@@ -7,7 +7,7 @@ pub mod dark_mode_toggle;
 pub mod header;
 pub use header::Header;
 mod nav_dropdown;
-pub use nav_dropdown::{DropdownItem, NavDropdown};
+pub use nav_dropdown::{ActiveDropdown, DropdownItem, NavDropdown};
 pub mod search;
 pub use search::SearchBar;
 

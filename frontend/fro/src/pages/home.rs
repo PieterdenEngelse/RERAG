@@ -1,4 +1,5 @@
 use crate::api;
+use crate::app::ShowRagInfo;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -98,8 +99,8 @@ pub fn Home() -> Element {
     // RAG toggle
     let mut rag_enabled = use_signal(|| true);
 
-    // Info panel state
-    let mut show_info = use_signal(|| false);
+    // Info panel state (global context)
+    let mut show_info = use_context::<Signal<ShowRagInfo>>();
 
     // Help modal state
     let mut show_help_modal = use_signal(|| false);
@@ -465,9 +466,66 @@ pub fn Home() -> Element {
     };
 
     rsx! {
-        // Fixed viewport container - NO scroll on body
+        // Welcome text with RAG toggle - fixed centered relative to full viewport (aligns with header title)
+        if messages().is_empty() {
+            div {
+                class: "fixed inset-x-0 text-center z-10",
+                style: "top: 3rem;",
+                p { class: "text-sm text-base-content/50", "Type a message or use /help for commands" }
+
+                // RAG toggle - centered
+                div {
+                    class: "flex justify-center mt-4",
+                    div {
+                        class: "flex flex-col items-center gap-0.5",
+                        label {
+                            class: "text-sm font-medium",
+                            style: "color: white;",
+                            "RAG"
+                        }
+                        input {
+                            r#type: "checkbox",
+                            class: "toggle toggle-md",
+                            style: if rag_enabled() { 
+                                "background-color:#3b82f6; border-color:#3b82f6;" 
+                            } else { 
+                                "background-color:#9ca3af; border: 2px solid white;" 
+                            },
+                            checked: rag_enabled(),
+                            onchange: move |_| rag_enabled.set(!rag_enabled()),
+                            title: if rag_enabled() { "RAG is ON - Click to disable" } else { "RAG is OFF - Click to enable" },
+                        }
+                    }
+                }
+
+                if rag_enabled() {
+                    p { class: "text-xs mt-2 text-white", "RAG is enabled - your documents will be searched" }
+                } else {
+                    p { class: "text-xs mt-2 text-gray-400", "RAG is disabled" }
+                }
+
+                // Add documents button - centered
+                div {
+                    class: "flex flex-col items-center mt-4",
+                    button {
+                        class: "btn btn-sm rounded-full px-4 text-lg font-bold",
+                        style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.5rem; height: 1.5rem;",
+                        onclick: move |_| show_upload_panel.set(!show_upload_panel()),
+                        title: "Toggle documents panel",
+                        "+"
+                    }
+                    span {
+                        class: "text-sm mt-1 font-medium",
+                        style: "color: white;",
+                        "Add documents"
+                    }
+                }
+            }
+        }
+
+        // Full height container that fills below the global header
         div {
-            class: "fixed inset-0 flex bg-base-200 overflow-hidden",
+            class: "relative flex h-[calc(100vh-2.5rem)] bg-base-200 overflow-hidden",
             "data-theme": "dark",
 
             // Left sidebar - Document Upload Panel (collapsible)
@@ -608,33 +666,6 @@ pub fn Home() -> Element {
             div {
                 class: "flex-1 flex flex-col min-w-0 h-full overflow-hidden",
 
-                // Header - compact
-                div {
-                    class: "p-2 sm:p-3 bg-base-100 border-b border-base-300 flex-shrink-0",
-
-                    div {
-                        class: "flex justify-between items-center",
-
-                        div {
-                            class: "flex items-center gap-2",
-                            h1 {
-                                class: "text-lg sm:text-xl font-bold",
-                                "💬 Chat"
-                            }
-                            span {
-                                class: "badge badge-sm",
-                                "{selected_model}"
-                            }
-                        }
-
-                        button {
-                            class: "btn btn-ghost btn-sm",
-                            onclick: clear_chat,
-                            "🗑️"
-                        }
-                    }
-                }
-
                 // Error display
                 if let Some(err) = error_msg() {
                     div {
@@ -652,19 +683,9 @@ pub fn Home() -> Element {
                 div {
                     class: "flex-1 overflow-y-auto min-h-0 p-2 sm:p-4",
 
+                    // Messages container
                     div {
                         class: "max-w-4xl mx-auto space-y-3",
-
-                        if messages().is_empty() {
-                            div {
-                                class: "text-center text-base-content/50 py-8",
-                                p { class: "text-lg mb-2", "👋 Welcome!" }
-                                p { class: "text-sm", "Type a message or use /help for commands" }
-                                if rag_enabled() {
-                                    p { class: "text-xs mt-2 text-success", "RAG is enabled - your documents will be searched" }
-                                }
-                            }
-                        }
 
                         for msg in messages() {
                             div {
@@ -709,116 +730,68 @@ pub fn Home() -> Element {
                     }
                 }
 
-                // Input area - compact, fixed at bottom
+            }
+
+            // Input area - fixed at bottom
+            div {
+                class: "fixed bottom-0 left-0 right-0 p-2 sm:p-3 bg-base-200",
+
+                // Input box with Send button inside - centered relative to full viewport (aligns with header title)
                 div {
-                    class: "p-2 sm:p-3 bg-base-100 border-t border-base-300 flex-shrink-0",
-
+                    class: "flex justify-center mb-2",
+                    
                     div {
-                        class: "max-w-4xl mx-auto",
+                        class: "relative",
+                        style: "width: 40rem;",
+                        
+                        input {
+                            class: "input input-bordered text-sm sm:text-base pl-4 pr-14 rounded-2xl focus:border-[#0D98BA] focus:outline-none focus:ring-1 focus:ring-[#0D98BA] w-full",
+                            style: "height: 5rem;",
+                            r#type: "text",
+                            placeholder: "Type a message...",
+                            value: "{input_text}",
+                            oninput: move |evt| input_text.set(evt.value()),
+                            onkeypress: on_keypress,
+                            disabled: is_loading(),
+                        }
 
-                        div {
-                            class: "flex gap-2 items-center",
+                        // Send button - inside input on the right
+                        button {
+                            class: "absolute right-2 top-1/2 -translate-y-1/2 btn btn-ghost btn-circle hover:bg-transparent",
+                            onclick: send_message,
+                            disabled: is_loading() || input_text().trim().is_empty(),
 
-                            // Left buttons: RAG toggle and Info
-                            div {
-                                class: "flex flex-col gap-2 items-center",
-
-                                // RAG toggle switch
-                                div {
-                                    class: "flex flex-col items-center gap-0.5",
-                                    label {
-                                        class: "text-sm font-medium",
-                                        style: "color: white;",
-                                        "RAG"
-                                    }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "toggle toggle-md",
-                                        style: if rag_enabled() { "background-color:#0D98BA; border-color:#0D98BA;" } else { "" },
-                                        checked: rag_enabled(),
-                                        onchange: move |_| rag_enabled.set(!rag_enabled()),
-                                        title: if rag_enabled() { "RAG is ON - Click to disable" } else { "RAG is OFF - Click to enable" },
-                                    }
-                                }
-
-                                // Info button
-                                button {
-                                    class: "btn btn-sm rounded-full px-4 text-sm font-medium",
-                                    style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.5rem; height: 1.5rem;",
-                                    onclick: move |_| show_info.set(!show_info()),
-                                    title: "Show RAG info",
-                                    "Info"
-                                }
-
-                                // Add documents button
-                                button {
-                                    class: "btn btn-sm rounded-full px-4 text-lg font-bold",
-                                    style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.5rem; height: 1.5rem;",
-                                    onclick: move |_| show_upload_panel.set(!show_upload_panel()),
-                                    title: "Toggle documents panel",
-                                    "+"
-                                }
-                            }
-
-                            input {
-                                class: "input input-bordered flex-1 text-sm sm:text-base px-3 sm:px-4 rounded-full focus:border-[#0D98BA] focus:outline-none focus:ring-1 focus:ring-[#0D98BA]",
-                                style: "height: 5rem;",
-                                r#type: "text",
-                                placeholder: "Type a message...",
-                                value: "{input_text}",
-                                oninput: move |evt| input_text.set(evt.value()),
-                                onkeypress: on_keypress,
-                                disabled: is_loading(),
-                            }
-
-                            // Stop button - always visible, disabled when not loading
-                            button {
-                                class: "btn btn-outline rounded-3xl px-6 text-sm text-white border border-red-400 hover:bg-red-700",
-                                onclick: stop_request,
-                                disabled: !is_loading(),
-                                "Stop"
-                            }
-
-                            button {
-                                class: "btn btn-lg rounded-3xl px-10 text-xl text-white hover:opacity-90",
-                                style: "border-radius:32px; background-color:#0D98BA;",
-                                onclick: send_message,
-                                disabled: is_loading() || input_text().trim().is_empty(),
-
-                                if is_loading() {
-                                    span { class: "loading loading-spinner loading-xs sm:loading-sm" }
-                                } else {
-                                    "Send"
+                            if is_loading() {
+                                span { class: "loading loading-spinner loading-sm" }
+                            } else {
+                                img {
+                                    src: asset!("/assets/styling/send-button.svg"),
+                                    alt: "Send",
+                                    class: "w-10 h-10",
                                 }
                             }
                         }
+                    }
+                }
 
-                        // Status bar - minimal
-                        div {
-                            class: "flex justify-between items-center mt-1 text-xs text-base-content/50 px-1",
-
-                            span {
-                                class: "truncate",
-                                if rag_enabled() {
-                                    "{selected_model} • RAG"
-                                } else {
-                                    "{selected_model}"
-                                }
-                            }
-
-                            span {
-                                "{messages().len()} msgs"
-                            }
+                // Stop button row - only visible when loading
+                if is_loading() {
+                    div {
+                        class: "flex justify-center gap-2 items-center",
+                        button {
+                            class: "btn btn-outline rounded-3xl px-6 text-sm text-white border border-red-400 hover:bg-red-700",
+                            onclick: stop_request,
+                            "Stop"
                         }
                     }
                 }
             }
 
             // Info Panel Overlay
-            if show_info() {
+            if show_info().0 {
                 div {
                     class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
-                    onclick: move |_| show_info.set(false),
+                    onclick: move |_| show_info.set(ShowRagInfo(false)),
 
                     div {
                         class: "bg-base-100 rounded-lg p-6 max-w-md mx-4 shadow-xl",
@@ -855,7 +828,7 @@ pub fn Home() -> Element {
 
                         button {
                             class: "btn btn-primary btn-sm mt-4 w-full",
-                            onclick: move |_| show_info.set(false),
+                            onclick: move |_| show_info.set(ShowRagInfo(false)),
                             "Got it!"
                         }
                     }
@@ -869,26 +842,27 @@ pub fn Home() -> Element {
                     onclick: move |_| show_help_modal.set(false),
 
                     div {
-                        class: "bg-base-100 rounded-lg p-6 max-w-7xl w-[95vw] mx-4 shadow-xl max-h-[80vh] overflow-y-auto",
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4",
+                        style: "margin-top: -3cm;",
                         onclick: move |evt| evt.stop_propagation(),
 
                         div {
-                            class: "flex justify-between items-center mb-4",
-                            h3 { class: "text-lg font-bold", "📖 Help - Available Commands" }
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "📖 Help" }
                             button {
-                                class: "btn btn-ghost btn-sm",
+                                class: "btn btn-ghost btn-xs",
                                 onclick: move |_| show_help_modal.set(false),
                                 "✕"
                             }
                         }
 
                         pre {
-                            class: "text-sm font-mono whitespace-pre-wrap bg-base-200 p-4 rounded-lg overflow-x-auto",
+                            class: "text-xs font-mono whitespace-pre-wrap bg-base-200 p-3 rounded-lg",
                             "{help_content}"
                         }
 
                         button {
-                            class: "btn btn-primary btn-sm mt-4 w-full",
+                            class: "btn btn-primary btn-xs w-full mt-3",
                             onclick: move |_| show_help_modal.set(false),
                             "Close"
                         }

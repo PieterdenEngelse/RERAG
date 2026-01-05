@@ -2146,32 +2146,32 @@ fn create_goal_from_command(goal_text: &str) -> Result<serde_json::Value, String
 fn get_help_text() -> String {
     r#"Available commands:
 
+/chain a -> b - Execute tool sequences (use $last placeholder)
+/clear        - Clear chat history (frontend only)
+/debug|/tokens - Inspect internals
+/dry-run <query> - Plan without execution
+/export|/import <json> - Export or import memories
+/focus <topic>|/unfocus - Control attention
+/forget <topic> - Forget matching memories
 /goal <text>  - Create a new goal
 /goals        - List active goals
-/status       - Show system health status
-/models       - List available models
 /help         - Show this help message
-/clear        - Clear chat history (frontend only)
-/forget <topic> - Forget matching memories
-/history     - Show recent agent episodes
-/sources     - Show last response sources
-/learn <url> - Fetch & ingest a URL (preview)
-/note <text> - Store a quick note
-/subgoal <text> - Add task under current goal
-/pause|/resume|/abandon - Control current goal
-/reflect     - Generate a reflection summary
-/why         - Explain the last reasoning steps
-/focus <topic>|/unfocus - Control attention
-/persona <name> - Swap agent persona
-/verbose|/brief - Change response verbosity
-/run <tool>  - Execute calculator/search/fetch
-/chain a -> b - Execute tool sequences (use $last placeholder)
-/retry|/undo - Retry last query / undo change
-/dry-run <query> - Plan without execution
+/history      - Show recent agent episodes
+/learn <url>  - Fetch & ingest a URL (preview)
 /model <name> - Switch backend model (use 'default')
+/models       - List available models
+/note <text>  - Store a quick note
+/pause|/resume|/abandon - Control current goal
+/persona <name> - Swap agent persona
+/reflect      - Generate a reflection summary
+/retry|/undo  - Retry last query / undo change
+/run <tool>   - Execute calculator/search/fetch
+/sources      - Show last response sources
+/status       - Show system health status
+/subgoal <text> - Add task under current goal
 /temperature <n> - Adjust creativity (use 'default')
-/export|/import <json> - Export or import memories
-/debug|/tokens - Inspect internals
+/verbose|/brief - Change response verbosity
+/why          - Explain the last reasoning steps
 
 Examples:
   /goal Find all Rust error handling patterns
