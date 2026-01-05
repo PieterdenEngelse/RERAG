@@ -1,8 +1,8 @@
 use crate::components::header::Header;
 use crate::pages::{
-    About, Config, ConfigHardware, ConfigOther, ConfigPrompt, ConfigSampling, Home, MonitorCache,
-    MonitorIndex, MonitorLogs, MonitorOverview, MonitorRateLimits, MonitorRequests, PageNotFound,
-    Parameters,
+    About, Config, ConfigHardware, ConfigOther, ConfigPrompt, ConfigSampling, Home, MonitorAgentic,
+    MonitorCache, MonitorIndex, MonitorLogs, MonitorOverview, MonitorRateLimits, MonitorRequests,
+    PageNotFound, Parameters,
 };
 use dioxus::prelude::*;
 
@@ -16,6 +16,8 @@ pub enum Route {
         About {},
         #[route("/monitor")]
         MonitorOverview {},
+        #[route("/monitor/agentic")]
+        MonitorAgentic {},
         #[route("/config")]
         Config {},
         #[route("/config/parameters")]

@@ -26,6 +26,59 @@ struct OllamaResponse {
 }
 
 const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/generate";
+const BACKEND_AGENT_URL: &str = "http://127.0.0.1:3010/agent";
+
+/// Check if input is a chat command (starts with /)
+fn is_chat_command(input: &str) -> bool {
+    let trimmed = input.trim();
+    trimmed.starts_with("/help") ||
+    trimmed.starts_with("/goal") ||
+    trimmed.starts_with("/goals") ||
+    trimmed.starts_with("/status") ||
+    trimmed.starts_with("/models") ||
+    trimmed.starts_with("/clear") ||
+    trimmed.starts_with("/focus") ||
+    trimmed.starts_with("/unfocus") ||
+    trimmed.starts_with("/persona") ||
+    trimmed.starts_with("/verbose") ||
+    trimmed.starts_with("/brief") ||
+    trimmed.starts_with("/run") ||
+    trimmed.starts_with("/chain") ||
+    trimmed.starts_with("/retry") ||
+    trimmed.starts_with("/undo") ||
+    trimmed.starts_with("/dry-run") ||
+    trimmed.starts_with("/model") ||
+    trimmed.starts_with("/temperature") ||
+    trimmed.starts_with("/export") ||
+    trimmed.starts_with("/import") ||
+    trimmed.starts_with("/debug") ||
+    trimmed.starts_with("/tokens") ||
+    trimmed.starts_with("/forget") ||
+    trimmed.starts_with("/history") ||
+    trimmed.starts_with("/sources") ||
+    trimmed.starts_with("/learn") ||
+    trimmed.starts_with("/note") ||
+    trimmed.starts_with("/subgoal") ||
+    trimmed.starts_with("/pause") ||
+    trimmed.starts_with("/resume") ||
+    trimmed.starts_with("/abandon") ||
+    trimmed.starts_with("/reflect") ||
+    trimmed.starts_with("/why")
+}
+
+#[derive(Deserialize)]
+struct AgentCommandResponse {
+    response: AgentResponseInner,
+    #[allow(dead_code)]
+    request_id: String,
+}
+
+#[derive(Deserialize)]
+struct AgentResponseInner {
+    answer: String,
+    #[allow(dead_code)]
+    chunks_used: usize,
+}
 
 #[component]
 pub fn Home() -> Element {
@@ -34,6 +87,7 @@ pub fn Home() -> Element {
     let mut is_loading = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
     let selected_model = use_signal(|| "phi:latest".to_string());
+    let mut cancel_requested = use_signal(|| false);
 
     // File upload state
     let mut show_upload_panel = use_signal(|| false);
@@ -47,8 +101,9 @@ pub fn Home() -> Element {
     // Info panel state
     let mut show_info = use_signal(|| false);
 
-    // Models actually installed in Ollama
-    let available_models = vec!["phi:latest"];
+    // Help modal state
+    let mut show_help_modal = use_signal(|| false);
+    let mut help_content = use_signal(|| String::new());
 
     // Load documents on mount
     use_effect(move || {
@@ -59,6 +114,41 @@ pub fn Home() -> Element {
             }
         });
     });
+
+    // Load active model from hardware config once on mount
+    {
+        let mut selected_model = selected_model.clone();
+        let mut error_signal = error_msg.clone();
+        use_future(move || async move {
+            // Try to load hardware config (with a quick retry) to keep home page in sync
+            let mut last_error = None;
+            for attempt in 0..2 {
+                match api::fetch_hardware_config().await {
+                    Ok(resp) => {
+                        let active_model = resp.config.model.trim().to_string();
+                        if !active_model.is_empty() {
+                            selected_model.set(active_model);
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                        if attempt == 0 {
+                            // Small delay before retrying
+                            gloo_timers::future::TimeoutFuture::new(250).await;
+                        }
+                    }
+                }
+            }
+
+            if let Some(err) = last_error {
+                error_signal.set(Some(format!(
+                    "[INFO] Failed to load active model from hardware config: {}",
+                    err
+                )));
+            }
+        });
+    }
 
     // Build prompt with RAG context - returns (prompt, context_summary)
     async fn build_rag_prompt(query: &str, rag_enabled: bool) -> (String, Option<String>) {
@@ -107,6 +197,13 @@ pub fn Home() -> Element {
             return;
         }
 
+        // Handle /clear command locally
+        if user_input.trim() == "/clear" {
+            messages.write().clear();
+            input_text.set(String::new());
+            return;
+        }
+
         messages.write().push(ChatMessage {
             role: "user".to_string(),
             content: user_input.clone(),
@@ -116,12 +213,60 @@ pub fn Home() -> Element {
         input_text.set(String::new());
         is_loading.set(true);
         error_msg.set(None);
+        cancel_requested.set(false);
 
         let model = selected_model();
         let use_rag = rag_enabled();
+        let cancel_flag = cancel_requested.clone();
 
         spawn(async move {
-            // Build prompt with RAG context if enabled
+            // Check if this is a chat command - route to backend
+            if is_chat_command(&user_input) {
+                let body = serde_json::json!({ "query": user_input });
+                let request = gloo_net::http::Request::post(BACKEND_AGENT_URL)
+                    .header("Content-Type", "application/json")
+                    .body(body.to_string())
+                    .unwrap();
+                match request.send().await {
+                    Ok(response) => {
+                        if cancel_flag() {
+                            is_loading.set(false);
+                            return;
+                        }
+                        if response.ok() {
+                            match response.json::<AgentCommandResponse>().await {
+                                Ok(data) => {
+                                    if !cancel_flag() {
+                                        // Check if this is a help response - show in modal
+                                        if user_input.trim() == "/help" || data.response.answer.contains("Available Commands") {
+                                            help_content.set(data.response.answer);
+                                            show_help_modal.set(true);
+                                        } else {
+                                            messages.write().push(ChatMessage {
+                                                role: "assistant".to_string(),
+                                                content: data.response.answer,
+                                                context: None,
+                                            });
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error_msg.set(Some(format!("Failed to parse command response: {}", e)));
+                                }
+                            }
+                        } else {
+                            error_msg.set(Some(format!("Command failed: HTTP {}", response.status())));
+                        }
+                    }
+                    Err(e) => {
+                        error_msg.set(Some(format!("Command request failed: {}", e)));
+                    }
+                }
+                is_loading.set(false);
+                return;
+            }
+
+            // Regular message - use Ollama
             let (prompt, context_summary) = build_rag_prompt(&user_input, use_rag).await;
 
             let request = OllamaRequest {
@@ -130,22 +275,27 @@ pub fn Home() -> Element {
                 stream: false,
             };
 
-            match gloo_net::http::Request::post(OLLAMA_URL)
+            let ollama_request = gloo_net::http::Request::post(OLLAMA_URL)
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_string(&request).unwrap())
-                .unwrap()
-                .send()
-                .await
-            {
+                .unwrap();
+
+            match ollama_request.send().await {
                 Ok(response) => {
+                    if cancel_flag() {
+                        is_loading.set(false);
+                        return;
+                    }
                     if response.ok() {
                         match response.json::<OllamaResponse>().await {
                             Ok(data) => {
-                                messages.write().push(ChatMessage {
-                                    role: "assistant".to_string(),
-                                    content: data.response,
-                                    context: context_summary,
-                                });
+                                if !cancel_flag() {
+                                    messages.write().push(ChatMessage {
+                                        role: "assistant".to_string(),
+                                        content: data.response,
+                                        context: context_summary,
+                                    });
+                                }
                             }
                             Err(e) => {
                                 error_msg.set(Some(format!("Failed to parse response: {}", e)));
@@ -172,6 +322,13 @@ pub fn Home() -> Element {
                 return;
             }
 
+            // Handle /clear command locally
+            if user_input.trim() == "/clear" {
+                messages.write().clear();
+                input_text.set(String::new());
+                return;
+            }
+
             messages.write().push(ChatMessage {
                 role: "user".to_string(),
                 content: user_input.clone(),
@@ -181,11 +338,60 @@ pub fn Home() -> Element {
             input_text.set(String::new());
             is_loading.set(true);
             error_msg.set(None);
+            cancel_requested.set(false);
 
             let model = selected_model();
             let use_rag = rag_enabled();
+            let cancel_flag = cancel_requested.clone();
 
             spawn(async move {
+                // Check if this is a chat command - route to backend
+                if is_chat_command(&user_input) {
+                    let body = serde_json::json!({ "query": user_input });
+                    let request = gloo_net::http::Request::post(BACKEND_AGENT_URL)
+                        .header("Content-Type", "application/json")
+                        .body(body.to_string())
+                        .unwrap();
+                    match request.send().await {
+                        Ok(response) => {
+                            if cancel_flag() {
+                                is_loading.set(false);
+                                return;
+                            }
+                            if response.ok() {
+                                match response.json::<AgentCommandResponse>().await {
+                                    Ok(data) => {
+                                        if !cancel_flag() {
+                                            // Check if this is a help response - show in modal
+                                            if user_input.trim() == "/help" || data.response.answer.contains("Available Commands") {
+                                                help_content.set(data.response.answer);
+                                                show_help_modal.set(true);
+                                            } else {
+                                                messages.write().push(ChatMessage {
+                                                    role: "assistant".to_string(),
+                                                    content: data.response.answer,
+                                                    context: None,
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error_msg.set(Some(format!("Failed to parse command response: {}", e)));
+                                    }
+                                }
+                            } else {
+                                error_msg.set(Some(format!("Command failed: HTTP {}", response.status())));
+                            }
+                        }
+                        Err(e) => {
+                            error_msg.set(Some(format!("Command request failed: {}", e)));
+                        }
+                    }
+                    is_loading.set(false);
+                    return;
+                }
+
+                // Regular message - use Ollama
                 let (prompt, context_summary) = build_rag_prompt(&user_input, use_rag).await;
 
                 let request = OllamaRequest {
@@ -194,22 +400,27 @@ pub fn Home() -> Element {
                     stream: false,
                 };
 
-                match gloo_net::http::Request::post(OLLAMA_URL)
+                let ollama_request = gloo_net::http::Request::post(OLLAMA_URL)
                     .header("Content-Type", "application/json")
                     .body(serde_json::to_string(&request).unwrap())
-                    .unwrap()
-                    .send()
-                    .await
-                {
+                    .unwrap();
+
+                match ollama_request.send().await {
                     Ok(response) => {
+                        if cancel_flag() {
+                            is_loading.set(false);
+                            return;
+                        }
                         if response.ok() {
                             match response.json::<OllamaResponse>().await {
                                 Ok(data) => {
-                                    messages.write().push(ChatMessage {
-                                        role: "assistant".to_string(),
-                                        content: data.response,
-                                        context: context_summary,
-                                    });
+                                    if !cancel_flag() {
+                                        messages.write().push(ChatMessage {
+                                            role: "assistant".to_string(),
+                                            content: data.response,
+                                            context: context_summary,
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     error_msg.set(Some(format!("Failed to parse response: {}", e)));
@@ -245,6 +456,12 @@ pub fn Home() -> Element {
                 Err(e) => upload_status.set(Some(format!("Failed to load: {}", e))),
             }
         });
+    };
+
+    let stop_request = move |_evt: Event<MouseData>| {
+        cancel_requested.set(true);
+        is_loading.set(false);
+        error_msg.set(Some("[INFO] Request cancelled.".to_string()));
     };
 
     rsx! {
@@ -331,14 +548,14 @@ pub fn Home() -> Element {
 
                                         is_uploading.set(false);
                                     });
-                                }
+                                },
                             }
                         }
 
                         // Upload status
                         if let Some(status) = upload_status() {
-                            div {
-                                class: "text-xs truncate",
+                            p {
+                                class: "text-xs mt-1 truncate",
                                 class: if status.starts_with("✓") { "text-success" } else if status.starts_with("✗") { "text-error" } else { "text-info" },
                                 "{status}"
                             }
@@ -347,198 +564,130 @@ pub fn Home() -> Element {
 
                     // Document list - scrollable
                     div {
-                        class: "flex-1 overflow-y-auto p-2 min-h-0",
+                        class: "flex-1 overflow-y-auto min-h-0",
 
                         div {
-                            class: "flex justify-between items-center mb-1",
-                            span {
-                                class: "text-xs text-base-content/70",
-                                "{documents().len()} docs"
-                            }
-                            button {
-                                class: "btn btn-ghost btn-xs",
-                                onclick: refresh_documents,
-                                "🔄"
-                            }
-                        }
+                            class: "p-2",
 
-                        if documents().is_empty() {
                             div {
-                                class: "text-center text-xs text-base-content/50 py-2",
-                                "No documents yet"
-                            }
-                        }
-
-                        for doc in documents() {
-                            div {
-                                key: "{doc}",
-                                class: "flex items-center justify-between p-1.5 bg-base-200 rounded mb-1 text-xs",
+                                class: "flex justify-between items-center mb-1",
                                 span {
-                                    class: "truncate flex-1 mr-1",
-                                    title: "{doc}",
-                                    "📄 {doc}"
+                                    class: "text-xs text-base-content/70",
+                                    "Indexed ({documents().len()})"
                                 }
                                 button {
-                                    class: "btn btn-ghost btn-xs text-error p-0 min-h-0 h-auto",
-                                    onclick: {
-                                        let doc_name = doc.clone();
-                                        move |_| {
-                                            let doc_to_delete = doc_name.clone();
-                                            spawn(async move {
-                                                if let Ok(_) = api::delete_document(&doc_to_delete).await {
-                                                    if let Ok(docs) = api::list_documents().await {
-                                                        documents.set(docs.documents);
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    },
-                                    "🗑"
+                                    class: "btn btn-ghost btn-xs",
+                                    onclick: refresh_documents,
+                                    "↻"
                                 }
                             }
-                        }
-                    }
 
-                    // Reindex button
-                    div {
-                        class: "p-2 border-t border-base-300 flex-shrink-0",
-                        button {
-                            class: "btn btn-xs w-full",
-                            style: "background-color:#0D98BA; color:white;",
-                            onclick: move |_| {
-                                spawn(async move {
-                                    upload_status.set(Some("Reindexing...".to_string()));
-                                    match api::reindex().await {
-                                        Ok(_) => upload_status.set(Some("✓ Reindex done".to_string())),
-                                        Err(e) => upload_status.set(Some(format!("✗ {}", e))),
+                            if documents().is_empty() {
+                                p {
+                                    class: "text-xs text-base-content/50 italic",
+                                    "No documents yet"
+                                }
+                            } else {
+                                ul {
+                                    class: "space-y-0.5",
+                                    for doc in documents() {
+                                        li {
+                                            class: "text-xs truncate py-0.5 px-1 hover:bg-base-200 rounded",
+                                            title: "{doc}",
+                                            "📄 {doc}"
+                                        }
                                     }
-                                });
-                            },
-                            "🔄 Reindex"
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Main chat area
+            // Main chat area - takes remaining space
             div {
-                class: "flex-1 flex flex-col min-w-0 h-full",
+                class: "flex-1 flex flex-col min-w-0 h-full overflow-hidden",
 
                 // Header - compact
                 div {
-                    class: "bg-base-100 shadow-lg flex-shrink-0 px-2 py-1.5 flex items-center justify-between",
-
-                    div {}
+                    class: "p-2 sm:p-3 bg-base-100 border-b border-base-300 flex-shrink-0",
 
                     div {
-                        class: "flex items-center gap-1 sm:gap-2",
+                        class: "flex justify-between items-center",
 
-                        // Clear button
+                        div {
+                            class: "flex items-center gap-2",
+                            h1 {
+                                class: "text-lg sm:text-xl font-bold",
+                                "💬 Chat"
+                            }
+                            span {
+                                class: "badge badge-sm",
+                                "{selected_model}"
+                            }
+                        }
+
                         button {
-                            class: "btn btn-ghost btn-xs",
+                            class: "btn btn-ghost btn-sm",
                             onclick: clear_chat,
                             "🗑️"
                         }
                     }
                 }
 
-                // Chat container - fills remaining space, internal scroll only
+                // Error display
+                if let Some(err) = error_msg() {
+                    div {
+                        class: "alert alert-error mx-2 mt-2 py-2 text-sm flex-shrink-0",
+                        span { "{err}" }
+                        button {
+                            class: "btn btn-ghost btn-xs",
+                            onclick: move |_| error_msg.set(None),
+                            "✕"
+                        }
+                    }
+                }
+
+                // Messages area - scrollable, takes remaining space
                 div {
-                    class: "flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 min-h-0",
+                    class: "flex-1 overflow-y-auto min-h-0 p-2 sm:p-4",
 
-                    // Welcome message if no messages
-                    if messages().is_empty() {
-                        div {
-                            class: "flex items-center justify-center h-full",
+                    div {
+                        class: "max-w-4xl mx-auto space-y-3",
+
+                        if messages().is_empty() {
                             div {
-                                class: "text-center px-4",
-                                h2 {
-                                    class: "text-lg sm:text-xl lg:text-2xl font-bold mb-2",
-                                    "Welcome to RAG Chat"
-                                }
-                                p {
-                                    class: "text-base-content/70 mb-2 text-xs sm:text-sm",
-                                    if rag_enabled() {
-                                        "Ask questions using your documents + Ollama."
-                                    } else {
-                                        "Ask questions using Ollama."
-                                    }
-                                }
-
-                                // Document count indicator
-                                if !documents().is_empty() && rag_enabled() {
-                                    div {
-                                        class: "mb-2 text-xs sm:text-sm",
-                                        style: "color:#0D98BA;",
-                                        "📚 {documents().len()} documents"
-                                    }
-                                }
-
-                                div {
-                                    class: "flex flex-wrap gap-1 sm:gap-2 justify-center",
-                                    button {
-                                        class: "btn btn-outline btn-xs",
-                                        onclick: move |_: Event<MouseData>| input_text.set("Explain quantum computing".to_string()),
-                                        "💡 Quantum"
-                                    }
-                                    button {
-                                        class: "btn btn-outline btn-xs",
-                                        onclick: move |_: Event<MouseData>| input_text.set("Write a Rust function to sort a vector".to_string()),
-                                        "🦀 Rust"
-                                    }
-                                    button {
-                                        class: "btn btn-outline btn-xs",
-                                        onclick: move |_: Event<MouseData>| input_text.set("What is RAG in AI?".to_string()),
-                                        "🤖 RAG"
-                                    }
+                                class: "text-center text-base-content/50 py-8",
+                                p { class: "text-lg mb-2", "👋 Welcome!" }
+                                p { class: "text-sm", "Type a message or use /help for commands" }
+                                if rag_enabled() {
+                                    p { class: "text-xs mt-2 text-success", "RAG is enabled - your documents will be searched" }
                                 }
                             }
                         }
-                    }
 
-                    // Messages
-                    for (idx, msg) in messages().iter().enumerate() {
-                        div {
-                            key: "{idx}",
-                            class: if msg.role == "user" { "chat chat-end" } else { "chat chat-start" },
-
+                        for msg in messages() {
                             div {
-                                class: "chat-image avatar placeholder",
+                                class: if msg.role == "user" { "chat chat-end" } else { "chat chat-start" },
+
                                 div {
                                     class: if msg.role == "user" {
-                                        "bg-[#0D98BA] text-white rounded-full w-6 sm:w-8"
+                                        "chat-bubble chat-bubble-primary text-sm sm:text-base"
                                     } else {
-                                        "bg-cyan-500 text-white rounded-full w-6 sm:w-8"
+                                        "chat-bubble text-sm sm:text-base"
                                     },
-                                    span {
-                                        class: "text-xs sm:text-sm",
-                                        if msg.role == "user" { "👤" } else { "🤖" }
-                                    }
-                                }
-                            }
-
-                            div {
-                                class: if msg.role == "user" {
-                                    "chat-bubble text-xs sm:text-sm bg-[#0D98BA] text-white max-w-[85%] sm:max-w-[75%]"
-                                } else {
-                                    "chat-bubble text-xs sm:text-sm bg-cyan-600 text-white max-w-[85%] sm:max-w-[75%]"
-                                },
-                                pre {
-                                    class: "whitespace-pre-wrap font-sans",
+                                    style: "white-space: pre-wrap;",
                                     "{msg.content}"
                                 }
 
-                                // Show RAG context if available (for assistant messages)
-                                if msg.role == "assistant" {
-                                    if let Some(ctx) = &msg.context {
-                                        div {
-                                            class: "mt-2 pt-2 border-t border-white/20 text-xs opacity-70",
-                                            div {
-                                                class: "font-semibold mb-1",
-                                                "📚 Sources used:"
-                                            }
+                                // Show RAG context if available
+                                if let Some(ctx) = &msg.context {
+                                    div {
+                                        class: "chat-footer opacity-50 text-xs mt-1",
+                                        details {
+                                            summary { class: "cursor-pointer", "📚 Sources used" }
                                             pre {
-                                                class: "whitespace-pre-wrap font-sans",
+                                                class: "mt-1 p-2 bg-base-200 rounded text-xs whitespace-pre-wrap",
                                                 "{ctx}"
                                             }
                                         }
@@ -546,42 +695,15 @@ pub fn Home() -> Element {
                                 }
                             }
                         }
-                    }
 
-                    // Loading indicator
-                    if is_loading() {
-                        div {
-                            class: "chat chat-start",
-
+                        // Loading indicator
+                        if is_loading() {
                             div {
-                                class: "chat-image avatar placeholder",
+                                class: "chat chat-start",
                                 div {
-                                    class: "bg-teal-500 text-white rounded-full w-6 sm:w-8",
-                                    span { class: "text-xs sm:text-sm", "🤖" }
+                                    class: "chat-bubble",
+                                    span { class: "loading loading-dots loading-sm" }
                                 }
-                            }
-
-                            div {
-                                class: "chat-bubble bg-cyan-600 text-white",
-                                span {
-                                    class: "loading loading-dots loading-xs sm:loading-sm text-white"
-                                }
-                            }
-                        }
-                    }
-
-                    // Info/Error message
-                    if let Some(msg) = error_msg() {
-                        div {
-                            class: if msg.starts_with("[INFO]") {
-                                "alert alert-info shadow-lg text-sm py-2 cursor-pointer"
-                            } else {
-                                "alert alert-error shadow-lg text-xs py-1"
-                            },
-                            onclick: move |_| error_msg.set(None),
-                            pre {
-                                class: "whitespace-pre-wrap font-sans",
-                                "{msg}"
                             }
                         }
                     }
@@ -649,6 +771,14 @@ pub fn Home() -> Element {
                                 disabled: is_loading(),
                             }
 
+                            // Stop button - always visible, disabled when not loading
+                            button {
+                                class: "btn btn-outline rounded-3xl px-6 text-sm text-white border border-red-400 hover:bg-red-700",
+                                onclick: stop_request,
+                                disabled: !is_loading(),
+                                "Stop"
+                            }
+
                             button {
                                 class: "btn btn-lg rounded-3xl px-10 text-xl text-white hover:opacity-90",
                                 style: "border-radius:32px; background-color:#0D98BA;",
@@ -691,228 +821,76 @@ pub fn Home() -> Element {
                     onclick: move |_| show_info.set(false),
 
                     div {
-                        class: "bg-base-100 rounded-2xl p-5 sm:p-6 max-w-7xl w-full mx-2 sm:mx-4 shadow-2xl max-h-[90vh] flex flex-col gap-4",
+                        class: "bg-base-100 rounded-lg p-6 max-w-md mx-4 shadow-xl",
                         onclick: move |evt| evt.stop_propagation(),
 
-                        div {
-                            class: "flex-1 overflow-y-auto space-y-2.5 pr-0 sm:pr-1",
+                        h3 { class: "text-lg font-bold mb-4", "ℹ️ RAG Information" }
 
-                            h3 {
-                                class: "text-lg font-bold leading-tight",
-                                style: "color: #0D98BA;",
-                                if rag_enabled() { "📚 RAG is ON" } else { "💬 RAG is OFF" }
+                        div {
+                            class: "space-y-3 text-sm",
+
+                            p {
+                                strong { "What is RAG?" }
+                                br {}
+                                "Retrieval-Augmented Generation searches your uploaded documents to provide context-aware answers."
                             }
 
-                            div {
-                                class: "grid gap-3.5 lg:gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] text-sm",
-
-                                // Column: RAG behavior + current config snapshot
-                                div {
-                                    class: "space-y-2",
-                                    if rag_enabled() {
-                                        p { "• Your question is searched against ", strong { "{documents().len()}" }, " uploaded documents" }
-                                        p { "• The LLM answers using both context + its knowledge" }
-                                        p { "• Top 3 relevant chunks are added as context" }
-                                    } else {
-                                        p { "• Questions go directly to Ollama" }
-                                        p { "• No document context is used" }
-                                        p { "• Toggle RAG ON to use your ", strong { "{documents().len()}" }, " documents" }
-                                    }
-
-                                    div {
-                                        class: "pt-1.5 border-t border-base-300",
-                                        p {
-                                            class: "leading-tight mb-3",
-                                            "Chunk size is the length of each document slice we embed. Bigger chunks keep more context per slice, while smaller ones stay precise but risk missing surrounding details. We aim for enough tokens to capture a full thought without blowing the model's context window."
-                                        }
-                                        p {
-                                            class: "text-xs font-medium mb-2 mt-1",
-                                            style: "color: #0D98BA;",
-                                            "Current Chunk Settings"
-                                        }
-                                        table {
-                                            class: "table table-xs w-full text-[0.72rem] leading-tight",
-                                            tbody {
-                                                tr {
-                                                    td { class: "text-xs", "target_size" }
-                                                    td { class: "text-xs font-mono", "384" }
-                                                    td { class: "text-xs text-base-content/60", "Target tokens" }
-                                                }
-                                                tr {
-                                                    td { class: "text-xs", "min_size" }
-                                                    td { class: "text-xs font-mono", "192" }
-                                                    td { class: "text-xs text-base-content/60", "Minimum tokens" }
-                                                }
-                                                tr {
-                                                    td { class: "text-xs", "max_size" }
-                                                    td { class: "text-xs font-mono", "512" }
-                                                    td { class: "text-xs text-base-content/60", "Maximum tokens" }
-                                                }
-                                                tr {
-                                                    td { class: "text-xs", "overlap" }
-                                                    td { class: "text-xs font-mono", "50" }
-                                                    td { class: "text-xs text-base-content/60", "Overlap tokens" }
-                                                }
-                                            }
-                                        }
-                                    }
+                            p {
+                                strong { "How it works:" }
+                                ul {
+                                    class: "list-disc list-inside mt-1",
+                                    li { "Upload documents (.txt, .md, .pdf)" }
+                                    li { "Ask questions in the chat" }
+                                    li { "Relevant content is found and sent to the LLM" }
+                                    li { "Get answers grounded in your documents" }
                                 }
+                            }
 
-                                // Column: Chunk guidance reference
-                                div {
-                                        class: "space-y-2",
-
-                                        div {
-                                            class: "border border-base-300 rounded-xl p-2.5 sm:p-3.5",
-                                            h4 {
-                                                class: "font-semibold text-sm mb-3",
-                                                "How to Decide on Chunk Size"
-                                            }
-
-                                            // 1. Model Context Window
-                                            div {
-                                                class: "mb-1.5",
-                                                p { class: "text-xs font-medium mb-1", "1. Model Context Window" }
-                                                table {
-                                                    class: "table table-xs w-full text-[0.72rem] leading-tight",
-                                                    thead {
-                                                        tr {
-                                                            th { class: "text-xs", "Model" }
-                                                            th { class: "text-xs", "Context" }
-                                                            th { class: "text-xs", "Recommended" }
-                                                        }
-                                                    }
-                                                    tbody {
-                                                        tr {
-                                                            td { class: "text-xs", "phi (2K)" }
-                                                            td { class: "text-xs", "2,048" }
-                                                            td { class: "text-xs", "256-384" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "llama2 (4K)" }
-                                                            td { class: "text-xs", "4,096" }
-                                                            td { class: "text-xs", "384-512" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "llama3 (8K)" }
-                                                            td { class: "text-xs", "8,192" }
-                                                            td { class: "text-xs", "512-768" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "GPT-3.5 (16K)" }
-                                                            td { class: "text-xs", "16,384" }
-                                                            td { class: "text-xs", "768-1024" }
-                                                        }
-                                                    }
-                                                }
-                                                p {
-                                                    class: "text-xs text-base-content/60 mt-0.5 italic leading-tight",
-                                                    "Rule: chunk_size × num_chunks + question + answer < context_window"
-                                                }
-                                            }
-
-                                            // 2. Content Type
-                                            div {
-                                                class: "mb-2",
-                                                p { class: "text-xs font-medium mb-1", "2. Content Type" }
-                                                table {
-                                                    class: "table table-xs w-full text-[0.72rem] leading-tight",
-                                                    thead {
-                                                        tr {
-                                                            th { class: "text-xs", "Content" }
-                                                            th { class: "text-xs", "Size" }
-                                                            th { class: "text-xs", "Why" }
-                                                        }
-                                                    }
-                                                    tbody {
-                                                        tr {
-                                                            td { class: "text-xs", "Technical docs" }
-                                                            td { class: "text-xs", "512-768" }
-                                                            td { class: "text-xs", "Concepts need context" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "Code" }
-                                                            td { class: "text-xs", "256-512" }
-                                                            td { class: "text-xs", "Functions self-contained" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "Legal/contracts" }
-                                                            td { class: "text-xs", "768-1024" }
-                                                            td { class: "text-xs", "Clauses need full context" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "Chat logs" }
-                                                            td { class: "text-xs", "256-384" }
-                                                            td { class: "text-xs", "Short exchanges" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "Academic papers" }
-                                                            td { class: "text-xs", "512-768" }
-                                                            td { class: "text-xs", "Paragraphs meaningful" }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // 3. Retrieval Quality Trade-offs
-                                            div {
-                                                class: "mb-2",
-                                                p { class: "text-xs font-medium mb-1", "3. Retrieval Quality Trade-offs" }
-                                                table {
-                                                    class: "table table-xs w-full text-[0.72rem] leading-tight",
-                                                    thead {
-                                                        tr {
-                                                            th { class: "text-xs", "Size" }
-                                                            th { class: "text-xs", "Pros" }
-                                                            th { class: "text-xs", "Cons" }
-                                                        }
-                                                    }
-                                                    tbody {
-                                                        tr {
-                                                            td { class: "text-xs", "Small (256)" }
-                                                            td { class: "text-xs", "Precise, granular" }
-                                                            td { class: "text-xs", "May lose context" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "Medium (512)" }
-                                                            td { class: "text-xs", "Good balance" }
-                                                            td { class: "text-xs", "Standard choice" }
-                                                        }
-                                                        tr {
-                                                            td { class: "text-xs", "Large (768+)" }
-                                                            td { class: "text-xs", "More context" }
-                                                            td { class: "text-xs", "Less precise" }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // 4. Overlap Considerations
-                                            div {
-                                                class: "mb-2",
-                                                p { class: "text-xs font-medium mb-1", "4. Overlap Considerations" }
-                                                ul {
-                                                    class: "text-xs space-y-0.5 list-disc list-inside text-base-content/80 leading-tight",
-                                                    li { class: "text-xs", "0 overlap: Risk losing context at boundaries" }
-                                                    li { class: "text-xs", "50-100 tokens (10-20%): Good balance" }
-                                                    li { class: "text-xs", "150+ tokens: Redundant, wastes space" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                            div {
-                                class: "pt-2 border-t border-base-300 text-xs text-base-content/70",
-                                "Model: {selected_model}"
+                            p {
+                                strong { "Toggle RAG:" }
+                                br {}
+                                "Use the RAG switch to enable/disable document search. When off, the LLM answers from its training only."
                             }
                         }
 
                         button {
-                            class: "btn btn-sm w-full mt-0.5 text-base",
-                            style: "background-color: #0D98BA; color: white; font-size: 1.25rem;",
+                            class: "btn btn-primary btn-sm mt-4 w-full",
                             onclick: move |_| show_info.set(false),
-                            "Got it"
+                            "Got it!"
+                        }
+                    }
+                }
+            }
+
+            // Help Modal Overlay
+            if show_help_modal() {
+                div {
+                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
+                    onclick: move |_| show_help_modal.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg p-6 max-w-7xl w-[95vw] mx-4 shadow-xl max-h-[80vh] overflow-y-auto",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-4",
+                            h3 { class: "text-lg font-bold", "📖 Help - Available Commands" }
+                            button {
+                                class: "btn btn-ghost btn-sm",
+                                onclick: move |_| show_help_modal.set(false),
+                                "✕"
+                            }
+                        }
+
+                        pre {
+                            class: "text-sm font-mono whitespace-pre-wrap bg-base-200 p-4 rounded-lg overflow-x-auto",
+                            "{help_content}"
+                        }
+
+                        button {
+                            class: "btn btn-primary btn-sm mt-4 w-full",
+                            onclick: move |_| show_help_modal.set(false),
+                            "Close"
                         }
                     }
                 }

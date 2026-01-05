@@ -36,15 +36,35 @@ pub enum GoalStatus {
     Active,
     Completed,
     Failed,
+    Paused,
+    Abandoned,
+}
+
+impl GoalStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GoalStatus::Active => "active",
+            GoalStatus::Completed => "completed",
+            GoalStatus::Failed => "failed",
+            GoalStatus::Paused => "paused",
+            GoalStatus::Abandoned => "abandoned",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "completed" => GoalStatus::Completed,
+            "failed" => GoalStatus::Failed,
+            "paused" => GoalStatus::Paused,
+            "abandoned" => GoalStatus::Abandoned,
+            _ => GoalStatus::Active,
+        }
+    }
 }
 
 impl std::fmt::Display for GoalStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GoalStatus::Active => write!(f, "active"),
-            GoalStatus::Completed => write!(f, "completed"),
-            GoalStatus::Failed => write!(f, "failed"),
-        }
+        write!(f, "{}", self.as_str())
     }
 }
 

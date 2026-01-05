@@ -1,3 +1,4 @@
+pub mod agentic;
 pub mod cache;
 pub mod index_page;
 pub mod logs;
@@ -5,6 +6,7 @@ pub mod overview;
 pub mod rate_limits;
 pub mod requests;
 
+pub use agentic::MonitorAgentic;
 pub use cache::MonitorCache;
 pub use index_page::MonitorIndex;
 pub use logs::MonitorLogs;

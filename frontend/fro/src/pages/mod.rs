@@ -16,7 +16,8 @@ pub use config::Config;
 pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use monitor::{
-    MonitorCache, MonitorIndex, MonitorLogs, MonitorOverview, MonitorRateLimits, MonitorRequests,
+    MonitorAgentic, MonitorCache, MonitorIndex, MonitorLogs, MonitorOverview, MonitorRateLimits,
+    MonitorRequests,
 };
 pub use not_found::PageNotFound;
 pub use other::ConfigOther;

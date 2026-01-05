@@ -158,6 +158,9 @@ pub struct LlmConfig {
     pub mirostat_eta: f32,
     pub mirostat_tau: f32,
     pub repeat_last_n: usize,
+    pub penalize_newline: bool,
+    pub num_predict: i64,
+    pub num_keep: i64,
 }
 
 impl Default for LlmConfig {
@@ -179,6 +182,9 @@ impl Default for LlmConfig {
             mirostat_eta: 0.1,
             mirostat_tau: 5.0,
             repeat_last_n: 64,
+            penalize_newline: true,
+            num_predict: -1,
+            num_keep: 0,
         }
     }
 }
@@ -906,4 +912,127 @@ where
         .json::<T>()
         .await
         .map_err(|e| format!("Failed to parse JSON: {}", e))
+}
+
+// ============================================================================
+// AGENTIC MONITORING API
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AgentStatsResponse {
+    pub active_agents: usize,
+    pub episodes_total: usize,
+    pub episodes_last_hour: usize,
+    pub success_rate: f64,
+    pub active_goals: usize,
+    pub completed_goals: usize,
+    pub failed_goals: usize,
+    pub total_reflections: usize,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EpisodeEntry {
+    pub id: String,
+    pub agent_id: String,
+    pub query: String,
+    pub response: String,
+    pub context_chunks_used: usize,
+    pub success: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct EpisodesResponse {
+    pub episodes: Vec<EpisodeEntry>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GoalEntry {
+    pub id: String,
+    pub agent_id: String,
+    pub goal: String,
+    pub status: String,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GoalsResponse {
+    pub goals: Vec<GoalEntry>,
+    pub active: usize,
+    pub completed: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReflectionEntry {
+    pub id: String,
+    pub agent_id: String,
+    pub reflection_type: String,
+    pub insight: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ReflectionsResponse {
+    pub reflections: Vec<ReflectionEntry>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MemoryStatsResponse {
+    pub total_episodes: usize,
+    pub total_rag_memories: usize,
+    pub unique_agents: usize,
+    pub oldest_episode_timestamp: Option<i64>,
+    pub newest_episode_timestamp: Option<i64>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolUsageEntry {
+    pub tool_name: String,
+    pub count: usize,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolStatsResponse {
+    pub tool_executions: usize,
+    pub avg_confidence: f64,
+    pub fallback_rate: f64,
+    pub tool_distribution: Vec<ToolUsageEntry>,
+    pub timestamp: String,
+}
+
+/// Fetch agent statistics
+pub async fn fetch_agent_stats() -> Result<AgentStatsResponse, String> {
+    fetch_json("/monitoring/agents/stats").await
+}
+
+/// Fetch recent episodes
+pub async fn fetch_recent_episodes(limit: usize) -> Result<EpisodesResponse, String> {
+    fetch_json(&format!("/monitoring/agents/episodes?limit={}", limit)).await
+}
+
+/// Fetch goals
+pub async fn fetch_goals() -> Result<GoalsResponse, String> {
+    fetch_json("/monitoring/agents/goals").await
+}
+
+/// Fetch reflections
+pub async fn fetch_reflections(limit: usize) -> Result<ReflectionsResponse, String> {
+    fetch_json(&format!("/monitoring/agents/reflections?limit={}", limit)).await
+}
+
+/// Fetch memory statistics
+pub async fn fetch_memory_stats() -> Result<MemoryStatsResponse, String> {
+    fetch_json("/monitoring/memory/stats").await
+}
+
+/// Fetch tool statistics
+pub async fn fetch_tool_stats() -> Result<ToolStatsResponse, String> {
+    fetch_json("/monitoring/tools/stats").await
 }

@@ -1,8 +1,10 @@
 use crate::agent_memory::AgentMemory;
 use crate::retriever::Retriever;
 use chrono::Utc;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentStep {
@@ -89,6 +91,7 @@ impl<'a> Agent<'a> {
                 message: "No chunks found; returning fallback".into(),
             });
             self.store_memory(query, &answer);
+            self.store_episode(query, &answer, 0, false); // Store failed episode
             return AgentResponse {
                 answer,
                 steps,
@@ -105,6 +108,7 @@ impl<'a> Agent<'a> {
 
         // Step 5: Store memory
         self.store_memory(query, &answer);
+        self.store_episode(query, &answer, used_chunks.len(), true); // Store successful episode
         steps.push(AgentStep {
             kind: "memory".into(),
             message: "Stored interaction in memory".into(),
@@ -122,6 +126,35 @@ impl<'a> Agent<'a> {
             let ts = Utc::now().to_rfc3339();
             let _ = mem.store(self.agent_id, &format!("Q: {}", query), &ts);
             let _ = mem.store(self.agent_id, &format!("A: {}", answer), &ts);
+        }
+    }
+
+    /// Store episode for monitoring dashboard
+    fn store_episode(&self, query: &str, response: &str, chunks_used: usize, success: bool) {
+        if let Ok(conn) = Connection::open(self.memory_db_path) {
+            // Ensure episodes table exists
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS episodes (
+                    id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    response TEXT NOT NULL,
+                    context_chunks_used INTEGER NOT NULL,
+                    success INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )",
+                [],
+            );
+            
+            let episode_id = Uuid::new_v4().to_string();
+            let created_at = Utc::now().timestamp();
+            let success_int = if success { 1 } else { 0 };
+            
+            let _ = conn.execute(
+                "INSERT INTO episodes (id, agent_id, query, response, context_chunks_used, success, created_at) 
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![episode_id, self.agent_id, query, response, chunks_used, success_int, created_at],
+            );
         }
     }
 }

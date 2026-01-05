@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentResponse};
+use crate::agent::{Agent, AgentResponse, AgentStep};
 use crate::agent_memory::{AgentMemory, MemoryItem, MemorySearchResult};
 use crate::config::ApiConfig;
 use crate::db::chunk_settings;
@@ -10,6 +10,11 @@ use crate::monitoring::metrics;
 use crate::monitoring::rate_limit_middleware::{MatchKind, RateLimitOptions, RouteRule};
 use crate::retriever::Retriever;
 use crate::security::rate_limiter::{RateLimiter, RateLimiterState};
+use crate::tools::calculator::CalculatorTool;
+use crate::tools::url_fetch::URLFetchTool;
+use crate::tools::web_search::WebSearchTool;
+use crate::tools::Tool;
+use crate::memory::agent::GoalStatus;
 use actix_cors::Cors;
 use actix_multipart::Multipart;
 use actix_web::{http::StatusCode, web, App, Error, HttpResponse, HttpServer};
@@ -18,6 +23,7 @@ use futures_util::stream::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
+use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -62,6 +68,168 @@ static RETRIEVER: OnceLock<Arc<Mutex<Retriever>>> = OnceLock::new();
 
 pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
     let _ = RETRIEVER.set(handle);
+}
+
+// Shared agent session state for chat commands
+#[derive(Default, Clone)]
+struct AgentChatState {
+    focus_topic: Option<String>,
+    persona: Option<String>,
+    verbosity: Verbosity,
+    preferred_model: Option<String>,
+    temperature: Option<f32>,
+    last_query: Option<String>,
+    last_response: Option<String>,
+    last_steps: Vec<AgentStep>,
+    last_sources: Vec<String>,
+    last_tool: Option<String>,
+    last_token_usage: Option<usize>,
+    undo_stack: Vec<CommandAction>,
+    dry_run_plan: Option<String>,
+}
+
+#[derive(Clone)]
+enum CommandAction {
+    FocusSet(Option<String>),
+    PersonaSet(Option<String>),
+    VerbosityChanged(Verbosity),
+    ModelChanged(Option<String>),
+    TemperatureChanged(Option<f32>),
+    NoteAdded(String),
+}
+
+#[derive(Clone, Copy, Default)]
+enum Verbosity {
+    Brief,
+    #[default]
+    Normal,
+    Verbose,
+}
+
+impl Verbosity {
+    fn label(&self) -> &'static str {
+        match self {
+            Verbosity::Brief => "brief",
+            Verbosity::Normal => "normal",
+            Verbosity::Verbose => "verbose",
+        }
+    }
+}
+
+static CHAT_STATE: OnceLock<Arc<Mutex<AgentChatState>>> = OnceLock::new();
+
+fn chat_state() -> Arc<Mutex<AgentChatState>> {
+    CHAT_STATE
+        .get_or_init(|| Arc::new(Mutex::new(AgentChatState::default())))
+        .clone()
+}
+
+fn update_last_agent_run(query: String, response: &AgentResponse) {
+    let state_arc = chat_state();
+    let mut state = state_arc.lock().expect("chat state lock");
+    state.last_query = Some(query.clone());
+    state.last_response = Some(response.answer.clone());
+    state.last_steps = response.steps.clone();
+    state.last_sources = response.used_chunks.clone();
+    let token_estimate = response
+        .answer
+        .split_whitespace()
+        .count();
+    state.last_token_usage = Some(token_estimate.max(response.used_chunks.len()));
+}
+
+fn record_focus_change(new_focus: Option<String>) -> Option<String> {
+    let state_arc = chat_state();
+    let mut state = state_arc.lock().expect("chat state lock");
+    let previous = state.focus_topic.clone();
+    state
+        .undo_stack
+        .push(CommandAction::FocusSet(previous.clone()));
+    state.focus_topic = new_focus;
+    previous
+}
+
+fn record_persona_change(new_persona: Option<String>) -> Option<String> {
+    let state_arc = chat_state();
+    let mut state = state_arc.lock().expect("chat state lock");
+    let previous = state.persona.clone();
+    state
+        .undo_stack
+        .push(CommandAction::PersonaSet(previous.clone()));
+    state.persona = new_persona;
+    previous
+}
+
+fn record_verbosity_change(new_mode: Verbosity) -> Verbosity {
+    let state_arc = chat_state();
+    let mut state = state_arc.lock().expect("chat state lock");
+    let previous = state.verbosity;
+    state
+        .undo_stack
+        .push(CommandAction::VerbosityChanged(previous));
+    state.verbosity = new_mode;
+    previous
+}
+
+fn push_note_action(note: String) {
+    let state_arc = chat_state();
+    let mut guard = state_arc.lock().expect("chat state lock");
+    guard
+        .undo_stack
+        .push(CommandAction::NoteAdded(note));
+}
+
+fn record_model_change(new_model: Option<String>) -> Option<String> {
+    let state_arc = chat_state();
+    let mut guard = state_arc.lock().expect("chat state lock");
+    let previous = guard.preferred_model.clone();
+    guard
+        .undo_stack
+        .push(CommandAction::ModelChanged(previous.clone()));
+    guard.preferred_model = new_model.clone();
+    previous
+}
+
+fn record_temperature_change(new_temp: Option<f32>) -> Option<f32> {
+    let state_arc = chat_state();
+    let mut guard = state_arc.lock().expect("chat state lock");
+    let previous = guard.temperature;
+    guard
+        .undo_stack
+        .push(CommandAction::TemperatureChanged(previous));
+    guard.temperature = new_temp;
+    previous
+}
+
+fn pop_undo_action() -> Option<CommandAction> {
+    let state_arc = chat_state();
+    let mut guard = state_arc.lock().expect("chat state lock");
+    guard.undo_stack.pop()
+}
+
+#[allow(dead_code)]
+fn snapshots_for_debug() -> (Option<String>, Option<String>, Verbosity, Option<String>) {
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+    (
+        state.focus_topic.clone(),
+        state.persona.clone(),
+        state.verbosity,
+        state.last_query.clone(),
+    )
+}
+
+fn store_dry_run_plan(plan: String) {
+    let state_arc = chat_state();
+    let mut guard = state_arc.lock().expect("chat state lock");
+    guard.dry_run_plan = Some(plan);
+}
+
+#[allow(dead_code)]
+fn fetch_dry_run_plan() -> Option<String> {
+    let state_arc = chat_state();
+    let guard = state_arc.lock().expect("chat state lock");
+    guard.dry_run_plan.clone()
 }
 
 // Rate limiting is enforced by middleware (see monitoring/rate_limit_middleware.rs).
@@ -1782,11 +1950,778 @@ async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Result<HttpRespo
     })))
 }
 
+/// Chat command types
+#[allow(dead_code)]
+enum ChatCommand {
+    // Existing goal/system helpers
+    Goal(String),
+    Goals,
+    Status,
+    Help,
+    Models,
+    Clear,
+    // Knowledge management
+    Forget(String),
+    History,
+    Sources,
+    Learn(String),
+    Note(String),
+    // Goal & task management
+    Subgoal(String),
+    PauseGoal,
+    ResumeGoal,
+    AbandonGoal,
+    Reflect,
+    Why,
+    // Context control
+    Focus(String),
+    Unfocus,
+    Persona(String),
+    Verbose,
+    Brief,
+    // Tools & execution
+    RunTool(String),
+    Chain(String, String),
+    Retry,
+    Undo,
+    DryRun(String),
+    // System commands
+    Model(String),
+    Temperature(String),
+    Export,
+    Import(Option<String>),
+    Debug,
+    Tokens,
+}
+
+fn extract_argument<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+    line.strip_prefix(marker).map(|rest| rest.trim()).filter(|s| !s.is_empty())
+}
+
+/// Parse chat commands from user input
+fn parse_chat_command(query: &str) -> Option<ChatCommand> {
+    let trimmed = query.trim();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+
+    if let Some(arg) = extract_argument(trimmed, "/goal ") {
+        return Some(ChatCommand::Goal(arg.to_string()));
+    }
+    if trimmed == "/goals" {
+        return Some(ChatCommand::Goals);
+    }
+    if trimmed == "/status" {
+        return Some(ChatCommand::Status);
+    }
+    if trimmed == "/help" {
+        return Some(ChatCommand::Help);
+    }
+    if trimmed == "/models" {
+        return Some(ChatCommand::Models);
+    }
+    if trimmed == "/clear" {
+        return Some(ChatCommand::Clear);
+    }
+
+    if let Some(arg) = extract_argument(trimmed, "/forget ") {
+        return Some(ChatCommand::Forget(arg.to_string()));
+    }
+    if trimmed == "/history" {
+        return Some(ChatCommand::History);
+    }
+    if trimmed == "/sources" {
+        return Some(ChatCommand::Sources);
+    }
+    if let Some(arg) = extract_argument(trimmed, "/learn ") {
+        return Some(ChatCommand::Learn(arg.to_string()));
+    }
+    if let Some(arg) = extract_argument(trimmed, "/note ") {
+        return Some(ChatCommand::Note(arg.to_string()));
+    }
+
+    if let Some(arg) = extract_argument(trimmed, "/subgoal ") {
+        return Some(ChatCommand::Subgoal(arg.to_string()));
+    }
+    if trimmed == "/pause" {
+        return Some(ChatCommand::PauseGoal);
+    }
+    if trimmed == "/resume" {
+        return Some(ChatCommand::ResumeGoal);
+    }
+    if trimmed == "/abandon" {
+        return Some(ChatCommand::AbandonGoal);
+    }
+    if trimmed == "/reflect" {
+        return Some(ChatCommand::Reflect);
+    }
+    if trimmed == "/why" {
+        return Some(ChatCommand::Why);
+    }
+
+    if let Some(arg) = extract_argument(trimmed, "/focus ") {
+        return Some(ChatCommand::Focus(arg.to_string()));
+    }
+    if trimmed == "/unfocus" {
+        return Some(ChatCommand::Unfocus);
+    }
+    if let Some(arg) = extract_argument(trimmed, "/persona ") {
+        return Some(ChatCommand::Persona(arg.to_string()));
+    }
+    if trimmed == "/verbose" {
+        return Some(ChatCommand::Verbose);
+    }
+    if trimmed == "/brief" {
+        return Some(ChatCommand::Brief);
+    }
+
+    if let Some(arg) = extract_argument(trimmed, "/run ") {
+        return Some(ChatCommand::RunTool(arg.to_string()));
+    }
+    if let Some(arg) = extract_argument(trimmed, "/chain ") {
+        let parts: Vec<&str> = arg.split("->").map(|p| p.trim()).collect();
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            return Some(ChatCommand::Chain(parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    if trimmed == "/retry" {
+        return Some(ChatCommand::Retry);
+    }
+    if trimmed == "/undo" {
+        return Some(ChatCommand::Undo);
+    }
+    if let Some(arg) = extract_argument(trimmed, "/dry-run ") {
+        return Some(ChatCommand::DryRun(arg.to_string()));
+    }
+
+    if let Some(arg) = extract_argument(trimmed, "/model ") {
+        return Some(ChatCommand::Model(arg.to_string()));
+    }
+    if let Some(arg) = extract_argument(trimmed, "/temperature ") {
+        return Some(ChatCommand::Temperature(arg.to_string()));
+    }
+    if trimmed == "/export" {
+        return Some(ChatCommand::Export);
+    }
+    if trimmed == "/import" {
+        return Some(ChatCommand::Import(None));
+    }
+    if trimmed == "/debug" {
+        return Some(ChatCommand::Debug);
+    }
+    if trimmed == "/tokens" {
+        return Some(ChatCommand::Tokens);
+    }
+
+    None
+}
+
+
+/// Create a goal via the agentic monitor routes
+fn create_goal_from_command(goal_text: &str) -> Result<serde_json::Value, String> {
+    use crate::api::agentic_monitor_routes::get_agent_db_connection;
+    
+    let conn = get_agent_db_connection()
+        .ok_or_else(|| "Database not available".to_string())?;
+    
+    let goal_id = Uuid::new_v4().to_string();
+    let now = Utc::now().timestamp();
+    let agent_id = "default";
+    
+    conn.execute(
+        "INSERT INTO goals (id, agent_id, goal, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![&goal_id, agent_id, goal_text, "active", now],
+    ).map_err(|e| format!("Failed to create goal: {}", e))?;
+    
+    Ok(json!({
+        "id": goal_id,
+        "goal": goal_text,
+        "status": "active",
+        "agent_id": agent_id,
+        "created_at": now
+    }))
+}
+
+/// Get help text for chat commands
+fn get_help_text() -> String {
+    r#"Available commands:
+
+/goal <text>  - Create a new goal
+/goals        - List active goals
+/status       - Show system health status
+/models       - List available models
+/help         - Show this help message
+/clear        - Clear chat history (frontend only)
+/forget <topic> - Forget matching memories
+/history     - Show recent agent episodes
+/sources     - Show last response sources
+/learn <url> - Fetch & ingest a URL (preview)
+/note <text> - Store a quick note
+/subgoal <text> - Add task under current goal
+/pause|/resume|/abandon - Control current goal
+/reflect     - Generate a reflection summary
+/why         - Explain the last reasoning steps
+/focus <topic>|/unfocus - Control attention
+/persona <name> - Swap agent persona
+/verbose|/brief - Change response verbosity
+/run <tool>  - Execute calculator/search/fetch
+/chain a -> b - Execute tool sequences (use $last placeholder)
+/retry|/undo - Retry last query / undo change
+/dry-run <query> - Plan without execution
+/model <name> - Switch backend model (use 'default')
+/temperature <n> - Adjust creativity (use 'default')
+/export|/import <json> - Export or import memories
+/debug|/tokens - Inspect internals
+
+Examples:
+  /goal Find all Rust error handling patterns
+  /focus tracing metrics
+  /run calculator 5+7"#.to_string()
+}
+
+/// Get active goals list
+fn get_goals_list() -> Result<String, String> {
+    use crate::api::agentic_monitor_routes::get_agent_db_connection;
+    
+    let conn = get_agent_db_connection()
+        .ok_or_else(|| "Database not available".to_string())?;
+    
+    let mut stmt = conn.prepare(
+        "SELECT goal, status, created_at FROM goals WHERE status = 'active' ORDER BY created_at DESC LIMIT 10"
+    ).map_err(|e| e.to_string())?;
+    
+    let goals: Vec<String> = stmt
+        .query_map([], |row| {
+            let goal: String = row.get(0)?;
+            Ok(format!("• {}", goal))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .collect();
+    
+    if goals.is_empty() {
+        Ok("No active goals. Create one with: /goal <your goal>".to_string())
+    } else {
+        Ok(format!("Active Goals ({}):\n{}", goals.len(), goals.join("\n")))
+    }
+}
+
+/// Get system status
+fn get_system_status() -> String {
+    let health = if RETRIEVER.get().is_some() { "✓ Healthy" } else { "✗ Retriever not initialized" };
+    format!("System Status: {}\nBackend: Running\nTimestamp: {}", health, Utc::now().to_rfc3339())
+}
+
+/// Get available models
+fn get_models_list() -> String {
+    // This would ideally query the actual models, but for now return a placeholder
+    "Available models:\n• default (local embedding model)\n\nUse /config to change model settings.".to_string()
+}
+
+fn forget_topic(topic: &str) -> Result<String, String> {
+    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    let removed = mem
+        .forget_topic("default", topic)
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Removed {} memories mentioning '{}'.", removed, topic))
+}
+
+fn list_recent_history(limit: usize) -> Result<String, String> {
+    use crate::api::agentic_monitor_routes::get_agent_db_connection;
+    let conn = get_agent_db_connection().ok_or_else(|| "Database not available".to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT query, response, created_at FROM episodes ORDER BY created_at DESC LIMIT ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([limit as i64], |row| {
+            let ts: i64 = row.get(2)?;
+            let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "unknown".into());
+            Ok(format!(
+                "• [{}] {}\n  ↳ {}",
+                timestamp,
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let entries: Vec<String> = rows.filter_map(Result::ok).collect();
+    if entries.is_empty() {
+        Ok("No recorded history yet. Ask a question to get started.".to_string())
+    } else {
+        Ok(entries.join("\n"))
+    }
+}
+
+fn last_sources_summary() -> String {
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+    if state.last_sources.is_empty() {
+        "No sources captured yet. Run a search query first.".to_string()
+    } else {
+        let lines: Vec<String> = state
+            .last_sources
+            .iter()
+            .enumerate()
+            .map(|(idx, s)| format!("{}. {}", idx + 1, s))
+            .collect();
+        format!("Sources from last response:\n{}", lines.join("\n"))
+    }
+}
+
+fn record_note(content: &str) -> Result<String, String> {
+    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    let ts = chrono::Utc::now().to_rfc3339();
+    mem.add_note("default", content, &ts)
+        .map_err(|e| e.to_string())?;
+    push_note_action(content.to_string());
+    Ok("Note stored.".to_string())
+}
+
+fn add_subgoal(text: &str) -> Result<String, String> {
+    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    if let Some((goal_id, goal_text)) = mem.latest_goal("default").map_err(|e| e.to_string())? {
+        let task_id = mem
+            .create_subgoal(&goal_id, text)
+            .map_err(|e| e.to_string())?;
+        Ok(format!("Added subgoal under '{}': {} (task {})", goal_text, text, task_id))
+    } else {
+        Err("No active goal to attach a subgoal. Use /goal first.".to_string())
+    }
+}
+
+fn update_goal_status_cmd(status: GoalStatus) -> Result<String, String> {
+    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    if let Some((goal_id, goal_text)) = mem.latest_goal("default").map_err(|e| e.to_string())? {
+        mem.update_goal_status(&goal_id, status.as_str())
+            .map_err(|e| e.to_string())?;
+        Ok(format!("Goal '{}' marked as {}.", goal_text, status.as_str()))
+    } else {
+        Err("No goal found.".to_string())
+    }
+}
+
+fn summarize_reflection() -> Result<String, String> {
+    use crate::api::agentic_monitor_routes::get_agent_db_connection;
+    let conn = get_agent_db_connection().ok_or_else(|| "Database not available".to_string())?;
+    let one_day_ago = chrono::Utc::now().timestamp() - 24 * 3600;
+    let mut stmt = conn
+        .prepare(
+            "SELECT COUNT(*), SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) FROM episodes WHERE created_at > ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let (total, success): (i64, i64) = stmt
+        .query_row([one_day_ago], |row| Ok((row.get(0)?, row.get(1).unwrap_or(0))))
+        .map_err(|e| e.to_string())?;
+    let rate = if total > 0 {
+        (success as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    Ok(format!(
+        "Last 24h episodes: {} (success {:.1}%)",
+        total, rate
+    ))
+}
+
+fn explain_last_reasoning() -> String {
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+    if state.last_steps.is_empty() {
+        "No reasoning trace available yet.".to_string()
+    } else {
+        let details: Vec<String> = state
+            .last_steps
+            .iter()
+            .map(|step| format!("- [{}] {}", step.kind, step.message))
+            .collect();
+        details.join("\n")
+    }
+}
+
+fn apply_focus(topic: Option<String>) -> String {
+    let previous = record_focus_change(topic.clone());
+    match (previous, topic) {
+        (Some(prev), Some(new_topic)) => format!("Focus switched from '{}' to '{}'.", prev, new_topic),
+        (None, Some(new_topic)) => format!("Focus set to '{}'.", new_topic),
+        (_, None) => "Focus cleared.".to_string(),
+    }
+}
+
+fn apply_persona(persona: Option<String>) -> String {
+    let previous = record_persona_change(persona.clone());
+    match (previous, persona) {
+        (Some(prev), Some(new_persona)) => format!("Persona switched from '{}' to '{}'.", prev, new_persona),
+        (None, Some(new_persona)) => format!("Persona set to '{}'.", new_persona),
+        (_, None) => "Persona reset to default.".to_string(),
+    }
+}
+
+fn apply_verbosity(mode: Verbosity) -> String {
+    let previous = record_verbosity_change(mode);
+    format!("Verbosity changed from {} to {}.", previous.label(), mode.label())
+}
+
+fn apply_model(model: Option<String>) -> String {
+    let previous = record_model_change(model.clone());
+    match (previous, model) {
+        (Some(prev), Some(new_model)) => format!("Model switched from '{}' to '{}'.", prev, new_model),
+        (None, Some(new_model)) => format!("Model set to '{}'.", new_model),
+        (_, None) => "Model reset to default.".to_string(),
+    }
+}
+
+fn apply_temperature(temp: Option<f32>) -> String {
+    let previous = record_temperature_change(temp);
+    match (previous, temp) {
+        (Some(prev), Some(new_temp)) => format!("Temperature changed from {:.2} to {:.2}.", prev, new_temp),
+        (None, Some(new_temp)) => format!("Temperature set to {:.2}.", new_temp),
+        (_, None) => "Temperature reset to default.".to_string(),
+    }
+}
+
+async fn run_calculator_tool(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if let Some(inner) = trimmed.strip_prefix("length(").and_then(|s| s.strip_suffix(')')) {
+        let len = inner.chars().count();
+        return Ok(format!("length(...) = {}", len));
+    }
+    let tool = CalculatorTool::new();
+    match tool.execute(trimmed).await {
+        Ok(result) if result.success => Ok(result.result),
+        Ok(result) => Err(result.result),
+        Err(err) => Err(err),
+    }
+}
+
+async fn run_web_search_tool(input: &str) -> Result<String, String> {
+    let tool = WebSearchTool::new();
+    let result = tool.execute(input).await.map_err(|e| e.to_string())?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
+fn normalize_pipe_separators(command: &str) -> String {
+    command
+        .split('|')
+        .map(|segment| segment.trim())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+async fn run_tool_command(command: &str) -> Result<String, String> {
+    let command = normalize_pipe_separators(command);
+    let trimmed = command.trim();
+    if trimmed.starts_with("calculator") {
+        let expr = trimmed.strip_prefix("calculator").unwrap_or("").trim();
+        if expr.is_empty() {
+            Err("Provide an expression after 'calculator'.".to_string())
+        } else {
+            run_calculator_tool(expr).await
+        }
+    } else if trimmed.starts_with("search") {
+        let query = trimmed.strip_prefix("search").unwrap_or("").trim();
+        if query.is_empty() {
+            Err("Provide a query after 'search'.".to_string())
+        } else {
+            run_web_search_tool(query).await
+        }
+    } else if trimmed.starts_with("fetch") {
+        let url = trimmed.strip_prefix("fetch").unwrap_or("").trim();
+        if url.is_empty() {
+            Err("Provide a URL after 'fetch'.".to_string())
+        } else {
+            preview_url_content(url).await
+        }
+    } else {
+        Err("Unknown tool. Use 'calculator', 'search', or 'fetch'.".to_string())
+    }
+}
+
+async fn run_chain_command(chain: (String, String)) -> Result<String, String> {
+    let first = run_tool_command(&chain.0).await?;
+    let second_input = if chain.1.trim().contains("$last") {
+        chain.1.replace("$last", &first)
+    } else {
+        chain.1.clone()
+    };
+    let second = run_tool_command(&second_input).await?;
+    Ok(format!("Step1:\n{}\n\nStep2:\n{}", first, second))
+}
+
+fn retry_last_query(default_top_k: usize) -> Result<AgentResponse, String> {
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+    if let Some(last_query) = &state.last_query {
+        if let Some(retriever) = RETRIEVER.get() {
+            let query_clone = last_query.clone();
+            drop(state);
+            let agent = Agent::new("default", "agent.db", Arc::clone(retriever));
+            let response = agent.run(&query_clone, default_top_k);
+            update_last_agent_run(query_clone, &response);
+            Ok(response)
+        } else {
+            Err("Retriever not initialized".to_string())
+        }
+    } else {
+        Err("No query to retry yet.".to_string())
+    }
+}
+
+fn apply_undo() -> String {
+    if let Some(action) = pop_undo_action() {
+        match action {
+            CommandAction::FocusSet(previous) => apply_focus(previous),
+            CommandAction::PersonaSet(previous) => apply_persona(previous),
+            CommandAction::VerbosityChanged(previous) => apply_verbosity(previous),
+            CommandAction::ModelChanged(previous) => apply_model(previous),
+            CommandAction::TemperatureChanged(previous) => apply_temperature(previous),
+            CommandAction::NoteAdded(_) => "Last note removal not supported yet.".to_string(),
+        }
+    } else {
+        "Nothing to undo.".to_string()
+    }
+}
+
+fn render_dry_run_plan(plan: &str) -> String {
+    store_dry_run_plan(plan.to_string());
+    format!("Planned actions:\n{}", plan)
+}
+
+fn export_state() -> String {
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+    let payload = json!({
+        "focus": state.focus_topic,
+        "persona": state.persona,
+        "verbosity": state.verbosity.label(),
+        "model": state.preferred_model,
+        "temperature": state.temperature,
+        "last_query": state.last_query,
+        "last_response": state.last_response,
+        "dry_run_plan": state.dry_run_plan,
+    });
+
+    let export_root = env::var("AG_EXPORT_DIR").unwrap_or_else(|_| {
+        let base = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        base.join(".local/share/ag/exports").display().to_string()
+    });
+
+    if let Err(err) = fs::create_dir_all(&export_root) {
+        return format!("Exported in-memory only (failed to write {}): {}", export_root, err);
+    }
+
+    let filename = format!("export-{}.json", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
+    let path = Path::new(&export_root).join(filename);
+    match fs::write(&path, payload.to_string()) {
+        Ok(_) => format!("Exported to {}", path.display()),
+        Err(err) => format!("Exported in-memory only (failed to write {}): {}", path.display(), err),
+    }
+}
+
+fn import_state(raw: &str) -> String {
+    if raw.trim().is_empty() {
+        return "Provide JSON payload after /import.".to_string();
+    }
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => {
+            if let Some(model) = value.get("model").and_then(|v| v.as_str()) {
+                record_model_change(if model.eq_ignore_ascii_case("default") { None } else { Some(model.to_string()) });
+            }
+            if let Some(temp) = value.get("temperature").and_then(|v| v.as_f64()) {
+                record_temperature_change(Some(temp as f32));
+            }
+            if let Some(focus) = value.get("focus").and_then(|v| v.as_str()) {
+                record_focus_change(Some(focus.to_string()));
+            }
+            if let Some(persona) = value.get("persona").and_then(|v| v.as_str()) {
+                record_persona_change(Some(persona.to_string()));
+            }
+            if let Some(verbosity) = value.get("verbosity").and_then(|v| v.as_str()) {
+                let mode = match verbosity.to_lowercase().as_str() {
+                    "brief" => Verbosity::Brief,
+                    "verbose" => Verbosity::Verbose,
+                    _ => Verbosity::Normal,
+                };
+                record_verbosity_change(mode);
+            }
+            "Import applied.".to_string()
+        }
+        Err(err) => format!("✗ Invalid import: {}", err),
+    }
+}
+
+fn debug_state_snapshot() -> String {
+    let (focus, persona, verbosity, last_query) = snapshots_for_debug();
+    format!(
+        "Debug State:\n- Focus: {:?}\n- Persona: {:?}\n- Verbosity: {:?}\n- Last query: {:?}",
+        focus, persona, verbosity.label(), last_query
+    )
+}
+
+fn tokens_usage_snapshot() -> String {
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+    match state.last_token_usage {
+        Some(tokens) => format!("Approximate token usage: {}", tokens),
+        None => "No token usage recorded yet.".to_string(),
+    }
+}
+
+async fn preview_url_content(url: &str) -> Result<String, String> {
+    let tool = URLFetchTool::new();
+    let query = format!("Fetch {}", url);
+    let result = tool.execute(&query).await.map_err(|e| e.to_string())?;
+    if result.success {
+        Ok(format!("Learned from {}:\n{}", url, result.result))
+    } else {
+        Err(result.result)
+    }
+}
+
 async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
+    
+    // Check for chat commands
+    if let Some(cmd) = parse_chat_command(&req.query) {
+        let (answer, extra) = match cmd {
+            ChatCommand::Goal(goal_text) => {
+                match create_goal_from_command(&goal_text) {
+                    Ok(goal) => (
+                        format!("✓ Goal created: {}", goal_text),
+                        Some(json!({ "goal": goal }))
+                    ),
+                    Err(e) => (format!("✗ Failed to create goal: {}", e), None),
+                }
+            }
+            ChatCommand::Goals => {
+                match get_goals_list() {
+                    Ok(list) => (list, None),
+                    Err(e) => (format!("✗ Failed to get goals: {}", e), None),
+                }
+            }
+            ChatCommand::Status => (get_system_status(), None),
+            ChatCommand::Help => (get_help_text(), None),
+            ChatCommand::Models => (get_models_list(), None),
+            ChatCommand::Clear => ("Chat cleared. (This is handled by the frontend)".to_string(), None),
+            ChatCommand::Forget(topic) => match forget_topic(&topic) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::History => match list_recent_history(5) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Sources => (last_sources_summary(), None),
+            ChatCommand::Learn(url) => match preview_url_content(&url).await {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Note(text) => match record_note(&text) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Subgoal(text) => match add_subgoal(&text) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::PauseGoal => match update_goal_status_cmd(GoalStatus::Paused) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::ResumeGoal => match update_goal_status_cmd(GoalStatus::Active) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::AbandonGoal => match update_goal_status_cmd(GoalStatus::Abandoned) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Reflect => match summarize_reflection() {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Why => (explain_last_reasoning(), None),
+            ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
+            ChatCommand::Unfocus => (apply_focus(None), None),
+            ChatCommand::Persona(name) => {
+                let persona_value = if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
+                    None
+                } else {
+                    Some(name)
+                };
+                (apply_persona(persona_value), None)
+            },
+            ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
+            ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
+            ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
+                Ok(result) => (result, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Chain(first, second) => match run_chain_command((first, second)).await {
+                Ok(result) => (result, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Retry => match retry_last_query(req.top_k) {
+                Ok(agent_response) => (
+                    agent_response.answer.clone(),
+                    Some(json!({ "retry": agent_response }))
+                ),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Undo => (apply_undo(), None),
+            ChatCommand::DryRun(plan) => (render_dry_run_plan(&plan), None),
+            ChatCommand::Model(name) => {
+                let model_value = if name.eq_ignore_ascii_case("default") {
+                    None
+                } else {
+                    Some(name)
+                };
+                (apply_model(model_value), None)
+            },
+            ChatCommand::Temperature(value) => {
+                let parsed = value.parse::<f32>().ok();
+                (apply_temperature(parsed), None)
+            },
+            ChatCommand::Export => (export_state(), None),
+            ChatCommand::Import(payload) => {
+                let body = payload.unwrap_or_else(|| "{}".to_string());
+                (import_state(&body), None)
+            },
+            ChatCommand::Debug => (debug_state_snapshot(), None),
+            ChatCommand::Tokens => (tokens_usage_snapshot(), None),
+        };
+        
+        let mut response = json!({
+            "response": {
+                "answer": answer,
+                "chunks_used": 0,
+                "sources": []
+            },
+            "request_id": request_id
+        });
+        
+        if let Some(extra_data) = extra {
+            if let Some(obj) = response.as_object_mut() {
+                for (k, v) in extra_data.as_object().unwrap() {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        
+        return Ok(HttpResponse::Ok().json(response));
+    }
+    
     if let Some(retriever) = RETRIEVER.get() {
         let agent = Agent::new("default", "agent.db", Arc::clone(retriever));
         let resp: AgentResponse = agent.run(&req.query, req.top_k);
+        update_last_agent_run(req.query.clone(), &resp);
         Ok(HttpResponse::Ok().json(json!({
             "response": resp,
             "request_id": request_id
@@ -1803,9 +2738,141 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
 // GET-based chat endpoint to avoid CORS preflight
 async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
+    
+    // Check for chat commands
+    if let Some(cmd) = parse_chat_command(&query.query) {
+        let (answer, extra) = match cmd {
+            ChatCommand::Goal(goal_text) => {
+                match create_goal_from_command(&goal_text) {
+                    Ok(goal) => (
+                        format!("✓ Goal created: {}", goal_text),
+                        Some(json!({ "goal": goal }))
+                    ),
+                    Err(e) => (format!("✗ Failed to create goal: {}", e), None),
+                }
+            }
+            ChatCommand::Goals => {
+                match get_goals_list() {
+                    Ok(list) => (list, None),
+                    Err(e) => (format!("✗ Failed to get goals: {}", e), None),
+                }
+            }
+            ChatCommand::Status => (get_system_status(), None),
+            ChatCommand::Help => (get_help_text(), None),
+            ChatCommand::Models => (get_models_list(), None),
+            ChatCommand::Clear => ("Chat cleared. (This is handled by the frontend)".to_string(), None),
+            ChatCommand::Forget(topic) => match forget_topic(&topic) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::History => match list_recent_history(5) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Sources => (last_sources_summary(), None),
+            ChatCommand::Learn(url) => match preview_url_content(&url).await {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Note(text) => match record_note(&text) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Subgoal(text) => match add_subgoal(&text) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::PauseGoal => match update_goal_status_cmd(GoalStatus::Paused) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::ResumeGoal => match update_goal_status_cmd(GoalStatus::Active) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::AbandonGoal => match update_goal_status_cmd(GoalStatus::Abandoned) {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Reflect => match summarize_reflection() {
+                Ok(msg) => (msg, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Why => (explain_last_reasoning(), None),
+            ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
+            ChatCommand::Unfocus => (apply_focus(None), None),
+            ChatCommand::Persona(name) => {
+                let persona_value = if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
+                    None
+                } else {
+                    Some(name)
+                };
+                (apply_persona(persona_value), None)
+            },
+            ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
+            ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
+            ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
+                Ok(result) => (result, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Chain(first, second) => match run_chain_command((first, second)).await {
+                Ok(result) => (result, None),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Retry => match retry_last_query(query.top_k) {
+                Ok(agent_response) => (
+                    agent_response.answer.clone(),
+                    Some(json!({ "retry": agent_response }))
+                ),
+                Err(err) => (format!("✗ {}", err), None),
+            },
+            ChatCommand::Undo => (apply_undo(), None),
+            ChatCommand::DryRun(plan) => (render_dry_run_plan(&plan), None),
+            ChatCommand::Model(name) => {
+                let model_value = if name.eq_ignore_ascii_case("default") {
+                    None
+                } else {
+                    Some(name)
+                };
+                (apply_model(model_value), None)
+            },
+            ChatCommand::Temperature(value) => {
+                let parsed = value.parse::<f32>().ok();
+                (apply_temperature(parsed), None)
+            },
+            ChatCommand::Export => (export_state(), None),
+            ChatCommand::Import(payload) => {
+                let body = payload.unwrap_or_else(|| "{}".to_string());
+                (import_state(&body), None)
+            },
+            ChatCommand::Debug => (debug_state_snapshot(), None),
+            ChatCommand::Tokens => (tokens_usage_snapshot(), None),
+        };
+        
+        let mut response = json!({
+            "response": {
+                "answer": answer,
+                "chunks_used": 0,
+                "sources": []
+            },
+            "request_id": request_id
+        });
+        
+        if let Some(extra_data) = extra {
+            if let Some(obj) = response.as_object_mut() {
+                for (k, v) in extra_data.as_object().unwrap() {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        
+        return Ok(HttpResponse::Ok().json(response));
+    }
+    
     if let Some(retriever) = RETRIEVER.get() {
         let agent = Agent::new("default", "agent.db", Arc::clone(retriever));
         let resp: AgentResponse = agent.run(&query.query, query.top_k);
+        update_last_agent_run(query.query.clone(), &resp);
         Ok(HttpResponse::Ok().json(json!({
             "response": resp,
             "request_id": request_id
@@ -1911,6 +2978,7 @@ fn parse_log_line(line: &str) -> LogEntry {
     }
 }
 
+pub mod agentic_monitor_routes;
 pub mod sys_routes;
 
 pub fn start_api_server(
@@ -2024,7 +3092,14 @@ pub fn start_api_server(
                     .route("/metrics", web::get().to(get_metrics)) // ← Prometheus format
                     .route("/ui/requests", web::get().to(get_ui_requests)) // ← Self-contained UI metrics for Requests
                     .route("/chunking/latest", web::get().to(get_chunking_stats))
-                    .route("/chunking/logging", web::get().to(toggle_chunking_logging)),
+                    .route("/chunking/logging", web::get().to(toggle_chunking_logging))
+                    // Agentic monitoring routes
+                    .route("/agents/stats", web::get().to(agentic_monitor_routes::get_agent_stats))
+                    .route("/agents/episodes", web::get().to(agentic_monitor_routes::get_recent_episodes))
+                    .route("/agents/goals", web::get().to(agentic_monitor_routes::get_goals))
+                    .route("/agents/reflections", web::get().to(agentic_monitor_routes::get_reflections))
+                    .route("/memory/stats", web::get().to(agentic_monitor_routes::get_memory_stats))
+                    .route("/tools/stats", web::get().to(agentic_monitor_routes::get_tool_stats)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES
@@ -2076,6 +3151,11 @@ pub fn start_api_server(
             // ============================================================================
             .route("/agent", web::post().to(run_agent))
             .route("/agent/chat", web::get().to(run_agent_get))
+            // Goal management routes
+            .route("/agent/goals", web::post().to(agentic_monitor_routes::create_goal))
+            .route("/agent/goals", web::get().to(agentic_monitor_routes::get_active_goals))
+            .route("/agent/goals/{goal_id}/complete", web::post().to(agentic_monitor_routes::complete_goal))
+            .route("/agent/goals/{goal_id}/fail", web::post().to(agentic_monitor_routes::fail_goal))
             .service(web::scope("/sys").configure(sys_routes::sys_routes))
     });
     if force_single_worker {

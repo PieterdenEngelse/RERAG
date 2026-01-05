@@ -1,5 +1,7 @@
+use chrono::Utc;
 use rusqlite::{Connection, Result};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 pub struct AgentMemory {
     conn: Connection,
@@ -45,6 +47,18 @@ impl AgentMemory {
             )",
             [],
         )?;
+        // Goal/task helpers for chat commands
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                goal_id TEXT NOT NULL,
+                task TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER
+            )",
+            [],
+        )?;
         Ok(Self { conn })
     }
 
@@ -82,6 +96,15 @@ impl AgentMemory {
         Ok(())
     }
 
+    pub fn forget_topic(&self, agent_id: &str, topic: &str) -> Result<usize> {
+        let pattern = format!("%{}%", topic);
+        let affected = self.conn.execute(
+            "DELETE FROM rag_memory WHERE agent_id = ?1 AND content LIKE ?2",
+            (agent_id, &pattern),
+        )?;
+        Ok(affected)
+    }
+
     pub fn recall_rag(&self, agent_id: &str, limit: usize) -> Result<Vec<MemoryItem>> {
         let sql = format!(
             "SELECT id, agent_id, memory_type, content, timestamp FROM rag_memory WHERE agent_id = ?1 ORDER BY timestamp DESC LIMIT {}",
@@ -98,6 +121,47 @@ impl AgentMemory {
             })
         })?;
         Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    pub fn add_note(&self, agent_id: &str, note: &str, timestamp: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO rag_memory (agent_id, memory_type, content, timestamp, vector) VALUES (?1, 'note', ?2, ?3, '[]')",
+            (agent_id, note, timestamp),
+        )?;
+        Ok(())
+    }
+
+    pub fn create_subgoal(&self, goal_id: &str, text: &str) -> Result<String> {
+        let task_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT INTO tasks (id, goal_id, task, status, created_at) VALUES (?1, ?2, ?3, 'pending', ?4)",
+            (&task_id, goal_id, text, now),
+        )?;
+        Ok(task_id)
+    }
+
+    pub fn update_goal_status(&self, goal_id: &str, status: &str) -> Result<()> {
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "UPDATE goals SET status = ?1, completed_at = CASE WHEN ?1 IN ('completed','failed','abandoned') THEN ?2 ELSE completed_at END WHERE id = ?3",
+            (status, now, goal_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn latest_goal(&self, agent_id: &str) -> Result<Option<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, goal FROM goals WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query([agent_id])?;
+        if let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let goal: String = row.get(1)?;
+            Ok(Some((id, goal)))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn search_rag(
