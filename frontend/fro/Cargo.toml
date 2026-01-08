@@ -8,7 +8,7 @@ edition = "2021"
 dioxus = { version = "0.6.3" }
 # Use compatible manganis version for Dioxus 0.6.3
 manganis = "0.6"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "DomTokenList", "Storage", "Navigator", "Clipboard", "console", "Blob", "BlobPropertyBag", "FormData", "FileList", "File"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "DomTokenList", "Storage", "Navigator", "Clipboard", "console", "Blob", "BlobPropertyBag", "FormData", "FileList", "File", "Request", "RequestInit", "RequestMode", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader"] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 gloo-net = "0.6"

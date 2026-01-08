@@ -5,11 +5,11 @@ use dioxus::prelude::*;
 pub fn InfoIcon() -> Element {
     rsx! {
         svg {
-            class: "w-3 h-3 text-blue-400",
+            class: "w-5 h-5 text-white",
             view_box: "0 0 20 20",
             fill: "none",
             stroke: "currentColor",
-            stroke_width: "2",
+            stroke_width: "1.5",
             circle { cx: "10", cy: "10", r: "9" }
             line { x1: "10", y1: "8", x2: "10", y2: "14" }
             circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }

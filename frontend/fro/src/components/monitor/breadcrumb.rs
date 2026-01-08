@@ -30,20 +30,20 @@ pub fn Breadcrumb(props: BreadcrumbProps) -> Element {
     }
 
     rsx! {
-        nav { class: "text-base font-semibold text-teal-200 flex items-center flex-wrap gap-3 py-4 px-2", style: "margin-bottom: -0.75%;",
+        nav { class: "text-base font-semibold text-white flex items-center flex-wrap gap-3 py-4 px-2", style: "margin-bottom: -0.75%;",
             for (idx, item) in props.items.iter().enumerate() {
                 if let Some(route) = &item.route {
                     Link {
                         to: route.clone(),
-                        class: "text-teal-100 hover:text-white transition-colors",
+                        class: "text-white/80 hover:text-white transition-colors",
                         {item.label.clone()}
                     }
                 } else {
-                    span { class: "text-teal-50 font-bold", {item.label.clone()} }
+                    span { class: "text-white font-bold", {item.label.clone()} }
                 }
 
                 if idx < props.items.len() - 1 {
-                    span { class: "text-teal-500", "›" }
+                    span { class: "text-white/50", "›" }
                 }
             }
         }

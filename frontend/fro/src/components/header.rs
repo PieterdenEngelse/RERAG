@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 pub fn Header() -> Element {
     let mut menu_open = use_signal(|| false);
     let mut health_status = use_signal(|| "unknown".to_string());
+    let current_route = use_route::<Route>();
 
     let is_dark = use_context::<Signal<bool>>();
     let mut show_help = use_context::<Signal<ShowHelpCommands>>();
@@ -26,7 +27,7 @@ pub fn Header() -> Element {
     });
 
     rsx! {
-        header { class: "sticky top-0 shadow-md p-0.5 z-50 transition-colors {header_bg} flex items-center relative",
+        header { class: "sticky top-0 shadow-md py-0 px-0.5 z-50 transition-colors {header_bg} flex items-center relative",
 
             // Rust icon
             div {
@@ -47,10 +48,13 @@ pub fn Header() -> Element {
             // Title - absolutely positioned to center on full viewport width
             {
                 rsx! {
-                    h1 {
-                        class: "absolute inset-x-0 text-sm font-medium text-center text-white",
-                        style: "font-family: 'Cinzel', serif;",
-                        "Rust Agentic Retrieval Augumented Generation"
+                    div {
+                        class: "absolute inset-x-0 flex justify-center pointer-events-none",
+                        h1 {
+                            class: "font-medium text-center text-white pointer-events-auto",
+                            style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem;",
+                            "Rust Agentic Retrieval Augumented Generation"
+                        }
                     }
                 }
             }
@@ -61,33 +65,57 @@ pub fn Header() -> Element {
 
                 nav {
                     class: "hidden md:flex items-center gap-6 text-sm",
-                    style: "font-family: 'Cinzel', serif;",
-                    Link {
-                        to: Route::Home {},
-                        class: if is_dark() {
-                            "py-2 px-3 rounded-lg transition-colors font-medium text-white hover:text-indigo-400"
+                    style: "font-family: ui-sans-serif, system-ui, sans-serif;",
+                    {
+                        let home_color = if matches!(current_route, Route::Home {}) {
+                            "#1D6B9A"
+                        } else if is_dark() {
+                            "white"
                         } else {
-                            "py-2 px-3 rounded-lg transition-colors font-medium text-gray-900 hover:text-indigo-600"
-                        },
-                        "Home"
+                            "#111827"
+                        };
+                        rsx! {
+                            Link {
+                                to: Route::Home {},
+                                class: "py-2 px-3 rounded-lg transition-colors font-medium",
+                                style: format!("color: {};", home_color),
+                                "Home"
+                            }
+                        }
                     }
-                    Link {
-                        to: Route::MonitorOverview {},
-                        class: if is_dark() {
-                            "py-2 px-3 rounded-lg transition-colors font-medium text-white hover:text-indigo-400"
+                    {
+                        let monitor_color = if matches!(current_route, Route::MonitorOverview {} | Route::MonitorAgentic {} | Route::MonitorRequests {} | Route::MonitorCache {} | Route::MonitorIndex {} | Route::MonitorRateLimits {} | Route::MonitorLogs {}) {
+                            "#1D6B9A"
+                        } else if is_dark() {
+                            "white"
                         } else {
-                            "py-2 px-3 rounded-lg transition-colors font-medium text-gray-900 hover:text-indigo-600"
-                        },
-                        "Monitor"
+                            "#111827"
+                        };
+                        rsx! {
+                            Link {
+                                to: Route::MonitorOverview {},
+                                class: "py-2 px-3 rounded-lg transition-colors font-medium",
+                                style: format!("color: {};", monitor_color),
+                                "Monitor"
+                            }
+                        }
                     }
-                    Link {
-                        to: Route::Config {},
-                        class: if is_dark() {
-                            "py-2 px-3 rounded-lg transition-colors font-medium text-white hover:text-indigo-400"
+                    {
+                        let config_color = if matches!(current_route, Route::Config {} | Route::ConfigHardware {} | Route::ConfigSampling {} | Route::ConfigPrompt {} | Route::ConfigOther {} | Route::Parameters {}) {
+                            "#1D6B9A"
+                        } else if is_dark() {
+                            "white"
                         } else {
-                            "py-2 px-3 rounded-lg transition-colors font-medium text-gray-900 hover:text-indigo-600"
-                        },
-                        "Config"
+                            "#111827"
+                        };
+                        rsx! {
+                            Link {
+                                to: Route::Config {},
+                                class: "py-2 px-3 rounded-lg transition-colors font-medium",
+                                style: format!("color: {};", config_color),
+                                "Config"
+                            }
+                        }
                     }
                     NavDropdown { title: "Help".to_string(),
                         DropdownActionItem { onclick: move |_| show_help.set(ShowHelpCommands(true)), "/help commands" }

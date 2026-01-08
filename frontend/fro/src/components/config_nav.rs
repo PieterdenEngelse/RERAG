@@ -39,9 +39,9 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
                         Link {
                             to: route,
                             class: if is_active {
-                                "text-teal-400 border-b-2 border-teal-400 pb-1"
+                                "text-white border-b-2 border-white pb-1"
                             } else {
-                                "hover:text-teal-300"
+                                "hover:text-white"
                             },
                             "{label}"
                         }

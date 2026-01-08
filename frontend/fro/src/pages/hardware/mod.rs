@@ -466,6 +466,7 @@ pub fn ConfigHardware() -> Element {
                             label { class: "text-gray-300 font-medium", "Backend" }
                             button {
                                 class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                 onclick: move |_| backend_info_signal.set(true),
                                 title: "Backend help",
                                 InfoIcon {}
@@ -503,6 +504,7 @@ pub fn ConfigHardware() -> Element {
                             label { class: "text-gray-300 font-medium", "Model" }
                             button {
                                 class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                 onclick: move |_| model_info_signal.set(true),
                                 title: "Model selection guidance",
                                 InfoIcon {}
@@ -547,6 +549,7 @@ pub fn ConfigHardware() -> Element {
                             }
                             button {
                                 class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                 onclick: move |_| reload_info_signal.set(true),
                                 title: "Reload help",
                                 InfoIcon {}
@@ -583,7 +586,8 @@ pub fn ConfigHardware() -> Element {
                     // Right side: save button, vertically centered
                     div { class: "flex items-center",
                         button {
-                            class: "btn btn-primary btn-md px-8",
+                            class: "btn btn-md px-8",
+                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white; box-shadow: none;",
                             onclick: on_save.clone(),
                             disabled: saving() || loading(),
                             if saving() { "Saving…" } else { "Save" }
@@ -628,6 +632,7 @@ pub fn ConfigHardware() -> Element {
                             span { "RoPE tuning: {supports_rope}" }
                             button {
                                 class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                 onclick: move |_| rope_tuning_info_signal.set(true),
                                 title: "RoPE tuning help",
                                 InfoIcon {}
@@ -662,6 +667,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| num_thread_info_signal.set(true),
                                         title: "Thread help",
                                         InfoIcon {}
@@ -686,6 +692,7 @@ pub fn ConfigHardware() -> Element {
                                 }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| num_ctx_info_signal.set(true),
                                     title: "Context size help",
                                     InfoIcon {}
@@ -708,6 +715,7 @@ pub fn ConfigHardware() -> Element {
                                 }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| num_batch_info_signal.set(true),
                                     title: "Batch size help",
                                     InfoIcon {}
@@ -738,6 +746,7 @@ pub fn ConfigHardware() -> Element {
                                 }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| numa_info_signal.set(true),
                                     title: "NUMA help",
                                     InfoIcon {}
@@ -763,6 +772,7 @@ pub fn ConfigHardware() -> Element {
                                 }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| mmap_info_signal.set(true),
                                     title: "mmap help",
                                     InfoIcon {}
@@ -788,6 +798,7 @@ pub fn ConfigHardware() -> Element {
                                 }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| mlock_info_signal.set(true),
                                     title: "mlock help",
                                     InfoIcon {}
@@ -816,6 +827,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| num_gpu_info_signal.set(true),
                                         title: "num_gpu help",
                                         InfoIcon {}
@@ -838,6 +850,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| main_gpu_info_signal.set(true),
                                         title: "main_gpu help",
                                         InfoIcon {}
@@ -862,6 +875,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| gpu_layers_info_signal.set(true),
                                         title: "gpu_layers help",
                                         InfoIcon {}
@@ -877,6 +891,7 @@ pub fn ConfigHardware() -> Element {
                                     label { class: "{PARAM_LABEL_CLASS} inline-block w-16", "low_vram" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| low_vram_info_signal.set(true),
                                         title: "low_vram help",
                                         InfoIcon {}
@@ -902,6 +917,7 @@ pub fn ConfigHardware() -> Element {
                                     label { class: "{PARAM_LABEL_CLASS} inline-block w-16", "f16_kv" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| f16_kv_info_signal.set(true),
                                         title: "f16_kv help",
                                         InfoIcon {}
@@ -928,6 +944,7 @@ pub fn ConfigHardware() -> Element {
                                 label { class: "{PARAM_LABEL_CLASS} inline-block w-16", "logits_all" }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| logits_all_info_signal.set(true),
                                     title: "logits_all help",
                                     InfoIcon {}
@@ -959,6 +976,7 @@ pub fn ConfigHardware() -> Element {
                                     label { class: PARAM_LABEL_CLASS_TIGHT, "rope_frequency_base" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| rope_base_info_signal.set(true),
                                         title: "RoPE base help",
                                         InfoIcon {}
@@ -982,6 +1000,7 @@ pub fn ConfigHardware() -> Element {
                                     label { class: PARAM_LABEL_CLASS_TIGHT, "rope_frequency_scale" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| rope_scale_info_signal.set(true),
                                         title: "RoPE scale help",
                                         InfoIcon {}
@@ -1004,6 +1023,7 @@ pub fn ConfigHardware() -> Element {
                                     label { class: PARAM_LABEL_CLASS, "vocab_only" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| vocab_only_info_signal.set(true),
                                         title: "vocab_only help",
                                         InfoIcon {}
@@ -1060,6 +1080,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| temperature_info_signal.set(true),
                                             title: "Temperature help",
                                             InfoIcon {}
@@ -1083,6 +1104,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| top_k_info_signal.set(true),
                                             title: "Top-K help",
                                             InfoIcon {}
@@ -1107,6 +1129,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| top_p_info_signal.set(true),
                                             title: "Top-P help",
                                             InfoIcon {}
@@ -1135,6 +1158,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| min_p_info_signal.set(true),
                                             title: "Min-P help",
                                             InfoIcon {}
@@ -1159,6 +1183,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| typical_p_info_signal.set(true),
                                             title: "Typical-P help",
                                             InfoIcon {}
@@ -1183,6 +1208,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| tfs_z_info_signal.set(true),
                                             title: "TFS help",
                                             InfoIcon {}
@@ -1212,6 +1238,7 @@ pub fn ConfigHardware() -> Element {
                                         }
                                         button {
                                             class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                             onclick: move |_| seed_info_signal.set(true),
                                             title: "Seed help",
                                             InfoIcon {}
@@ -1247,6 +1274,7 @@ pub fn ConfigHardware() -> Element {
                                     div { class: "flex-1" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| mirostat_info_signal.set(true),
                                         title: "Mirostat help",
                                         InfoIcon {}
@@ -1272,6 +1300,7 @@ pub fn ConfigHardware() -> Element {
                                     div { class: "flex-1" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| mirostat_tau_info_signal.set(true),
                                         title: "Mirostat tau help",
                                         InfoIcon {}
@@ -1297,6 +1326,7 @@ pub fn ConfigHardware() -> Element {
                                     div { class: "flex-1" }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| mirostat_eta_info_signal.set(true),
                                         title: "Mirostat eta help",
                                         InfoIcon {}
@@ -1331,6 +1361,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| repeat_last_n_info_signal.set(true),
                                         title: "Repeat last N help",
                                         InfoIcon {}
@@ -1354,6 +1385,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| repeat_penalty_info_signal.set(true),
                                         title: "Repeat penalty help",
                                         InfoIcon {}
@@ -1382,6 +1414,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| presence_penalty_info_signal.set(true),
                                         title: "Presence penalty help",
                                         InfoIcon {}
@@ -1406,6 +1439,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| frequency_penalty_info_signal.set(true),
                                         title: "Frequency penalty help",
                                         InfoIcon {}
@@ -1435,6 +1469,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| penalize_newline_info_signal.set(true),
                                         title: "Penalize newline help",
                                         InfoIcon {}
@@ -1468,6 +1503,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| num_predict_info_signal.set(true),
                                         title: "Max tokens help",
                                         InfoIcon {}
@@ -1491,6 +1527,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| num_keep_info_signal.set(true),
                                         title: "Tokens to keep help",
                                         InfoIcon {}
@@ -1520,6 +1557,7 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| stop_sequences_info_signal.set(true),
                                         title: "Stop sequences help",
                                         InfoIcon {}
@@ -1538,7 +1576,8 @@ pub fn ConfigHardware() -> Element {
                     div { class: "flex items-center justify-between gap-4",
                         span { class: "text-base text-gray-200 font-semibold", "Stored credentials" }
                         button {
-                            class: "btn btn-primary btn-xs",
+                            class: "btn btn-xs",
+                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white; box-shadow: none;",
                             onclick: on_save_keys.clone(),
                             disabled: saving_keys(),
                             if saving_keys() { "Saving…" } else { "Save keys" }

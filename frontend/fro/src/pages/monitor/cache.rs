@@ -119,9 +119,9 @@ pub fn MonitorCache() -> Element {
                                 p { class: "font-semibold text-slate-50", "Deep dive" }
                                 ul { class: "list-disc ml-5 space-y-1",
                                     li {
-                                        "Pair this panel with the Requests checklist and capture"
+                                        "Pair this panel with the Requests checklist and capture  "
                                         code { {CACHE_INFO_COMMAND} }
-                                        "output plus Tempo/Grafana traces while caches are misbehaving."
+                                        "  output plus Tempo/Grafana traces while caches are misbehaving."
                                         span { " " }
                                         button {
                                             class: "text-[11px] text-slate-300 underline hover:text-teal-300",

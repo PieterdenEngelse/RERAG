@@ -1863,11 +1863,26 @@ pub async fn save_vectors_handler() -> Result<HttpResponse, Error> {
     }
 }
 
+/// Chat mode: how to process queries
+#[derive(serde::Deserialize, Clone, Copy, Default, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatMode {
+    /// Only search documents (RAG)
+    Rag,
+    /// Only use LLM (no document search)
+    Llm,
+    /// Combine: search documents + LLM fallback/enhancement
+    #[default]
+    Hybrid,
+}
+
 #[derive(serde::Deserialize)]
 pub struct AgentRequest {
     pub query: String,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    #[serde(default)]
+    pub mode: ChatMode,
 }
 
 // Simple query variant for GET /agent/chat
@@ -1876,6 +1891,8 @@ pub struct AgentQueryParams {
     pub query: String,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    #[serde(default)]
+    pub mode: ChatMode,
 }
 
 fn default_top_k() -> usize {
@@ -2719,8 +2736,22 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
     }
     
     if let Some(retriever) = RETRIEVER.get() {
-        let agent = Agent::new("default", "agent.db", Arc::clone(retriever));
-        let resp: AgentResponse = agent.run(&req.query, req.top_k);
+        // Convert ChatMode to AgentMode
+        let agent_mode = match req.mode {
+            ChatMode::Rag => crate::agent::AgentMode::Rag,
+            ChatMode::Llm => crate::agent::AgentMode::Llm,
+            ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
+        };
+        let query_clone = req.query.clone();
+        let top_k = req.top_k;
+        let retriever_clone = Arc::clone(retriever);
+        
+        // Run agent in blocking thread pool to avoid blocking async runtime
+        let resp = web::block(move || {
+            let agent = Agent::new("default", "agent.db", retriever_clone);
+            agent.run_with_mode(&query_clone, top_k, agent_mode)
+        }).await.map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
+        
         update_last_agent_run(req.query.clone(), &resp);
         Ok(HttpResponse::Ok().json(json!({
             "response": resp,
@@ -2870,8 +2901,22 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
     }
     
     if let Some(retriever) = RETRIEVER.get() {
-        let agent = Agent::new("default", "agent.db", Arc::clone(retriever));
-        let resp: AgentResponse = agent.run(&query.query, query.top_k);
+        // Convert ChatMode to AgentMode
+        let agent_mode = match query.mode {
+            ChatMode::Rag => crate::agent::AgentMode::Rag,
+            ChatMode::Llm => crate::agent::AgentMode::Llm,
+            ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
+        };
+        let query_str = query.query.clone();
+        let top_k = query.top_k;
+        let retriever_clone = Arc::clone(retriever);
+        
+        // Run agent in blocking thread pool to avoid blocking async runtime
+        let resp = web::block(move || {
+            let agent = Agent::new("default", "agent.db", retriever_clone);
+            agent.run_with_mode(&query_str, top_k, agent_mode)
+        }).await.map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
+        
         update_last_agent_run(query.query.clone(), &resp);
         Ok(HttpResponse::Ok().json(json!({
             "response": resp,
@@ -2883,6 +2928,180 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
             "message": "Retriever not initialized",
             "request_id": request_id
         })))
+    }
+}
+
+// Streaming agent endpoint using Server-Sent Events
+async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
+    use actix_web::web::Bytes;
+    use futures_util::stream::StreamExt;
+    
+    let request_id = generate_request_id();
+    
+    // For commands, redirect to non-streaming endpoint (commands don't benefit from streaming)
+    if parse_chat_command(&req.query).is_some() {
+        // Just call the regular endpoint for commands
+        return run_agent(req).await;
+    }
+    
+    // Get Ollama config
+    let ollama_url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = std::env::var("OLLAMA_MODEL")
+        .unwrap_or_else(|_| "phi:latest".to_string());
+    
+    // Determine mode and build context
+    let agent_mode = match req.mode {
+        ChatMode::Rag => crate::agent::AgentMode::Rag,
+        ChatMode::Llm => crate::agent::AgentMode::Llm,
+        ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
+    };
+    
+    // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
+    if matches!(agent_mode, crate::agent::AgentMode::Rag) {
+        if let Some(retriever) = RETRIEVER.get() {
+            let query_clone = req.query.clone();
+            let top_k = req.top_k;
+            let retriever_clone = Arc::clone(retriever);
+            
+            let resp = web::block(move || {
+                let agent = Agent::new("default", "agent.db", retriever_clone);
+                agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Rag)
+            }).await.map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
+            
+            update_last_agent_run(req.query.clone(), &resp);
+            let json_response = serde_json::json!({
+                "type": "complete",
+                "answer": resp.answer,
+                "steps": resp.steps,
+                "used_chunks": resp.used_chunks,
+                "request_id": request_id
+            });
+            return Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .insert_header(("Cache-Control", "no-cache"))
+                .body(format!("data: {}\n\n", json_response)));
+        }
+    }
+    
+    // For LLM and Hybrid modes, stream from Ollama
+    let mut context = String::new();
+    let mut used_chunks: Vec<String> = Vec::new();
+    
+    // For Hybrid mode, first get RAG context
+    if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
+        if let Some(retriever) = RETRIEVER.get() {
+            if let Ok(mut r) = retriever.lock() {
+                if let Ok(mut results) = r.hybrid_search(&req.query, None) {
+                    if results.len() > req.top_k {
+                        results.truncate(req.top_k);
+                    }
+                    if !results.is_empty() {
+                        context = results.join("\n\n");
+                        used_chunks = results;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Build prompt
+    let prompt = if context.is_empty() {
+        req.query.clone()
+    } else {
+        format!(
+            "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}\n\nQuestion: {}\n\nAnswer:",
+            context, req.query
+        )
+    };
+    
+    // Get mode-specific config
+    use crate::db::llm_settings::LlmConfig;
+    let config = match agent_mode {
+        crate::agent::AgentMode::Rag => LlmConfig::documents_only(),
+        crate::agent::AgentMode::Llm => LlmConfig::llm_only(),
+        crate::agent::AgentMode::Hybrid => LlmConfig::combined(),
+    };
+    
+    // Create streaming request to Ollama with mode-specific options
+    let client = reqwest::Client::new();
+    let ollama_request = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": true,
+        "options": {
+            "temperature": config.temperature,
+            "top_p": config.top_p,
+            "top_k": config.top_k,
+            "num_predict": config.max_tokens,
+            "repeat_penalty": config.repeat_penalty
+        }
+    });
+    
+    let url = format!("{}/api/generate", ollama_url);
+    let query_for_memory = req.query.clone();
+    let chunks_count = used_chunks.len();
+    
+    match client.post(&url).json(&ollama_request).send().await {
+        Ok(response) => {
+            let stream = response.bytes_stream().map(move |chunk_result| {
+                match chunk_result {
+                    Ok(bytes) => {
+                        // Parse Ollama's streaming response (newline-delimited JSON)
+                        let text = String::from_utf8_lossy(&bytes);
+                        let mut output = String::new();
+                        
+                        for line in text.lines() {
+                            if line.is_empty() {
+                                continue;
+                            }
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                                if let Some(response_text) = json.get("response").and_then(|v| v.as_str()) {
+                                    let event = serde_json::json!({
+                                        "type": "token",
+                                        "content": response_text
+                                    });
+                                    output.push_str(&format!("data: {}\n\n", event));
+                                }
+                                if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                    let event = serde_json::json!({
+                                        "type": "done",
+                                        "chunks_used": chunks_count
+                                    });
+                                    output.push_str(&format!("data: {}\n\n", event));
+                                }
+                            }
+                        }
+                        
+                        Ok::<Bytes, actix_web::error::Error>(Bytes::from(output))
+                    }
+                    Err(e) => {
+                        let error_event = serde_json::json!({
+                            "type": "error",
+                            "message": format!("Stream error: {}", e)
+                        });
+                        Ok(Bytes::from(format!("data: {}\n\n", error_event)))
+                    }
+                }
+            });
+            
+            Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .insert_header(("Cache-Control", "no-cache"))
+                .insert_header(("X-Accel-Buffering", "no"))
+                .insert_header(("Access-Control-Allow-Origin", "*"))
+                .streaming(stream))
+        }
+        Err(e) => {
+            let error_response = serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to connect to Ollama: {}", e),
+                "request_id": request_id
+            });
+            Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .body(format!("data: {}\n\n", error_response)))
+        }
     }
 }
 
@@ -3150,6 +3369,7 @@ pub fn start_api_server(
             // AGENT ROUTES
             // ============================================================================
             .route("/agent", web::post().to(run_agent))
+            .route("/agent/stream", web::post().to(run_agent_stream))
             .route("/agent/chat", web::get().to(run_agent_get))
             // Goal management routes
             .route("/agent/goals", web::post().to(agentic_monitor_routes::create_goal))

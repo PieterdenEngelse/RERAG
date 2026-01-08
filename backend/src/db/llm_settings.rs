@@ -103,6 +103,47 @@ impl Default for LlmConfig {
     }
 }
 
+impl LlmConfig {
+    /// Mode 1: Documents Only (strict RAG)
+    /// Factual, deterministic, sticks to retrieved content
+    pub fn documents_only() -> Self {
+        Self {
+            temperature: 0.2,
+            top_p: 0.85,
+            top_k: 15,
+            max_tokens: 512,
+            repeat_penalty: 1.15,
+            ..Default::default()
+        }
+    }
+    
+    /// Mode 2: LLM Only (pure generation)
+    /// Creative, flexible, uses model knowledge
+    pub fn llm_only() -> Self {
+        Self {
+            temperature: 0.7,
+            top_p: 0.95,
+            top_k: 40,
+            max_tokens: 1024,
+            repeat_penalty: 1.1,
+            ..Default::default()
+        }
+    }
+    
+    /// Mode 3: Combined (RAG + LLM)
+    /// Balanced - grounded but can expand
+    pub fn combined() -> Self {
+        Self {
+            temperature: 0.4,
+            top_p: 0.9,
+            top_k: 30,
+            max_tokens: 768,
+            repeat_penalty: 1.12,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LlmConfigError {
     #[error("database error: {0}")]
