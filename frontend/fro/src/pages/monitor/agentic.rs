@@ -137,27 +137,27 @@ pub fn MonitorAgentic() -> Element {
                     Ok(stats) => new_state.agent_stats = Some(stats),
                     Err(e) => new_state.error = Some(format!("Agent stats: {}", e)),
                 }
-                
+
                 // Fetch goals
                 if let Ok(goals) = api::fetch_goals().await {
                     new_state.goals = Some(goals);
                 }
-                
+
                 // Fetch episodes
                 if let Ok(episodes) = api::fetch_recent_episodes(10).await {
                     new_state.episodes = Some(episodes);
                 }
-                
+
                 // Fetch reflections
                 if let Ok(reflections) = api::fetch_reflections(5).await {
                     new_state.reflections = Some(reflections);
                 }
-                
+
                 // Fetch memory stats
                 if let Ok(memory) = api::fetch_memory_stats().await {
                     new_state.memory_stats = Some(memory);
                 }
-                
+
                 // Fetch tool stats
                 if let Ok(tools) = api::fetch_tool_stats().await {
                     new_state.tool_stats = Some(tools);
@@ -172,7 +172,7 @@ pub fn MonitorAgentic() -> Element {
     }
 
     let snapshot = state.read().clone();
-    
+
     // Extract values with defaults
     let agent_stats = snapshot.agent_stats.clone().unwrap_or_default();
     let goals = snapshot.goals.clone().unwrap_or_default();
@@ -282,7 +282,7 @@ pub fn MonitorAgentic() -> Element {
                             div { class: "flex items-center gap-3",
                                 span { class: "text-xs text-gray-400 w-32", "{tool.tool_name}" }
                                 div { class: "flex-1 h-4 bg-gray-700 rounded overflow-hidden",
-                                    div { 
+                                    div {
                                         class: "h-full bg-teal-500",
                                         style: "width: {tool.percentage}%"
                                     }
@@ -359,7 +359,7 @@ pub fn MonitorAgentic() -> Element {
                         div { class: "space-y-2",
                             for goal in goals.goals.iter().take(5) {
                                 div { class: "bg-gray-900/50 rounded p-2 flex items-center gap-3",
-                                    span { 
+                                    span {
                                         class: match goal.status.as_str() {
                                             "active" => "w-2 h-2 rounded-full bg-teal-400",
                                             "completed" => "w-2 h-2 rounded-full bg-green-400",
@@ -387,7 +387,7 @@ pub fn MonitorAgentic() -> Element {
                         for reflection in reflections.reflections.iter() {
                             div { class: "bg-gray-900/50 rounded p-3",
                                 div { class: "flex items-center gap-2 mb-1",
-                                    span { 
+                                    span {
                                         class: match reflection.reflection_type.as_str() {
                                             "success" => "text-xs px-2 py-0.5 rounded bg-green-900/50 text-green-300",
                                             "failure" => "text-xs px-2 py-0.5 rounded bg-red-900/50 text-red-300",
@@ -417,7 +417,7 @@ pub fn MonitorAgentic() -> Element {
                         for episode in episodes.episodes.iter().take(5) {
                             div { class: "bg-gray-900/50 rounded p-3",
                                 div { class: "flex items-center gap-2 mb-1",
-                                    span { 
+                                    span {
                                         class: if episode.success {
                                             "text-xs px-2 py-0.5 rounded bg-green-900/50 text-green-300"
                                         } else {
@@ -464,10 +464,10 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 #[component]
 fn EpisodeInfoButton() -> Element {
     let mut show_tooltip = use_signal(|| false);
-    
+
     const INFO_BUTTON_CLASS: &str =
         "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded border border-blue-500/40 bg-blue-500/10 flex items-center justify-center cursor-pointer hover:bg-blue-500/20";
-    
+
     rsx! {
         button {
             class: INFO_BUTTON_CLASS,
@@ -484,7 +484,7 @@ fn EpisodeInfoButton() -> Element {
                 circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
             }
         }
-        
+
         if *show_tooltip.read() {
             div {
                 class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",

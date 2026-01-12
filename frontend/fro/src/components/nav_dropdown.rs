@@ -9,7 +9,7 @@ pub struct ActiveDropdown(pub Option<String>);
 pub fn NavDropdown(title: String, children: Element) -> Element {
     let is_dark = use_context::<Signal<bool>>();
     let mut active_dropdown = use_context::<Signal<ActiveDropdown>>();
-    
+
     let is_open = active_dropdown().0.as_ref() == Some(&title);
     let title_clone = title.clone();
 

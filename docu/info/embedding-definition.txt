@@ -1,0 +1,3 @@
+An embedding is an array of length n representing a position in n-dimensional space. If n were 3, an embedding might be [10, 4, 2] representing the location x=10, y=4, z=2 in 3 dimensional space. When LLMs are being trained, each token gets assigned a random starting location in this space, and the training process nudges all of the tokens around until it finds an arrangement that produces the best outputs.
+
+In summary, embeddings are points in n-dimensional space that you can think of as the semantic meaning of the text they represent. During training, each token gets moved within this space to be close to other, similar tokens. The more dimensions, the more complex and nuanced the LLM's representation of each token can be.

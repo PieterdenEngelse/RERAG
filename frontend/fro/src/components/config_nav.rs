@@ -5,6 +5,7 @@ use dioxus_router::prelude::Link;
 #[derive(Clone, PartialEq)]
 pub enum ConfigTab {
     Home,
+    Memories,
     Sampling,
     Prompt,
     Hardware,
@@ -20,6 +21,7 @@ pub struct ConfigNavProps {
 pub fn ConfigNav(props: ConfigNavProps) -> Element {
     let tabs = vec![
         ("Rag&Agent", Route::Config {}, ConfigTab::Home),
+        ("Memories", Route::ConfigMemories {}, ConfigTab::Memories),
         ("Sampling", Route::ConfigSampling {}, ConfigTab::Sampling),
         ("Prompt", Route::ConfigPrompt {}, ConfigTab::Prompt),
         (

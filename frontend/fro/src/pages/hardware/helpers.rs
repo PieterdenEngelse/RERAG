@@ -7,6 +7,8 @@ pub fn format_model_label(model: &api::ModelInfo) -> String {
         if !family.is_empty() {
             parts.push(format!("({})", family));
         }
+    } else if model.is_custom {
+        parts.push("(custom)".to_string());
     }
     let size = model.size_display();
     if !size.is_empty() {
@@ -14,6 +16,14 @@ pub fn format_model_label(model: &api::ModelInfo) -> String {
     }
     if let Some(modified) = &model.modified_at {
         parts.push(format!("updated {}", modified));
+    }
+    if let Some(desc) = &model.description {
+        if !desc.is_empty() {
+            parts.push(format!("- {}", desc));
+        }
+    }
+    if model.is_active {
+        parts.push("• active".to_string());
     }
     parts.join(" ")
 }

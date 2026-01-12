@@ -34,14 +34,14 @@ pub fn StatCard(props: StatCardProps) -> Element {
         div {
             class: "rounded p-4 bg-gray-800 border border-gray-700 relative",
             style: if has_description { "width: fit-content;" } else { "" },
-            
+
             // Title row (only if there's a title)
             if has_title {
                 div { class: "flex items-center gap-2 mb-1",
                     div { class: "text-xs text-gray-400", {props.title.clone()} }
                 }
             }
-            
+
             // Tooltip popup (modal style matching hardware page)
             if *show_tooltip.read() {
                 if let Some(tooltip) = &props.info_tooltip {
@@ -67,7 +67,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                     }
                 }
             }
-            
+
             if has_description {
                 div { class: "flex items-start gap-4",
                     div { class: "flex-shrink-0",

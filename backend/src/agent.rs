@@ -1,4 +1,5 @@
 use crate::agent_memory::AgentMemory;
+use crate::db::path_resolver;
 use crate::retriever::Retriever;
 use chrono::Utc;
 use rusqlite::Connection;
@@ -31,10 +32,347 @@ pub enum AgentMode {
     Hybrid,
 }
 
+/// Verbosity level for responses
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum Verbosity {
+    Brief,
+    #[default]
+    Normal,
+    Verbose,
+}
+
+impl Verbosity {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Verbosity::Brief => "brief",
+            Verbosity::Normal => "normal",
+            Verbosity::Verbose => "verbose",
+        }
+    }
+}
+
+/// Memory priority for prompt injection
+/// Higher priority memories are injected first and given more weight
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemoryPriority {
+    /// Highest: Direct instructions to follow
+    Instruction = 0,
+    /// High: User preferences to respect
+    Preference = 1,
+    /// Medium-High: Persona definitions
+    Persona = 2,
+    /// Medium: Contextual information
+    Context = 3,
+    /// Medium-Low: Factual information
+    Fact = 4,
+    /// Low: Summaries and notes
+    Summary = 5,
+    /// Lowest: Other memory types
+    Other = 6,
+}
+
+impl MemoryPriority {
+    pub fn from_memory_type(memory_type: &str) -> Self {
+        match memory_type.to_lowercase().as_str() {
+            "instruction" => MemoryPriority::Instruction,
+            "preference" => MemoryPriority::Preference,
+            "persona" => MemoryPriority::Persona,
+            "context" => MemoryPriority::Context,
+            "fact" => MemoryPriority::Fact,
+            "summary" | "note" => MemoryPriority::Summary,
+            _ => MemoryPriority::Other,
+        }
+    }
+}
+
+/// Categorized memory for prompt building
+#[derive(Debug, Clone)]
+pub struct CategorizedMemory {
+    pub memory_type: String,
+    pub content: String,
+    pub priority: MemoryPriority,
+}
+
+/// Chat settings that affect prompt generation
+#[derive(Debug, Clone, Default)]
+pub struct ChatSettings {
+    /// Focus topic - narrows responses to this topic
+    pub focus_topic: Option<String>,
+    /// Persona - changes the assistant's personality/style
+    pub persona: Option<String>,
+    /// Verbosity - controls response length
+    pub verbosity: Verbosity,
+    /// Custom temperature override
+    pub temperature: Option<f32>,
+    /// Custom model override
+    pub model: Option<String>,
+    /// RAG memories to inject into prompt
+    pub memories: Vec<CategorizedMemory>,
+}
+
+impl ChatSettings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_focus(mut self, topic: Option<String>) -> Self {
+        self.focus_topic = topic;
+        self
+    }
+
+    pub fn with_persona(mut self, persona: Option<String>) -> Self {
+        self.persona = persona;
+        self
+    }
+
+    pub fn with_verbosity(mut self, verbosity: Verbosity) -> Self {
+        self.verbosity = verbosity;
+        self
+    }
+
+    pub fn with_temperature(mut self, temp: Option<f32>) -> Self {
+        self.temperature = temp;
+        self
+    }
+
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
+        self
+    }
+
+    pub fn with_memories(mut self, memories: Vec<CategorizedMemory>) -> Self {
+        self.memories = memories;
+        self
+    }
+
+    /// Build system prompt prefix based on settings and memories
+    /// Priority order:
+    /// 1. Instructions (from memories)
+    /// 2. Persona (from settings or memories)
+    /// 3. Preferences (from memories)
+    /// 4. Focus (from settings)
+    /// 5. Verbosity (from settings)
+    /// 6. Context/Facts (from memories)
+    pub fn build_system_prompt(&self) -> String {
+        let mut parts = Vec::new();
+
+        // Sort memories by priority
+        let mut sorted_memories = self.memories.clone();
+        sorted_memories.sort_by_key(|m| m.priority);
+
+        // 1. Add instruction memories (highest priority - these are directives)
+        let instructions: Vec<&CategorizedMemory> = sorted_memories
+            .iter()
+            .filter(|m| m.priority == MemoryPriority::Instruction)
+            .collect();
+        if !instructions.is_empty() {
+            let instruction_text: Vec<String> = instructions
+                .iter()
+                .map(|m| format!("• {}", m.content))
+                .collect();
+            parts.push(format!(
+                "INSTRUCTIONS (follow these directives):\n{}",
+                instruction_text.join("\n")
+            ));
+        }
+
+        // 2. Add persona (from settings first, then from memories)
+        if let Some(persona) = &self.persona {
+            parts.push(format!(
+                "PERSONA: You are acting as '{}'. Adopt this persona's communication style, expertise, and perspective.",
+                persona
+            ));
+        } else {
+            // Check for persona in memories
+            let persona_memories: Vec<&CategorizedMemory> = sorted_memories
+                .iter()
+                .filter(|m| m.priority == MemoryPriority::Persona)
+                .collect();
+            if !persona_memories.is_empty() {
+                let persona_text: Vec<String> =
+                    persona_memories.iter().map(|m| m.content.clone()).collect();
+                parts.push(format!("PERSONA: {}", persona_text.join(" ")));
+            }
+        }
+
+        // 3. Add preference memories
+        let preferences: Vec<&CategorizedMemory> = sorted_memories
+            .iter()
+            .filter(|m| m.priority == MemoryPriority::Preference)
+            .collect();
+        if !preferences.is_empty() {
+            let pref_text: Vec<String> = preferences
+                .iter()
+                .map(|m| format!("• {}", m.content))
+                .collect();
+            parts.push(format!(
+                "USER PREFERENCES (respect these when responding):\n{}",
+                pref_text.join("\n")
+            ));
+        }
+
+        // 4. Add focus instruction (from settings)
+        if let Some(focus) = &self.focus_topic {
+            parts.push(format!(
+                "FOCUS: Prioritize information related to '{}'. Filter out unrelated details.",
+                focus
+            ));
+        }
+
+        // 5. Add verbosity instruction (from settings)
+        match self.verbosity {
+            Verbosity::Brief => {
+                parts.push("RESPONSE STYLE: Be concise and brief. Give short, direct answers. Aim for 1-3 sentences.".to_string());
+            }
+            Verbosity::Normal => {
+                // Default - no special instruction needed
+            }
+            Verbosity::Verbose => {
+                parts.push("RESPONSE STYLE: Provide detailed, comprehensive responses. Include explanations, examples, and relevant context.".to_string());
+            }
+        }
+
+        // 6. Add context memories (informational, not directive)
+        let context_memories: Vec<&CategorizedMemory> = sorted_memories
+            .iter()
+            .filter(|m| m.priority == MemoryPriority::Context)
+            .collect();
+        if !context_memories.is_empty() {
+            let ctx_text: Vec<String> = context_memories
+                .iter()
+                .map(|m| format!("• {}", m.content))
+                .collect();
+            parts.push(format!(
+                "CONTEXT (background information):\n{}",
+                ctx_text.join("\n")
+            ));
+        }
+
+        // 7. Add fact memories (informational)
+        let facts: Vec<&CategorizedMemory> = sorted_memories
+            .iter()
+            .filter(|m| m.priority == MemoryPriority::Fact)
+            .collect();
+        if !facts.is_empty() {
+            let fact_text: Vec<String> = facts.iter().map(|m| format!("• {}", m.content)).collect();
+            parts.push(format!("KNOWN FACTS:\n{}", fact_text.join("\n")));
+        }
+
+        // 8. Add summary/note memories (lowest priority informational)
+        let summaries: Vec<&CategorizedMemory> = sorted_memories
+            .iter()
+            .filter(|m| {
+                m.priority == MemoryPriority::Summary || m.priority == MemoryPriority::Other
+            })
+            .take(3) // Limit to avoid prompt bloat
+            .collect();
+        if !summaries.is_empty() {
+            let sum_text: Vec<String> = summaries
+                .iter()
+                .map(|m| format!("• {}", m.content))
+                .collect();
+            parts.push(format!("NOTES:\n{}", sum_text.join("\n")));
+        }
+
+        if parts.is_empty() {
+            String::new()
+        } else {
+            parts.join("\n\n")
+        }
+    }
+
+    /// Check if any settings are active
+    pub fn has_active_settings(&self) -> bool {
+        self.focus_topic.is_some()
+            || self.persona.is_some()
+            || self.verbosity != Verbosity::Normal
+            || !self.memories.is_empty()
+    }
+}
+
+/// Safety filter for memory content
+/// Returns true if the memory content is safe to inject
+pub fn is_safe_memory_content(content: &str) -> bool {
+    let content_lower = content.to_lowercase();
+
+    // Reject memories that look like injection attempts
+    let dangerous_patterns = [
+        "ignore previous",
+        "ignore all",
+        "disregard",
+        "forget everything",
+        "new instructions",
+        "override",
+        "system prompt",
+        "jailbreak",
+        "bypass",
+        "pretend you",
+        "act as if",
+        "roleplay as",
+        "you are now",
+        "from now on",
+        "ignore safety",
+        "ignore rules",
+        "ignore guidelines",
+        "do not follow",
+        "don't follow",
+    ];
+
+    for pattern in dangerous_patterns {
+        if content_lower.contains(pattern) {
+            return false;
+        }
+    }
+
+    // Reject very long memories (potential prompt injection)
+    if content.len() > 1000 {
+        return false;
+    }
+
+    // Reject memories with suspicious characters
+    if content.contains("```") && content.contains("system") {
+        return false;
+    }
+
+    true
+}
+
+/// Load and categorize memories from the database
+pub fn load_categorized_memories(
+    db_path: &str,
+    agent_id: &str,
+    limit: usize,
+) -> Vec<CategorizedMemory> {
+    let resolved_path = path_resolver::resolve_db_path(db_path);
+    let resolved_string = resolved_path.to_string_lossy().into_owned();
+    let mut memories = Vec::new();
+
+    if let Ok(mem) = AgentMemory::new(&resolved_string) {
+        if let Ok(items) = mem.recall_rag(agent_id, limit) {
+            for item in items {
+                // Apply safety filter
+                if !is_safe_memory_content(&item.content) {
+                    continue;
+                }
+
+                let priority = MemoryPriority::from_memory_type(&item.memory_type);
+                memories.push(CategorizedMemory {
+                    memory_type: item.memory_type,
+                    content: item.content,
+                    priority,
+                });
+            }
+        }
+    }
+
+    memories
+}
+
 pub struct Agent<'a> {
     pub agent_id: &'a str,
-    pub memory_db_path: &'a str,
+    pub memory_db_path: String,
     pub retriever: Arc<Mutex<Retriever>>,
+    pub settings: ChatSettings,
 }
 
 impl<'a> Agent<'a> {
@@ -43,11 +381,18 @@ impl<'a> Agent<'a> {
         memory_db_path: &'a str,
         retriever: Arc<Mutex<Retriever>>,
     ) -> Self {
+        let resolved = path_resolver::resolve_db_path(memory_db_path);
         Self {
             agent_id,
-            memory_db_path,
+            memory_db_path: resolved.to_string_lossy().into_owned(),
             retriever,
+            settings: ChatSettings::default(),
         }
+    }
+
+    pub fn with_settings(mut self, settings: ChatSettings) -> Self {
+        self.settings = settings;
+        self
     }
 
     /// Run with default hybrid mode (backward compatible)
@@ -59,8 +404,29 @@ impl<'a> Agent<'a> {
     pub fn run_with_mode(&self, query: &str, top_k: usize, mode: AgentMode) -> AgentResponse {
         let mut steps = Vec::new();
 
+        // Log active settings
+        if self.settings.has_active_settings() {
+            let mut settings_info = Vec::new();
+            if let Some(focus) = &self.settings.focus_topic {
+                settings_info.push(format!("focus: {}", focus));
+            }
+            if let Some(persona) = &self.settings.persona {
+                settings_info.push(format!("persona: {}", persona));
+            }
+            if self.settings.verbosity != Verbosity::Normal {
+                settings_info.push(format!("verbosity: {}", self.settings.verbosity.label()));
+            }
+            if !self.settings.memories.is_empty() {
+                settings_info.push(format!("memories: {}", self.settings.memories.len()));
+            }
+            steps.push(AgentStep {
+                kind: "settings".into(),
+                message: format!("Active settings: {}", settings_info.join(", ")),
+            });
+        }
+
         // Step 1: Recall recent memory (always do this)
-        let recalled: Vec<String> = if let Ok(mem) = AgentMemory::new(self.memory_db_path) {
+        let recalled: Vec<String> = if let Ok(mem) = AgentMemory::new(&self.memory_db_path) {
             mem.recall(self.agent_id)
                 .map(|items| items.into_iter().take(5).collect())
                 .unwrap_or_default()
@@ -126,7 +492,8 @@ impl<'a> Agent<'a> {
             match mode {
                 AgentMode::Rag => {
                     // RAG-only mode: return fallback if no chunks
-                    let answer = "I couldn't find relevant information in the knowledge base.".to_string();
+                    let answer =
+                        "I couldn't find relevant information in the knowledge base.".to_string();
                     steps.push(AgentStep {
                         kind: "plan".into(),
                         message: "No chunks found; returning fallback (RAG-only mode)".into(),
@@ -177,7 +544,10 @@ impl<'a> Agent<'a> {
                 let context = used_chunks.join("\n\n");
                 steps.push(AgentStep {
                     kind: "llm".into(),
-                    message: format!("Generating answer with LLM using {} chunks as context", used_chunks.len()),
+                    message: format!(
+                        "Generating answer with LLM using {} chunks as context",
+                        used_chunks.len()
+                    ),
                 });
                 self.call_llm(query, Some(&context), mode)
             }
@@ -203,31 +573,36 @@ impl<'a> Agent<'a> {
     /// Uses mode-specific LlmConfig for optimal parameters
     fn call_llm(&self, query: &str, context: Option<&str>, mode: AgentMode) -> String {
         use crate::db::llm_settings::LlmConfig;
-        
+
         // Get mode-specific config
-        let config = match mode {
+        let mut config = match mode {
             AgentMode::Rag => LlmConfig::documents_only(),
             AgentMode::Llm => LlmConfig::llm_only(),
             AgentMode::Hybrid => LlmConfig::combined(),
         };
-        
+
+        // Apply temperature override if set
+        if let Some(temp) = self.settings.temperature {
+            config.temperature = temp;
+        }
+
         // Get Ollama URL from environment or use default
-        let ollama_url = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "phi:latest".to_string());
-        
-        // Build prompt with optional context
-        let prompt = match context {
-            Some(ctx) => format!(
-                "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}\n\nQuestion: {}\n\nAnswer:",
-                ctx, query
-            ),
-            None => query.to_string(),
-        };
-        
+        let ollama_url =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+
+        // Use model override if set, otherwise use environment or default
+        let model = self.settings.model.clone().unwrap_or_else(|| {
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "phi:latest".to_string())
+        });
+
+        // Build system prompt from settings (includes memories)
+        let system_prompt = self.settings.build_system_prompt();
+
+        // Build the full prompt
+        let prompt = self.build_prompt(query, context, &system_prompt);
+
         let url = format!("{}/api/generate", ollama_url);
-        
+
         #[derive(serde::Serialize)]
         struct OllamaOptions {
             temperature: f32,
@@ -236,30 +611,40 @@ impl<'a> Agent<'a> {
             num_predict: usize,
             repeat_penalty: f32,
         }
-        
+
         #[derive(serde::Serialize)]
         struct OllamaRequest {
             model: String,
             prompt: String,
             stream: bool,
             options: OllamaOptions,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            system: Option<String>,
         }
-        
+
         #[derive(serde::Deserialize, Debug)]
         struct OllamaResponse {
             response: String,
             #[serde(default)]
+            #[allow(dead_code)]
             done: bool,
         }
-        
+
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
-        
+
+        // Use system field if we have settings, otherwise embed in prompt
+        let (final_prompt, system_field) = if !system_prompt.is_empty() {
+            (prompt, Some(system_prompt))
+        } else {
+            (prompt, None)
+        };
+
         let request_body = OllamaRequest {
             model,
-            prompt,
+            prompt: final_prompt,
             stream: false,
             options: OllamaOptions {
                 temperature: config.temperature,
@@ -268,8 +653,9 @@ impl<'a> Agent<'a> {
                 num_predict: config.max_tokens,
                 repeat_penalty: config.repeat_penalty,
             },
+            system: system_field,
         };
-        
+
         match client.post(&url).json(&request_body).send() {
             Ok(response) => {
                 // Get the response text first
@@ -278,7 +664,11 @@ impl<'a> Agent<'a> {
                         // Try to parse as JSON
                         match serde_json::from_str::<OllamaResponse>(&text) {
                             Ok(data) => data.response.trim().to_string(),
-                            Err(e) => format!("Failed to parse LLM response: {} - Raw: {}", e, &text[..text.len().min(200)]),
+                            Err(e) => format!(
+                                "Failed to parse LLM response: {} - Raw: {}",
+                                e,
+                                &text[..text.len().min(200)]
+                            ),
                         }
                     }
                     Err(e) => format!("Failed to read LLM response: {}", e),
@@ -288,8 +678,34 @@ impl<'a> Agent<'a> {
         }
     }
 
+    /// Build the prompt with context and settings
+    fn build_prompt(&self, query: &str, context: Option<&str>, system_prompt: &str) -> String {
+        let mut prompt_parts = Vec::new();
+
+        // Add system prompt if present (for models that don't support system field)
+        if !system_prompt.is_empty() {
+            prompt_parts.push(format!("Instructions:\n{}", system_prompt));
+        }
+
+        // Add context if present
+        if let Some(ctx) = context {
+            prompt_parts.push(format!(
+                "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}",
+                ctx
+            ));
+        }
+
+        // Add the question
+        prompt_parts.push(format!("Question: {}", query));
+
+        // Add answer prompt
+        prompt_parts.push("Answer:".to_string());
+
+        prompt_parts.join("\n\n")
+    }
+
     fn store_memory(&self, query: &str, answer: &str) {
-        if let Ok(mem) = AgentMemory::new(self.memory_db_path) {
+        if let Ok(mem) = AgentMemory::new(&self.memory_db_path) {
             let ts = Utc::now().to_rfc3339();
             let _ = mem.store(self.agent_id, &format!("Q: {}", query), &ts);
             let _ = mem.store(self.agent_id, &format!("A: {}", answer), &ts);
@@ -298,7 +714,7 @@ impl<'a> Agent<'a> {
 
     /// Store episode for monitoring dashboard
     fn store_episode(&self, query: &str, response: &str, chunks_used: usize, success: bool) {
-        if let Ok(conn) = Connection::open(self.memory_db_path) {
+        if let Ok(conn) = Connection::open(&self.memory_db_path) {
             // Ensure episodes table exists
             let _ = conn.execute(
                 "CREATE TABLE IF NOT EXISTS episodes (
@@ -312,11 +728,11 @@ impl<'a> Agent<'a> {
                 )",
                 [],
             );
-            
+
             let episode_id = Uuid::new_v4().to_string();
             let created_at = Utc::now().timestamp();
             let success_int = if success { 1 } else { 0 };
-            
+
             let _ = conn.execute(
                 "INSERT INTO episodes (id, agent_id, query, response, context_chunks_used, success, created_at) 
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

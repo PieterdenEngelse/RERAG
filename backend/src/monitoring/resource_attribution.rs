@@ -12,6 +12,7 @@ use crate::monitoring::metrics::REGISTRY;
 use once_cell::sync::Lazy;
 use prometheus::{Gauge, IntGauge, Opts};
 use std::env;
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -129,6 +130,7 @@ struct ProcessStats {
     rss_pages: u64,
 }
 
+#[cfg(target_os = "linux")]
 impl ProcessStats {
     /// Read process stats from /proc/self/stat
     fn read() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -158,6 +160,23 @@ impl ProcessStats {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+impl ProcessStats {
+    fn read() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Err("Process stats are only available on Linux via /proc".into())
+    }
+
+    fn total_cpu_time(&self) -> u64 {
+        0
+    }
+
+    /// Get RSS in bytes (assuming 4KB pages)
+    #[allow(dead_code)]
+    fn rss_bytes(&self) -> u64 {
+        self.rss_pages * 4096
+    }
+}
+
 /// Process memory statistics from /proc/self/status
 #[derive(Debug, Default)]
 struct MemoryStats {
@@ -167,6 +186,7 @@ struct MemoryStats {
     vm_rss_kb: u64,
 }
 
+#[cfg(target_os = "linux")]
 impl MemoryStats {
     /// Read memory stats from /proc/self/status
     fn read() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -199,6 +219,21 @@ impl MemoryStats {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+impl MemoryStats {
+    fn read() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Err("Memory stats are only available on Linux via /proc".into())
+    }
+
+    fn peak_bytes(&self) -> u64 {
+        0
+    }
+
+    fn rss_bytes(&self) -> u64 {
+        0
+    }
+}
+
 /// Resource tracker for monitoring overhead
 struct ResourceTracker {
     last_stats: Option<ProcessStats>,
@@ -206,10 +241,22 @@ struct ResourceTracker {
     clock_ticks_per_sec: u64,
 }
 
+#[cfg(target_os = "linux")]
+fn clock_ticks_per_sec() -> u64 {
+    unsafe { libc::sysconf(libc::_SC_CLK_TCK) as u64 }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn clock_ticks_per_sec() -> u64 {
+    // Fall back to 100Hz on targets where sysconf/_SC_CLK_TCK are unavailable.
+    // Other metrics rely on /proc/* and will no-op when those files are missing,
+    // but we still need a reasonable default so the code compiles.
+    100
+}
+
 impl ResourceTracker {
     fn new() -> Self {
-        // Get system clock ticks per second (usually 100)
-        let clock_ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as u64 };
+        let clock_ticks_per_sec = clock_ticks_per_sec();
 
         Self {
             last_stats: None,

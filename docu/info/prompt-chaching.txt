@@ -1,0 +1,762 @@
+https://ngrok.com/blog/prompt-caching
+
+Skip to main content
+ngrok logo
+Command Palette
+Search for a command to run...
+
+    Platform
+
+Blog
+Pricing
+Log in
+Sign up
+
+    AI
+
+Prompt caching: 10x cheaper LLM tokens, but how?
+Avatar for Sam Rose
+
+Sam Rose
+•
+
+Dec 16, 2025
+•
+
+4441 words
+
+As I write this post, cached input tokens are 10x cheaper in dollars per token than regular input tokens for both OpenAI and Anthropic's APIs.
+
+Anthropic even claim that prompt caching can reduce latency "by up to 85% for long prompts" and in my own testing I found that for a long enough prompt, this is true. I sent hundreds of requests to both Anthropic and OpenAI and noticed a substantial reduction in time-to-first-token latency for prompts where every input token was cached.
+GPT-5
+Uncached —Cached —
+0k65k130k195k260kprompt length (tokens)0s7s14s21s28stime to first token
+Sonnet 4.5
+Uncached —Cached —
+0k40k80k120k160kprompt length (tokens)0s2s4s6s8stime to first token
+
+Now that I've hooked you in with fancy gradient text and pretty charts, have you ever asked yourself...
+
+What on earth is a cached token?
+
+What's going on in those vast oceans of GPUs that enables providers to give you a 10x discount on input tokens? What are they saving between requests? It's not a case of saving the response and re-using it if the same prompt is sent again, it's easy to verify that this isn't happening through the API. Write a prompt, send it a dozen times, notice that you get different responses each time even when the usage section shows cached input tokens.
+
+Not satisfied with the answers in the vendor documentation, which do a good job of explaining how to use prompt caching but sidestep the question of what is actually being cached, I decided to go deeper. I went down the rabbit hole of how LLMs work until I understood the precise data providers cache, what it's used for, and how it makes everything faster and cheaper for everyone.
+By the end of this post you will...
+
+    Understand, at a deeper level, how LLMs work
+    Have built some new intuition for why LLMs work the way they do
+    Understand the exact 1s and 0s that get cached, and how they reduce the cost of your LLM requests
+
+LLM Architecture
+
+At their core, LLMs are giant mathematical functions. They take a sequence of numbers as input, and produce a number as output. Inside the LLM there is an enormous graph of billions of carefully arranged operations that transform the input numbers into an output number.
+
+This enormous graph of operations can be roughly split into 4 parts.
+
+Each node in that diagram can be thought of as a function that takes some input, and produces some output. Input is fed into the LLM in a loop until a special output value tells it to stop. Here's how it might look as pseudocode:
+
+prompt = "What is the meaning of life?";
+
+tokens = tokenizer(prompt);
+while (true) {
+	embeddings = embed(tokens);
+	for ([attention, feedforward] of transformers) {
+		embeddings = attention(embeddings);
+		embeddings = feedforward(embeddings);
+	}
+	output_token = output(embeddings);
+	if (output_token === END_TOKEN) {
+		break;
+	}
+	tokens.push(output_token);
+}
+
+print(decode(tokens));
+
+LLMs are surprisingly small
+
+While the above is greatly simplified, it surprised me just how few lines of code modern LLMs have.
+
+Sebastian Raschka creates standalone reimplementations of open source models using PyTorch, as well as a tonne of other top-tier educational material that you'll enjoy if you like this post. One of the current leading open models, Olmo 3, comes in at only a couple hundred lines of code for example.
+
+The place where prompt caching happens is in the "attention" mechanism of the transformer. We're going to walk through how an LLM works, in order, until we get there. That means we have to start this journey by talking about tokens.
+Tokenizer
+
+Before the LLM can do anything with your prompt, it needs to convert it into a representation it can work with. This is a two-step process shared between the tokenizer and the embedding stages. It won't become clear why this is all necessary until we get to embedding, so bear with me while we go through what the tokenizer does.
+
+The tokenizer takes your prompt, chops it up into small chunks, and assigns each unique chunk an integer ID called a "token." For example, here's how GPT-5 tokenizes the prompt "Check out ngrok.ai":
+4383
+
+Check
+
+842
+
+ out
+
+1657
+
+ ng
+
+17690
+
+rok
+
+75584
+
+.ai
+
+The prompt has been split into the array ["Check", " out", " ng", "rok", ".ai"], and converted into the tokens [4383, 842, 1657, 17690, 75584]. The same prompt always results in the same tokens. Tokens are also case-sensitive, and this is because capitalisation tells you something about the word. "Will" with a capital W is more likely to be a name than "will" with a lowercase W, for example.
+Why not just split on spaces? Or characters?
+
+This is a surprisingly big question, and covering it in detail could easily double the length of this post. The short, unsatisfying answer is that it's a trade-off. If you want to go deep on it Andrej Karpathy has an excellent video where he builds a tokenizer from scratch. For prompt caching, it's enough to know that tokenization turns text into numbers.
+
+Tokens are the fundamental unit of input and output for LLMs. When you ask ChatGPT a question, the response is streamed back to you one token at a time as each iteration of the LLM is completed. Providers do this because generating a full response can take tens of seconds, but sending you each token when it's ready makes the process feel more interactive.
+
+Let's ask a classic LLM question to see this in action. Hit the
+
+send button below when you're ready.
+Input (12 tokens)
+How[5299,
+␣many1991,
+␣r428,
+'s885,
+␣in306,
+␣the290,
+␣word2195,
+␣'461,
+st302,
+raw1618,
+berry19772,
+'?127222,
+Output
+How many r's in the word 'strawberry'?
+
+Prompt tokens go in, ✨ AI happens ✨, output token comes out, repeat. This process is called "inference," and notice that every output token gets appended to the input prompt before the next iteration. LLMs need all of the context to produce good answers. If we only fed the prompt in, it would continually try to produce the first token of the answer. If we only fed the answer in, it would immediately forget the question. The whole prompt + the answer need to be fed into the LLM, every single iteration.
+What's that 199999 <END> token all about?
+
+Inference has to stop at some point. LLMs have a variety of "special" tokens they can output, one of which signals the end of a response. In the GPT-5 tokenizer this is token 199999. This is one of many ways LLMs can terminate. You could specify a maximum number of tokens to generate through the API, and providers may also have other safety-related rules about when to stop.
+
+There are also special tokens for denoting the start and end of conversational messages, and these are how chat models like ChatGPT and Claude know when one message ends and another begins.
+
+Last thing on tokenizers: there are lots of them! The tokenizer that ChatGPT uses is different to the one Claude uses. Even different models made by OpenAI use different tokenizers. Each tokenizer has its own rules for splitting text into tokens. If you want to see how a variety of different tokenizers split text, check out tiktokenizer.
+
+Now that I've introduced you to tokens, let's talk about embeddings.
+Embedding
+
+Our tokens from the tokenizer are now fed into the embedding stage. To understand embedding, it helps to understand what the goal of a model is.
+
+When humans solve a problem with code, we write functions that take input and produce output. Converting Fahrenheit to Celsius, for example.
+
+function fahrenheitToCelsius(fahrenheit) {
+	return ((fahrenheit - 32) * 5) / 9;
+}
+
+We can throw any number into fahrenheitToCelsius and get the right answer. But what if we had a problem where we didn't know the formula? What if we just had this mysterious table of inputs and outputs below?
+Input	Output
+21	73
+2	3
+10	29
+206	1277
+
+I'm not expecting you to recognise the function here, though I will say that ChatGPT figures it out straight away if you paste a screenshot into the app.
+
+When we know the expected output for each input, but not the function that produces it, we can "train" a model to learn the function. We do this by giving the model a canvas—the enormous graph of mathematical operations—and modifying that graph until the model converges on the correct function. Every time the graph is updated, we run the inputs through it to see how close it gets to the correct outputs. We do this until we're happy it's close enough. This is what training is.
+
+It turns out, when training a model to output correct text, it helps to be able to recognise when two sentences are similar. Similar how, though? They may be similarly sad, or funny, or thought-provoking. They may be similar in length, rhythm, tone, language, vocabulary, structure. There are a huge number of dimensions that we can use to describe the similarity of two sentences, and sentences can be similar along some dimensions but not others.
+
+Tokens do not have dimensions. They're plain ol' integers. Embeddings, though, embeddings have lots of dimensions.
+
+An embedding is an array of length n representing a position in n-dimensional space. If n were 3, an embedding might be [10, 4, 2] representing the location x=10, y=4, z=2 in 3 dimensional space. When LLMs are being trained, each token gets assigned a random starting location in this space, and the training process nudges all of the tokens around until it finds an arrangement that produces the best outputs.
+
+The embedding stage starts out by looking up each token's embedding. In pseudocode it might look like this:
+
+// Created during training, never changes during inference.
+const EMBEDDINGS = [...];
+
+function embed(tokens) {
+	return tokens.map(token => {
+		return EMBEDDINGS[token];
+	});
+}
+
+So we take tokens, an array of integers, and convert it into an array of embeddings. An array of arrays, or a "matrix." Toggle between tokens and embeddings below to see how I picture this process in my head.
+
+The tokens [75, 305, 284, 887] get converted into a matrix of 3-dimensional embeddings.
+
+The more dimensions we give the embeddings, the more dimensions it has to compare sentences with. We've been talking about embeddings with 3 dimensions, but current models have embeddings with thousands of dimensions. The biggest ones have more than 10,000.
+
+To demonstrate the value of more dimensions, below I have 8 groups of coloured shapes that start off in 1-dimensional space. They sit on a line, and they're a jumbled mess that's hard to make sense of. But as you add more dimensions, it becomes clear that there are 8 distinct, related groups. Click the 2D and 3D buttons to see what I mean.
+Drag to rotate
+
+3 dimensions is the best I can do for a visual example here, you'll have to use your imagination to picture what you might be able to do with thousands of dimensions.
+
+There's one last thing that the embedding stage does. After fetching a token's embeddings, it encodes the token's position within the prompt into the embeddings. I didn't dig deeply into how this works other than enough to know it doesn't make much difference to how prompt caching works, but without it the LLM would not be able to tell the order of the tokens in the prompt.
+
+To update our pseudocode from earlier, assume that a function called encodePosition exists. It takes embeddings and a position and returns new embeddings with the position encoded within.
+
+const EMBEDDINGS = [...];
+
+// Input: array of tokens (integers)
+function embed(tokens) {
+	// Output: array of n-dimensional embedding arrays
+	return tokens.map((token, i) => {
+		const embeddings = EMBEDDINGS[token];
+		return encodePosition(embeddings, i);
+	});
+}
+
+In summary, embeddings are points in n-dimensional space that you can think of as the semantic meaning of the text they represent. During training, each token gets moved within this space to be close to other, similar tokens. The more dimensions, the more complex and nuanced the LLM's representation of each token can be.
+
+All of the work we've done in the tokenizer and embedding stages has been to convert text into something the LLM can work with. Let's now take a look at what that work looks like in the transformer stage.
+Transformer
+
+The transformer stage is all about taking embeddings as input and moving them around their n-dimensional space. It does this in two ways, and we're only going to focus on the first: attention. We aren't going to talk about "Feedforward" or the output stage (in this post 👀).
+
+The job of the attention mechanism is to help the LLM understand the relationships between each token in the prompt, by allowing tokens to influence each others' positions in n-dimensional space. It does this by combining the embeddings of the prompt's tokens in a weighted fashion. The input is an entire prompt's embeddings, and the output is a single new embedding that is a weighted combination of all of the input embeddings.
+
+For example, if we had the prompt "Mary had a little", and it resulted in the 4 tokens Mary, had, a, and little, the attention mechanism might decide that to generate the next token we should use:
+
+    63% of Mary's embeddings
+    16% of had's embeddings
+    12% of a's embeddings
+    9% of little's embeddings
+
+And it would combine them all by scaling them by their weights and summing them up. This is how LLMs know how much they should care about, or "attend" to, each token in a prompt.
+
+This is the most complicated and abstract part of the process so far. I'm going to present it first as pseudocode, and then we'll have a look at how the embeddings get manipulated passing through it. I wanted to make this section less math-heavy but it's hard to avoid some math here. You can do it, I believe in you.
+
+Most of the calculations in attention are matrix multiplications. The only thing you need to know about matrix multiplication for this post is that the shape of the output matrix is determined by the shapes of the input matrices. The output always has the same number of rows as the first input matrix and the same number of columns as the second input matrix.
+A matrix with 2 rows 3 columns, labelled "2x3".
+2x3
+1.00	2.00	3.00
+4.00	5.00	6.00
+×
+A matrix with 3 rows 1 columns, labelled "3x1".
+3x1
+6.00
+7.00
+8.00
+=
+A matrix with 2 rows 1 columns, labelled "2x1".
+2x1
+44.00
+107.00
+
+With that in mind, here's how a simplified attention mechanism calculates the weight to assign to each token. In the code below I'm using * to represent matrix multiplication.
+
+// Similar to EMBEDDINGS from the pseudocode
+// earlier, WQ and WK are learned during 
+// training and do not change during inference.
+// 
+// These are both n*n matrices, where n is the
+// number of embedding dimensions. In our example
+// above, n = 3.
+const WQ = [[...], [...], [...]];
+const WK = [[...], [...], [...]];
+
+// The input embeddings look like this:
+// [
+//   [-0.1, 0.1, -0.3], // Mary
+//   [1.0, -0.5, -0.6], // had
+//   [0.0, 0.8, 0.6],   // a
+//   [0.5, -0.7, 1.0]   // little
+// ]
+function attentionWeights(embeddings) {
+	const Q = embeddings * WQ;
+	const K = embeddings * WK;
+	const scores = Q * transpose(K);
+	const masked = mask(scores);
+	return softmax(masked);
+}
+
+Let's take a look at the embeddings as they flow through this function.
+Hold up, what're these WQ and WK variables?
+
+Remember how I said earlier that the embeddings for each token get assigned a random position and then the training process makes small tweaks to them until the model converges on a good arrangement?
+
+WQ and WK are similar. They're n-by-n matrices, with n being the embedding dimension, and they're given random values at the start of training. Then during training they also get tweaked to help the model converge on a good solution.
+
+Anything that gets tweaked during training is said to be a "model parameter." Each floating point number in the embeddings vectors and inside these WQ and WK matrices is one parameter. When you hear a model being described as having "175 billion parameters," these are the numbers they're talking about.
+
+As for what WQ and WK actually are, we kinda don't know. As the model converges, they end up representing some kind of transformation of the embeddings that helps the model produce good output. They could be doing anything, and interpreting what's in there as an open and active area of research.
+
+To get Q and K we take embeddings and multiply them by WQ and WK respectively. WQ and WK always have rows and columns equal to the number of embedding dimensions, which is 3 in this case. I've picked random values for WQ and WK here, and values are rounded to 2 decimal places for readability.
+A matrix with 4 rows 3 columns, labelled "embeddings".
+embeddings
+-0.06	0.13	-0.30
+0.95	-0.49	-0.64
+-0.05	0.75	0.65
+0.51	-0.72	0.98
+×
+A matrix with 3 rows 3 columns, labelled "WQ".
+WQ
+-0.74	0.91	-0.21
+-0.51	0.43	0.18
+-0.56	-0.21	0.76
+=
+A matrix with 4 rows 3 columns, labelled "Q".
+Q
+0.15	0.07	-0.19
+-0.10	0.79	-0.78
+-0.71	0.15	0.64
+-0.56	-0.06	0.51
+
+The resulting Q matrix has 4 rows and 3 columns. 4 rows because the embeddings matrix had 4 rows (one per token), and 3 columns because WQ had 3 columns (one per embedding dimension).
+
+The calculation for K is exactly the same, just with WK instead of WQ.
+A matrix with 4 rows 3 columns, labelled "embeddings".
+embeddings
+-0.06	0.13	-0.30
+0.95	-0.49	-0.64
+-0.05	0.75	0.65
+0.51	-0.72	0.98
+×
+A matrix with 3 rows 3 columns, labelled "WK".
+WK
+0.13	-0.51	-0.63
+-0.79	0.54	-0.04
+0.33	-0.10	-0.87
+=
+A matrix with 4 rows 3 columns, labelled "K".
+K
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+
+Q and K are both "projections" of the input embeddings into new n-dimensional spaces. They're not the original embeddings, but they're derived from them.
+
+Then we take Q and K and multiply them together. We "transpose" K, which means we flip it along the diagonal, so that the resulting matrix is a square, with rows and columns equal to the number of tokens in the input prompt.
+A matrix with 4 rows 3 columns, labelled "Q".
+Q
+0.15	0.07	-0.19
+-0.10	0.79	-0.78
+-0.71	0.15	0.64
+-0.56	-0.06	0.51
+×
+A matrix with 3 rows 4 columns, labelled "transpose(K)".
+transpose(K)
+-0.21	0.30	-0.39	0.96
+0.13	-0.68	0.36	-0.74
+0.29	-0.03	-0.56	-1.15
+=
+A matrix with 4 rows 4 columns, labelled "scores".
+scores
+-0.08	0.00	0.08	0.31
+-0.10	-0.54	0.76	0.21
+0.36	-0.33	-0.04	-1.53
+0.26	-0.15	-0.09	-1.08
+
+These scores are a representation of how important each token is to the next token generated. The top left number, -0.08, is how important "Mary" is to "had". Then 1 row down, -0.10, is how important "Mary" is to "a". I'll show a visual of this after the matrix math. Everything that happens next is about turning these scores into weights that we can use to mix the embeddings together.
+
+The first problem with this matrix of scores is that it allows future tokens to influence the past. In that top row, the only word we know about is "Mary", so it should be the only word that contributes to the generation of "had". The same goes for the second row, where we know "Mary" and "had", so only those two words should contribute to the generation of "a", and so on.
+
+To fix this, we apply a triangular mask to the matrix to zero out future tokens. Rather than zero them out though, we set them to negative infinity. I'll explain why in a moment.
+mask(
+A matrix with 4 rows 4 columns, labelled "scores".
+scores
+-0.08	0.00	0.08	0.31
+-0.10	-0.54	0.76	0.21
+0.36	-0.33	-0.04	-1.53
+0.26	-0.15	-0.09	-1.08
+)
+=
+A matrix with 4 rows 4 columns, labelled "masked".
+masked
+-0.08	-∞	-∞	-∞
+-0.10	-0.54	-∞	-∞
+0.36	-0.33	-0.04	-∞
+0.26	-0.15	-0.09	-1.08
+
+The second problem is that these scores are arbitrary numbers. They would be much more useful to us if they were a distribution that sums to 1 across each row. This is exactly what the softmax function does. The details of how softmax works aren't important, it's slightly more complicated than dividing each number by the sum of the row, but the result is the same: each row sums to 1, and each number is between 0 and 1.
+softmax(
+A matrix with 4 rows 4 columns, labelled "masked".
+masked
+-0.08	-∞	-∞	-∞
+-0.10	-0.54	-∞	-∞
+0.36	-0.33	-0.04	-∞
+0.26	-0.15	-0.09	-1.08
+)
+=
+A matrix with 4 rows 4 columns, labelled "weights".
+weights
+1.00	0.00	0.00	0.00
+0.61	0.39	0.00	0.00
+0.46	0.23	0.31	0.00
+0.38	0.25	0.27	0.10
+
+To explain the negative infinities, here's an implementation of softmax in code:
+
+function softmax(matrix) {
+	return matrix.map(row => {
+		const exps = row.map(x => Math.exp(x));
+		const sumExps = exps.reduce((a, b) => a + b, 0);
+		return exps.map(exp => exp / sumExps);
+	});
+}
+
+It doesn't quite sum the numbers and then divide each number by the sum. Instead, it takes the Math.exp of each number first, which does e^x. If we used zeroes instead of negative infinity, Math.exp(0) === 1 so the zeroes would still contribute a weight. Math.exp(-Infinity) is 0, which is what we want.
+
+The grid below shows an example of the attention weights for the prompt "Mary had a little". You can hover or click grid cells to see the contribution each token has. These weights don't match up with the calculations above because I pulled them from the version of GPT-2 that's running at the fantastic Transformer Explained site. So these are real weights from a real, albeit old, model.
+Maryhadalittle?
+63%
+Mary
+had
+a
+little
+Mary
+had
+a
+little
+1
+.79
+.21
+.81
+.13
+.06
+.63
+.16
+.12
+.09
+
+In the first row, we just have "Mary", so Mary contributes 100% to "had". Then in the 2nd row "Mary" contributes 79% while "had" contributes 21% to the generation of "a", and so on. It's probably not surprising that the word the LLM thinks is most important in this sentence is "Mary," as shown by Mary having the highest weight in every row. If I asked you to complete the sentence "Jessica had a little" it's unlikely you'd pick "lamb."
+
+All that remains is to do the mixing of the token embeddings, which is mercifully simpler than generating the weights.
+
+// Learned during training, doesn't change 
+// during inference. This is also an n*n matrix,
+// where n is the number of embedding dimensions.
+const WV = [[...], [...], ...];
+
+function attention(embeddings) {
+	const V = embeddings * WV;
+	// This is the `attentionWeights` function from
+	// the section above. We're wrapping it in
+	// this `attention` function.
+	const weights = attentionWeights(embeddings);
+	return weights * V;
+}
+
+Similar to before, we have a WV matrix that's determined at training time. We use this to get a V matrix from the token embeddings.
+A matrix with 4 rows 3 columns, labelled "embeddings".
+embeddings
+-0.06	0.13	-0.30
+0.95	-0.49	-0.64
+-0.05	0.75	0.65
+0.51	-0.72	0.98
+×
+A matrix with 3 rows 3 columns, labelled "WV".
+WV
+0.96	0.62	-0.40
+-0.90	0.06	-0.55
+-0.17	-0.09	0.59
+=
+A matrix with 4 rows 3 columns, labelled "V".
+V
+-0.12	-0.00	-0.23
+1.46	0.62	-0.49
+-0.83	-0.04	-0.01
+0.97	0.18	0.78
+Why not mix the embeddings directly?
+
+When we derive Q and K then multiply them together to get the attention weights, we're operating entirely on the relevance tokens have to each other. Embeddings are encoding all sorts of semantic meaning about the tokens, one dimension could represent "colour", another "size", another "rudeness", and so on. The weights are using similarity to determine relevance.
+
+What WV allows the model to do is to then decide which dimensions to carry forward. In the sentence "Mary had a little", what's important about Mary is her name. The model could have also learned plenty about the drink Bloody Mary, or Mary Queen of Scots. These are irrelevant to the nursery rhyme, and it would introduce noise to carry them forward. So WV allows the model to filter out irrelevant features before mixing the embeddings together.
+
+Then we multiply that V by the weights we generated, and the output is a new set of embeddings:
+A matrix with 4 rows 4 columns, labelled "weights".
+weights
+1.00	0.00	0.00	0.00
+0.61	0.39	0.00	0.00
+0.46	0.23	0.31	0.00
+0.38	0.25	0.27	0.10
+×
+A matrix with 4 rows 3 columns, labelled "V".
+V
+-0.12	-0.00	-0.23
+1.46	0.62	-0.49
+-0.83	-0.04	-0.01
+0.97	0.18	0.78
+=
+A matrix with 4 rows 3 columns, labelled "output".
+output
+-0.12	-0.00	-0.23
+0.50	0.24	-0.33
+0.02	0.13	-0.22
+0.20	0.16	-0.14
+
+The final output of the attention mechanism is the last row of this output matrix. All of the contextual information from previous tokens has been mixed into this last row through the attention process, but all of the previous rows had to be calculated to do that.
+
+So all in all, embeddings go in and a new embedding comes out. The attention mechanism has done a lot of intricate math to mix tokens together in proportion to how important they are based on the WQ, WK, and WV matrices it learned during training. This is the mechanism that allows LLMs to know what's important in its context window, and why.
+
+We now, finally, know everything we need to know to talk about caching.
+There is more to attention
+
+What I've shown here is a simplified (I know, right?) version of attention designed to highlight what matters most for prompt caching. There's more to it in practice, and if you're interested in going deeper I recommend the 3blue1brown video on attention.
+Prompt caching
+
+Let's take a look at the grid above again, but this time we'll see it get populated as each new token is produced in the inference loop. Hit play to start the animation.
+
+Every new token is appended to the input and reprocessed in full. But look closely, play the animation back a few times: none of previous weights change. The 2nd row is always 0.79 and 0.21. The 3rd row is always 0.81, 0.13, 0.06. We're redoing lots of calculations we don't need to. Most of the matrix multiplications for "Mary had a little" aren't necessary if you've only just finished processing "Mary had a", which is how the LLM inference loop works.
+
+You can avoid these duplicate calculations by making two changes to the inference loop:
+
+    Cache the K and V matrices every iteration.
+    Only feed the newest token into the model, not the entire prompt.
+
+Let's walk through the matrix multiplications again but this time, we have the first 4 tokens' K and V matrices cached, and we only pass in a single token's embeddings. Yes, it's more matrix math, I'm sorry, but it's mostly the same as above and we're going to speed through it.
+
+Calculating a new Q produces just a single row as output. WQ hasn't changed from before.
+A matrix with 1 rows 3 columns, labelled "embeddings".
+embeddings
+0.20	-0.10	0.70
+×
+A matrix with 3 rows 3 columns, labelled "WQ".
+WQ
+-0.74	0.91	-0.21
+-0.51	0.43	0.18
+-0.56	-0.21	0.76
+=
+A matrix with 1 rows 3 columns, labelled "Q(new)".
+Q(new)
+-0.49	-0.01	0.48
+
+Then calculating a new K produces just a single row as output as well, and likewise WK is the same.
+A matrix with 1 rows 3 columns, labelled "embeddings".
+embeddings
+0.20	-0.10	0.70
+×
+A matrix with 3 rows 3 columns, labelled "WK".
+WK
+0.13	-0.51	-0.63
+-0.79	0.54	-0.04
+0.33	-0.10	-0.87
+=
+A matrix with 1 rows 3 columns, labelled "K(new)".
+K(new)
+0.34	-0.23	-0.74
+
+But then we take that new row and append it to the 4 cached K rows from the previous iteration:
+A matrix with 4 rows 3 columns, labelled "cached K".
+cached K
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+append
+A matrix with 1 rows 3 columns, labelled "K(new)".
+K(new)
+0.34	-0.23	-0.74
+=
+A matrix with 5 rows 3 columns, labelled "K".
+K
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+0.34	-0.23	-0.74
+
+So now we have the K matrix for all of the tokens in the prompt, but we've only had to calculate the last row of it.
+
+We carry on in this fashion to get new scores:
+A matrix with 1 rows 3 columns, labelled "Q(new)".
+Q(new)
+-0.49	-0.01	0.48
+×
+A matrix with 3 rows 5 columns, labelled "transpose(K)".
+transpose(K)
+-0.21	0.30	-0.39	0.96	0.34
+0.13	-0.68	0.36	-0.74	-0.23
+0.29	-0.03	-0.56	-1.15	-0.74
+=
+A matrix with 1 rows 5 columns, labelled "scores(new)".
+scores(new)
+0.24	-0.16	-0.08	-1.01	-0.52
+
+And new weights:
+softmax(
+A matrix with 1 rows 5 columns, labelled "scores(new)".
+scores(new)
+0.24	-0.16	-0.08	-1.01	-0.52
+)
+=
+A matrix with 1 rows 5 columns, labelled "weights(new)".
+weights(new)
+0.32	0.21	0.23	0.09	0.15
+
+The whole time, we only calculate what we need. No recalculation of old values at all. This continues with getting the new row of V:
+A matrix with 1 rows 3 columns, labelled "embeddings".
+embeddings
+0.20	-0.10	0.70
+×
+A matrix with 3 rows 3 columns, labelled "WV".
+WV
+-0.74	0.91	-0.21
+-0.51	0.43	0.18
+-0.56	-0.21	0.76
+=
+A matrix with 1 rows 3 columns, labelled "V(new)".
+V(new)
+-0.49	-0.01	0.48
+
+And appending it to the V we had cached:
+A matrix with 4 rows 3 columns, labelled "cached V".
+cached V
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+append
+A matrix with 1 rows 3 columns, labelled "V(new)".
+V(new)
+-0.49	-0.01	0.48
+=
+A matrix with 5 rows 3 columns, labelled "V".
+V
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+-0.49	-0.01	0.48
+
+And finally multiplying the new weights with the new V to get the final new embeddings:
+A matrix with 1 rows 5 columns, labelled "weights(new)".
+weights(new)
+0.32	0.21	0.23	0.09	0.15
+×
+A matrix with 5 rows 3 columns, labelled "V".
+V
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+-0.49	-0.01	0.48
+=
+A matrix with 1 rows 3 columns, labelled "embeddings(new)".
+embeddings(new)
+-0.08	-0.09	-0.08
+
+This single new row of embeddings is all that we needed. All of the contextual information from previous tokens has been baked into it thanks to the cached K and V.
+The data that gets cached is the result of embeddings * WK and embeddings * WV, so K and V. As a result, prompt caching tends to be called "KV caching."
+Cache
+A matrix with 5 rows 3 columns, labelled "K".
+K
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+0.34	-0.23	-0.74
+A matrix with 5 rows 3 columns, labelled "V".
+V
+-0.21	0.13	0.29
+0.30	-0.68	-0.03
+-0.39	0.36	-0.56
+0.96	-0.74	-1.15
+-0.49	-0.01	0.48
+
+That's it, those K and V matrices above, they are the 1s and 0s that the providers save in their giant datacenters to offer us 10x cheaper tokens, and much faster responses.
+
+Providers hold on to these matrices for each prompt for 5-10 minutes after the request is made, and if you send a new request that starts with the same prompt, they reuse the cached K and V rather than recalculating them. What's really cool is that you can partially match a cache entry and still use the bit that matched, not the whole thing.
+
+The visual below round robins between a few prompts that have similar prefixes, to show how cache entries might get used. Every so often the cache gets emptied to show how it fills back up.
+Cache
+No cached prompts yet.
+
+OpenAI and Anthropic do caching very differently from each other. OpenAI do it all automatically for you, attempting to route requests to cached entries when possible. In my experiments, by sending a request and then immediately resending it, I was able to get a hit rate of about 50%. Given how long the time-to-first-byte can get for long context windows, this could lead to inconsistent performance.
+
+Anthropic give you more control, letting you decide when to cache and for how long. You pay for this privilege, but in my experiments Anthropic route you to cached entries 100% of the time when you ask them to cache a prompt. This might make them a more appropriate choice for applications where you're operating on long context windows and need predictable latency.
+Wait, what about temperature?
+
+There are a variety of parameters that LLM providers offer you to control the randomness of what a model will produce. Common ones are temperature, top_p, and top_k. These parameters all affect the final step of the inference loop, where the model picks a token based on the probabilities it has assigned to each token in its vocabulary. This happens after the attention mechanism has produced the final embeddings, so prompt caching is unaffected by these parameters. You can change them freely without worrying about invalidating your cached prompts.
+Conclusion
+
+I had a blast learning everything I've presented in this post. LLMs are fascinating technology and I think, as an industry, we've only scratched the surface of what they can do.
+
+If you made it this far, you are the perfect customer for our new product: ngrok.ai. Route, secure, and manage traffic to any LLM—cloud or local—with one unified platform.
+
+Learn more in the announcement post or jump straight into the documentation.
+Acknowledgments
+
+I devoured many resources to learn everything I needed to know to write this post, and here are the ones that I found most helpful:
+
+    Build a Large Language Model (From Scratch) by Sebastian Raschka.
+    Neural Networks: Zero to Hero by Andrej Karpathy.
+    Neural Networks video course by 3blue1brown.
+    Transformer Explainer by Aeree Cho et al.
+
+If you enjoyed this post, you will definitely enjoy them.
+Share this post
+
+    Share Prompt caching: 10x cheaper LLM tokens, but how? on hackernews
+
+Share Prompt caching: 10x cheaper LLM tokens, but how? on linkedin
+Share Prompt caching: 10x cheaper LLM tokens, but how? on twitter
+Share Prompt caching: 10x cheaper LLM tokens, but how? on reddit
+Share Prompt caching: 10x cheaper LLM tokens, but how? on whatsapp
+Avatar for Sam Rose
+Sam Rose
+
+Sam Rose is a Senior Developer Educator at ngrok, focusing on creating content that helps developers get the most out of ngrok.
+Platform
+
+    Product
+    Cloud Edge
+    Secure Tunnels
+    Platform Features
+
+Use Cases
+
+    ngrok for development
+    ngrok for production
+    API Gateway
+    Site-to-Site Connectivity
+    Kubernetes Operator
+    Device Gateway
+    Global Load Balancer
+    Identity-Aware Proxy
+    Webhook Testing
+    Developer Preview
+    View all use cases
+
+Resources
+
+    Security
+    Trust
+    Platform
+    Customers
+    Integrations
+    Blog
+    Support
+    Abuse
+
+Get Started
+
+    Download
+    Pricing
+    Docs
+    Contact
+    Partners
+    Service status
+
+Company
+
+    About
+    Newsletter
+    Events
+    Press
+    Brand
+    Careers
+    Terms of Service
+    Privacy Policy
+    Privacy Preferences
+    DPA
+
+© 2026 ngrok, Inc.
+RSS
+GitHub
+Twitter
+LinkedIn
+YouTube
+2s
+

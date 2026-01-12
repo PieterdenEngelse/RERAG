@@ -61,6 +61,7 @@ pub struct ApiConfig {
 
     // Chunking snapshot logging
     pub chunking_log_enabled: bool,
+    pub admin_api_token: Option<String>,
 }
 
 impl ApiConfig {
@@ -145,6 +146,8 @@ impl ApiConfig {
             .map(|v| v.to_lowercase() != "false" && v != "0")
             .unwrap_or(true);
 
+        let admin_api_token = env::var("ADMIN_API_TOKEN").ok();
+
         Self {
             host,
             port,
@@ -166,6 +169,7 @@ impl ApiConfig {
             redis_url,
             redis_ttl,
             chunking_log_enabled,
+            admin_api_token,
         }
     }
 

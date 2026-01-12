@@ -116,7 +116,7 @@ impl LlmConfig {
             ..Default::default()
         }
     }
-    
+
     /// Mode 2: LLM Only (pure generation)
     /// Creative, flexible, uses model knowledge
     pub fn llm_only() -> Self {
@@ -129,7 +129,7 @@ impl LlmConfig {
             ..Default::default()
         }
     }
-    
+
     /// Mode 3: Combined (RAG + LLM)
     /// Balanced - grounded but can expand
     pub fn combined() -> Self {

@@ -6,7 +6,6 @@ use actix_web::{web, HttpResponse, Result as ActixResult};
 use chrono::Utc;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use tracing::{debug, warn};
 
 // ============ Response Types ============
@@ -112,9 +111,6 @@ fn default_limit() -> usize {
 
 // ============ Database Helpers ============
 
-const AGENT_DB_PATH: &str = "agent.db";
-const AGENT_MEMORY_DB_PATH: &str = "db/agent_memory.db";
-
 fn ensure_tables(conn: &Connection) {
     let _ = conn.execute_batch(
         "
@@ -142,37 +138,24 @@ fn ensure_tables(conn: &Connection) {
             insight TEXT NOT NULL,
             created_at INTEGER NOT NULL
         );
-        "
+        ",
     );
 }
 
 pub fn get_agent_db_connection() -> Option<Connection> {
     // Try multiple possible paths
-    let paths = [
-        AGENT_DB_PATH,
-        "db/agent.db",
-        "../agent.db",
-        AGENT_MEMORY_DB_PATH,
-    ];
-    
-    for path in &paths {
-        if Path::new(path).exists() {
-            if let Ok(conn) = Connection::open(path) {
-                debug!("Connected to agent database at: {}", path);
-                ensure_tables(&conn);
-                return Some(conn);
-            }
+    let path = crate::db::path_resolver::agent_db_path();
+    match Connection::open(path) {
+        Ok(conn) => {
+            debug!("Connected to agent database at: {}", path.display());
+            ensure_tables(&conn);
+            Some(conn)
+        }
+        Err(err) => {
+            warn!("Could not connect to agent database: {}", err);
+            None
         }
     }
-    
-    // Try to create a new connection to the default path
-    if let Ok(conn) = Connection::open(AGENT_DB_PATH) {
-        ensure_tables(&conn);
-        return Some(conn);
-    }
-    
-    warn!("Could not connect to any agent database");
-    None
 }
 
 // ============ Endpoint Handlers ============
@@ -199,11 +182,9 @@ pub async fn get_agent_stats() -> ActixResult<HttpResponse> {
 
     // Count unique agents
     let active_agents: usize = conn
-        .query_row(
-            "SELECT COUNT(DISTINCT agent_id) FROM episodes",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(DISTINCT agent_id) FROM episodes", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(1); // At least 1 default agent
 
     // Total episodes
@@ -229,7 +210,7 @@ pub async fn get_agent_stats() -> ActixResult<HttpResponse> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap_or((0, 0));
-    
+
     let success_rate = if total > 0 {
         (successful as f64 / total as f64) * 100.0
     } else {
@@ -293,10 +274,10 @@ pub async fn get_recent_episodes(query: web::Query<LimitQuery>) -> ActixResult<H
     };
 
     let limit = query.limit.min(100);
-    
+
     let mut stmt = match conn.prepare(
         "SELECT id, agent_id, query, response, context_chunks_used, success, created_at 
-         FROM episodes ORDER BY created_at DESC LIMIT ?1"
+         FROM episodes ORDER BY created_at DESC LIMIT ?1",
     ) {
         Ok(s) => s,
         Err(_) => {
@@ -364,10 +345,12 @@ pub async fn create_goal(req: web::Json<CreateGoalRequest>) -> ActixResult<HttpR
     let conn = match get_agent_db_connection() {
         Some(c) => c,
         None => {
-            return Ok(HttpResponse::InternalServerError().json(GoalActionResponse {
-                status: "error".to_string(),
-                message: "Database not available".to_string(),
-            }));
+            return Ok(
+                HttpResponse::InternalServerError().json(GoalActionResponse {
+                    status: "error".to_string(),
+                    message: "Database not available".to_string(),
+                }),
+            );
         }
     };
 
@@ -385,10 +368,12 @@ pub async fn create_goal(req: web::Json<CreateGoalRequest>) -> ActixResult<HttpR
             agent_id: req.agent_id.clone(),
             created_at: now,
         })),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(GoalActionResponse {
-            status: "error".to_string(),
-            message: format!("Failed to create goal: {}", e),
-        })),
+        Err(e) => Ok(
+            HttpResponse::InternalServerError().json(GoalActionResponse {
+                status: "error".to_string(),
+                message: format!("Failed to create goal: {}", e),
+            }),
+        ),
     }
 }
 
@@ -398,10 +383,12 @@ pub async fn complete_goal(goal_id: web::Path<String>) -> ActixResult<HttpRespon
     let conn = match get_agent_db_connection() {
         Some(c) => c,
         None => {
-            return Ok(HttpResponse::InternalServerError().json(GoalActionResponse {
-                status: "error".to_string(),
-                message: "Database not available".to_string(),
-            }));
+            return Ok(
+                HttpResponse::InternalServerError().json(GoalActionResponse {
+                    status: "error".to_string(),
+                    message: "Database not available".to_string(),
+                }),
+            );
         }
     };
 
@@ -419,10 +406,12 @@ pub async fn complete_goal(goal_id: web::Path<String>) -> ActixResult<HttpRespon
             status: "error".to_string(),
             message: format!("Goal {} not found", goal_id),
         })),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(GoalActionResponse {
-            status: "error".to_string(),
-            message: format!("Failed to complete goal: {}", e),
-        })),
+        Err(e) => Ok(
+            HttpResponse::InternalServerError().json(GoalActionResponse {
+                status: "error".to_string(),
+                message: format!("Failed to complete goal: {}", e),
+            }),
+        ),
     }
 }
 
@@ -432,10 +421,12 @@ pub async fn fail_goal(goal_id: web::Path<String>) -> ActixResult<HttpResponse> 
     let conn = match get_agent_db_connection() {
         Some(c) => c,
         None => {
-            return Ok(HttpResponse::InternalServerError().json(GoalActionResponse {
-                status: "error".to_string(),
-                message: "Database not available".to_string(),
-            }));
+            return Ok(
+                HttpResponse::InternalServerError().json(GoalActionResponse {
+                    status: "error".to_string(),
+                    message: "Database not available".to_string(),
+                }),
+            );
         }
     };
 
@@ -453,10 +444,12 @@ pub async fn fail_goal(goal_id: web::Path<String>) -> ActixResult<HttpResponse> 
             status: "error".to_string(),
             message: format!("Goal {} not found", goal_id),
         })),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(GoalActionResponse {
-            status: "error".to_string(),
-            message: format!("Failed to mark goal as failed: {}", e),
-        })),
+        Err(e) => Ok(
+            HttpResponse::InternalServerError().json(GoalActionResponse {
+                status: "error".to_string(),
+                message: format!("Failed to mark goal as failed: {}", e),
+            }),
+        ),
     }
 }
 
@@ -472,7 +465,7 @@ pub async fn get_active_goals() -> ActixResult<HttpResponse> {
 
     let mut stmt = match conn.prepare(
         "SELECT id, agent_id, goal, status, created_at, completed_at 
-         FROM goals WHERE status = 'active' ORDER BY created_at DESC"
+         FROM goals WHERE status = 'active' ORDER BY created_at DESC",
     ) {
         Ok(s) => s,
         Err(_) => {
@@ -515,7 +508,7 @@ pub async fn get_goals() -> ActixResult<HttpResponse> {
 
     let mut stmt = match conn.prepare(
         "SELECT id, agent_id, goal, status, created_at, completed_at 
-         FROM goals ORDER BY created_at DESC LIMIT 50"
+         FROM goals ORDER BY created_at DESC LIMIT 50",
     ) {
         Ok(s) => s,
         Err(_) => {
@@ -572,7 +565,7 @@ pub async fn get_reflections(query: web::Query<LimitQuery>) -> ActixResult<HttpR
 
     let mut stmt = match conn.prepare(
         "SELECT id, agent_id, reflection_type, insight, created_at 
-         FROM reflections ORDER BY created_at DESC LIMIT ?1"
+         FROM reflections ORDER BY created_at DESC LIMIT ?1",
     ) {
         Ok(s) => s,
         Err(_) => {
@@ -631,27 +624,17 @@ pub async fn get_memory_stats() -> ActixResult<HttpResponse> {
         .unwrap_or(0);
 
     let unique_agents: usize = conn
-        .query_row(
-            "SELECT COUNT(DISTINCT agent_id) FROM episodes",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(DISTINCT agent_id) FROM episodes", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(1);
 
     let oldest_episode_timestamp: Option<i64> = conn
-        .query_row(
-            "SELECT MIN(created_at) FROM episodes",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT MIN(created_at) FROM episodes", [], |row| row.get(0))
         .ok();
 
     let newest_episode_timestamp: Option<i64> = conn
-        .query_row(
-            "SELECT MAX(created_at) FROM episodes",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT MAX(created_at) FROM episodes", [], |row| row.get(0))
         .ok();
 
     Ok(HttpResponse::Ok().json(MemoryStatsResponse {
@@ -709,12 +692,6 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
             .route("/goals", web::get().to(get_goals))
             .route("/reflections", web::get().to(get_reflections)),
     )
-    .service(
-        web::scope("/monitoring/memory")
-            .route("/stats", web::get().to(get_memory_stats)),
-    )
-    .service(
-        web::scope("/monitoring/tools")
-            .route("/stats", web::get().to(get_tool_stats)),
-    );
+    .service(web::scope("/monitoring/memory").route("/stats", web::get().to(get_memory_stats)))
+    .service(web::scope("/monitoring/tools").route("/stats", web::get().to(get_tool_stats)));
 }

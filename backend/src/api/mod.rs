@@ -3,7 +3,9 @@ use crate::agent_memory::{AgentMemory, MemoryItem, MemorySearchResult};
 use crate::config::ApiConfig;
 use crate::db::chunk_settings;
 use crate::db::llm_settings::{self, LlmConfig};
+use crate::db::path_resolver;
 use crate::index;
+use crate::memory::agent::GoalStatus;
 use crate::memory::chunker::ChunkerConfig;
 use crate::monitoring::config::MonitoringConfig;
 use crate::monitoring::metrics;
@@ -14,10 +16,10 @@ use crate::tools::calculator::CalculatorTool;
 use crate::tools::url_fetch::URLFetchTool;
 use crate::tools::web_search::WebSearchTool;
 use crate::tools::Tool;
-use crate::memory::agent::GoalStatus;
 use actix_cors::Cors;
 use actix_multipart::Multipart;
-use actix_web::{http::StatusCode, web, App, Error, HttpResponse, HttpServer};
+use actix_web::http::header::AUTHORIZATION;
+use actix_web::{http::StatusCode, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use chrono::Utc;
 use futures_util::stream::StreamExt;
 use serde::Serialize;
@@ -29,8 +31,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::SystemTime;
-use tracing::{error, info, warn};
+use std::time::{Instant, SystemTime};
+use tracing::{error, info, info_span, warn};
 use uuid::Uuid;
 
 pub const UPLOAD_DIR: &str = "documents";
@@ -82,10 +84,13 @@ struct AgentChatState {
     last_response: Option<String>,
     last_steps: Vec<AgentStep>,
     last_sources: Vec<String>,
+    #[allow(dead_code)]
     last_tool: Option<String>,
     last_token_usage: Option<usize>,
     undo_stack: Vec<CommandAction>,
     dry_run_plan: Option<String>,
+    /// Enable prompt caching (uses /api/chat instead of /api/generate for Ollama)
+    prompt_caching_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -95,7 +100,7 @@ enum CommandAction {
     VerbosityChanged(Verbosity),
     ModelChanged(Option<String>),
     TemperatureChanged(Option<f32>),
-    NoteAdded(String),
+    NoteAdded(#[allow(dead_code)] String),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -131,10 +136,7 @@ fn update_last_agent_run(query: String, response: &AgentResponse) {
     state.last_response = Some(response.answer.clone());
     state.last_steps = response.steps.clone();
     state.last_sources = response.used_chunks.clone();
-    let token_estimate = response
-        .answer
-        .split_whitespace()
-        .count();
+    let token_estimate = response.answer.split_whitespace().count();
     state.last_token_usage = Some(token_estimate.max(response.used_chunks.len()));
 }
 
@@ -174,9 +176,7 @@ fn record_verbosity_change(new_mode: Verbosity) -> Verbosity {
 fn push_note_action(note: String) {
     let state_arc = chat_state();
     let mut guard = state_arc.lock().expect("chat state lock");
-    guard
-        .undo_stack
-        .push(CommandAction::NoteAdded(note));
+    guard.undo_stack.push(CommandAction::NoteAdded(note));
 }
 
 fn record_model_change(new_model: Option<String>) -> Option<String> {
@@ -201,6 +201,22 @@ fn record_temperature_change(new_temp: Option<f32>) -> Option<f32> {
     previous
 }
 
+/// Get current prompt caching state
+fn get_prompt_caching_enabled() -> bool {
+    let state_arc = chat_state();
+    let guard = state_arc.lock().expect("chat state lock");
+    guard.prompt_caching_enabled
+}
+
+/// Set prompt caching state
+fn set_prompt_caching_enabled(enabled: bool) -> bool {
+    let state_arc = chat_state();
+    let mut guard = state_arc.lock().expect("chat state lock");
+    let previous = guard.prompt_caching_enabled;
+    guard.prompt_caching_enabled = enabled;
+    previous
+}
+
 fn pop_undo_action() -> Option<CommandAction> {
     let state_arc = chat_state();
     let mut guard = state_arc.lock().expect("chat state lock");
@@ -217,6 +233,31 @@ fn snapshots_for_debug() -> (Option<String>, Option<String>, Verbosity, Option<S
         state.verbosity,
         state.last_query.clone(),
     )
+}
+
+/// Get current chat settings for the agent, including RAG memories
+fn get_current_chat_settings() -> crate::agent::ChatSettings {
+    use crate::agent::{load_categorized_memories, ChatSettings, Verbosity as AgentVerbosity};
+
+    let state_arc = chat_state();
+    let state = state_arc.lock().expect("chat state lock");
+
+    let verbosity = match state.verbosity {
+        Verbosity::Brief => AgentVerbosity::Brief,
+        Verbosity::Normal => AgentVerbosity::Normal,
+        Verbosity::Verbose => AgentVerbosity::Verbose,
+    };
+
+    // Load RAG memories from database (limit to 20 most recent)
+    let memories = load_categorized_memories(path_resolver::agent_db_path_str(), "default", 20);
+
+    ChatSettings::new()
+        .with_focus(state.focus_topic.clone())
+        .with_persona(state.persona.clone())
+        .with_verbosity(verbosity)
+        .with_temperature(state.temperature)
+        .with_model(state.preferred_model.clone())
+        .with_memories(memories)
 }
 
 fn store_dry_run_plan(plan: String) {
@@ -985,6 +1026,263 @@ async fn commit_llm_config(payload: web::Json<LlmConfigRequest>) -> Result<HttpR
             Ok(HttpResponse::InternalServerError().json(json!({
                 "status": "error",
                 "message": format!("Failed to save LLM config: {}", err),
+                "request_id": request_id
+            })))
+        }
+    }
+}
+
+// ============================================================================
+// PROMPT CACHING ENDPOINTS
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct PromptCachingResponse {
+    status: String,
+    message: String,
+    request_id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PromptCachingRequest {
+    enabled: bool,
+}
+
+/// Get current prompt caching state
+/// When enabled, uses /api/chat (with KV caching) instead of /api/generate
+async fn get_prompt_caching() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let enabled = get_prompt_caching_enabled();
+    Ok(HttpResponse::Ok().json(PromptCachingResponse {
+        status: "ok".into(),
+        message: if enabled {
+            "Prompt caching enabled (using /api/chat)".into()
+        } else {
+            "Prompt caching disabled (using /api/generate)".into()
+        },
+        request_id,
+        enabled,
+    }))
+}
+
+/// Set prompt caching state
+async fn set_prompt_caching(payload: web::Json<PromptCachingRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let body = payload.into_inner();
+    let previous = set_prompt_caching_enabled(body.enabled);
+    
+    tracing::info!(
+        request_id = %request_id,
+        enabled = body.enabled,
+        previous = previous,
+        "Prompt caching state changed"
+    );
+    
+    Ok(HttpResponse::Ok().json(PromptCachingResponse {
+        status: "ok".into(),
+        message: if body.enabled {
+            "Prompt caching enabled - using /api/chat for better KV cache reuse".into()
+        } else {
+            "Prompt caching disabled - using /api/generate".into()
+        },
+        request_id,
+        enabled: body.enabled,
+    }))
+}
+
+// ============================================================================
+// TRAINING DATA COLLECTION ENDPOINTS (Phase 20)
+// ============================================================================
+
+use crate::training::{TrainingDataCollector, TrainingExample, TrainingStats};
+
+static TRAINING_COLLECTOR: OnceLock<TrainingDataCollector> = OnceLock::new();
+
+fn training_collector() -> &'static TrainingDataCollector {
+    TRAINING_COLLECTOR.get_or_init(TrainingDataCollector::default)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TrainingFeedbackRequest {
+    query: String,
+    response: String,
+    context: Option<String>,
+    quality_score: u8,
+    conversation_id: Option<String>,
+    mode: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TrainingFeedbackResponse {
+    status: String,
+    example_id: String,
+    message: String,
+    request_id: String,
+}
+
+/// POST /training/feedback - Submit user feedback for training data collection
+async fn submit_training_feedback(
+    payload: web::Json<TrainingFeedbackRequest>,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let body = payload.into_inner();
+    let collector = training_collector();
+
+    if !collector.is_enabled() {
+        return Ok(HttpResponse::Ok().json(TrainingFeedbackResponse {
+            status: "skipped".into(),
+            example_id: String::new(),
+            message: "Training data collection is disabled".into(),
+            request_id,
+        }));
+    }
+
+    let example_id = uuid::Uuid::new_v4().to_string();
+    let example = TrainingExample {
+        id: example_id.clone(),
+        instruction: body.query,
+        context: body.context,
+        response: body.response,
+        quality_score: Some(body.quality_score.clamp(1, 5)),
+        timestamp: chrono::Utc::now(),
+        conversation_id: body.conversation_id,
+        mode: body.mode,
+        model: body.model,
+    };
+
+    match collector.add_example(example) {
+        Ok(_) => {
+            tracing::info!(
+                example_id = %example_id,
+                quality = body.quality_score,
+                "Training feedback collected"
+            );
+            Ok(HttpResponse::Ok().json(TrainingFeedbackResponse {
+                status: "collected".into(),
+                example_id,
+                message: "Thank you for your feedback!".into(),
+                request_id,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to collect training feedback");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to save feedback: {}", e),
+                "request_id": request_id
+            })))
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct TrainingStatsResponse {
+    status: String,
+    request_id: String,
+    stats: TrainingStats,
+    collection_enabled: bool,
+}
+
+/// GET /training/stats - Get training data collection statistics
+async fn get_training_stats() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let collector = training_collector();
+
+    match collector.get_stats() {
+        Ok(stats) => Ok(HttpResponse::Ok().json(TrainingStatsResponse {
+            status: "ok".into(),
+            request_id,
+            stats,
+            collection_enabled: collector.is_enabled(),
+        })),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to get training stats");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to get stats: {}", e),
+                "request_id": request_id
+            })))
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct TrainingExportResponse {
+    status: String,
+    request_id: String,
+    exported_count: usize,
+    output_path: String,
+    message: String,
+}
+
+/// POST /training/export - Export collected data for Unsloth training
+async fn export_training_data() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let collector = training_collector();
+
+    // Determine export path
+    let export_path = std::env::var("TRAINING_EXPORT_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("ag")
+                .join("training")
+                .join("training_data.jsonl")
+        });
+
+    // Ensure parent directory exists
+    if let Some(parent) = export_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    match collector.export_for_unsloth(&export_path) {
+        Ok(count) => {
+            tracing::info!(
+                count = count,
+                path = ?export_path,
+                "Training data exported"
+            );
+            Ok(HttpResponse::Ok().json(TrainingExportResponse {
+                status: "ok".into(),
+                request_id,
+                exported_count: count,
+                output_path: export_path.to_string_lossy().to_string(),
+                message: format!("Exported {} examples for Unsloth training", count),
+            }))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to export training data");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to export: {}", e),
+                "request_id": request_id
+            })))
+        }
+    }
+}
+
+/// POST /training/clear - Clear all collected training data
+async fn clear_training_data() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let collector = training_collector();
+
+    match collector.clear() {
+        Ok(_) => {
+            tracing::info!("Training data cleared");
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "ok",
+                "message": "Training data cleared",
+                "request_id": request_id
+            })))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to clear training data");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to clear: {}", e),
                 "request_id": request_id
             })))
         }
@@ -1925,9 +2223,122 @@ pub struct RecallRagRequest {
     pub limit: usize,
 }
 
+#[derive(serde::Deserialize)]
+pub struct ManualObservationRequest {
+    pub entry_type: String,
+    pub title: String,
+    pub narrative: String,
+    #[serde(default)]
+    pub facts: Vec<String>,
+    #[serde(default)]
+    pub concepts: Vec<String>,
+    #[serde(default)]
+    pub files_read: Vec<String>,
+    #[serde(default)]
+    pub files_modified: Vec<String>,
+    pub author: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ManualObservationOrder {
+    Relevance,
+    Newest,
+    Oldest,
+}
+
+impl Default for ManualObservationOrder {
+    fn default() -> Self {
+        ManualObservationOrder::Relevance
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationSearchRequest {
+    pub query: String,
+    pub entry_type: Option<String>,
+    pub project: Option<String>,
+    pub date_start: Option<String>,
+    pub date_end: Option<String>,
+    #[serde(default)]
+    pub order: ManualObservationOrder,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationListQuery {
+    pub entry_type: Option<String>,
+    pub project: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationTimelineRequest {
+    pub anchor_id: Option<String>,
+    pub query: Option<String>,
+    #[serde(default = "default_limit")]
+    pub depth_before: usize,
+    #[serde(default = "default_limit")]
+    pub depth_after: usize,
+    pub entry_type: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationFetchRequest {
+    pub ids: Vec<String>,
+}
+
+/// Valid RAG memory types
+/// Core types: fact, preference, instruction, context, summary, task
+/// Extended types: conversation, decision, correction, feedback, persona, note
+const VALID_MEMORY_TYPES: &[&str] = &[
+    // Core types
+    "fact",        // What is true (project facts, user info)
+    "preference",  // What user likes/dislikes
+    "instruction", // What to do/not do
+    "context",     // Background information
+    "summary",     // Condensed past interactions
+    "task",        // Current work context
+    // Extended types
+    "conversation", // Past exchanges/dialogue
+    "decision",     // Past decisions made
+    "correction",   // Corrections to previous responses
+    "feedback",     // User feedback on responses
+    "persona",      // Personality/style preferences
+    "note",         // User-added notes
+];
+
+fn validate_memory_type(memory_type: &str) -> Result<(), Error> {
+    if VALID_MEMORY_TYPES.contains(&memory_type) {
+        Ok(())
+    } else {
+        Err(actix_web::error::ErrorBadRequest(format!(
+            "Invalid memory_type '{}'. Valid types are: {}",
+            memory_type,
+            VALID_MEMORY_TYPES.join(", ")
+        )))
+    }
+}
+
+async fn list_memory_types() -> Result<HttpResponse, Error> {
+    Ok(HttpResponse::Ok().json(json!({
+        "core": ["fact", "preference", "instruction", "context", "summary", "task"],
+        "extended": ["conversation", "decision", "correction", "feedback", "persona", "note"],
+        "all": VALID_MEMORY_TYPES,
+        "request_id": generate_request_id()
+    })))
+}
+
 async fn store_rag_memory(req: web::Json<StoreRagRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    let mem = AgentMemory::new("agent.db")
+    validate_memory_type(&req.memory_type)?;
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     let ts = req
         .timestamp
@@ -1943,7 +2354,7 @@ async fn store_rag_memory(req: web::Json<StoreRagRequest>) -> Result<HttpRespons
 
 async fn search_rag_memory(req: web::Json<SearchRagRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    let mem = AgentMemory::new("agent.db")
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     let results: Vec<MemorySearchResult> = mem
         .search_rag(&req.agent_id, &req.query, req.top_k)
@@ -1956,7 +2367,7 @@ async fn search_rag_memory(req: web::Json<SearchRagRequest>) -> Result<HttpRespo
 
 async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    let mem = AgentMemory::new("agent.db")
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     let items: Vec<MemoryItem> = mem
         .recall_rag(&req.agent_id, req.limit)
@@ -1964,6 +2375,359 @@ async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Result<HttpRespo
     Ok(HttpResponse::Ok().json(json!({
         "items": items,
         "request_id": request_id
+    })))
+}
+
+fn validate_manual_observation(req: &ManualObservationRequest) -> Result<(), Error> {
+    if req.title.trim().is_empty() || req.title.len() > 200 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "title must be 1-200 characters",
+        ));
+    }
+    if req.entry_type.trim().is_empty() || req.entry_type.len() > 100 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "entry_type must be 1-100 characters",
+        ));
+    }
+    if req.narrative.trim().is_empty() || req.narrative.len() > 10_000 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "narrative must be 1-10000 characters",
+        ));
+    }
+    if req.facts.len() > 32 || req.concepts.len() > 32 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "facts/concepts limit is 32 items",
+        ));
+    }
+    if req.files_read.len() > 32 || req.files_modified.len() > 32 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "files_read/files_modified limit is 32 items",
+        ));
+    }
+    Ok(())
+}
+
+async fn create_manual_observation(
+    req: web::Json<ManualObservationRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    validate_manual_observation(&req)?;
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    let start = std::time::Instant::now();
+    let result = (|| {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let id = mem
+            .create_manual_observation(
+                &req.entry_type,
+                &req.title,
+                &req.narrative,
+                &req.facts,
+                &req.concepts,
+                &req.files_read,
+                &req.files_modified,
+                req.author.as_deref(),
+                req.project.as_deref(),
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "id": id,
+            "request_id": request_id
+        })))
+    })();
+    crate::monitoring::metrics::record_manual_observation(
+        "create",
+        result.is_ok(),
+        start.elapsed().as_secs_f64() * 1000.0,
+    );
+    result
+}
+
+async fn list_manual_observations(
+    query: web::Query<ManualObservationListQuery>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("list", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let results = mem
+            .list_manual_observations(query.entry_type.as_deref(), query.project.as_deref(), query.limit)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "observations": results,
+            "request_id": request_id
+        })))
+    })
+}
+
+async fn get_manual_observation(
+    path: web::Path<String>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("get", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        match mem
+            .get_manual_observation(&path)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?
+        {
+            Some(obs) => Ok(HttpResponse::Ok().json(json!({
+                "observation": obs,
+                "request_id": request_id
+            }))),
+            None => Ok(HttpResponse::NotFound().json(json!({
+                "error": "not_found",
+                "request_id": request_id
+            }))),
+        }
+    })
+}
+
+async fn update_manual_observation(
+    path: web::Path<String>,
+    req: web::Json<ManualObservationRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    validate_manual_observation(&req)?;
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("update", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let updated = mem
+            .update_manual_observation(
+                &path,
+                &req.entry_type,
+                &req.title,
+                &req.narrative,
+                &req.facts,
+                &req.concepts,
+                &req.files_read,
+                &req.files_modified,
+                req.author.as_deref(),
+                req.project.as_deref(),
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        if updated {
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "updated",
+                "request_id": request_id
+            })))
+        } else {
+            Ok(HttpResponse::NotFound().json(json!({
+                "error": "not_found",
+                "request_id": request_id
+            })))
+        }
+    })
+}
+
+async fn delete_manual_observation(
+    path: web::Path<String>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("delete", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let deleted = mem
+            .delete_manual_observation(&path)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        if deleted {
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "deleted",
+                "request_id": request_id
+            })))
+        } else {
+            Ok(HttpResponse::NotFound().json(json!({
+                "error": "not_found",
+                "request_id": request_id
+            })))
+        }
+    })
+}
+
+async fn manual_observation_timeline(
+    req: web::Json<ManualObservationTimelineRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_memory_search_layer("timeline", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let results = mem
+            .timeline_manual_observations(
+                req.anchor_id.as_deref(),
+                req.query.as_deref(),
+                req.entry_type.as_deref(),
+                req.project.as_deref(),
+                req.depth_before,
+                req.depth_after,
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "timeline": results,
+            "request_id": request_id
+        })))
+    })
+}
+
+async fn fetch_manual_observations(
+    req: web::Json<ManualObservationFetchRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    if req.ids.is_empty() {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "error": "empty_ids",
+            "request_id": request_id
+        })));
+    }
+    if req.ids.len() > 20 {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "error": "too_many_ids",
+            "request_id": request_id
+        })));
+    }
+    observe_memory_search_layer("fetch", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let observations = mem
+            .fetch_manual_observations(&req.ids)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "observations": observations,
+            "request_id": request_id
+        })))
+    })
+}
+
+async fn search_manual_observations(
+    req: web::Json<ManualObservationSearchRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_memory_search_layer("search", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let hits = mem
+            .search_manual_observations(
+                req.query.as_str(),
+                req.entry_type.as_deref(),
+                req.project.as_deref(),
+                req.date_start.as_deref(),
+                req.date_end.as_deref(),
+                req.order,
+                req.limit,
+                req.offset,
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "results": hits,
+            "offset": req.offset,
+            "limit": req.limit,
+            "request_id": request_id
+        })))
+    })
+}
+
+async fn get_manual_observation_metrics(_http_req: HttpRequest) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let snapshot = metrics::manual_observation_metrics_snapshot();
+    Ok(HttpResponse::Ok().json(json!({
+        "metrics": snapshot,
+        "request_id": generate_request_id()
+    })))
+}
+
+/// GET /monitoring/memory/search/stats - 3-layer memory search metrics (SEARCH.md)
+async fn get_memory_search_layer_stats(_http_req: HttpRequest) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let layer_stats = metrics::memory_search_layer_stats();
+    let tokens_saved = metrics::memory_search_tokens_saved_total();
+    Ok(HttpResponse::Ok().json(json!({
+        "layers": layer_stats,
+        "tokens_saved_total": tokens_saved,
+        "request_id": generate_request_id()
+    })))
+}
+
+async fn get_recent_observations(
+    query: web::Query<ManualObservationListQuery>,
+) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let results = mem
+        .list_manual_observations(query.entry_type.as_deref(), query.project.as_deref(), query.limit)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "observations": results,
+        "request_id": generate_request_id()
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct RagMemoriesQuery {
+    #[serde(default = "default_limit")]
+    limit: usize,
+    agent_id: Option<String>,
+}
+
+async fn get_recent_rag_memories(
+    query: web::Query<RagMemoriesQuery>,
+) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let agent_id = query.agent_id.as_deref().unwrap_or("default");
+    let items: Vec<MemoryItem> = mem
+        .recall_rag(agent_id, query.limit)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "memories": items,
+        "request_id": generate_request_id()
     })))
 }
 
@@ -2012,7 +2776,9 @@ enum ChatCommand {
 }
 
 fn extract_argument<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
-    line.strip_prefix(marker).map(|rest| rest.trim()).filter(|s| !s.is_empty())
+    line.strip_prefix(marker)
+        .map(|rest| rest.trim())
+        .filter(|s| !s.is_empty())
 }
 
 /// Parse chat commands from user input
@@ -2098,7 +2864,10 @@ fn parse_chat_command(query: &str) -> Option<ChatCommand> {
     if let Some(arg) = extract_argument(trimmed, "/chain ") {
         let parts: Vec<&str> = arg.split("->").map(|p| p.trim()).collect();
         if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-            return Some(ChatCommand::Chain(parts[0].to_string(), parts[1].to_string()));
+            return Some(ChatCommand::Chain(
+                parts[0].to_string(),
+                parts[1].to_string(),
+            ));
         }
     }
     if trimmed == "/retry" {
@@ -2133,23 +2902,22 @@ fn parse_chat_command(query: &str) -> Option<ChatCommand> {
     None
 }
 
-
 /// Create a goal via the agentic monitor routes
 fn create_goal_from_command(goal_text: &str) -> Result<serde_json::Value, String> {
     use crate::api::agentic_monitor_routes::get_agent_db_connection;
-    
-    let conn = get_agent_db_connection()
-        .ok_or_else(|| "Database not available".to_string())?;
-    
+
+    let conn = get_agent_db_connection().ok_or_else(|| "Database not available".to_string())?;
+
     let goal_id = Uuid::new_v4().to_string();
     let now = Utc::now().timestamp();
     let agent_id = "default";
-    
+
     conn.execute(
         "INSERT INTO goals (id, agent_id, goal, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         rusqlite::params![&goal_id, agent_id, goal_text, "active", now],
-    ).map_err(|e| format!("Failed to create goal: {}", e))?;
-    
+    )
+    .map_err(|e| format!("Failed to create goal: {}", e))?;
+
     Ok(json!({
         "id": goal_id,
         "goal": goal_text,
@@ -2193,20 +2961,20 @@ fn get_help_text() -> String {
 Examples:
   /goal Find all Rust error handling patterns
   /focus tracing metrics
-  /run calculator 5+7"#.to_string()
+  /run calculator 5+7"#
+        .to_string()
 }
 
 /// Get active goals list
 fn get_goals_list() -> Result<String, String> {
     use crate::api::agentic_monitor_routes::get_agent_db_connection;
-    
-    let conn = get_agent_db_connection()
-        .ok_or_else(|| "Database not available".to_string())?;
-    
+
+    let conn = get_agent_db_connection().ok_or_else(|| "Database not available".to_string())?;
+
     let mut stmt = conn.prepare(
         "SELECT goal, status, created_at FROM goals WHERE status = 'active' ORDER BY created_at DESC LIMIT 10"
     ).map_err(|e| e.to_string())?;
-    
+
     let goals: Vec<String> = stmt
         .query_map([], |row| {
             let goal: String = row.get(0)?;
@@ -2215,32 +2983,48 @@ fn get_goals_list() -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .filter_map(Result::ok)
         .collect();
-    
+
     if goals.is_empty() {
         Ok("No active goals. Create one with: /goal <your goal>".to_string())
     } else {
-        Ok(format!("Active Goals ({}):\n{}", goals.len(), goals.join("\n")))
+        Ok(format!(
+            "Active Goals ({}):\n{}",
+            goals.len(),
+            goals.join("\n")
+        ))
     }
 }
 
 /// Get system status
 fn get_system_status() -> String {
-    let health = if RETRIEVER.get().is_some() { "✓ Healthy" } else { "✗ Retriever not initialized" };
-    format!("System Status: {}\nBackend: Running\nTimestamp: {}", health, Utc::now().to_rfc3339())
+    let health = if RETRIEVER.get().is_some() {
+        "✓ Healthy"
+    } else {
+        "✗ Retriever not initialized"
+    };
+    format!(
+        "System Status: {}\nBackend: Running\nTimestamp: {}",
+        health,
+        Utc::now().to_rfc3339()
+    )
 }
 
 /// Get available models
 fn get_models_list() -> String {
     // This would ideally query the actual models, but for now return a placeholder
-    "Available models:\n• default (local embedding model)\n\nUse /config to change model settings.".to_string()
+    "Available models:\n• default (local embedding model)\n\nUse /config to change model settings."
+        .to_string()
 }
 
 fn forget_topic(topic: &str) -> Result<String, String> {
-    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
     let removed = mem
         .forget_topic("default", topic)
         .map_err(|e| e.to_string())?;
-    Ok(format!("Removed {} memories mentioning '{}'.", removed, topic))
+    Ok(format!(
+        "Removed {} memories mentioning '{}'.",
+        removed, topic
+    ))
 }
 
 fn list_recent_history(limit: usize) -> Result<String, String> {
@@ -2290,7 +3074,7 @@ fn last_sources_summary() -> String {
 }
 
 fn record_note(content: &str) -> Result<String, String> {
-    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
     let ts = chrono::Utc::now().to_rfc3339();
     mem.add_note("default", content, &ts)
         .map_err(|e| e.to_string())?;
@@ -2299,23 +3083,30 @@ fn record_note(content: &str) -> Result<String, String> {
 }
 
 fn add_subgoal(text: &str) -> Result<String, String> {
-    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
     if let Some((goal_id, goal_text)) = mem.latest_goal("default").map_err(|e| e.to_string())? {
         let task_id = mem
             .create_subgoal(&goal_id, text)
             .map_err(|e| e.to_string())?;
-        Ok(format!("Added subgoal under '{}': {} (task {})", goal_text, text, task_id))
+        Ok(format!(
+            "Added subgoal under '{}': {} (task {})",
+            goal_text, text, task_id
+        ))
     } else {
         Err("No active goal to attach a subgoal. Use /goal first.".to_string())
     }
 }
 
 fn update_goal_status_cmd(status: GoalStatus) -> Result<String, String> {
-    let mem = AgentMemory::new("agent.db").map_err(|e| e.to_string())?;
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
     if let Some((goal_id, goal_text)) = mem.latest_goal("default").map_err(|e| e.to_string())? {
         mem.update_goal_status(&goal_id, status.as_str())
             .map_err(|e| e.to_string())?;
-        Ok(format!("Goal '{}' marked as {}.", goal_text, status.as_str()))
+        Ok(format!(
+            "Goal '{}' marked as {}.",
+            goal_text,
+            status.as_str()
+        ))
     } else {
         Err("No goal found.".to_string())
     }
@@ -2331,7 +3122,9 @@ fn summarize_reflection() -> Result<String, String> {
         )
         .map_err(|e| e.to_string())?;
     let (total, success): (i64, i64) = stmt
-        .query_row([one_day_ago], |row| Ok((row.get(0)?, row.get(1).unwrap_or(0))))
+        .query_row([one_day_ago], |row| {
+            Ok((row.get(0)?, row.get(1).unwrap_or(0)))
+        })
         .map_err(|e| e.to_string())?;
     let rate = if total > 0 {
         (success as f64 / total as f64) * 100.0
@@ -2362,7 +3155,9 @@ fn explain_last_reasoning() -> String {
 fn apply_focus(topic: Option<String>) -> String {
     let previous = record_focus_change(topic.clone());
     match (previous, topic) {
-        (Some(prev), Some(new_topic)) => format!("Focus switched from '{}' to '{}'.", prev, new_topic),
+        (Some(prev), Some(new_topic)) => {
+            format!("Focus switched from '{}' to '{}'.", prev, new_topic)
+        }
         (None, Some(new_topic)) => format!("Focus set to '{}'.", new_topic),
         (_, None) => "Focus cleared.".to_string(),
     }
@@ -2371,7 +3166,9 @@ fn apply_focus(topic: Option<String>) -> String {
 fn apply_persona(persona: Option<String>) -> String {
     let previous = record_persona_change(persona.clone());
     match (previous, persona) {
-        (Some(prev), Some(new_persona)) => format!("Persona switched from '{}' to '{}'.", prev, new_persona),
+        (Some(prev), Some(new_persona)) => {
+            format!("Persona switched from '{}' to '{}'.", prev, new_persona)
+        }
         (None, Some(new_persona)) => format!("Persona set to '{}'.", new_persona),
         (_, None) => "Persona reset to default.".to_string(),
     }
@@ -2379,13 +3176,19 @@ fn apply_persona(persona: Option<String>) -> String {
 
 fn apply_verbosity(mode: Verbosity) -> String {
     let previous = record_verbosity_change(mode);
-    format!("Verbosity changed from {} to {}.", previous.label(), mode.label())
+    format!(
+        "Verbosity changed from {} to {}.",
+        previous.label(),
+        mode.label()
+    )
 }
 
 fn apply_model(model: Option<String>) -> String {
     let previous = record_model_change(model.clone());
     match (previous, model) {
-        (Some(prev), Some(new_model)) => format!("Model switched from '{}' to '{}'.", prev, new_model),
+        (Some(prev), Some(new_model)) => {
+            format!("Model switched from '{}' to '{}'.", prev, new_model)
+        }
         (None, Some(new_model)) => format!("Model set to '{}'.", new_model),
         (_, None) => "Model reset to default.".to_string(),
     }
@@ -2394,7 +3197,9 @@ fn apply_model(model: Option<String>) -> String {
 fn apply_temperature(temp: Option<f32>) -> String {
     let previous = record_temperature_change(temp);
     match (previous, temp) {
-        (Some(prev), Some(new_temp)) => format!("Temperature changed from {:.2} to {:.2}.", prev, new_temp),
+        (Some(prev), Some(new_temp)) => {
+            format!("Temperature changed from {:.2} to {:.2}.", prev, new_temp)
+        }
         (None, Some(new_temp)) => format!("Temperature set to {:.2}.", new_temp),
         (_, None) => "Temperature reset to default.".to_string(),
     }
@@ -2402,7 +3207,10 @@ fn apply_temperature(temp: Option<f32>) -> String {
 
 async fn run_calculator_tool(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
-    if let Some(inner) = trimmed.strip_prefix("length(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(inner) = trimmed
+        .strip_prefix("length(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
         let len = inner.chars().count();
         return Ok(format!("length(...) = {}", len));
     }
@@ -2479,7 +3287,11 @@ fn retry_last_query(default_top_k: usize) -> Result<AgentResponse, String> {
         if let Some(retriever) = RETRIEVER.get() {
             let query_clone = last_query.clone();
             drop(state);
-            let agent = Agent::new("default", "agent.db", Arc::clone(retriever));
+            let agent = Agent::new(
+                "default",
+                path_resolver::agent_db_path_str(),
+                Arc::clone(retriever),
+            );
             let response = agent.run(&query_clone, default_top_k);
             update_last_agent_run(query_clone, &response);
             Ok(response)
@@ -2531,14 +3343,21 @@ fn export_state() -> String {
     });
 
     if let Err(err) = fs::create_dir_all(&export_root) {
-        return format!("Exported in-memory only (failed to write {}): {}", export_root, err);
+        return format!(
+            "Exported in-memory only (failed to write {}): {}",
+            export_root, err
+        );
     }
 
     let filename = format!("export-{}.json", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
     let path = Path::new(&export_root).join(filename);
     match fs::write(&path, payload.to_string()) {
         Ok(_) => format!("Exported to {}", path.display()),
-        Err(err) => format!("Exported in-memory only (failed to write {}): {}", path.display(), err),
+        Err(err) => format!(
+            "Exported in-memory only (failed to write {}): {}",
+            path.display(),
+            err
+        ),
     }
 }
 
@@ -2549,7 +3368,11 @@ fn import_state(raw: &str) -> String {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) => {
             if let Some(model) = value.get("model").and_then(|v| v.as_str()) {
-                record_model_change(if model.eq_ignore_ascii_case("default") { None } else { Some(model.to_string()) });
+                record_model_change(if model.eq_ignore_ascii_case("default") {
+                    None
+                } else {
+                    Some(model.to_string())
+                });
             }
             if let Some(temp) = value.get("temperature").and_then(|v| v.as_f64()) {
                 record_temperature_change(Some(temp as f32));
@@ -2578,7 +3401,10 @@ fn debug_state_snapshot() -> String {
     let (focus, persona, verbosity, last_query) = snapshots_for_debug();
     format!(
         "Debug State:\n- Focus: {:?}\n- Persona: {:?}\n- Verbosity: {:?}\n- Last query: {:?}",
-        focus, persona, verbosity.label(), last_query
+        focus,
+        persona,
+        verbosity.label(),
+        last_query
     )
 }
 
@@ -2604,29 +3430,28 @@ async fn preview_url_content(url: &str) -> Result<String, String> {
 
 async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     // Check for chat commands
     if let Some(cmd) = parse_chat_command(&req.query) {
         let (answer, extra) = match cmd {
-            ChatCommand::Goal(goal_text) => {
-                match create_goal_from_command(&goal_text) {
-                    Ok(goal) => (
-                        format!("✓ Goal created: {}", goal_text),
-                        Some(json!({ "goal": goal }))
-                    ),
-                    Err(e) => (format!("✗ Failed to create goal: {}", e), None),
-                }
-            }
-            ChatCommand::Goals => {
-                match get_goals_list() {
-                    Ok(list) => (list, None),
-                    Err(e) => (format!("✗ Failed to get goals: {}", e), None),
-                }
-            }
+            ChatCommand::Goal(goal_text) => match create_goal_from_command(&goal_text) {
+                Ok(goal) => (
+                    format!("✓ Goal created: {}", goal_text),
+                    Some(json!({ "goal": goal })),
+                ),
+                Err(e) => (format!("✗ Failed to create goal: {}", e), None),
+            },
+            ChatCommand::Goals => match get_goals_list() {
+                Ok(list) => (list, None),
+                Err(e) => (format!("✗ Failed to get goals: {}", e), None),
+            },
             ChatCommand::Status => (get_system_status(), None),
             ChatCommand::Help => (get_help_text(), None),
             ChatCommand::Models => (get_models_list(), None),
-            ChatCommand::Clear => ("Chat cleared. (This is handled by the frontend)".to_string(), None),
+            ChatCommand::Clear => (
+                "Chat cleared. (This is handled by the frontend)".to_string(),
+                None,
+            ),
             ChatCommand::Forget(topic) => match forget_topic(&topic) {
                 Ok(msg) => (msg, None),
                 Err(err) => (format!("✗ {}", err), None),
@@ -2668,13 +3493,14 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
             ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
             ChatCommand::Unfocus => (apply_focus(None), None),
             ChatCommand::Persona(name) => {
-                let persona_value = if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
-                    None
-                } else {
-                    Some(name)
-                };
+                let persona_value =
+                    if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
+                        None
+                    } else {
+                        Some(name)
+                    };
                 (apply_persona(persona_value), None)
-            },
+            }
             ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
             ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
             ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
@@ -2688,7 +3514,7 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
             ChatCommand::Retry => match retry_last_query(req.top_k) {
                 Ok(agent_response) => (
                     agent_response.answer.clone(),
-                    Some(json!({ "retry": agent_response }))
+                    Some(json!({ "retry": agent_response })),
                 ),
                 Err(err) => (format!("✗ {}", err), None),
             },
@@ -2701,20 +3527,20 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
                     Some(name)
                 };
                 (apply_model(model_value), None)
-            },
+            }
             ChatCommand::Temperature(value) => {
                 let parsed = value.parse::<f32>().ok();
                 (apply_temperature(parsed), None)
-            },
+            }
             ChatCommand::Export => (export_state(), None),
             ChatCommand::Import(payload) => {
                 let body = payload.unwrap_or_else(|| "{}".to_string());
                 (import_state(&body), None)
-            },
+            }
             ChatCommand::Debug => (debug_state_snapshot(), None),
             ChatCommand::Tokens => (tokens_usage_snapshot(), None),
         };
-        
+
         let mut response = json!({
             "response": {
                 "answer": answer,
@@ -2723,7 +3549,7 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
             },
             "request_id": request_id
         });
-        
+
         if let Some(extra_data) = extra {
             if let Some(obj) = response.as_object_mut() {
                 for (k, v) in extra_data.as_object().unwrap() {
@@ -2731,10 +3557,10 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
                 }
             }
         }
-        
+
         return Ok(HttpResponse::Ok().json(response));
     }
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         // Convert ChatMode to AgentMode
         let agent_mode = match req.mode {
@@ -2745,13 +3571,23 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
         let query_clone = req.query.clone();
         let top_k = req.top_k;
         let retriever_clone = Arc::clone(retriever);
-        
+
+        // Get current chat settings
+        let chat_settings = get_current_chat_settings();
+
         // Run agent in blocking thread pool to avoid blocking async runtime
         let resp = web::block(move || {
-            let agent = Agent::new("default", "agent.db", retriever_clone);
+            let agent = Agent::new(
+                "default",
+                path_resolver::agent_db_path_str(),
+                retriever_clone,
+            )
+            .with_settings(chat_settings);
             agent.run_with_mode(&query_clone, top_k, agent_mode)
-        }).await.map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
-        
+        })
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
+
         update_last_agent_run(req.query.clone(), &resp);
         Ok(HttpResponse::Ok().json(json!({
             "response": resp,
@@ -2769,29 +3605,28 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
 // GET-based chat endpoint to avoid CORS preflight
 async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     // Check for chat commands
     if let Some(cmd) = parse_chat_command(&query.query) {
         let (answer, extra) = match cmd {
-            ChatCommand::Goal(goal_text) => {
-                match create_goal_from_command(&goal_text) {
-                    Ok(goal) => (
-                        format!("✓ Goal created: {}", goal_text),
-                        Some(json!({ "goal": goal }))
-                    ),
-                    Err(e) => (format!("✗ Failed to create goal: {}", e), None),
-                }
-            }
-            ChatCommand::Goals => {
-                match get_goals_list() {
-                    Ok(list) => (list, None),
-                    Err(e) => (format!("✗ Failed to get goals: {}", e), None),
-                }
-            }
+            ChatCommand::Goal(goal_text) => match create_goal_from_command(&goal_text) {
+                Ok(goal) => (
+                    format!("✓ Goal created: {}", goal_text),
+                    Some(json!({ "goal": goal })),
+                ),
+                Err(e) => (format!("✗ Failed to create goal: {}", e), None),
+            },
+            ChatCommand::Goals => match get_goals_list() {
+                Ok(list) => (list, None),
+                Err(e) => (format!("✗ Failed to get goals: {}", e), None),
+            },
             ChatCommand::Status => (get_system_status(), None),
             ChatCommand::Help => (get_help_text(), None),
             ChatCommand::Models => (get_models_list(), None),
-            ChatCommand::Clear => ("Chat cleared. (This is handled by the frontend)".to_string(), None),
+            ChatCommand::Clear => (
+                "Chat cleared. (This is handled by the frontend)".to_string(),
+                None,
+            ),
             ChatCommand::Forget(topic) => match forget_topic(&topic) {
                 Ok(msg) => (msg, None),
                 Err(err) => (format!("✗ {}", err), None),
@@ -2833,13 +3668,14 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
             ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
             ChatCommand::Unfocus => (apply_focus(None), None),
             ChatCommand::Persona(name) => {
-                let persona_value = if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
-                    None
-                } else {
-                    Some(name)
-                };
+                let persona_value =
+                    if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
+                        None
+                    } else {
+                        Some(name)
+                    };
                 (apply_persona(persona_value), None)
-            },
+            }
             ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
             ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
             ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
@@ -2853,7 +3689,7 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
             ChatCommand::Retry => match retry_last_query(query.top_k) {
                 Ok(agent_response) => (
                     agent_response.answer.clone(),
-                    Some(json!({ "retry": agent_response }))
+                    Some(json!({ "retry": agent_response })),
                 ),
                 Err(err) => (format!("✗ {}", err), None),
             },
@@ -2866,20 +3702,20 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
                     Some(name)
                 };
                 (apply_model(model_value), None)
-            },
+            }
             ChatCommand::Temperature(value) => {
                 let parsed = value.parse::<f32>().ok();
                 (apply_temperature(parsed), None)
-            },
+            }
             ChatCommand::Export => (export_state(), None),
             ChatCommand::Import(payload) => {
                 let body = payload.unwrap_or_else(|| "{}".to_string());
                 (import_state(&body), None)
-            },
+            }
             ChatCommand::Debug => (debug_state_snapshot(), None),
             ChatCommand::Tokens => (tokens_usage_snapshot(), None),
         };
-        
+
         let mut response = json!({
             "response": {
                 "answer": answer,
@@ -2888,7 +3724,7 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
             },
             "request_id": request_id
         });
-        
+
         if let Some(extra_data) = extra {
             if let Some(obj) = response.as_object_mut() {
                 for (k, v) in extra_data.as_object().unwrap() {
@@ -2896,10 +3732,10 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
                 }
             }
         }
-        
+
         return Ok(HttpResponse::Ok().json(response));
     }
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         // Convert ChatMode to AgentMode
         let agent_mode = match query.mode {
@@ -2910,13 +3746,23 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
         let query_str = query.query.clone();
         let top_k = query.top_k;
         let retriever_clone = Arc::clone(retriever);
-        
+
+        // Get current chat settings
+        let chat_settings = get_current_chat_settings();
+
         // Run agent in blocking thread pool to avoid blocking async runtime
         let resp = web::block(move || {
-            let agent = Agent::new("default", "agent.db", retriever_clone);
+            let agent = Agent::new(
+                "default",
+                path_resolver::agent_db_path_str(),
+                retriever_clone,
+            )
+            .with_settings(chat_settings);
             agent.run_with_mode(&query_str, top_k, agent_mode)
-        }).await.map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
-        
+        })
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
+
         update_last_agent_run(query.query.clone(), &resp);
         Ok(HttpResponse::Ok().json(json!({
             "response": resp,
@@ -2931,44 +3777,359 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
     }
 }
 
+// ============================================================================
+// OPENAI STREAMING HANDLER
+// ============================================================================
+
+/// Stream response from OpenAI API
+/// OpenAI uses Server-Sent Events with format:
+/// data: {"choices":[{"delta":{"content":"text"}}]}
+/// data: [DONE]
+async fn stream_openai_response(
+    client: reqwest::Client,
+    api_key: &str,
+    model: &str,
+    body: serde_json::Value,
+    chunks_count: usize,
+    request_id: String,
+) -> Result<HttpResponse, Error> {
+    use actix_web::web::Bytes;
+    use futures_util::stream::StreamExt;
+
+    let url = "https://api.openai.com/v1/chat/completions";
+    
+    tracing::info!(
+        model = %model,
+        request_id = %request_id,
+        "Streaming from OpenAI API"
+    );
+
+    match client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                tracing::error!("OpenAI API error: {} - {}", status, error_text);
+                let error_response = serde_json::json!({
+                    "type": "error",
+                    "message": format!("OpenAI API error: {} - {}", status, error_text),
+                    "request_id": request_id
+                });
+                return Ok(HttpResponse::Ok()
+                    .content_type("text/event-stream")
+                    .body(format!("data: {}\n\n", error_response)));
+            }
+
+            let stream = response.bytes_stream().map(move |chunk_result| {
+                match chunk_result {
+                    Ok(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        let mut output = String::new();
+
+                        for line in text.lines() {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            
+                            // OpenAI SSE format: "data: {...}" or "data: [DONE]"
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                if data == "[DONE]" {
+                                    let event = serde_json::json!({
+                                        "type": "done",
+                                        "chunks_used": chunks_count
+                                    });
+                                    output.push_str(&format!("data: {}\n\n", event));
+                                } else if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                    // Extract content from choices[0].delta.content
+                                    if let Some(content) = json
+                                        .get("choices")
+                                        .and_then(|c| c.get(0))
+                                        .and_then(|c| c.get("delta"))
+                                        .and_then(|d| d.get("content"))
+                                        .and_then(|c| c.as_str())
+                                    {
+                                        if !content.is_empty() {
+                                            let event = serde_json::json!({
+                                                "type": "token",
+                                                "content": content
+                                            });
+                                            output.push_str(&format!("data: {}\n\n", event));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Ok::<Bytes, actix_web::error::Error>(Bytes::from(output))
+                    }
+                    Err(e) => {
+                        let error_event = serde_json::json!({
+                            "type": "error",
+                            "message": format!("Stream error: {}", e)
+                        });
+                        Ok(Bytes::from(format!("data: {}\n\n", error_event)))
+                    }
+                }
+            });
+
+            Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .insert_header(("Cache-Control", "no-cache"))
+                .insert_header(("X-Accel-Buffering", "no"))
+                .insert_header(("Access-Control-Allow-Origin", "*"))
+                .streaming(stream))
+        }
+        Err(e) => {
+            let error_response = serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to connect to OpenAI: {}", e),
+                "request_id": request_id
+            });
+            Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .body(format!("data: {}\n\n", error_response)))
+        }
+    }
+}
+
+// ============================================================================
+// ANTHROPIC STREAMING HANDLER
+// ============================================================================
+
+/// Stream response from Anthropic API
+/// Anthropic uses Server-Sent Events with format:
+/// event: content_block_delta
+/// data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"content"}}
+/// event: message_stop
+/// data: {"type":"message_stop"}
+#[allow(clippy::too_many_arguments)]
+async fn stream_anthropic_response(
+    client: reqwest::Client,
+    api_key: &str,
+    model: &str,
+    payload: serde_json::Value,
+    temperature: f32,
+    max_tokens: usize,
+    chunks_count: usize,
+    request_id: String,
+    use_caching: bool,
+) -> Result<HttpResponse, Error> {
+    use actix_web::web::Bytes;
+    use futures_util::stream::StreamExt;
+
+    let url = "https://api.anthropic.com/v1/messages";
+    
+    // Build the request body
+    let system = payload.get("system").cloned().unwrap_or(serde_json::Value::Null);
+    let messages = payload.get("messages").cloned().unwrap_or(serde_json::json!([]));
+    
+    let mut body = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": true,
+        "messages": messages
+    });
+    
+    // Add system if present
+    if !system.is_null() {
+        body["system"] = system;
+    }
+    
+    tracing::info!(
+        model = %model,
+        request_id = %request_id,
+        caching = use_caching,
+        "Streaming from Anthropic API"
+    );
+
+    let mut request = client
+        .post(url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("Content-Type", "application/json");
+    
+    // Add beta header for prompt caching if enabled
+    if use_caching {
+        request = request.header("anthropic-beta", "prompt-caching-2024-07-31");
+    }
+
+    match request.json(&body).send().await {
+        Ok(response) => {
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                tracing::error!("Anthropic API error: {} - {}", status, error_text);
+                let error_response = serde_json::json!({
+                    "type": "error",
+                    "message": format!("Anthropic API error: {} - {}", status, error_text),
+                    "request_id": request_id
+                });
+                return Ok(HttpResponse::Ok()
+                    .content_type("text/event-stream")
+                    .body(format!("data: {}\n\n", error_response)));
+            }
+
+            let stream = response.bytes_stream().map(move |chunk_result| {
+                match chunk_result {
+                    Ok(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        let mut output = String::new();
+                        let mut current_event_type = String::new();
+
+                        for line in text.lines() {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            
+                            // Anthropic SSE format: "event: type" followed by "data: {...}"
+                            if let Some(event_type) = line.strip_prefix("event: ") {
+                                current_event_type = event_type.to_string();
+                            } else if let Some(data) = line.strip_prefix("data: ") {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                    match current_event_type.as_str() {
+                                        "content_block_delta" => {
+                                            // Extract text from delta.text
+                                            if let Some(text_content) = json
+                                                .get("delta")
+                                                .and_then(|d| d.get("text"))
+                                                .and_then(|t| t.as_str())
+                                            {
+                                                if !text_content.is_empty() {
+                                                    let event = serde_json::json!({
+                                                        "type": "token",
+                                                        "content": text_content
+                                                    });
+                                                    output.push_str(&format!("data: {}\n\n", event));
+                                                }
+                                            }
+                                        }
+                                        "message_stop" | "message_delta" => {
+                                            // Check if this is the final message
+                                            if json.get("type").and_then(|t| t.as_str()) == Some("message_stop") {
+                                                let event = serde_json::json!({
+                                                    "type": "done",
+                                                    "chunks_used": chunks_count
+                                                });
+                                                output.push_str(&format!("data: {}\n\n", event));
+                                            }
+                                        }
+                                        "error" => {
+                                            let error_msg = json
+                                                .get("error")
+                                                .and_then(|e| e.get("message"))
+                                                .and_then(|m| m.as_str())
+                                                .unwrap_or("Unknown error");
+                                            let event = serde_json::json!({
+                                                "type": "error",
+                                                "message": error_msg
+                                            });
+                                            output.push_str(&format!("data: {}\n\n", event));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+
+                        Ok::<Bytes, actix_web::error::Error>(Bytes::from(output))
+                    }
+                    Err(e) => {
+                        let error_event = serde_json::json!({
+                            "type": "error",
+                            "message": format!("Stream error: {}", e)
+                        });
+                        Ok(Bytes::from(format!("data: {}\n\n", error_event)))
+                    }
+                }
+            });
+
+            Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .insert_header(("Cache-Control", "no-cache"))
+                .insert_header(("X-Accel-Buffering", "no"))
+                .insert_header(("Access-Control-Allow-Origin", "*"))
+                .streaming(stream))
+        }
+        Err(e) => {
+            let error_response = serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to connect to Anthropic: {}", e),
+                "request_id": request_id
+            });
+            Ok(HttpResponse::Ok()
+                .content_type("text/event-stream")
+                .body(format!("data: {}\n\n", error_response)))
+        }
+    }
+}
+
 // Streaming agent endpoint using Server-Sent Events
 async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
     use actix_web::web::Bytes;
     use futures_util::stream::StreamExt;
-    
+    use crate::memory::prompt_cache::CacheOptimizedPrompt;
+
     let request_id = generate_request_id();
-    
+
     // For commands, redirect to non-streaming endpoint (commands don't benefit from streaming)
     if parse_chat_command(&req.query).is_some() {
         // Just call the regular endpoint for commands
         return run_agent(req).await;
     }
-    
-    // Get Ollama config
-    let ollama_url = std::env::var("OLLAMA_HOST")
-        .unwrap_or_else(|_| "http://localhost:11434".to_string());
-    let model = std::env::var("OLLAMA_MODEL")
-        .unwrap_or_else(|_| "phi:latest".to_string());
-    
+
+    // Get hardware config to determine backend type
+    let hardware_config = crate::db::param_hardware::global_config();
+    let backend_type = hardware_config.backend_type;
+    let prompt_caching = get_prompt_caching_enabled();
+
+    // Get Ollama config (used for Ollama backend)
+    let ollama_url =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = if !hardware_config.model.is_empty() {
+        hardware_config.model.clone()
+    } else {
+        std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "phi:latest".to_string())
+    };
+
     // Determine mode and build context
     let agent_mode = match req.mode {
         ChatMode::Rag => crate::agent::AgentMode::Rag,
         ChatMode::Llm => crate::agent::AgentMode::Llm,
         ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
     };
-    
+
     // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
     if matches!(agent_mode, crate::agent::AgentMode::Rag) {
         if let Some(retriever) = RETRIEVER.get() {
             let query_clone = req.query.clone();
             let top_k = req.top_k;
             let retriever_clone = Arc::clone(retriever);
-            
+            let chat_settings = get_current_chat_settings();
+
             let resp = web::block(move || {
-                let agent = Agent::new("default", "agent.db", retriever_clone);
+                let agent = Agent::new(
+                    "default",
+                    path_resolver::agent_db_path_str(),
+                    retriever_clone,
+                )
+                .with_settings(chat_settings);
                 agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Rag)
-            }).await.map_err(|e| actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e)))?;
-            
+            })
+            .await
+            .map_err(|e| {
+                actix_web::error::ErrorInternalServerError(format!("Agent error: {}", e))
+            })?;
+
             update_last_agent_run(req.query.clone(), &resp);
             let json_response = serde_json::json!({
                 "type": "complete",
@@ -2983,11 +4144,11 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                 .body(format!("data: {}\n\n", json_response)));
         }
     }
-    
+
     // For LLM and Hybrid modes, stream from Ollama
     let mut context = String::new();
     let mut used_chunks: Vec<String> = Vec::new();
-    
+
     // For Hybrid mode, first get RAG context
     if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
         if let Some(retriever) = RETRIEVER.get() {
@@ -3004,64 +4165,244 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
             }
         }
     }
-    
-    // Build prompt
-    let prompt = if context.is_empty() {
-        req.query.clone()
-    } else {
-        format!(
-            "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}\n\nQuestion: {}\n\nAnswer:",
-            context, req.query
-        )
+
+    // Get chat settings for prompt building
+    let chat_settings = get_current_chat_settings();
+    let system_prompt = chat_settings.build_system_prompt();
+
+    // Build prompt with settings
+    let prompt = {
+        let mut parts = Vec::new();
+
+        // Add system prompt if present
+        if !system_prompt.is_empty() {
+            parts.push(format!("Instructions:\n{}", system_prompt));
+        }
+
+        // Add context if present
+        if !context.is_empty() {
+            parts.push(format!(
+                "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}",
+                context
+            ));
+        }
+
+        // Add question
+        parts.push(format!("Question: {}", req.query));
+        parts.push("Answer:".to_string());
+
+        parts.join("\n\n")
     };
-    
+
     // Get mode-specific config
     use crate::db::llm_settings::LlmConfig;
-    let config = match agent_mode {
+    let mut config = match agent_mode {
         crate::agent::AgentMode::Rag => LlmConfig::documents_only(),
         crate::agent::AgentMode::Llm => LlmConfig::llm_only(),
         crate::agent::AgentMode::Hybrid => LlmConfig::combined(),
     };
-    
-    // Create streaming request to Ollama with mode-specific options
+
+    // Apply temperature override if set
+    if let Some(temp) = chat_settings.temperature {
+        config.temperature = temp;
+    }
+
+    // Use model override if set
+    let final_model = chat_settings.model.unwrap_or(model);
+
+    // Build cache-optimized prompt structure
+    let cache_prompt = CacheOptimizedPrompt::new()
+        .with_system_prompt(&system_prompt)
+        .with_context(&context)
+        .with_user_query(&req.query);
+
+    // Create streaming request based on backend type and caching preference
     let client = reqwest::Client::new();
-    let ollama_request = serde_json::json!({
-        "model": model,
-        "prompt": prompt,
-        "stream": true,
-        "options": {
-            "temperature": config.temperature,
-            "top_p": config.top_p,
-            "top_k": config.top_k,
-            "num_predict": config.max_tokens,
-            "repeat_penalty": config.repeat_penalty
-        }
-    });
-    
-    let url = format!("{}/api/generate", ollama_url);
-    let query_for_memory = req.query.clone();
     let chunks_count = used_chunks.len();
-    
-    match client.post(&url).json(&ollama_request).send().await {
+
+    // Determine URL and request body based on backend and caching
+    let (url, request_body) = match backend_type {
+        crate::db::param_hardware::BackendType::Ollama => {
+            if prompt_caching {
+                // Use /api/chat for KV cache reuse
+                let options = serde_json::json!({
+                    "temperature": config.temperature,
+                    "top_p": config.top_p,
+                    "top_k": config.top_k,
+                    "num_predict": config.max_tokens,
+                    "repeat_penalty": config.repeat_penalty
+                });
+                let body = cache_prompt.build_ollama_chat_request(&final_model, true, Some(options));
+                (format!("{}/api/chat", ollama_url), body)
+            } else {
+                // Use /api/generate (no caching)
+                let body = serde_json::json!({
+                    "model": final_model,
+                    "prompt": prompt,
+                    "stream": true,
+                    "options": {
+                        "temperature": config.temperature,
+                        "top_p": config.top_p,
+                        "top_k": config.top_k,
+                        "num_predict": config.max_tokens,
+                        "repeat_penalty": config.repeat_penalty
+                    },
+                    "system": if system_prompt.is_empty() { serde_json::Value::Null } else { serde_json::json!(system_prompt) }
+                });
+                (format!("{}/api/generate", ollama_url), body)
+            }
+        }
+        crate::db::param_hardware::BackendType::OpenAi => {
+            // OpenAI API with automatic prefix caching
+            let api_key = std::env::var("OPENAI_API_KEY")
+                .unwrap_or_else(|_| crate::db::api_keys::global_config().openai_api_key.clone());
+            
+            if api_key.is_empty() {
+                tracing::warn!("OpenAI API key not configured, falling back to Ollama");
+                let fallback_body = serde_json::json!({
+                    "model": final_model,
+                    "prompt": prompt,
+                    "stream": true,
+                    "options": {
+                        "temperature": config.temperature,
+                        "top_p": config.top_p,
+                        "top_k": config.top_k,
+                        "num_predict": config.max_tokens,
+                        "repeat_penalty": config.repeat_penalty
+                    }
+                });
+                (format!("{}/api/generate", ollama_url), fallback_body)
+            } else {
+                let messages = if prompt_caching {
+                    cache_prompt.build_openai_messages()
+                } else {
+                    vec![
+                        serde_json::json!({"role": "system", "content": system_prompt}),
+                        serde_json::json!({"role": "user", "content": format!("{}\n\nQuestion: {}", context, req.query)}),
+                    ]
+                };
+                let body = serde_json::json!({
+                    "model": final_model,
+                    "messages": messages,
+                    "stream": true,
+                    "temperature": config.temperature,
+                    "max_tokens": config.max_tokens
+                });
+                // Return special marker for OpenAI handling
+                return stream_openai_response(
+                    client,
+                    &api_key,
+                    &final_model,
+                    body,
+                    chunks_count,
+                    request_id,
+                ).await;
+            }
+        }
+        crate::db::param_hardware::BackendType::Anthropic => {
+            // Anthropic API with explicit cache_control
+            let api_key = std::env::var("ANTHROPIC_API_KEY")
+                .unwrap_or_else(|_| crate::db::api_keys::global_config().anthropic_api_key.clone());
+            
+            if api_key.is_empty() {
+                tracing::warn!("Anthropic API key not configured, falling back to Ollama");
+                let fallback_body = serde_json::json!({
+                    "model": final_model,
+                    "prompt": prompt,
+                    "stream": true,
+                    "options": {
+                        "temperature": config.temperature,
+                        "top_p": config.top_p,
+                        "top_k": config.top_k,
+                        "num_predict": config.max_tokens,
+                        "repeat_penalty": config.repeat_penalty
+                    }
+                });
+                (format!("{}/api/generate", ollama_url), fallback_body)
+            } else {
+                let anthropic_payload = if prompt_caching {
+                    cache_prompt.build_anthropic_messages()
+                } else {
+                    serde_json::json!({
+                        "system": system_prompt,
+                        "messages": [{
+                            "role": "user",
+                            "content": format!("{}\n\nQuestion: {}", context, req.query)
+                        }]
+                    })
+                };
+                // Return special marker for Anthropic handling
+                return stream_anthropic_response(
+                    client,
+                    &api_key,
+                    &final_model,
+                    anthropic_payload,
+                    config.temperature,
+                    config.max_tokens,
+                    chunks_count,
+                    request_id,
+                    prompt_caching,
+                ).await;
+            }
+        }
+        _ => {
+            // Default to Ollama /api/generate for other backends
+            let body = serde_json::json!({
+                "model": final_model,
+                "prompt": prompt,
+                "stream": true,
+                "options": {
+                    "temperature": config.temperature,
+                    "top_p": config.top_p,
+                    "top_k": config.top_k,
+                    "num_predict": config.max_tokens,
+                    "repeat_penalty": config.repeat_penalty
+                },
+                "system": if system_prompt.is_empty() { serde_json::Value::Null } else { serde_json::json!(system_prompt) }
+            });
+            (format!("{}/api/generate", ollama_url), body)
+        }
+    };
+
+    tracing::debug!(
+        backend = ?backend_type,
+        caching = prompt_caching,
+        url = %url,
+        "Sending LLM request"
+    );
+
+    match client.post(&url).json(&request_body).send().await {
         Ok(response) => {
             let stream = response.bytes_stream().map(move |chunk_result| {
                 match chunk_result {
                     Ok(bytes) => {
                         // Parse Ollama's streaming response (newline-delimited JSON)
+                        // Handles both /api/generate ("response" field) and /api/chat ("message.content" field)
                         let text = String::from_utf8_lossy(&bytes);
                         let mut output = String::new();
-                        
+
                         for line in text.lines() {
                             if line.is_empty() {
                                 continue;
                             }
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                                if let Some(response_text) = json.get("response").and_then(|v| v.as_str()) {
-                                    let event = serde_json::json!({
-                                        "type": "token",
-                                        "content": response_text
+                                // Try /api/generate format first ("response" field)
+                                let response_text = json.get("response").and_then(|v| v.as_str())
+                                    // Then try /api/chat format ("message.content" field)
+                                    .or_else(|| {
+                                        json.get("message")
+                                            .and_then(|m| m.get("content"))
+                                            .and_then(|c| c.as_str())
                                     });
-                                    output.push_str(&format!("data: {}\n\n", event));
+
+                                if let Some(text) = response_text {
+                                    if !text.is_empty() {
+                                        let event = serde_json::json!({
+                                            "type": "token",
+                                            "content": text
+                                        });
+                                        output.push_str(&format!("data: {}\n\n", event));
+                                    }
                                 }
                                 if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
                                     let event = serde_json::json!({
@@ -3072,7 +4413,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                                 }
                             }
                         }
-                        
+
                         Ok::<Bytes, actix_web::error::Error>(Bytes::from(output))
                     }
                     Err(e) => {
@@ -3084,7 +4425,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     }
                 }
             });
-            
+
             Ok(HttpResponse::Ok()
                 .content_type("text/event-stream")
                 .insert_header(("Cache-Control", "no-cache"))
@@ -3200,6 +4541,63 @@ fn parse_log_line(line: &str) -> LogEntry {
 pub mod agentic_monitor_routes;
 pub mod sys_routes;
 
+fn require_admin(req: &HttpRequest, config: &ApiConfig) -> Result<(), Error> {
+    if let Some(expected) = &config.admin_api_token {
+        if expected.is_empty() {
+            return Ok(());
+        }
+        if let Some(header) = req.headers().get(AUTHORIZATION) {
+            if let Ok(value) = header.to_str() {
+                if value == expected || value.trim_start_matches("Bearer ") == expected {
+                    return Ok(());
+                }
+            }
+        }
+        Err(actix_web::error::ErrorUnauthorized(
+            "Missing or invalid admin API token",
+        ))
+    } else {
+        Err(actix_web::error::ErrorUnauthorized(
+            "ADMIN_API_TOKEN not configured",
+        ))
+    }
+}
+
+fn observe_manual_endpoint<F>(endpoint: &'static str, f: F) -> Result<HttpResponse, Error>
+where
+    F: FnOnce() -> Result<HttpResponse, Error>,
+{
+    let start = Instant::now();
+    let span = info_span!("manual_observation", endpoint);
+    let _guard = span.enter();
+    let result = f();
+    metrics::record_manual_observation(
+        endpoint,
+        result.is_ok(),
+        start.elapsed().as_secs_f64() * 1000.0,
+    );
+    result
+}
+
+/// Helper for 3-layer memory search metrics (SEARCH.md)
+/// layer: "search" | "timeline" | "fetch"
+fn observe_memory_search_layer<F>(layer: &'static str, f: F) -> Result<HttpResponse, Error>
+where
+    F: FnOnce() -> Result<HttpResponse, Error>,
+{
+    let start = Instant::now();
+    let span = info_span!("memory_search_layer", layer);
+    let _guard = span.enter();
+    let result = f();
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    
+    // Record both the general manual observation metric and the layer-specific metric
+    metrics::record_manual_observation(layer, result.is_ok(), duration_ms);
+    metrics::record_memory_search_layer(layer, result.is_ok(), duration_ms);
+    
+    result
+}
+
 pub fn start_api_server(
     config: &ApiConfig,
 ) -> impl std::future::Future<Output = std::io::Result<()>> {
@@ -3313,12 +4711,43 @@ pub fn start_api_server(
                     .route("/chunking/latest", web::get().to(get_chunking_stats))
                     .route("/chunking/logging", web::get().to(toggle_chunking_logging))
                     // Agentic monitoring routes
-                    .route("/agents/stats", web::get().to(agentic_monitor_routes::get_agent_stats))
-                    .route("/agents/episodes", web::get().to(agentic_monitor_routes::get_recent_episodes))
-                    .route("/agents/goals", web::get().to(agentic_monitor_routes::get_goals))
-                    .route("/agents/reflections", web::get().to(agentic_monitor_routes::get_reflections))
-                    .route("/memory/stats", web::get().to(agentic_monitor_routes::get_memory_stats))
-                    .route("/tools/stats", web::get().to(agentic_monitor_routes::get_tool_stats)),
+                    .route(
+                        "/agents/stats",
+                        web::get().to(agentic_monitor_routes::get_agent_stats),
+                    )
+                    .route(
+                        "/agents/episodes",
+                        web::get().to(agentic_monitor_routes::get_recent_episodes),
+                    )
+                    .route(
+                        "/agents/goals",
+                        web::get().to(agentic_monitor_routes::get_goals),
+                    )
+                    .route(
+                        "/agents/reflections",
+                        web::get().to(agentic_monitor_routes::get_reflections),
+                    )
+                    .route(
+                        "/memory/stats",
+                        web::get().to(agentic_monitor_routes::get_memory_stats),
+                    )
+                    .route(
+                        "/tools/stats",
+                        web::get().to(agentic_monitor_routes::get_tool_stats),
+                    )
+                    .route(
+                        "/observations/metrics",
+                        web::get().to(get_manual_observation_metrics),
+                    )
+                    .route(
+                        "/observations/recent",
+                        web::get().to(get_recent_observations),
+                    )
+                    .route(
+                        "/memory/search/stats",
+                        web::get().to(get_memory_search_layer_stats),
+                    )
+                    .route("/memories/rag", web::get().to(get_recent_rag_memories)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES
@@ -3330,6 +4759,8 @@ pub fn start_api_server(
             .route("/config/chunk_size", web::post().to(commit_chunk_config))
             .route("/config/llm", web::get().to(get_llm_config))
             .route("/config/llm", web::post().to(commit_llm_config))
+            .route("/config/prompt_caching", web::get().to(get_prompt_caching))
+            .route("/config/prompt_caching", web::post().to(set_prompt_caching))
             .route("/config/hardware", web::get().to(get_hardware_config))
             .route("/config/hardware", web::post().to(commit_hardware_config))
             .route("/config/api_keys", web::get().to(get_api_keys))
@@ -3362,9 +4793,50 @@ pub fn start_api_server(
             // ============================================================================
             // RAG MEMORY ROUTES
             // ============================================================================
+            .route("/memory/types", web::get().to(list_memory_types))
             .route("/memory/store_rag", web::post().to(store_rag_memory))
             .route("/memory/search_rag", web::post().to(search_rag_memory))
             .route("/memory/recall_rag", web::post().to(recall_rag_memory))
+            // Manual observation CRUD + search
+            .route(
+                "/memory/observations",
+                web::post().to(create_manual_observation),
+            )
+            .route(
+                "/memory/observations",
+                web::get().to(list_manual_observations),
+            )
+            .route(
+                "/memory/observations/search",
+                web::post().to(search_manual_observations),
+            )
+            .route(
+                "/memory/observations/timeline",
+                web::post().to(manual_observation_timeline),
+            )
+            .route(
+                "/memory/observations/fetch",
+                web::post().to(fetch_manual_observations),
+            )
+            .route(
+                "/memory/observations/{id}",
+                web::get().to(get_manual_observation),
+            )
+            .route(
+                "/memory/observations/{id}",
+                web::put().to(update_manual_observation),
+            )
+            .route(
+                "/memory/observations/{id}",
+                web::delete().to(delete_manual_observation),
+            )
+            // ============================================================================
+            // TRAINING DATA COLLECTION ROUTES (Phase 20)
+            // ============================================================================
+            .route("/training/feedback", web::post().to(submit_training_feedback))
+            .route("/training/stats", web::get().to(get_training_stats))
+            .route("/training/export", web::post().to(export_training_data))
+            .route("/training/clear", web::post().to(clear_training_data))
             // ============================================================================
             // AGENT ROUTES
             // ============================================================================
@@ -3372,10 +4844,22 @@ pub fn start_api_server(
             .route("/agent/stream", web::post().to(run_agent_stream))
             .route("/agent/chat", web::get().to(run_agent_get))
             // Goal management routes
-            .route("/agent/goals", web::post().to(agentic_monitor_routes::create_goal))
-            .route("/agent/goals", web::get().to(agentic_monitor_routes::get_active_goals))
-            .route("/agent/goals/{goal_id}/complete", web::post().to(agentic_monitor_routes::complete_goal))
-            .route("/agent/goals/{goal_id}/fail", web::post().to(agentic_monitor_routes::fail_goal))
+            .route(
+                "/agent/goals",
+                web::post().to(agentic_monitor_routes::create_goal),
+            )
+            .route(
+                "/agent/goals",
+                web::get().to(agentic_monitor_routes::get_active_goals),
+            )
+            .route(
+                "/agent/goals/{goal_id}/complete",
+                web::post().to(agentic_monitor_routes::complete_goal),
+            )
+            .route(
+                "/agent/goals/{goal_id}/fail",
+                web::post().to(agentic_monitor_routes::fail_goal),
+            )
             .service(web::scope("/sys").configure(sys_routes::sys_routes))
     });
     if force_single_worker {

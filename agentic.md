@@ -873,3 +873,1156 @@ Here are some commands that could extend `ag`'s capabilities:
 ## Which interest you?
 
 Some are simple (frontend only), others need new endpoints. Which ones fit how you want to use `ag`?
+
+-------------------------------------------
+
+Here’s a high-level plan to implement the 3-layer memory search workflow as an internal backend feature, tailored to your project:
+
+1. **Assess the Current Storage Layer**
+   - Inventory the existing persistence (e.g., SQLite, Tantivy, embedded DBs) already used by the backend.
+   - Determine whether there’s a natural place to store structured “observations” and their metadata (IDs, types, timestamps, concepts, linked files).
+   - Decide if we can extend an existing SQLite DB or need a dedicated table/schema.
+
+2. **Define the Memory Schema & Abstractions**
+   - Draft a Rust data model representing observations (ID, type, title, narrative, facts, files read/modified, concepts).
+   - Create the table(s) required for the index view and any secondary structures (e.g., FTS table for text search, optional vector embeddings via Tantivy or a Chroma-like store).
+   - Plan migration strategy for the new schema (e.g., Diesel migration, rusqlite schema creation on startup).
+
+3. **Implement Layer 1: `search` Endpoint**
+   - Add a backend route (e.g., `POST /memory/search`) that executes full-text searches over the observations table.
+   - Return compact summaries (ID, title, date, type, concepts) to mirror the “index” layer.
+   - Integrate pagination, type/date filters, and ordering.
+
+4. **Implement Layer 2: `timeline` Endpoint**
+   - Add an endpoint (e.g., `POST /memory/timeline`) that either:
+     - Accepts an `anchor_id` and fetches surrounding observations (`depth_before`, `depth_after`), or
+     - Accepts a query and finds the anchor automatically.
+   - Ensure chronological ordering and include enough context (ID, date, title, type).
+
+5. **Implement Layer 3: `get_observations` Endpoint**
+   - Add an endpoint (e.g., `POST /memory/observations`) that takes a list of IDs and returns full observation details (narrative, facts, files, concepts).
+   - Enforce batching of IDs to keep calls efficient.
+
+6. **Wire Up Service Layer + Reuse Storage**
+   - Implement a Rust service module that encapsulates:
+     - Search via SQLite FTS or Tantivy.
+     - Timeline retrieval logic (based on timestamps and IDs).
+     - Bulk fetch by IDs.
+   - Ensure the service is reusable so future CLI or cron jobs can leverage it.
+
+7. **Add Input Validation & Rate Limiting**
+   - Extend existing middleware or add route-specific guards to prevent large payloads (e.g., limit IDs per request).
+   - Apply existing rate-limit categories (maybe reuse the search or memory buckets) to protect the new endpoints.
+
+8. **Observability & Metrics**
+   - Expose Prometheus counters/histograms for each new endpoint (request counts, latencies, hits/misses).
+   - Add tracing spans so `search`, `timeline`, and `get_observations` calls show up in OTLP pipelines.
+
+9. **Documentation & Usage Guidance**
+   - Update backend API docs (and possibly `docu/PLAN.md`) to describe the new workflow and request/response formats.
+   - Provide examples showing the token-efficient 3-layer usage pattern.
+   - Advise on how frontend or CLI should call these endpoints.
+
+10. **Follow-up Advice**
+    - After reviewing your current storage layer, we can confirm whether to extend SQLite or integrate an embedded vector DB.
+    - Recommend whether to create a thin internal CLI client or front-end view to exercise the new endpoints.
+
+If this plan matches what you’re looking for, the next step is to inspect your existing storage layer and confirm where the observation schema should live. Let me know, and I’ll proceed.
+
+I'll search for information about Unsloth and how it might fit into your Agentic RAG project.Now let me search for how Unsloth exports to Ollama/GGUF since that's relevant for your setup:Now I have a comprehensive understanding. Let me give you a clear analysis:
+
+## Unsloth for Your Agentic RAG Project - Analysis
+
+### What Unsloth Is
+Unsloth is a Python framework for fine-tuning LLMs 2x faster with 70% less VRAM. It supports GRPO, GSPO, DrGRPO, DAPO reinforcement learning methods with 0% loss in accuracy - no approximation methods.
+
+### The Good News - Potential Fit
+
+1. **Direct Ollama Export**: Unsloth can export fine-tuned models directly to GGUF formats for Ollama, Jan AI, Open WebUI with one-line commands like `model.save_pretrained_gguf("directory", tokenizer, quantization_method = "q4_k_m")`.
+
+2. **Low VRAM Requirements**: You can fine-tune or do RL for free on Colab, Kaggle, or locally with just 3GB VRAM using their notebooks.
+
+3. **RAG-Relevant**: Fine-tuning can replicate all of RAG's capabilities, but not vice versa. You can think of a fine-tuned model as a specialized agent designed to do specific tasks more effectively and efficiently.
+
+### The Challenge - Your Hardware Constraints
+
+| Requirement | Your System | Verdict |
+|-------------|-------------|---------|
+| GPU with CUDA | Intel i3-10110U (integrated graphics) | ❌ **No NVIDIA GPU** |
+| Minimum VRAM | 3GB+ GPU VRAM | ❌ No dedicated GPU |
+| RAM | 8GB | ⚠️ Tight for training |
+
+Unsloth supports NVIDIA GPUs since 2018 with minimum CUDA Capability 7.0 (V100, T4, Titan V, RTX 20, 30, 40x, A100, H100, L40 etc).
+
+### Realistic Integration Approaches
+
+**Option A: Train Elsewhere, Deploy Locally (RECOMMENDED)**
+```
+┌──────────────────────────────────────────────────────────────┐
+│  TRAINING (Cloud/Colab)          DEPLOYMENT (Your System)    │
+│  ┌─────────────────────┐         ┌─────────────────────────┐ │
+│  │ Unsloth + GPU       │ ──────► │ Ollama + Fine-tuned     │ │
+│  │ Fine-tune on        │  GGUF   │ Model (Q4_K_M)          │ │
+│  │ domain data         │  export │ Your Agentic RAG        │ │
+│  └─────────────────────┘         └─────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Option B: Use Pre-Fine-Tuned Unsloth Models**
+Unsloth provides optimized GGUF models you can use directly with Ollama without training.
+
+### What Would This Enable for Your Project?
+
+1. **Domain-Specific RAG**: Fine-tune a small model (Phi-3.5, Llama 3.2 1B) on your document corpus
+2. **Better Retrieval Understanding**: Train model to understand your chunking/query patterns
+3. **Custom Response Style**: Match your application's tone and format requirements
+
+### Practical Integration Plan
+
+```
+Phase X: Custom Model Integration (Future Enhancement)
+├── Step 1: Collect training data from your RAG interactions
+├── Step 2: Fine-tune using free Colab/Kaggle GPU
+├── Step 3: Export to GGUF (Q4_K_M for 8GB RAM)
+├── Step 4: Deploy via existing Ollama infrastructure
+└── Step 5: Update installer to download custom model
+```
+
+### Installer Impact (Future)
+
+```toml
+# config.toml addition (future)
+[llm]
+model_source = "ollama"           # or "custom"
+custom_model_path = ""            # path to custom GGUF
+custom_model_url = ""             # download URL for installer
+```
+
+### My Recommendation
+
+**Not Now, But Keep It on the Roadmap**
+
+1. **Current Phase**: Focus on completing Phase 16 (distributed tracing) and production hardening
+2. **Later Phases**: Once your RAG system has real usage data, fine-tuning becomes valuable
+3. **Training Strategy**: Use Google Colab (free T4 GPU) to fine-tune, deploy locally
+
+**For Now**: Your current Phi-3.5 + Ollama setup is appropriate. Unsloth becomes valuable when:
+- You have domain-specific training data collected
+- Default model responses need improvement for your use case
+- You want specialized behavior (better citation, specific format, etc.)
+
+Would you like me to:
+1. Create a future phase plan document for custom model integration?
+2. Add this to your roadmap as a future enhancement?
+3. Focus on something else for Phase 16?
+
+----------------------------------------------------------------
+
+# Phase 20: Custom Model Integration with Unsloth
+## Version 1.0.0
+
+> **Status:** PLANNED (Future Enhancement)
+> **Prerequisites:** Phase 16-19 complete, production deployment stable
+> **Hardware Note:** Training requires cloud GPU; deployment uses existing Ollama infrastructure
+
+---
+
+## Executive Summary
+
+This phase introduces the ability to fine-tune custom LLM models for domain-specific RAG tasks using Unsloth, then deploy them through the existing Ollama infrastructure. The key innovation is a **Train Elsewhere, Deploy Locally** approach that respects the 8GB RAM constraint while enabling powerful customization.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        CUSTOM MODEL PIPELINE                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    PHASE 1: DATA COLLECTION                          │    │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │    │
+│  │  │ RAG Queries │───▶│ QA Pairs    │───▶│ Training    │              │    │
+│  │  │ & Responses │    │ Generator   │    │ Dataset     │              │    │
+│  │  └─────────────┘    └─────────────┘    └─────────────┘              │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    PHASE 2: CLOUD TRAINING                           │    │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │    │
+│  │  │ Google      │    │ Unsloth     │    │ LoRA        │              │    │
+│  │  │ Colab/Kaggle│───▶│ Fine-tune   │───▶│ Adapter     │              │    │
+│  │  │ (Free T4)   │    │ QLoRA       │    │ (~100MB)    │              │    │
+│  │  └─────────────┘    └─────────────┘    └─────────────┘              │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    PHASE 3: MODEL EXPORT                             │    │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │    │
+│  │  │ LoRA        │    │ GGUF        │    │ Q4_K_M      │              │    │
+│  │  │ Merge       │───▶│ Conversion  │───▶│ Quantized   │              │    │
+│  │  │             │    │             │    │ (~2-4GB)    │              │    │
+│  │  └─────────────┘    └─────────────┘    └─────────────┘              │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    PHASE 4: LOCAL DEPLOYMENT                         │    │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │    │
+│  │  │ Download    │    │ Ollama      │    │ Agentic     │              │    │
+│  │  │ GGUF Model  │───▶│ Import      │───▶│ RAG API     │              │    │
+│  │  │             │    │             │    │             │              │    │
+│  │  └─────────────┘    └─────────────┘    └─────────────┘              │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Step 1: Training Data Collection Module
+
+### 1.1 Purpose
+Automatically collect and format training data from RAG interactions.
+
+### 1.2 New File: `src/training/data_collector.rs`
+
+```rust
+// src/training/data_collector.rs
+// Version: 1.0.0
+
+use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
+use std::sync::Mutex;
+use chrono::{DateTime, Utc};
+
+/// A single training example in QA format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingExample {
+    /// Unique identifier
+    pub id: String,
+    /// User query
+    pub instruction: String,
+    /// Retrieved context (optional)
+    pub context: Option<String>,
+    /// Model response
+    pub response: String,
+    /// Quality score (1-5, from user feedback)
+    pub quality_score: Option<u8>,
+    /// Timestamp
+    pub timestamp: DateTime<Utc>,
+    /// Source conversation ID
+    pub conversation_id: Option<String>,
+}
+
+/// Alpaca format for Unsloth compatibility
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AlpacaFormat {
+    pub instruction: String,
+    pub input: String,
+    pub output: String,
+}
+
+impl From<TrainingExample> for AlpacaFormat {
+    fn from(example: TrainingExample) -> Self {
+        AlpacaFormat {
+            instruction: example.instruction,
+            input: example.context.unwrap_or_default(),
+            output: example.response,
+        }
+    }
+}
+
+/// Training data collector with buffered writes
+pub struct TrainingDataCollector {
+    output_path: PathBuf,
+    buffer: Mutex<Vec<TrainingExample>>,
+    buffer_size: usize,
+    min_quality_score: u8,
+}
+
+impl TrainingDataCollector {
+    pub fn new(output_path: PathBuf) -> Self {
+        Self {
+            output_path,
+            buffer: Mutex::new(Vec::new()),
+            buffer_size: 100, // Flush every 100 examples
+            min_quality_score: 3, // Only keep quality >= 3
+        }
+    }
+
+    /// Add a training example (buffers until flush)
+    pub fn add_example(&self, example: TrainingExample) -> Result<(), std::io::Error> {
+        // Filter by quality if score is provided
+        if let Some(score) = example.quality_score {
+            if score < self.min_quality_score {
+                return Ok(()); // Skip low-quality examples
+            }
+        }
+
+        let mut buffer = self.buffer.lock().unwrap();
+        buffer.push(example);
+
+        if buffer.len() >= self.buffer_size {
+            self.flush_internal(&mut buffer)?;
+        }
+
+        Ok(())
+    }
+
+    /// Flush buffer to disk
+    pub fn flush(&self) -> Result<(), std::io::Error> {
+        let mut buffer = self.buffer.lock().unwrap();
+        self.flush_internal(&mut buffer)
+    }
+
+    fn flush_internal(&self, buffer: &mut Vec<TrainingExample>) -> Result<(), std::io::Error> {
+        if buffer.is_empty() {
+            return Ok(());
+        }
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.output_path)?;
+
+        let mut writer = BufWriter::new(file);
+
+        for example in buffer.drain(..) {
+            let alpaca: AlpacaFormat = example.into();
+            serde_json::to_writer(&mut writer, &alpaca)?;
+            writeln!(writer)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Export to Unsloth-compatible JSONL format
+    pub fn export_for_unsloth(&self, output_path: &PathBuf) -> Result<usize, std::io::Error> {
+        let input = std::fs::read_to_string(&self.output_path)?;
+        let mut count = 0;
+
+        let file = File::create(output_path)?;
+        let mut writer = BufWriter::new(file);
+
+        for line in input.lines() {
+            if let Ok(example) = serde_json::from_str::<AlpacaFormat>(line) {
+                serde_json::to_writer(&mut writer, &example)?;
+                writeln!(writer)?;
+                count += 1;
+            }
+        }
+
+        writer.flush()?;
+        Ok(count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_training_example_to_alpaca() {
+        let example = TrainingExample {
+            id: "test-1".to_string(),
+            instruction: "What is Rust?".to_string(),
+            context: Some("Rust is a systems programming language.".to_string()),
+            response: "Rust is a systems programming language focused on safety.".to_string(),
+            quality_score: Some(5),
+            timestamp: Utc::now(),
+            conversation_id: None,
+        };
+
+        let alpaca: AlpacaFormat = example.into();
+        assert_eq!(alpaca.instruction, "What is Rust?");
+        assert!(!alpaca.input.is_empty());
+    }
+
+    #[test]
+    fn test_collector_flush() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("training_data.jsonl");
+        
+        let collector = TrainingDataCollector::new(path.clone());
+        
+        let example = TrainingExample {
+            id: "test-1".to_string(),
+            instruction: "Test question".to_string(),
+            context: None,
+            response: "Test answer".to_string(),
+            quality_score: Some(4),
+            timestamp: Utc::now(),
+            conversation_id: None,
+        };
+
+        collector.add_example(example).unwrap();
+        collector.flush().unwrap();
+
+        assert!(path.exists());
+    }
+}
+```
+
+### 1.3 Directory Structure
+```
+~/ag/
+├── src/
+│   └── training/
+│       ├── mod.rs              # Module declaration
+│       ├── data_collector.rs   # Training data collection
+│       └── export.rs           # Export utilities
+├── data/
+│   └── training/
+│       ├── raw/                # Raw collected examples
+│       └── processed/          # Unsloth-ready JSONL
+```
+
+---
+
+## Step 2: Unsloth Training Notebook
+
+### 2.1 Purpose
+Provide a ready-to-use Colab notebook for fine-tuning.
+
+### 2.2 File: `notebooks/unsloth_finetune.ipynb` (Exported as Python)
+
+```python
+# notebooks/unsloth_finetune.py
+# Version: 1.0.0
+# Run in Google Colab with T4 GPU
+
+"""
+Agentic RAG Custom Model Fine-tuning with Unsloth
+================================================
+This notebook fine-tunes a small LLM for your RAG system.
+
+Prerequisites:
+- Upload your training_data.jsonl to Colab
+- Select Runtime > Change runtime type > T4 GPU
+"""
+
+# Cell 1: Install Unsloth
+# %%capture
+!pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+!pip install --no-deps trl peft accelerate bitsandbytes
+
+# Cell 2: Import and Configure
+from unsloth import FastLanguageModel
+import torch
+
+# Configuration - MODIFY THESE
+MODEL_NAME = "unsloth/Phi-3.5-mini-instruct-bnb-4bit"  # Matches your Ollama setup
+MAX_SEQ_LENGTH = 2048
+LOAD_IN_4BIT = True
+
+# For 8GB RAM deployment, use smaller models:
+# - unsloth/Phi-3.5-mini-instruct-bnb-4bit (3.8B params, ~2GB GGUF)
+# - unsloth/Llama-3.2-1B-Instruct-bnb-4bit (1B params, ~0.6GB GGUF)
+# - unsloth/Llama-3.2-3B-Instruct-bnb-4bit (3B params, ~1.8GB GGUF)
+
+# Cell 3: Load Model
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name=MODEL_NAME,
+    max_seq_length=MAX_SEQ_LENGTH,
+    load_in_4bit=LOAD_IN_4BIT,
+    dtype=None,  # Auto-detect
+)
+
+# Cell 4: Add LoRA Adapters
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,  # LoRA rank
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj"
+    ],
+    lora_alpha=16,
+    lora_dropout=0,
+    bias="none",
+    use_gradient_checkpointing="unsloth",
+    random_state=3407,
+)
+
+# Cell 5: Prepare Dataset
+from datasets import load_dataset
+
+# Upload your training_data.jsonl to Colab first
+dataset = load_dataset("json", data_files="training_data.jsonl", split="train")
+
+# Alpaca prompt template (matches your RAG output format)
+alpaca_prompt = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+### Instruction:
+{}
+
+### Input:
+{}
+
+### Response:
+{}"""
+
+def formatting_prompts_func(examples):
+    instructions = examples["instruction"]
+    inputs = examples["input"]
+    outputs = examples["output"]
+    texts = []
+    for instruction, input, output in zip(instructions, inputs, outputs):
+        text = alpaca_prompt.format(instruction, input, output) + tokenizer.eos_token
+        texts.append(text)
+    return {"text": texts}
+
+dataset = dataset.map(formatting_prompts_func, batched=True)
+
+# Cell 6: Training Configuration
+from trl import SFTTrainer
+from transformers import TrainingArguments
+
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    max_seq_length=MAX_SEQ_LENGTH,
+    dataset_num_proc=2,
+    packing=False,
+    args=TrainingArguments(
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,
+        warmup_steps=5,
+        max_steps=100,  # Increase for better results (500-1000)
+        learning_rate=2e-4,
+        fp16=not torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_bf16_supported(),
+        logging_steps=10,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="linear",
+        seed=3407,
+        output_dir="outputs",
+    ),
+)
+
+# Cell 7: Train!
+trainer_stats = trainer.train()
+print(f"Training completed in {trainer_stats.metrics['train_runtime']:.2f}s")
+
+# Cell 8: Export to GGUF for Ollama
+# Choose quantization based on your RAM:
+# - q4_k_m: Best balance (recommended for 8GB RAM)
+# - q8_0: Higher quality, larger file
+# - q2_k: Smallest, lower quality
+
+model.save_pretrained_gguf(
+    "ag-custom-model",
+    tokenizer,
+    quantization_method="q4_k_m"
+)
+
+print("✅ Model exported to: ag-custom-model/")
+print("Download the .gguf file and deploy via Ollama")
+
+# Cell 9: Create Ollama Modelfile
+modelfile_content = '''FROM ./ag-custom-model-q4_k_m.gguf
+
+TEMPLATE """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+### Instruction:
+{{ .Prompt }}
+
+### Input:
+{{ .Context }}
+
+### Response:
+"""
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER stop "### Instruction:"
+PARAMETER stop "### Input:"
+'''
+
+with open("Modelfile", "w") as f:
+    f.write(modelfile_content)
+
+print("✅ Modelfile created")
+print("\nTo deploy locally:")
+print("1. Download ag-custom-model-q4_k_m.gguf and Modelfile")
+print("2. Run: ollama create ag-custom -f Modelfile")
+print("3. Test: ollama run ag-custom")
+```
+
+---
+
+## Step 3: Model Configuration Updates
+
+### 3.1 File: `src/config.rs` additions
+
+```rust
+// Add to existing config.rs
+// Version: 2.1.0 (adds custom model support)
+
+/// Custom model configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct CustomModelConfig {
+    /// Use custom model instead of default
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Model name in Ollama (after import)
+    #[serde(default = "default_custom_model_name")]
+    pub model_name: String,
+
+    /// Download URL for GGUF (optional, for installer)
+    pub download_url: Option<String>,
+
+    /// Expected file hash (SHA256) for verification
+    pub file_hash: Option<String>,
+
+    /// Fallback to default model if custom unavailable
+    #[serde(default = "default_true")]
+    pub fallback_enabled: bool,
+}
+
+fn default_custom_model_name() -> String {
+    "ag-custom".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for CustomModelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_name: default_custom_model_name(),
+            download_url: None,
+            file_hash: None,
+            fallback_enabled: true,
+        }
+    }
+}
+
+// Environment variables:
+// CUSTOM_MODEL_ENABLED=true|false
+// CUSTOM_MODEL_NAME=ag-custom
+// CUSTOM_MODEL_URL=https://...
+// CUSTOM_MODEL_HASH=sha256:...
+// CUSTOM_MODEL_FALLBACK=true|false
+```
+
+### 3.2 File: `src/llm/model_loader.rs`
+
+```rust
+// src/llm/model_loader.rs
+// Version: 1.0.0
+
+use crate::config::CustomModelConfig;
+use std::process::Command;
+use tracing::{info, warn, error};
+
+pub struct ModelLoader {
+    config: CustomModelConfig,
+    ollama_base_url: String,
+}
+
+impl ModelLoader {
+    pub fn new(config: CustomModelConfig, ollama_base_url: String) -> Self {
+        Self { config, ollama_base_url }
+    }
+
+    /// Check if custom model is available in Ollama
+    pub async fn is_model_available(&self) -> bool {
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/tags", self.ollama_base_url);
+        
+        match client.get(&url).send().await {
+            Ok(response) => {
+                if let Ok(json) = response.json::<serde_json::Value>().await {
+                    if let Some(models) = json["models"].as_array() {
+                        return models.iter().any(|m| {
+                            m["name"].as_str() == Some(&self.config.model_name)
+                        });
+                    }
+                }
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Get the model name to use (custom or fallback)
+    pub async fn get_active_model(&self) -> String {
+        if !self.config.enabled {
+            return self.get_default_model();
+        }
+
+        if self.is_model_available().await {
+            info!(model = %self.config.model_name, "Using custom model");
+            self.config.model_name.clone()
+        } else if self.config.fallback_enabled {
+            warn!(
+                custom = %self.config.model_name,
+                fallback = %self.get_default_model(),
+                "Custom model unavailable, using fallback"
+            );
+            self.get_default_model()
+        } else {
+            error!(model = %self.config.model_name, "Custom model unavailable and fallback disabled");
+            panic!("Required custom model not available");
+        }
+    }
+
+    fn get_default_model(&self) -> String {
+        std::env::var("LLM_MODEL").unwrap_or_else(|_| "phi3.5:3.8b".to_string())
+    }
+
+    /// Import a GGUF model into Ollama (used by installer)
+    pub fn import_gguf(gguf_path: &str, model_name: &str, modelfile_path: &str) -> Result<(), String> {
+        let output = Command::new("ollama")
+            .args(["create", model_name, "-f", modelfile_path])
+            .output()
+            .map_err(|e| format!("Failed to run ollama: {}", e))?;
+
+        if output.status.success() {
+            info!(model = %model_name, "Successfully imported custom model");
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to import model: {}", stderr))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_model() {
+        let config = CustomModelConfig::default();
+        let loader = ModelLoader::new(config, "http://localhost:11434".to_string());
+        assert_eq!(loader.get_default_model(), "phi3.5:3.8b");
+    }
+}
+```
+
+---
+
+## Step 4: Installer Updates
+
+### 4.1 File: `installer/custom_model.sh`
+
+```bash
+#!/bin/bash
+# installer/custom_model.sh
+# Version: 1.0.0
+# Custom model installation for Agentic RAG
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODEL_DIR="${HOME}/.local/share/ag/models"
+MODEL_NAME="${CUSTOM_MODEL_NAME:-ag-custom}"
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Check if Ollama is running
+check_ollama() {
+    if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+        log_error "Ollama is not running. Start with: ollama serve"
+        exit 1
+    fi
+    log_info "Ollama is running"
+}
+
+# Download custom model GGUF
+download_model() {
+    local url="$1"
+    local output="$2"
+    local expected_hash="$3"
+
+    log_info "Downloading custom model..."
+    
+    mkdir -p "$MODEL_DIR"
+    
+    if command -v wget &> /dev/null; then
+        wget -q --show-progress -O "$output" "$url"
+    elif command -v curl &> /dev/null; then
+        curl -L --progress-bar -o "$output" "$url"
+    else
+        log_error "Neither wget nor curl available"
+        exit 1
+    fi
+
+    # Verify hash if provided
+    if [ -n "$expected_hash" ]; then
+        local actual_hash=$(sha256sum "$output" | cut -d' ' -f1)
+        if [ "$actual_hash" != "$expected_hash" ]; then
+            log_error "Hash mismatch! Expected: $expected_hash, Got: $actual_hash"
+            rm -f "$output"
+            exit 1
+        fi
+        log_info "Hash verified ✓"
+    fi
+}
+
+# Create Modelfile and import
+import_to_ollama() {
+    local gguf_path="$1"
+    local model_name="$2"
+
+    log_info "Creating Modelfile..."
+    
+    cat > "${MODEL_DIR}/Modelfile" << 'EOF'
+FROM ./model.gguf
+
+TEMPLATE """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+### Instruction:
+{{ .Prompt }}
+
+### Input:
+{{ .Context }}
+
+### Response:
+"""
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER stop "### Instruction:"
+PARAMETER stop "### Input:"
+EOF
+
+    # Copy GGUF to expected location
+    cp "$gguf_path" "${MODEL_DIR}/model.gguf"
+
+    log_info "Importing model to Ollama..."
+    cd "$MODEL_DIR"
+    ollama create "$model_name" -f Modelfile
+
+    log_info "Custom model '$model_name' imported successfully!"
+}
+
+# Check if model already exists
+check_existing() {
+    if ollama list | grep -q "$MODEL_NAME"; then
+        log_warn "Model '$MODEL_NAME' already exists"
+        read -p "Overwrite? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Skipping model import"
+            exit 0
+        fi
+    fi
+}
+
+# Main
+main() {
+    local gguf_url="${CUSTOM_MODEL_URL:-}"
+    local gguf_path="${CUSTOM_MODEL_PATH:-}"
+    local expected_hash="${CUSTOM_MODEL_HASH:-}"
+
+    check_ollama
+    check_existing
+
+    if [ -n "$gguf_path" ] && [ -f "$gguf_path" ]; then
+        log_info "Using local GGUF: $gguf_path"
+        import_to_ollama "$gguf_path" "$MODEL_NAME"
+    elif [ -n "$gguf_url" ]; then
+        local output="${MODEL_DIR}/${MODEL_NAME}.gguf"
+        download_model "$gguf_url" "$output" "$expected_hash"
+        import_to_ollama "$output" "$MODEL_NAME"
+    else
+        log_error "No model source specified"
+        echo "Set either:"
+        echo "  CUSTOM_MODEL_PATH=/path/to/model.gguf"
+        echo "  CUSTOM_MODEL_URL=https://..."
+        exit 1
+    fi
+
+    # Enable custom model in config
+    echo "CUSTOM_MODEL_ENABLED=true" >> "${HOME}/.config/ag/env"
+    echo "CUSTOM_MODEL_NAME=$MODEL_NAME" >> "${HOME}/.config/ag/env"
+
+    log_info "Custom model setup complete!"
+    echo ""
+    echo "Test with: ollama run $MODEL_NAME"
+    echo "The Agentic RAG system will automatically use this model."
+}
+
+main "$@"
+```
+
+---
+
+## Step 5: API Endpoints for Training Data
+
+### 5.1 File: `src/api/training.rs`
+
+```rust
+// src/api/training.rs
+// Version: 1.0.0
+
+use actix_web::{web, HttpResponse, post, get};
+use serde::{Deserialize, Serialize};
+use crate::training::data_collector::{TrainingDataCollector, TrainingExample};
+use chrono::Utc;
+use uuid::Uuid;
+
+#[derive(Deserialize)]
+pub struct FeedbackRequest {
+    pub query: String,
+    pub response: String,
+    pub context: Option<String>,
+    pub quality_score: u8,  // 1-5
+    pub conversation_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct FeedbackResponse {
+    pub status: String,
+    pub example_id: String,
+}
+
+/// POST /training/feedback
+/// Submit user feedback for training data collection
+#[post("/training/feedback")]
+pub async fn submit_feedback(
+    collector: web::Data<TrainingDataCollector>,
+    body: web::Json<FeedbackRequest>,
+) -> HttpResponse {
+    let example_id = Uuid::new_v4().to_string();
+    
+    let example = TrainingExample {
+        id: example_id.clone(),
+        instruction: body.query.clone(),
+        context: body.context.clone(),
+        response: body.response.clone(),
+        quality_score: Some(body.quality_score.clamp(1, 5)),
+        timestamp: Utc::now(),
+        conversation_id: body.conversation_id.clone(),
+    };
+
+    match collector.add_example(example) {
+        Ok(_) => HttpResponse::Ok().json(FeedbackResponse {
+            status: "collected".to_string(),
+            example_id,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+#[derive(Serialize)]
+pub struct TrainingStats {
+    pub total_examples: usize,
+    pub high_quality_count: usize,  // score >= 4
+    pub ready_for_export: bool,
+}
+
+/// GET /training/stats
+/// Get training data collection statistics
+#[get("/training/stats")]
+pub async fn get_training_stats(
+    collector: web::Data<TrainingDataCollector>,
+) -> HttpResponse {
+    // Implementation would read from collected data
+    HttpResponse::Ok().json(TrainingStats {
+        total_examples: 0,  // TODO: Implement actual counting
+        high_quality_count: 0,
+        ready_for_export: false,
+    })
+}
+
+/// POST /training/export
+/// Export collected data for Unsloth training
+#[post("/training/export")]
+pub async fn export_training_data(
+    collector: web::Data<TrainingDataCollector>,
+) -> HttpResponse {
+    match collector.flush() {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "exported",
+            "message": "Training data exported to data/training/processed/"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub fn configure(cfg: &mut web::ServiceConfig) {
+    cfg.service(submit_feedback)
+       .service(get_training_stats)
+       .service(export_training_data);
+}
+```
+
+---
+
+## Step 6: Integration Tests
+
+### 6.1 File: `tests/custom_model_integration.rs`
+
+```rust
+// tests/custom_model_integration.rs
+// Version: 1.0.0
+
+use std::env;
+
+/// Test that custom model configuration loads correctly
+#[test]
+fn test_custom_model_config_defaults() {
+    // Clear any existing env vars
+    env::remove_var("CUSTOM_MODEL_ENABLED");
+    
+    // Default should be disabled
+    let enabled = env::var("CUSTOM_MODEL_ENABLED")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    
+    assert!(!enabled, "Custom model should be disabled by default");
+}
+
+/// Test fallback behavior
+#[test]
+fn test_model_fallback() {
+    env::set_var("CUSTOM_MODEL_ENABLED", "true");
+    env::set_var("CUSTOM_MODEL_FALLBACK", "true");
+    
+    let fallback = env::var("CUSTOM_MODEL_FALLBACK")
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    
+    assert!(fallback, "Fallback should be enabled by default");
+    
+    // Cleanup
+    env::remove_var("CUSTOM_MODEL_ENABLED");
+    env::remove_var("CUSTOM_MODEL_FALLBACK");
+}
+
+/// Test training data format
+#[test]
+fn test_alpaca_format() {
+    let example = serde_json::json!({
+        "instruction": "What is Rust?",
+        "input": "Context about Rust programming language.",
+        "output": "Rust is a systems programming language."
+    });
+    
+    assert!(example["instruction"].is_string());
+    assert!(example["input"].is_string());
+    assert!(example["output"].is_string());
+}
+```
+
+---
+
+## Installer Impact Summary
+
+### New Components
+
+| Component | Size | Required | Purpose |
+|-----------|------|----------|---------|
+| `installer/custom_model.sh` | ~3KB | Optional | Custom model import script |
+| `data/training/` | Variable | Optional | Training data storage |
+| Custom GGUF model | 2-4GB | Optional | Fine-tuned model file |
+
+### New Environment Variables
+
+```bash
+# Custom Model Configuration (Optional)
+CUSTOM_MODEL_ENABLED=false          # Enable custom model
+CUSTOM_MODEL_NAME=ag-custom         # Model name in Ollama
+CUSTOM_MODEL_URL=                   # Download URL (for installer)
+CUSTOM_MODEL_HASH=                  # SHA256 hash for verification
+CUSTOM_MODEL_FALLBACK=true          # Fallback to default if unavailable
+
+# Training Data Collection (Optional)
+TRAINING_DATA_ENABLED=false         # Enable training data collection
+TRAINING_DATA_PATH=~/.local/share/ag/training/
+TRAINING_MIN_QUALITY=3              # Minimum quality score to collect
+```
+
+### Installer Checklist Updates
+
+```bash
+# Add to installer/install.sh
+
+# Optional: Custom Model Setup
+if [ "$INSTALL_CUSTOM_MODEL" = "true" ]; then
+    echo "Setting up custom model..."
+    ./custom_model.sh
+fi
+```
+
+---
+
+## Recommended Model Choices for 8GB RAM
+
+| Model | Parameters | GGUF Size (Q4_K_M) | RAM Usage | Recommendation |
+|-------|------------|-------------------|-----------|----------------|
+| Phi-3.5-mini | 3.8B | ~2.2GB | ~4GB | ✅ **Best for your system** |
+| Llama-3.2-1B | 1B | ~0.6GB | ~2GB | Good for very limited RAM |
+| Llama-3.2-3B | 3B | ~1.8GB | ~3.5GB | Good balance |
+| Gemma-2-2B | 2B | ~1.2GB | ~3GB | Alternative option |
+
+---
+
+## Success Metrics
+
+1. **Training Data Quality**: Average quality score >= 4.0
+2. **Model Performance**: Response relevance improved by measurable margin
+3. **Resource Compliance**: RAM usage stays under 6GB during inference
+4. **Deployment Success**: Model imports to Ollama without errors
+5. **Fallback Reliability**: System gracefully falls back if custom model unavailable
+
+---
+
+## Timeline Estimate
+
+| Step | Duration | Dependencies |
+|------|----------|--------------|
+| Step 1: Data Collector | 2 hours | None |
+| Step 2: Training Notebook | 1 hour | Step 1 |
+| Step 3: Config Updates | 1 hour | None |
+| Step 4: Installer Updates | 1 hour | Step 3 |
+| Step 5: API Endpoints | 2 hours | Step 1 |
+| Step 6: Integration Tests | 1 hour | All above |
+| **Training (Cloud)** | 30 min - 2 hours | Steps 1-2 |
+| **Total Development** | ~8 hours | |
+
+---
+
+## References
+
+- [Unsloth Documentation](https://unsloth.ai/docs)
+- [Unsloth + Ollama Tutorial](https://unsloth.ai/docs/get-started/fine-tuning-llms-guide/tutorial-how-to-finetune-llama-3-and-use-in-ollama)
+- [GGUF Quantization Guide](https://unsloth.ai/docs/basics/inference-and-deployment/saving-to-gguf)
+
+---
+
+**Document Version:** 1.0.0
+**Created:** 2025-01-11
+**Status:** PLANNED
+

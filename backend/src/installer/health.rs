@@ -2,6 +2,7 @@
 // Phase 13.1.2: Health Monitoring & Auto-restart
 // Version: 13.1.2
 
+use crate::db::path_resolver;
 use crate::installer::{InstallLogger, InstallerError, InstallerResult};
 use std::net::TcpStream;
 use std::time::{Duration, SystemTime};
@@ -35,7 +36,7 @@ impl Default for HealthMonitorConfig {
             retry_delay: Duration::from_secs(5),
             backend_port: 3010,
             frontend_port: 3011,
-            db_path: "agent.db".to_string(),
+            db_path: path_resolver::agent_db_path_string(),
         }
     }
 }

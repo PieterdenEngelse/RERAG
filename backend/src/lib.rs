@@ -5,6 +5,7 @@ pub mod db {
     pub mod llm_settings;
     pub mod param_hardware;
     pub mod param_store;
+    pub mod path_resolver;
     pub mod schema_init;
 }
 pub mod agent;
@@ -26,3 +27,4 @@ pub mod tools;
 pub use monitoring::performance_analysis;
 pub use monitoring::trace_middleware;
 pub mod security;
+pub mod training;

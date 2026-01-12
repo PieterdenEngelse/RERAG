@@ -1,5 +1,5 @@
 use crate::api;
-use crate::app::{Route, ShowHelpCommands, ShowRagInfo};
+use crate::app::{ClearChat, Route, ShowHelpCommands, ShowRagInfo};
 use crate::components::dark_mode_toggle::DarkModeToggle;
 use crate::components::nav_dropdown::{DropdownActionItem, DropdownItem, NavDropdown};
 use dioxus::prelude::*;
@@ -13,8 +13,9 @@ pub fn Header() -> Element {
     let is_dark = use_context::<Signal<bool>>();
     let mut show_help = use_context::<Signal<ShowHelpCommands>>();
     let mut show_rag_info = use_context::<Signal<ShowRagInfo>>();
+    let mut clear_chat = use_context::<Signal<ClearChat>>();
 
-    let header_bg = "bg-transparent";
+    let header_bg = "bg-gray-900";
 
     use_future(move || async move {
         loop {
@@ -64,7 +65,7 @@ pub fn Header() -> Element {
             div { class: "flex justify-end items-center",
 
                 nav {
-                    class: "hidden md:flex items-center gap-6 text-sm",
+                    class: "hidden md:flex items-center gap-3 text-sm",
                     style: "font-family: ui-sans-serif, system-ui, sans-serif;",
                     {
                         let home_color = if matches!(current_route, Route::Home {}) {
@@ -79,6 +80,13 @@ pub fn Header() -> Element {
                                 to: Route::Home {},
                                 class: "py-2 px-3 rounded-lg transition-colors font-medium",
                                 style: format!("color: {};", home_color),
+                                onclick: move |_| {
+                                    // Clear chat and scroll to top when clicking Home
+                                    clear_chat.set(ClearChat(true));
+                                    if let Some(window) = web_sys::window() {
+                                        window.scroll_to_with_x_and_y(0.0, 0.0);
+                                    }
+                                },
                                 "Home"
                             }
                         }
@@ -117,6 +125,23 @@ pub fn Header() -> Element {
                             }
                         }
                     }
+                    {
+                        let train_color = if matches!(current_route, Route::Train {}) {
+                            "#1D6B9A"
+                        } else if is_dark() {
+                            "white"
+                        } else {
+                            "#111827"
+                        };
+                        rsx! {
+                            Link {
+                                to: Route::Train {},
+                                class: "py-2 px-3 rounded-lg transition-colors font-medium",
+                                style: format!("color: {};", train_color),
+                                "Train"
+                            }
+                        }
+                    }
                     NavDropdown { title: "Help".to_string(),
                         DropdownActionItem { onclick: move |_| show_help.set(ShowHelpCommands(true)), "/help commands" }
                         DropdownItem { to: Route::Home {}, "Design" }
@@ -138,9 +163,10 @@ pub fn Header() -> Element {
 
             if menu_open() {
                 div { class: "md:hidden mt-4 pb-4 flex flex-col gap-4",
-                    Link { to: Route::Home {}, class: "text-teal-200 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Home" }
+                    Link { to: Route::Home {}, class: "text-teal-200 hover:text-white transition-colors", onclick: move |_| { clear_chat.set(ClearChat(true)); menu_open.set(false); }, "Home" }
                     Link { to: Route::MonitorOverview {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Monitor" }
                     Link { to: Route::Config {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Config" }
+                    Link { to: Route::Train {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Train" }
                     Link { to: Route::About {}, class: "hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors", onclick: move |_| menu_open.set(false), "About" }
                     button {
                         class: "text-left text-teal-100 hover:text-white transition-colors",

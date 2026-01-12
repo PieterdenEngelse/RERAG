@@ -512,6 +512,12 @@ pub struct ModelInfo {
     pub modified_at: Option<String>,
     #[serde(default)]
     pub family: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub is_custom: bool,
+    #[serde(default)]
+    pub is_active: bool,
 }
 
 impl ModelInfo {
@@ -555,6 +561,142 @@ pub async fn fetch_system_info() -> Result<SystemInfo, String> {
 pub async fn fetch_models(backend: &str) -> Result<Vec<ModelInfo>, String> {
     let url = format!("/sys/models?backend={}", backend);
     fetch_json::<Vec<ModelInfo>>(&url).await
+}
+
+/// Fetch custom models discovered on this host
+pub async fn fetch_custom_models() -> Result<Vec<ModelInfo>, String> {
+    fetch_json::<Vec<ModelInfo>>("/sys/models/custom").await
+}
+
+// ============================================================================
+// PROMPT CACHING API
+// ============================================================================
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PromptCachingResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub enabled: bool,
+}
+
+/// Get current prompt caching state
+pub async fn get_prompt_caching() -> Result<PromptCachingResponse, String> {
+    fetch_json::<PromptCachingResponse>("/config/prompt_caching").await
+}
+
+/// Set prompt caching state
+pub async fn set_prompt_caching(enabled: bool) -> Result<PromptCachingResponse, String> {
+    let url = format!("{}/config/prompt_caching", API_BASE_URL);
+    let body = serde_json::json!({ "enabled": enabled });
+    
+    gloo_net::http::Request::post(&url)
+        .json(&body)
+        .map_err(|e| format!("Failed to create request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+// ============================================================================
+// TRAINING DATA COLLECTION API (Phase 20)
+// ============================================================================
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TrainingFeedbackRequest {
+    pub query: String,
+    pub response: String,
+    pub context: Option<String>,
+    pub quality_score: u8,
+    pub conversation_id: Option<String>,
+    pub mode: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TrainingFeedbackResponse {
+    pub status: String,
+    pub example_id: String,
+    pub message: String,
+    pub request_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TrainingStats {
+    pub total_examples: usize,
+    pub high_quality_count: usize,
+    pub usable_count: usize,
+    pub average_quality: f32,
+    pub ready_for_export: bool,
+    #[serde(default)]
+    pub by_mode: std::collections::HashMap<String, usize>,
+    pub last_collected: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TrainingStatsResponse {
+    pub status: String,
+    pub request_id: String,
+    pub stats: TrainingStats,
+    pub collection_enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TrainingExportResponse {
+    pub status: String,
+    pub request_id: String,
+    pub exported_count: usize,
+    pub output_path: String,
+    pub message: String,
+}
+
+/// Submit feedback for training data collection
+pub async fn submit_training_feedback(feedback: TrainingFeedbackRequest) -> Result<TrainingFeedbackResponse, String> {
+    let url = format!("{}/training/feedback", API_BASE_URL);
+    
+    gloo_net::http::Request::post(&url)
+        .json(&feedback)
+        .map_err(|e| format!("Failed to create request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Get training data collection statistics
+pub async fn get_training_stats() -> Result<TrainingStatsResponse, String> {
+    fetch_json::<TrainingStatsResponse>("/training/stats").await
+}
+
+/// Export training data for Unsloth
+pub async fn export_training_data() -> Result<TrainingExportResponse, String> {
+    let url = format!("{}/training/export", API_BASE_URL);
+    
+    gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Clear all training data
+pub async fn clear_training_data() -> Result<serde_json::Value, String> {
+    let url = format!("{}/training/clear", API_BASE_URL);
+    
+    gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 /// Check backend health
@@ -1035,4 +1177,108 @@ pub async fn fetch_memory_stats() -> Result<MemoryStatsResponse, String> {
 /// Fetch tool statistics
 pub async fn fetch_tool_stats() -> Result<ToolStatsResponse, String> {
     fetch_json("/monitoring/tools/stats").await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ManualObservationMetric {
+    pub endpoint: String,
+    pub ok: u64,
+    pub err: u64,
+    pub latency_p50: f64,
+    pub latency_p90: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ManualObservationMetricsResponse {
+    pub metrics: Vec<ManualObservationMetric>,
+    pub request_id: String,
+}
+
+pub async fn fetch_manual_observation_metrics() -> Result<ManualObservationMetricsResponse, String>
+{
+    fetch_json("/monitoring/observations/metrics").await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ManualObservationSummary {
+    pub id: String,
+    pub entry_type: String,
+    pub title: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RecentObservationsResponse {
+    pub observations: Vec<ManualObservationSummary>,
+    pub request_id: String,
+}
+
+pub async fn fetch_recent_observations(limit: usize) -> Result<RecentObservationsResponse, String> {
+    fetch_json(&format!("/monitoring/observations/recent?limit={}", limit)).await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct RagMemoryItem {
+    pub id: i64,
+    pub agent_id: String,
+    pub memory_type: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RagMemoriesResponse {
+    pub memories: Vec<RagMemoryItem>,
+    pub request_id: String,
+}
+
+pub async fn fetch_rag_memories(limit: usize) -> Result<RagMemoriesResponse, String> {
+    fetch_json(&format!("/monitoring/memories/rag?limit={}", limit)).await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MemoryTypesResponse {
+    pub core: Vec<String>,
+    pub extended: Vec<String>,
+    pub all: Vec<String>,
+    pub request_id: String,
+}
+
+pub async fn fetch_memory_types() -> Result<MemoryTypesResponse, String> {
+    fetch_json("/memory/types").await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StoreRagRequest {
+    pub agent_id: String,
+    pub memory_type: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StoreRagResponse {
+    pub status: String,
+    pub request_id: String,
+}
+
+pub async fn store_rag_memory(req: &StoreRagRequest) -> Result<StoreRagResponse, String> {
+    let url = format!("{}/memory/store_rag", API_BASE_URL);
+    let response = gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(req).map_err(|e| format!("Failed to serialize: {}", e))?)
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }

@@ -1,0 +1,7 @@
+https://ngrok.com/blog/prompt-caching
+
+The transformer stage is all about taking embeddings as input and moving them around their n-dimensional space. It does this in two ways, and we're only going to focus on the first: attention. We aren't going to talk about "Feedforward" or the output stage (in this post 👀).
+
+The job of the attention mechanism is to help the LLM understand the relationships between each token in the prompt, by allowing tokens to influence each others' positions in n-dimensional space. It does this by combining the embeddings of the prompt's tokens in a weighted fashion. The input is an entire prompt's embeddings, and the output is a single new embedding that is a weighted combination of all of the input embeddings.
+
+

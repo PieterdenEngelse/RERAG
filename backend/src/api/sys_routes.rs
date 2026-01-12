@@ -1,6 +1,9 @@
+use crate::path_manager::PathManager;
 use actix_web::{web, HttpResponse, Responder};
+use chrono::{DateTime, Utc};
 use num_cpus;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use wgpu::Instance;
 
 #[derive(Serialize)]
@@ -104,6 +107,12 @@ struct ModelInfo {
     modified_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default)]
+    is_custom: bool,
+    #[serde(default)]
+    is_active: bool,
 }
 
 /// Response from Ollama /api/tags endpoint
@@ -157,6 +166,9 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
                                 size: m.size,
                                 modified_at: m.modified_at,
                                 family: m.details.and_then(|d| d.family),
+                                description: None,
+                                is_custom: false,
+                                is_active: false,
                             })
                             .collect();
                         HttpResponse::Ok().json(models)
@@ -180,30 +192,45 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
                     size: None,
                     modified_at: None,
                     family: Some("GPT-4".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "gpt-4o-mini".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("GPT-4".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "gpt-4-turbo".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("GPT-4".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "gpt-4".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("GPT-4".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "gpt-3.5-turbo".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("GPT-3.5".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
             ];
             HttpResponse::Ok().json(models)
@@ -216,30 +243,45 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
                     size: None,
                     modified_at: None,
                     family: Some("Claude 3.5".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "claude-3-5-haiku-latest".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("Claude 3.5".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "claude-3-opus-latest".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("Claude 3".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "claude-3-sonnet-20240229".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("Claude 3".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
                 ModelInfo {
                     name: "claude-3-haiku-20240307".to_string(),
                     size: None,
                     modified_at: None,
                     family: Some("Claude 3".to_string()),
+                    description: None,
+                    is_custom: false,
+                    is_active: false,
                 },
             ];
             HttpResponse::Ok().json(models)
@@ -292,10 +334,90 @@ async fn get_system_info() -> impl Responder {
     HttpResponse::Ok().json(info)
 }
 
+fn custom_models_dir() -> std::io::Result<std::path::PathBuf> {
+    let manager = PathManager::new()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    Ok(manager.base_dir().join("models"))
+}
+
+fn is_custom_model_enabled() -> bool {
+    std::env::var("CUSTOM_MODEL_ENABLED")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+}
+
+fn active_custom_model_name() -> Option<String> {
+    if !is_custom_model_enabled() {
+        return None;
+    }
+    std::env::var("CUSTOM_MODEL_NAME")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+fn list_custom_models() -> std::io::Result<Vec<ModelInfo>> {
+    let dir = custom_models_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let active_name = active_custom_model_name();
+    let mut models = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if !matches!(ext, "gguf" | "bin" | "mlmodelc") {
+                continue;
+            }
+        } else {
+            continue;
+        }
+        if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
+            let metadata = entry.metadata()?;
+            let modified_at = metadata.modified().ok().and_then(|ts| {
+                DateTime::<Utc>::from(ts)
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string()
+                    .into()
+            });
+            let name = file_name.to_string();
+            let is_active = active_name
+                .as_ref()
+                .map(|active| active.eq_ignore_ascii_case(&name))
+                .unwrap_or(false);
+            models.push(ModelInfo {
+                name: name.clone(),
+                size: Some(metadata.len()),
+                modified_at,
+                family: Some("custom".to_string()),
+                description: Some(format!("Local file ({})", path.display())),
+                is_custom: true,
+                is_active,
+            });
+        }
+    }
+    Ok(models)
+}
+
+async fn get_custom_models() -> impl Responder {
+    match list_custom_models() {
+        Ok(models) => HttpResponse::Ok().json(models),
+        Err(err) => {
+            tracing::warn!("Failed to list custom models: {}", err);
+            HttpResponse::Ok().json(Vec::<ModelInfo>::new())
+        }
+    }
+}
+
 pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/cores").route(web::get().to(get_physical_cores)));
     cfg.service(web::resource("/gpus").route(web::get().to(get_gpus)));
     cfg.service(web::resource("/gpu-names").route(web::get().to(get_gpu_names)));
     cfg.service(web::resource("/info").route(web::get().to(get_system_info)));
     cfg.service(web::resource("/models").route(web::get().to(get_models)));
+    cfg.service(web::resource("/models/custom").route(web::get().to(get_custom_models)));
 }

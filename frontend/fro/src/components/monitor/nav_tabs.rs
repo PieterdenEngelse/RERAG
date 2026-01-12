@@ -14,6 +14,7 @@ pub fn NavTabs(props: NavTabsProps) -> Element {
         ("Requests", Route::MonitorRequests {}),
         ("Cache", Route::MonitorCache {}),
         ("Index", Route::MonitorIndex {}),
+        ("Observations", Route::MonitorObservations {}),
         ("Rate Limits", Route::MonitorRateLimits {}),
         ("Logs", Route::MonitorLogs {}),
     ];

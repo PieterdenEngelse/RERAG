@@ -98,6 +98,10 @@ impl HelpTopic {
             Self::Model => vec![
                 "When the backend exposes a discovery API the select menu lists its models.",
                 "You can always type a model identifier manually, e.g., `llama3:8b`.",
+                "Any .gguf/.bin files under ~/.local/share/ag/models/ (or $AG_HOME/models/) appear automatically.",
+                "Custom entries are labeled \"(custom)\" and, if `CUSTOM_MODEL_ENABLED=true` plus `CUSTOM_MODEL_NAME` matches, you will see a `• active` tag in both the dropdown and the read-only Active model field.",
+                "If the backend is set to a local runner such as Ollama, the custom list is merged with /sys/models so you can manage everything from one place.",
+                "To try it: run installer/custom_model.sh, ensure it appends CUSTOM_MODEL_* env vars to ~/.config/ag/env, then reload the model list to see the detected custom model badge.",
             ],
             Self::NumThread => vec![
                 "Controls how many worker threads the local backend uses.",

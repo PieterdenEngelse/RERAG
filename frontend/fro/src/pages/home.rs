@@ -1,5 +1,5 @@
 use crate::api;
-use crate::app::ShowRagInfo;
+use crate::app::{ClearChat, ShowRagInfo};
 use dioxus::prelude::*;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -19,39 +19,61 @@ const BACKEND_STREAM_URL: &str = "http://127.0.0.1:3010/agent/stream";
 /// Check if input is a chat command (starts with /)
 fn is_chat_command(input: &str) -> bool {
     let trimmed = input.trim();
-    trimmed.starts_with("/help") ||
-    trimmed.starts_with("/goal") ||
-    trimmed.starts_with("/goals") ||
-    trimmed.starts_with("/status") ||
-    trimmed.starts_with("/models") ||
-    trimmed.starts_with("/clear") ||
-    trimmed.starts_with("/focus") ||
-    trimmed.starts_with("/unfocus") ||
-    trimmed.starts_with("/persona") ||
-    trimmed.starts_with("/verbose") ||
-    trimmed.starts_with("/brief") ||
-    trimmed.starts_with("/run") ||
-    trimmed.starts_with("/chain") ||
-    trimmed.starts_with("/retry") ||
-    trimmed.starts_with("/undo") ||
-    trimmed.starts_with("/dry-run") ||
-    trimmed.starts_with("/model") ||
-    trimmed.starts_with("/temperature") ||
-    trimmed.starts_with("/export") ||
-    trimmed.starts_with("/import") ||
-    trimmed.starts_with("/debug") ||
-    trimmed.starts_with("/tokens") ||
-    trimmed.starts_with("/forget") ||
-    trimmed.starts_with("/history") ||
-    trimmed.starts_with("/sources") ||
-    trimmed.starts_with("/learn") ||
-    trimmed.starts_with("/note") ||
-    trimmed.starts_with("/subgoal") ||
-    trimmed.starts_with("/pause") ||
-    trimmed.starts_with("/resume") ||
-    trimmed.starts_with("/abandon") ||
-    trimmed.starts_with("/reflect") ||
-    trimmed.starts_with("/why")
+    trimmed.starts_with("/help")
+        || trimmed.starts_with("/goal")
+        || trimmed.starts_with("/goals")
+        || trimmed.starts_with("/status")
+        || trimmed.starts_with("/models")
+        || trimmed.starts_with("/clear")
+        || trimmed.starts_with("/focus")
+        || trimmed.starts_with("/unfocus")
+        || trimmed.starts_with("/persona")
+        || trimmed.starts_with("/verbose")
+        || trimmed.starts_with("/brief")
+        || trimmed.starts_with("/run")
+        || trimmed.starts_with("/chain")
+        || trimmed.starts_with("/retry")
+        || trimmed.starts_with("/undo")
+        || trimmed.starts_with("/dry-run")
+        || trimmed.starts_with("/model")
+        || trimmed.starts_with("/temperature")
+        || trimmed.starts_with("/export")
+        || trimmed.starts_with("/import")
+        || trimmed.starts_with("/debug")
+        || trimmed.starts_with("/tokens")
+        || trimmed.starts_with("/forget")
+        || trimmed.starts_with("/history")
+        || trimmed.starts_with("/sources")
+        || trimmed.starts_with("/learn")
+        || trimmed.starts_with("/note")
+        || trimmed.starts_with("/subgoal")
+        || trimmed.starts_with("/pause")
+        || trimmed.starts_with("/resume")
+        || trimmed.starts_with("/abandon")
+        || trimmed.starts_with("/reflect")
+        || trimmed.starts_with("/why")
+}
+
+/// Convert model names to friendly display names
+fn friendly_model_name(name: &str) -> String {
+    match name {
+        "phi:latest" => "Phi-2".to_string(),
+        "phi3.5:latest" => "Phi-3.5".to_string(),
+        "phi3:latest" => "Phi-3".to_string(),
+        "llama3.2:latest" | "llama3.2:3b" => "Llama 3.2 (3B)".to_string(),
+        "llama3.2:1b" => "Llama 3.2 (1B)".to_string(),
+        "llama3:latest" | "llama3:8b" => "Llama 3 (8B)".to_string(),
+        "mistral:latest" | "mistral:7b" => "Mistral (7B)".to_string(),
+        "gemma2:latest" | "gemma2:9b" => "Gemma 2 (9B)".to_string(),
+        "gemma2:2b" => "Gemma 2 (2B)".to_string(),
+        "qwen2.5:latest" | "qwen2.5:7b" => "Qwen 2.5 (7B)".to_string(),
+        "qwen2.5:3b" => "Qwen 2.5 (3B)".to_string(),
+        "nomic-embed-text:latest" => "Nomic Embed".to_string(),
+        _ => {
+            // For unknown models, clean up the name a bit
+            name.replace(":latest", "").replace(":", " ")
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -75,8 +97,12 @@ pub fn Home() -> Element {
     let mut input_text = use_signal(|| String::new());
     let mut is_loading = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
-    let selected_model = use_signal(|| "phi:latest".to_string());
+    let mut selected_model = use_signal(|| "phi:latest".to_string());
     let mut cancel_requested = use_signal(|| false);
+    
+    // Available models for dropdown
+    let available_models: Signal<Vec<api::ModelInfo>> = use_signal(Vec::new);
+    let models_loading = use_signal(|| false);
 
     // File upload state
     let mut show_upload_panel = use_signal(|| false);
@@ -89,6 +115,19 @@ pub fn Home() -> Element {
 
     // Info panel state (global context)
     let mut show_info = use_context::<Signal<ShowRagInfo>>();
+    
+    // Clear chat signal (triggered by Home link in header)
+    let mut clear_chat = use_context::<Signal<ClearChat>>();
+    
+    // Watch for clear chat signal
+    use_effect(move || {
+        if clear_chat().0 {
+            messages.write().clear();
+            input_text.set(String::new());
+            error_msg.set(None);
+            clear_chat.set(ClearChat(false)); // Reset the signal
+        }
+    });
 
     // Help modal state
     let mut show_help_modal = use_signal(|| false);
@@ -98,6 +137,18 @@ pub fn Home() -> Element {
     let mut show_rag_info = use_signal(|| false);
     let mut show_llm_info = use_signal(|| false);
     let mut show_hybrid_info = use_signal(|| false);
+
+    // Training feedback state - track last response for rating
+    let mut last_query = use_signal(|| String::new());
+    let mut last_response = use_signal(|| String::new());
+    let mut last_context = use_signal(|| Option::<String>::None);
+    let mut last_response_rated = use_signal(|| false);
+    let mut feedback_status = use_signal(|| Option::<String>::None);
+
+    // Prompt caching toggle (uses /api/chat instead of /api/generate for KV cache reuse)
+    let mut prompt_caching_enabled = use_signal(|| false);
+    let mut show_cache_info = use_signal(|| false);
+    let mut show_api_behavior = use_signal(|| false);
 
     // Load documents on mount
     use_effect(move || {
@@ -109,13 +160,29 @@ pub fn Home() -> Element {
         });
     });
 
-    // Load active model from hardware config once on mount
+    // Load prompt caching state on mount
+    {
+        let mut prompt_caching_enabled = prompt_caching_enabled.clone();
+        use_effect(move || {
+            spawn(async move {
+                if let Ok(resp) = api::get_prompt_caching().await {
+                    prompt_caching_enabled.set(resp.enabled);
+                }
+            });
+        });
+    }
+
+    // Load active model and available models from hardware config once on mount
     {
         let mut selected_model = selected_model.clone();
+        let mut available_models = available_models.clone();
+        let mut models_loading = models_loading.clone();
         let mut error_signal = error_msg.clone();
         use_future(move || async move {
             // Try to load hardware config (with a quick retry) to keep home page in sync
             let mut last_error = None;
+            let mut backend_type = String::new();
+            
             for attempt in 0..2 {
                 match api::fetch_hardware_config().await {
                     Ok(resp) => {
@@ -123,7 +190,8 @@ pub fn Home() -> Element {
                         if !active_model.is_empty() {
                             selected_model.set(active_model);
                         }
-                        return;
+                        backend_type = resp.config.backend_type.clone();
+                        break;
                     }
                     Err(e) => {
                         last_error = Some(e);
@@ -140,6 +208,21 @@ pub fn Home() -> Element {
                     "[INFO] Failed to load active model from hardware config: {}",
                     err
                 )));
+                return;
+            }
+            
+            // Load available models for the backend
+            if !backend_type.is_empty() {
+                models_loading.set(true);
+                match api::fetch_models(&backend_type).await {
+                    Ok(models) => {
+                        available_models.set(models);
+                    }
+                    Err(_) => {
+                        // Silently fail - models dropdown will just be empty
+                    }
+                }
+                models_loading.set(false);
             }
         });
     }
@@ -190,7 +273,9 @@ pub fn Home() -> Element {
                                 Ok(data) => {
                                     if !cancel_flag() {
                                         // Check if this is a help response - show in modal
-                                        if user_input.trim() == "/help" || data.response.answer.contains("Available Commands") {
+                                        if user_input.trim() == "/help"
+                                            || data.response.answer.contains("Available Commands")
+                                        {
                                             help_content.set(data.response.answer);
                                             show_help_modal.set(true);
                                         } else {
@@ -203,11 +288,15 @@ pub fn Home() -> Element {
                                     }
                                 }
                                 Err(e) => {
-                                    error_msg.set(Some(format!("Failed to parse command response: {}", e)));
+                                    error_msg.set(Some(format!(
+                                        "Failed to parse command response: {}",
+                                        e
+                                    )));
                                 }
                             }
                         } else {
-                            error_msg.set(Some(format!("Command failed: HTTP {}", response.status())));
+                            error_msg
+                                .set(Some(format!("Command failed: HTTP {}", response.status())));
                         }
                     }
                     Err(e) => {
@@ -226,26 +315,29 @@ pub fn Home() -> Element {
                 context: None,
             });
             let msg_index = messages().len() - 1;
-            
+
             // Use streaming endpoint
             let body = serde_json::json!({ "query": user_input, "mode": mode });
-            
+
             // Create fetch request with streaming
             let window = web_sys::window().unwrap();
             let mut opts = RequestInit::new();
             opts.method("POST");
             opts.mode(RequestMode::Cors);
             opts.body(Some(&JsValue::from_str(&body.to_string())));
-            
+
             let request = Request::new_with_str_and_init(BACKEND_STREAM_URL, &opts).unwrap();
-            request.headers().set("Content-Type", "application/json").unwrap();
-            
+            request
+                .headers()
+                .set("Content-Type", "application/json")
+                .unwrap();
+
             let resp_promise = window.fetch_with_request(&request);
-            
+
             match wasm_bindgen_futures::JsFuture::from(resp_promise).await {
                 Ok(resp_value) => {
                     let response: Response = resp_value.dyn_into().unwrap();
-                    
+
                     if !response.ok() {
                         error_msg.set(Some(format!("HTTP error: {}", response.status())));
                         // Remove the empty message
@@ -253,66 +345,99 @@ pub fn Home() -> Element {
                         is_loading.set(false);
                         return;
                     }
-                    
+
                     // Get the response body as a ReadableStream
                     if let Some(body) = response.body() {
-                        let reader = body.get_reader().dyn_into::<web_sys::ReadableStreamDefaultReader>().unwrap();
+                        let reader = body
+                            .get_reader()
+                            .dyn_into::<web_sys::ReadableStreamDefaultReader>()
+                            .unwrap();
                         let mut accumulated_text = String::new();
                         let mut chunks_used = 0usize;
-                        
+
                         loop {
                             if cancel_flag() {
                                 break;
                             }
-                            
+
                             let read_promise = reader.read();
                             match wasm_bindgen_futures::JsFuture::from(read_promise).await {
                                 Ok(result) => {
-                                    let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
-                                        .unwrap()
-                                        .as_bool()
-                                        .unwrap_or(true);
-                                    
+                                    let done =
+                                        js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+                                            .unwrap()
+                                            .as_bool()
+                                            .unwrap_or(true);
+
                                     if done {
                                         break;
                                     }
-                                    
-                                    let value = js_sys::Reflect::get(&result, &JsValue::from_str("value")).unwrap();
+
+                                    let value =
+                                        js_sys::Reflect::get(&result, &JsValue::from_str("value"))
+                                            .unwrap();
                                     let array = js_sys::Uint8Array::new(&value);
                                     let bytes = array.to_vec();
                                     let text = String::from_utf8_lossy(&bytes);
-                                    
+
                                     // Parse SSE events
                                     for line in text.lines() {
                                         if line.starts_with("data: ") {
                                             let json_str = &line[6..];
-                                            if let Ok(event) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                            if let Ok(event) =
+                                                serde_json::from_str::<serde_json::Value>(json_str)
+                                            {
+                                                if let Some(event_type) =
+                                                    event.get("type").and_then(|v| v.as_str())
+                                                {
                                                     match event_type {
                                                         "token" => {
-                                                            if let Some(content) = event.get("content").and_then(|v| v.as_str()) {
+                                                            if let Some(content) = event
+                                                                .get("content")
+                                                                .and_then(|v| v.as_str())
+                                                            {
                                                                 accumulated_text.push_str(content);
                                                                 // Update the message in place
-                                                                if let Some(msg) = messages.write().get_mut(msg_index) {
-                                                                    msg.content = accumulated_text.clone();
+                                                                if let Some(msg) = messages
+                                                                    .write()
+                                                                    .get_mut(msg_index)
+                                                                {
+                                                                    msg.content =
+                                                                        accumulated_text.clone();
                                                                 }
                                                             }
                                                         }
                                                         "done" => {
-                                                            chunks_used = event.get("chunks_used").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                                            chunks_used = event
+                                                                .get("chunks_used")
+                                                                .and_then(|v| v.as_u64())
+                                                                .unwrap_or(0)
+                                                                as usize;
                                                         }
                                                         "complete" => {
                                                             // Non-streaming response (for RAG mode)
-                                                            if let Some(answer) = event.get("answer").and_then(|v| v.as_str()) {
-                                                                accumulated_text = answer.to_string();
-                                                                if let Some(msg) = messages.write().get_mut(msg_index) {
-                                                                    msg.content = accumulated_text.clone();
+                                                            if let Some(answer) = event
+                                                                .get("answer")
+                                                                .and_then(|v| v.as_str())
+                                                            {
+                                                                accumulated_text =
+                                                                    answer.to_string();
+                                                                if let Some(msg) = messages
+                                                                    .write()
+                                                                    .get_mut(msg_index)
+                                                                {
+                                                                    msg.content =
+                                                                        accumulated_text.clone();
                                                                 }
                                                             }
                                                         }
                                                         "error" => {
-                                                            if let Some(err_msg) = event.get("message").and_then(|v| v.as_str()) {
-                                                                error_msg.set(Some(err_msg.to_string()));
+                                                            if let Some(err_msg) = event
+                                                                .get("message")
+                                                                .and_then(|v| v.as_str())
+                                                            {
+                                                                error_msg
+                                                                    .set(Some(err_msg.to_string()));
                                                             }
                                                         }
                                                         _ => {}
@@ -325,17 +450,30 @@ pub fn Home() -> Element {
                                 Err(_) => break,
                             }
                         }
-                        
+
                         // Update context if chunks were used
-                        if chunks_used > 0 {
+                        let ctx = if chunks_used > 0 {
+                            let ctx_str = format!("Used {} chunks from knowledge base", chunks_used);
                             if let Some(msg) = messages.write().get_mut(msg_index) {
-                                msg.context = Some(format!("Used {} chunks from knowledge base", chunks_used));
+                                msg.context = Some(ctx_str.clone());
                             }
-                        }
+                            Some(ctx_str)
+                        } else {
+                            None
+                        };
+                        
+                        // Track for feedback buttons
+                        last_query.set(user_input.clone());
+                        last_response.set(accumulated_text);
+                        last_context.set(ctx);
+                        last_response_rated.set(false);
                     }
                 }
                 Err(e) => {
-                    error_msg.set(Some(format!("Request failed: {:?}. Is backend running?", e)));
+                    error_msg.set(Some(format!(
+                        "Request failed: {:?}. Is backend running?",
+                        e
+                    )));
                     // Remove the empty message
                     messages.write().pop();
                 }
@@ -393,7 +531,12 @@ pub fn Home() -> Element {
                                     Ok(data) => {
                                         if !cancel_flag() {
                                             // Check if this is a help response - show in modal
-                                            if user_input.trim() == "/help" || data.response.answer.contains("Available Commands") {
+                                            if user_input.trim() == "/help"
+                                                || data
+                                                    .response
+                                                    .answer
+                                                    .contains("Available Commands")
+                                            {
                                                 help_content.set(data.response.answer);
                                                 show_help_modal.set(true);
                                             } else {
@@ -406,11 +549,17 @@ pub fn Home() -> Element {
                                         }
                                     }
                                     Err(e) => {
-                                        error_msg.set(Some(format!("Failed to parse command response: {}", e)));
+                                        error_msg.set(Some(format!(
+                                            "Failed to parse command response: {}",
+                                            e
+                                        )));
                                     }
                                 }
                             } else {
-                                error_msg.set(Some(format!("Command failed: HTTP {}", response.status())));
+                                error_msg.set(Some(format!(
+                                    "Command failed: HTTP {}",
+                                    response.status()
+                                )));
                             }
                         }
                         Err(e) => {
@@ -429,88 +578,134 @@ pub fn Home() -> Element {
                     context: None,
                 });
                 let msg_index = messages().len() - 1;
-                
+
                 // Use streaming endpoint
                 let body = serde_json::json!({ "query": user_input, "mode": mode });
-                
+
                 // Create fetch request with streaming
                 let window = web_sys::window().unwrap();
                 let mut opts = RequestInit::new();
                 opts.method("POST");
                 opts.mode(RequestMode::Cors);
                 opts.body(Some(&JsValue::from_str(&body.to_string())));
-                
+
                 let request = Request::new_with_str_and_init(BACKEND_STREAM_URL, &opts).unwrap();
-                request.headers().set("Content-Type", "application/json").unwrap();
-                
+                request
+                    .headers()
+                    .set("Content-Type", "application/json")
+                    .unwrap();
+
                 let resp_promise = window.fetch_with_request(&request);
-                
+
                 match wasm_bindgen_futures::JsFuture::from(resp_promise).await {
                     Ok(resp_value) => {
                         let response: Response = resp_value.dyn_into().unwrap();
-                        
+
                         if !response.ok() {
                             error_msg.set(Some(format!("HTTP error: {}", response.status())));
                             messages.write().pop();
                             is_loading.set(false);
                             return;
                         }
-                        
+
                         if let Some(body) = response.body() {
-                            let reader = body.get_reader().dyn_into::<web_sys::ReadableStreamDefaultReader>().unwrap();
+                            let reader = body
+                                .get_reader()
+                                .dyn_into::<web_sys::ReadableStreamDefaultReader>()
+                                .unwrap();
                             let mut accumulated_text = String::new();
                             let mut chunks_used = 0usize;
-                            
+
                             loop {
                                 if cancel_flag() {
                                     break;
                                 }
-                                
+
                                 let read_promise = reader.read();
                                 match wasm_bindgen_futures::JsFuture::from(read_promise).await {
                                     Ok(result) => {
-                                        let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
-                                            .unwrap()
-                                            .as_bool()
-                                            .unwrap_or(true);
-                                        
+                                        let done = js_sys::Reflect::get(
+                                            &result,
+                                            &JsValue::from_str("done"),
+                                        )
+                                        .unwrap()
+                                        .as_bool()
+                                        .unwrap_or(true);
+
                                         if done {
                                             break;
                                         }
-                                        
-                                        let value = js_sys::Reflect::get(&result, &JsValue::from_str("value")).unwrap();
+
+                                        let value = js_sys::Reflect::get(
+                                            &result,
+                                            &JsValue::from_str("value"),
+                                        )
+                                        .unwrap();
                                         let array = js_sys::Uint8Array::new(&value);
                                         let bytes = array.to_vec();
                                         let text = String::from_utf8_lossy(&bytes);
-                                        
+
                                         for line in text.lines() {
                                             if line.starts_with("data: ") {
                                                 let json_str = &line[6..];
-                                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                                if let Ok(event) =
+                                                    serde_json::from_str::<serde_json::Value>(
+                                                        json_str,
+                                                    )
+                                                {
+                                                    if let Some(event_type) =
+                                                        event.get("type").and_then(|v| v.as_str())
+                                                    {
                                                         match event_type {
                                                             "token" => {
-                                                                if let Some(content) = event.get("content").and_then(|v| v.as_str()) {
-                                                                    accumulated_text.push_str(content);
-                                                                    if let Some(msg) = messages.write().get_mut(msg_index) {
-                                                                        msg.content = accumulated_text.clone();
+                                                                if let Some(content) = event
+                                                                    .get("content")
+                                                                    .and_then(|v| v.as_str())
+                                                                {
+                                                                    accumulated_text
+                                                                        .push_str(content);
+                                                                    if let Some(msg) = messages
+                                                                        .write()
+                                                                        .get_mut(msg_index)
+                                                                    {
+                                                                        msg.content =
+                                                                            accumulated_text
+                                                                                .clone();
                                                                     }
                                                                 }
                                                             }
                                                             "done" => {
-                                                                chunks_used = event.get("chunks_used").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                                                chunks_used = event
+                                                                    .get("chunks_used")
+                                                                    .and_then(|v| v.as_u64())
+                                                                    .unwrap_or(0)
+                                                                    as usize;
                                                             }
                                                             "complete" => {
-                                                                if let Some(answer) = event.get("answer").and_then(|v| v.as_str()) {
-                                                                    accumulated_text = answer.to_string();
-                                                                    if let Some(msg) = messages.write().get_mut(msg_index) {
-                                                                        msg.content = accumulated_text.clone();
+                                                                if let Some(answer) = event
+                                                                    .get("answer")
+                                                                    .and_then(|v| v.as_str())
+                                                                {
+                                                                    accumulated_text =
+                                                                        answer.to_string();
+                                                                    if let Some(msg) = messages
+                                                                        .write()
+                                                                        .get_mut(msg_index)
+                                                                    {
+                                                                        msg.content =
+                                                                            accumulated_text
+                                                                                .clone();
                                                                     }
                                                                 }
                                                             }
                                                             "error" => {
-                                                                if let Some(err_msg) = event.get("message").and_then(|v| v.as_str()) {
-                                                                    error_msg.set(Some(err_msg.to_string()));
+                                                                if let Some(err_msg) = event
+                                                                    .get("message")
+                                                                    .and_then(|v| v.as_str())
+                                                                {
+                                                                    error_msg.set(Some(
+                                                                        err_msg.to_string(),
+                                                                    ));
                                                                 }
                                                             }
                                                             _ => {}
@@ -523,16 +718,22 @@ pub fn Home() -> Element {
                                     Err(_) => break,
                                 }
                             }
-                            
+
                             if chunks_used > 0 {
                                 if let Some(msg) = messages.write().get_mut(msg_index) {
-                                    msg.context = Some(format!("Used {} chunks from knowledge base", chunks_used));
+                                    msg.context = Some(format!(
+                                        "Used {} chunks from knowledge base",
+                                        chunks_used
+                                    ));
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        error_msg.set(Some(format!("Request failed: {:?}. Is backend running?", e)));
+                        error_msg.set(Some(format!(
+                            "Request failed: {:?}. Is backend running?",
+                            e
+                        )));
                         messages.write().pop();
                     }
                 }
@@ -542,7 +743,7 @@ pub fn Home() -> Element {
         }
     };
 
-    let clear_chat = move |_evt: Event<MouseData>| {
+    let _clear_chat_local = move |_evt: Event<MouseData>| {
         messages.write().clear();
         error_msg.set(None);
     };
@@ -697,20 +898,122 @@ pub fn Home() -> Element {
                     }
                 }
 
-                // Add documents button - centered
+                // RAG ADD'S label and buttons
+                label {
+                    class: "font-medium text-center block",
+                    style: "color: white; font-size: 1.1rem; margin-top: calc(0.5rem + 5mm); margin-bottom: 4mm;",
+                    "RAG Add's"
+                }
+
+                // Add Documents and RAG Memories buttons - aligned with gaps between mode buttons
                 div {
-                    class: "flex flex-col items-center mt-4",
-                    button {
-                        class: "btn rounded-full px-5 text-xl font-bold",
-                        style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
-                        onclick: move |_| show_upload_panel.set(!show_upload_panel()),
-                        title: "Toggle documents panel",
-                        "+"
+                    class: "flex justify-center",
+                    style: "gap: 1.08rem;",
+                    // Spacer to match RAG button width
+                    div { style: "width: 5.5rem;" }
+                    // Documents button - in gap between RAG and LLM
+                    div {
+                        class: "flex flex-col items-center",
+                        style: "width: 5.5rem;",
+                        button {
+                            class: "btn rounded-full px-5 text-xl font-bold",
+                            style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
+                            onclick: move |_| show_upload_panel.set(!show_upload_panel()),
+                            title: "Toggle documents panel",
+                            "+"
+                        }
+                        span {
+                            class: "text-sm mt-1 font-medium",
+                            style: "color: white;",
+                            "Documents"
+                        }
                     }
-                    span {
-                        class: "text-sm mt-1 font-medium",
-                        style: "color: white;",
-                        "Add documents"
+                    // Spacer to match LLM button width
+                    div { style: "width: 5.5rem;" }
+                    // Memories button - in gap between LLM and Hybrid
+                    div {
+                        class: "flex flex-col items-center",
+                        style: "width: 5.5rem;",
+                        a {
+                            class: "btn rounded-full px-5 text-xl font-bold cursor-pointer",
+                            style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none; text-decoration: none;",
+                            href: "/config/memories",
+                            title: "Add RAG memories",
+                            "+"
+                        }
+                        span {
+                            class: "text-sm mt-1 font-medium",
+                            style: "color: white;",
+                            "Memories"
+                        }
+                    }
+                    // Spacer to match Hybrid button width
+                    div { style: "width: 5.5rem;" }
+                }
+
+                // Prompt Caching Toggle
+                div {
+                    class: "flex justify-center items-center gap-2",
+                    style: "margin-top: calc(0.5rem + 5mm);",
+                    
+                    // Toggle switch
+                    label {
+                        class: "flex items-center gap-2 cursor-pointer",
+                        input {
+                            r#type: "checkbox",
+                            class: "toggle toggle-sm !border !border-white",
+                            style: {
+                                format!(
+                                    "border: 1px solid white; background-color: {};",
+                                    if prompt_caching_enabled() { "" } else { "#d1d5db" }
+                                )
+                            },
+                            checked: prompt_caching_enabled(),
+                            onchange: move |evt| {
+                                let new_value = evt.checked();
+                                prompt_caching_enabled.set(new_value);
+                                spawn(async move {
+                                    let _ = api::set_prompt_caching(new_value).await;
+                                });
+                            }
+                        }
+                        span {
+                            class: "text-sm font-medium",
+                            style: "color: white;",
+                            "⚡ KV Cache"
+                        }
+                    }
+                    
+                    // Info button
+                    button {
+                        class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                        onclick: move |_| show_cache_info.set(true),
+                        title: "Info about KV caching",
+                        svg {
+                            class: "w-4 h-4 text-white",
+                            view_box: "0 0 20 20",
+                            fill: "none",
+                            stroke: "currentColor",
+                            circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                        }
+                    }
+                }
+                
+                // Cache status indicator
+                p {
+                    class: "text-xs",
+                    style: if prompt_caching_enabled() {
+                        "color: #22c55e; margin-top: 4px;"
+                    } else {
+                        "color: rgba(255,255,255,0.5); margin-top: 4px;"
+                    },
+                    if prompt_caching_enabled() {
+                        "Prompt caching enabled"
+                    } else {
+                        "Prompt caching disabled"
                     }
                 }
             }
@@ -920,6 +1223,109 @@ pub fn Home() -> Element {
                                 }
                             }
                         }
+                        
+                        // Feedback bar for last response
+                        if !last_response().is_empty() && !last_response_rated() && !is_loading() {
+                            div {
+                                class: "flex justify-center items-center gap-3 py-2 mt-2 bg-base-200 rounded-lg",
+                                span {
+                                    class: "text-sm text-base-content/70",
+                                    "Rate this response:"
+                                }
+                                button {
+                                    class: "btn btn-sm btn-ghost text-success hover:bg-success/20",
+                                    title: "Good response - save for training",
+                                    onclick: move |_| {
+                                        let q = last_query();
+                                        let r = last_response();
+                                        let c = last_context();
+                                        let m = chat_mode();
+                                        spawn(async move {
+                                            let feedback = api::TrainingFeedbackRequest {
+                                                query: q,
+                                                response: r,
+                                                context: c,
+                                                quality_score: 5,
+                                                conversation_id: None,
+                                                mode: Some(m),
+                                                model: None,
+                                            };
+                                            match api::submit_training_feedback(feedback).await {
+                                                Ok(resp) => {
+                                                    if resp.status == "collected" {
+                                                        last_response_rated.set(true);
+                                                        feedback_status.set(Some("👍 Saved!".to_string()));
+                                                    } else {
+                                                        feedback_status.set(Some(resp.message));
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    feedback_status.set(Some(format!("Error: {}", e)));
+                                                }
+                                            }
+                                            gloo_timers::future::TimeoutFuture::new(2000).await;
+                                            feedback_status.set(None);
+                                        });
+                                    },
+                                    "👍 Good"
+                                }
+                                button {
+                                    class: "btn btn-sm btn-ghost text-error hover:bg-error/20",
+                                    title: "Poor response - save for training",
+                                    onclick: move |_| {
+                                        let q = last_query();
+                                        let r = last_response();
+                                        let c = last_context();
+                                        let m = chat_mode();
+                                        spawn(async move {
+                                            let feedback = api::TrainingFeedbackRequest {
+                                                query: q,
+                                                response: r,
+                                                context: c,
+                                                quality_score: 2,
+                                                conversation_id: None,
+                                                mode: Some(m),
+                                                model: None,
+                                            };
+                                            match api::submit_training_feedback(feedback).await {
+                                                Ok(resp) => {
+                                                    if resp.status == "collected" {
+                                                        last_response_rated.set(true);
+                                                        feedback_status.set(Some("👎 Noted".to_string()));
+                                                    } else {
+                                                        feedback_status.set(Some(resp.message));
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    feedback_status.set(Some(format!("Error: {}", e)));
+                                                }
+                                            }
+                                            gloo_timers::future::TimeoutFuture::new(2000).await;
+                                            feedback_status.set(None);
+                                        });
+                                    },
+                                    "👎 Poor"
+                                }
+                                // Show feedback status
+                                if let Some(status) = feedback_status() {
+                                    span {
+                                        class: "text-sm font-medium",
+                                        "{status}"
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Show "Rated" confirmation
+                        if last_response_rated() && !is_loading() {
+                            div {
+                                class: "flex justify-center items-center py-2 mt-2",
+                                span {
+                                    class: "text-sm text-success",
+                                    "✓ Response rated - thank you!"
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -929,14 +1335,58 @@ pub fn Home() -> Element {
             div {
                 class: "fixed bottom-0 inset-x-0 p-2 sm:p-3",
 
-                // Input box with Send button inside - centered relative to full viewport (aligns with header title)
+                // Container for model dropdown + input box
                 div {
-                    class: "mx-auto mb-2",
-                    style: "width: 40rem; max-width: 90vw; margin-left: calc(50% - 20rem + 1cm);",
-                    
+                    class: "mx-auto mb-2 flex items-center gap-2",
+                    style: "width: 48rem; max-width: 95vw; margin-left: calc(50% - 24rem + 1cm);",
+
+                    // Model dropdown - left of input
                     div {
-                        class: "relative w-full",
-                        
+                        class: "flex-shrink-0",
+                        select {
+                            class: "select select-bordered select-sm rounded-xl text-xs",
+                            style: "min-width: 8rem; max-width: 12rem; height: 2.5rem; background-color: #1f2937; border-color: #374151; color: white;",
+                            value: "{selected_model}",
+                            disabled: models_loading() || is_loading(),
+                            onchange: move |evt| {
+                                let new_model = evt.value();
+                                selected_model.set(new_model.clone());
+                                // Save model selection to backend
+                                spawn(async move {
+                                    // Fetch current hardware config
+                                    if let Ok(resp) = api::fetch_hardware_config().await {
+                                        let mut config = resp.config;
+                                        config.model = new_model;
+                                        // Save updated config
+                                        let _ = api::commit_hardware_config(&config).await;
+                                    }
+                                });
+                            },
+                            
+                            if models_loading() {
+                                option { value: "", "Loading..." }
+                            } else if available_models().is_empty() {
+                                option { value: "{selected_model}", "{selected_model}" }
+                            } else {
+                                for model in available_models() {
+                                    option {
+                                        value: "{model.name}",
+                                        selected: model.name == selected_model() || model.is_active,
+                                        if model.is_active {
+                                            "⚡ {friendly_model_name(&model.name)}"
+                                        } else {
+                                            "{friendly_model_name(&model.name)}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Input box with Send button inside
+                    div {
+                        class: "relative flex-1",
+
                         input {
                             class: "input input-bordered text-sm sm:text-base pl-4 pr-14 rounded-2xl focus:border-[#3b82f6] focus:outline-none focus:ring-1 focus:ring-[#3b82f6] w-full",
                             style: "height: 5rem;",
@@ -1199,6 +1649,266 @@ pub fn Home() -> Element {
                             class: "btn btn-primary btn-xs w-full mt-3",
                             onclick: move |_| show_hybrid_info.set(false),
                             "Close"
+                        }
+                    }
+                }
+            }
+
+            // KV Cache Info Modal
+            if show_cache_info() {
+                div {
+                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto",
+                    onclick: move |_| show_cache_info.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-lg my-4",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "⚡ KV Cache" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_cache_info.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-2",
+                            
+                            // What changes
+                            div {
+                                class: "bg-base-200 p-2 rounded",
+                                p { class: "font-medium", "What changes:" }
+                                div {
+                                    class: "text-xs mt-1 space-y-1",
+                                    p { 
+                                        span { class: "text-red-400 font-medium", "OFF: " }
+                                        "Raw text prompt. K/V recomputed each request."
+                                    }
+                                    p { 
+                                        span { class: "text-green-400 font-medium", "ON: " }
+                                        "Structured messages. All providers cache K/V for matching prefixes."
+                                    }
+                                }
+                            }
+                            
+                            // Example
+                            div {
+                                class: "bg-base-200 p-2 rounded",
+                                p { class: "font-medium", "Example (follow-up question):" }
+                                div {
+                                    class: "text-xs mt-1 space-y-1",
+                                    p { 
+                                        span { class: "text-red-400", "Without: " }
+                                        "5000 tokens computed twice"
+                                    }
+                                    p { 
+                                        span { class: "text-green-400", "With: " }
+                                        "5000 tokens cached, only new tokens computed"
+                                    }
+                                }
+                            }
+                            
+                            // Per backend
+                            div {
+                                class: "bg-base-200 p-2 rounded",
+                                p { class: "font-medium", "Per Backend:" }
+                                ul {
+                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "Ollama: /api/chat + keep_alive" }
+                                    li { "OpenAI: Structured messages for prefix caching" }
+                                    li { "Anthropic: cache_control hints (beta)" }
+                                }
+                                p { class: "text-xs text-green-400 mt-1", "✓ All backends supported" }
+                            }
+                            
+                            // Why disabled by default
+                            div {
+                                class: "bg-base-200 p-2 rounded",
+                                p { class: "font-medium text-yellow-400", "Why Disabled by Default:" }
+                                ul {
+                                    class: "text-xs mt-1 space-y-1",
+                                    li { 
+                                        span { class: "font-medium", "Not universally beneficial: " }
+                                        "Short prompts (<1024 tokens) don't benefit"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Resource usage: " }
+                                        "KV cache consumes GPU/CPU memory"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Debugging simplicity: " }
+                                        "Stateless requests are easier to debug"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Cost for cloud: " }
+                                        "Anthropic charges extra to write to cache"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Cache misses: " }
+                                        "First request has no benefit; varied prompts have low hit rates"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Different API behavior: " }
+                                        button {
+                                            class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
+                                            onclick: move |_| show_api_behavior.set(true),
+                                            "Ollama: /api/chat vs /api/generate have different semantics →"
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // When to enable
+                            div {
+                                class: "bg-base-200 p-2 rounded",
+                                p { class: "font-medium text-green-400", "When to Enable:" }
+                                ul {
+                                    class: "text-xs mt-1 space-y-1",
+                                    li { 
+                                        span { class: "font-medium", "High-volume apps: " }
+                                        "Many similar requests benefit from cache reuse"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Long system prompts: " }
+                                        "2000+ token system prompts get cached"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "RAG with stable context: " }
+                                        "Same documents retrieved repeatedly"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Cost-sensitive production: " }
+                                        "Up to 10x cheaper on cloud API costs"
+                                    }
+                                    li { 
+                                        span { class: "font-medium", "Latency-sensitive: " }
+                                        "Up to 85% faster for long cached prompts"
+                                    }
+                                }
+                            }
+                        }
+
+                        button {
+                            class: "btn btn-primary btn-xs w-full mt-3",
+                            onclick: move |_| show_cache_info.set(false),
+                            "Close"
+                        }
+                    }
+                }
+            }
+
+            // API Behavior Modal (linked from KV Cache modal)
+            if show_api_behavior() {
+                div {
+                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto",
+                    onclick: move |_| show_api_behavior.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-2xl my-4",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "/api/generate vs /api/chat" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_api_behavior.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-3",
+                            
+                            // Comparison table
+                            div {
+                                class: "overflow-x-auto",
+                                table {
+                                    class: "table table-xs w-full",
+                                    thead {
+                                        tr {
+                                            th { class: "text-left", "Aspect" }
+                                            th { class: "text-left text-red-400", "/api/generate" }
+                                            th { class: "text-left text-green-400", "/api/chat" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr {
+                                            td { class: "font-medium", "Request format" }
+                                            td { "Single prompt string" }
+                                            td { "Array of messages" }
+                                        }
+                                        tr {
+                                            td { class: "font-medium", "System prompt" }
+                                            td { "Separate system field" }
+                                            td { "Message with role: \"system\"" }
+                                        }
+                                        tr {
+                                            td { class: "font-medium", "Context handling" }
+                                            td { "Embedded in prompt" }
+                                            td { "Separate user message + assistant ack" }
+                                        }
+                                        tr {
+                                            td { class: "font-medium", "Cache behavior" }
+                                            td { "None" }
+                                            td { "Prefix matching on message array" }
+                                        }
+                                        tr {
+                                            td { class: "font-medium", "Model memory" }
+                                            td { "Unloads after request" }
+                                            td { "keep_alive keeps loaded" }
+                                        }
+                                        tr {
+                                            td { class: "font-medium", "Response format" }
+                                            td { code { class: "text-xs", "{{ \"response\": \"...\" }}" } }
+                                            td { code { class: "text-xs", "{{ \"message\": {{ \"content\": \"...\" }} }}" } }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Synthetic assistant message warning
+                            div {
+                                class: "bg-yellow-900/30 border border-yellow-600/50 p-3 rounded",
+                                p { class: "font-medium text-yellow-400 mb-2", "⚠️ The \"Synthetic\" Assistant Message" }
+                                p { class: "text-xs mb-2", "Notice this in the chat format:" }
+                                pre {
+                                    class: "bg-base-300 p-2 rounded text-xs overflow-x-auto",
+                                    code {
+                                        "{{ \"role\": \"assistant\", \"content\": \"I'll use this context to help answer your questions.\" }}"
+                                    }
+                                }
+                                p { class: "text-xs mt-2", 
+                                    "This is "
+                                    span { class: "font-medium", "injected automatically" }
+                                    " to help maintain cache alignment. It's not a real response - it's a trick to make the message prefix more stable for caching."
+                                }
+                                p { class: "text-xs mt-2 text-yellow-300", 
+                                    "This can affect behavior because the model \"sees\" this as part of the conversation history, potentially influencing its responses."
+                                }
+                            }
+                        }
+
+                        div {
+                            class: "flex gap-2 mt-3",
+                            button {
+                                class: "btn btn-ghost btn-xs flex-1",
+                                onclick: move |_| {
+                                    show_api_behavior.set(false);
+                                },
+                                "← Back to KV Cache"
+                            }
+                            button {
+                                class: "btn btn-primary btn-xs flex-1",
+                                onclick: move |_| {
+                                    show_api_behavior.set(false);
+                                    show_cache_info.set(false);
+                                },
+                                "Close All"
+                            }
                         }
                     }
                 }

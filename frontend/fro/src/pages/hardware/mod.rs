@@ -17,6 +17,51 @@ use crate::{
 };
 use dioxus::prelude::*;
 
+fn merge_model_lists(
+    mut base: Vec<api::ModelInfo>,
+    extras: Vec<api::ModelInfo>,
+) -> Vec<api::ModelInfo> {
+    for extra in extras {
+        if let Some(existing) = base
+            .iter_mut()
+            .find(|m| m.name.eq_ignore_ascii_case(&extra.name))
+        {
+            if extra.is_custom {
+                if extra.description.is_some() {
+                    existing.description = extra.description.clone();
+                }
+                if extra.family.is_some() {
+                    existing.family = extra.family.clone();
+                }
+                existing.is_custom = true;
+                existing.is_active = extra.is_active || existing.is_active;
+            }
+        } else {
+            base.push(extra);
+        }
+    }
+    base.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    base
+}
+
+async fn fetch_and_merge_models(
+    backend: &str,
+) -> Result<(Vec<api::ModelInfo>, Option<String>), String> {
+    let mut base = api::fetch_models(backend).await?;
+    let mut warning = None;
+    match api::fetch_custom_models().await {
+        Ok(custom) => {
+            if !custom.is_empty() {
+                base = merge_model_lists(base, custom);
+            }
+        }
+        Err(err) => {
+            warning = Some(format!("Custom model discovery failed: {}", err));
+        }
+    }
+    Ok((base, warning))
+}
+
 #[component]
 pub fn ConfigHardware() -> Element {
     let mut hardware_config = use_signal(api::HardwareConfig::default);
@@ -113,14 +158,18 @@ pub fn ConfigHardware() -> Element {
                 Ok(resp) => {
                     last_model_backend.set(resp.config.backend_type.clone());
                     models_loading.set(true);
-                    match api::fetch_models(&resp.config.backend_type).await {
-                        Ok(list) => {
+                    match fetch_and_merge_models(&resp.config.backend_type).await {
+                        Ok((list, warn)) => {
                             models.set(list);
-                            model_error.set(None);
+                            if let Some(msg) = warn {
+                                model_error.set(Some(msg));
+                            } else {
+                                model_error.set(None);
+                            }
                         }
                         Err(e) => {
                             models.set(Vec::new());
-                            model_error.set(Some(e));
+                            model_error.set(Some(format!("Model fetch failed: {}", e)));
                         }
                     }
                     models_loading.set(false);
@@ -258,25 +307,37 @@ pub fn ConfigHardware() -> Element {
 
     let on_save = {
         let hardware_config = hardware_config.clone();
+        let sampling_config = sampling_config.clone();
         let status = status.clone();
         let mut error = error.clone();
         let mut saving = saving.clone();
         move |_| {
             saving.set(true);
             error.set(None);
-            let payload = hardware_config();
+            let hw_payload = hardware_config();
+            let sampling_payload = sampling_config();
             let mut hardware_config = hardware_config.clone();
+            let mut sampling_config = sampling_config.clone();
             let mut status = status.clone();
             let mut error = error.clone();
             let mut saving = saving.clone();
             spawn(async move {
-                match api::commit_hardware_config(&payload).await {
-                    Ok(resp) => {
-                        status.set(Some(resp.message));
-                        hardware_config.set(resp.config);
+                // Save hardware config
+                let hw_result = api::commit_hardware_config(&hw_payload).await;
+                // Save sampling config
+                let sampling_result = api::commit_llm_config(&sampling_payload).await;
+                
+                match (hw_result, sampling_result) {
+                    (Ok(hw_resp), Ok(sampling_resp)) => {
+                        status.set(Some("✓ Settings saved".to_string()));
+                        hardware_config.set(hw_resp.config);
+                        sampling_config.set(sampling_resp.config);
                     }
-                    Err(err_msg) => {
-                        error.set(Some(format!("Failed to save hardware config: {}", err_msg)));
+                    (Err(hw_err), _) => {
+                        error.set(Some(format!("Failed to save hardware config: {}", hw_err)));
+                    }
+                    (_, Err(sampling_err)) => {
+                        error.set(Some(format!("Failed to save sampling config: {}", sampling_err)));
                     }
                 }
                 saving.set(false);
@@ -354,9 +415,15 @@ pub fn ConfigHardware() -> Element {
     let model_hint = if models_loading() {
         Some(("Loading models…".to_string(), "text-blue-300".to_string()))
     } else if let Some(err) = model_error() {
-        Some((format!("Model fetch failed: {}", err), "text-red-300".to_string()))
+        Some((
+            format!("Model fetch failed: {}", err),
+            "text-red-300".to_string(),
+        ))
     } else if models().is_empty() {
-        Some(("Enter model name manually or ensure backend provides a list.".to_string(), "text-yellow-300".to_string()))
+        Some((
+            "Enter model name manually or ensure backend provides a list.".to_string(),
+            "text-yellow-300".to_string(),
+        ))
     } else {
         None
     };
@@ -437,7 +504,7 @@ pub fn ConfigHardware() -> Element {
     let mut anthropic_input_signal = anthropic_input.clone();
 
     rsx! {
-        div { class: "space-y-6",
+        div { class: "space-y-5",
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
@@ -458,7 +525,14 @@ pub fn ConfigHardware() -> Element {
                         } else if let Some(err) = error() {
                             div { class: "text-xs text-red-400", "{err}" }
                         } else if let Some(msg) = status() {
-                            div { class: "text-xs text-gray-400", "{msg}" }
+                            div { 
+                                class: if msg.contains("saved") || msg.contains("Saved") { 
+                                    "text-xs text-green-400 font-medium" 
+                                } else { 
+                                    "text-xs text-gray-400" 
+                                },
+                                "{msg}" 
+                            }
                         }
                         div { class: "flex flex-col md:flex-row md:items-start gap-4",
                     div { class: "flex flex-col gap-1 text-xs text-gray-200 md:w-64",

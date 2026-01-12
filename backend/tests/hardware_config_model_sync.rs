@@ -73,7 +73,7 @@ mod tests {
         }"#;
 
         let response: HardwareConfigResponse = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(response.status, "ok");
         assert_eq!(response.config.model, "llama3:latest");
         assert_eq!(response.config.backend_type, "ollama");
@@ -109,7 +109,7 @@ mod tests {
         }"#;
 
         let response: HardwareConfigResponse = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(response.config.model, "");
         // Frontend logic: if model.trim().is_empty(), keep default
         let active_model = response.config.model.trim().to_string();
@@ -146,7 +146,7 @@ mod tests {
         }"#;
 
         let response: HardwareConfigResponse = serde_json::from_str(json).unwrap();
-        
+
         // Frontend logic: trim whitespace
         let active_model = response.config.model.trim().to_string();
         assert!(active_model.is_empty());
@@ -181,7 +181,7 @@ mod tests {
         }"#;
 
         let response: HardwareConfigResponse = serde_json::from_str(json).unwrap();
-        
+
         // Frontend logic: trim whitespace
         let active_model = response.config.model.trim().to_string();
         assert_eq!(active_model, "phi:latest");
@@ -200,7 +200,8 @@ mod tests {
         ];
 
         for (backend, model) in backends {
-            let json = format!(r#"{{
+            let json = format!(
+                r#"{{
                 "status": "ok",
                 "message": "",
                 "request_id": "test",
@@ -223,10 +224,12 @@ mod tests {
                     "use_mmap": true,
                     "use_mlock": false
                 }}
-            }}"#, backend, model);
+            }}"#,
+                backend, model
+            );
 
             let response: HardwareConfigResponse = serde_json::from_str(&json).unwrap();
-            
+
             assert_eq!(response.config.backend_type, backend);
             assert_eq!(response.config.model, model);
         }
@@ -236,7 +239,7 @@ mod tests {
     #[test]
     fn test_hardware_config_defaults() {
         let config = HardwareConfig::default();
-        
+
         // Verify defaults match what frontend expects
         assert!(config.model.is_empty());
         assert!(config.backend_type.is_empty());
@@ -248,16 +251,16 @@ mod tests {
     fn test_frontend_model_sync_logic() {
         // Default model (what frontend starts with)
         let mut selected_model = "phi:latest".to_string();
-        
+
         // Simulate successful hardware config fetch
         let hardware_model = "llama3:8b".to_string();
         let active_model = hardware_model.trim().to_string();
-        
+
         // Frontend logic: only update if not empty
         if !active_model.is_empty() {
             selected_model = active_model;
         }
-        
+
         assert_eq!(selected_model, "llama3:8b");
     }
 
@@ -266,16 +269,16 @@ mod tests {
     fn test_frontend_keeps_default_on_empty() {
         // Default model (what frontend starts with)
         let mut selected_model = "phi:latest".to_string();
-        
+
         // Simulate hardware config with empty model
         let hardware_model = "".to_string();
         let active_model = hardware_model.trim().to_string();
-        
+
         // Frontend logic: only update if not empty
         if !active_model.is_empty() {
             selected_model = active_model;
         }
-        
+
         // Should keep the default
         assert_eq!(selected_model, "phi:latest");
     }

@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
 use prometheus::{
-    core::Collector, Encoder, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts,
-    Registry, TextEncoder,
+    core::Collector, Encoder, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
+    IntGauge, Opts, Registry, TextEncoder,
 };
 
 // Global Prometheus registry
@@ -228,6 +228,35 @@ pub static REQUEST_LATENCY_MS: Lazy<prometheus::HistogramVec> = Lazy::new(|| {
     hv
 });
 
+pub static MANUAL_OBS_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "manual_observation_requests_total",
+        "Manual observation handler calls",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let cv = IntCounterVec::new(opts, &["endpoint", "status"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
+pub static MANUAL_OBS_LATENCY_MS: Lazy<HistogramVec> = Lazy::new(|| {
+    use prometheus::histogram_opts;
+    let (service, env_name) = service_and_env();
+    let mut opts = histogram_opts!(
+        "manual_observation_latency_ms",
+        "Latency for manual observation endpoints"
+    );
+    opts.common_opts = opts
+        .common_opts
+        .const_label("service", service)
+        .const_label("env", env_name);
+    let hv = HistogramVec::new(opts, &["endpoint"]).unwrap();
+    REGISTRY.register(Box::new(hv.clone())).ok();
+    hv
+});
+
 // Helper to update gauges from retriever
 pub fn refresh_retriever_gauges(retriever: &crate::retriever::Retriever) {
     DOCUMENTS_TOTAL.set(retriever.metrics.total_documents_indexed as i64);
@@ -292,4 +321,220 @@ pub fn rate_limit_drops_by_route_snapshot() -> Vec<(String, i64)> {
         }
     }
     out
+}
+
+pub fn record_manual_observation(endpoint: &str, success: bool, duration_ms: f64) {
+    let status = if success { "ok" } else { "err" };
+    MANUAL_OBS_REQUESTS_TOTAL
+        .with_label_values(&[endpoint, status])
+        .inc();
+    MANUAL_OBS_LATENCY_MS
+        .with_label_values(&[endpoint])
+        .observe(duration_ms);
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ManualObservationMetricSnapshot {
+    pub endpoint: String,
+    pub ok: u64,
+    pub err: u64,
+    pub latency_p50: f64,
+    pub latency_p90: f64,
+}
+
+pub fn manual_observation_metrics_snapshot() -> Vec<ManualObservationMetricSnapshot> {
+    use prometheus::proto::MetricFamily;
+
+    let mut counters: std::collections::HashMap<String, (u64, u64)> =
+        std::collections::HashMap::new();
+    let mut latencies: std::collections::HashMap<String, Vec<f64>> =
+        std::collections::HashMap::new();
+
+    let gather = MANUAL_OBS_REQUESTS_TOTAL.collect();
+    for family in gather.iter() {
+        if family.get_name() != "manual_observation_requests_total" {
+            continue;
+        }
+        for metric in family.get_metric() {
+            let mut endpoint = "unknown".to_string();
+            let mut status = "ok".to_string();
+            for label in metric.get_label() {
+                if label.get_name() == "endpoint" {
+                    endpoint = label.get_value().to_string();
+                }
+                if label.get_name() == "status" {
+                    status = label.get_value().to_string();
+                }
+            }
+            let entry = counters.entry(endpoint).or_insert((0, 0));
+            let value = metric.get_counter().get_value() as u64;
+            if status == "ok" {
+                entry.0 = value;
+            } else {
+                entry.1 = value;
+            }
+        }
+    }
+
+    let gather_latency: Vec<MetricFamily> = MANUAL_OBS_LATENCY_MS.collect();
+    for family in gather_latency.iter() {
+        if family.get_name() != "manual_observation_latency_ms" {
+            continue;
+        }
+        for metric in family.get_metric() {
+            let mut endpoint = "unknown".to_string();
+            for label in metric.get_label() {
+                if label.get_name() == "endpoint" {
+                    endpoint = label.get_value().to_string();
+                }
+            }
+            let histogram = metric.get_histogram();
+            for bucket in histogram.get_bucket() {
+                // Not a true percentile; approximate using cumulative counts
+                // since we lack raw samples. Use upper_bound as representative.
+                // We'll store bucket upper bounds repeated by count.
+                let entry = latencies.entry(endpoint.clone()).or_default();
+                entry.push(bucket.get_upper_bound());
+            }
+        }
+    }
+
+    counters
+        .into_iter()
+        .map(|(endpoint, (ok, err))| {
+            let mut latency_vec = latencies.remove(&endpoint).unwrap_or_default();
+            latency_vec.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            fn percentile(data: &[f64], pct: f64) -> f64 {
+                if data.is_empty() {
+                    return 0.0;
+                }
+                let idx = ((data.len() as f64 - 1.0) * pct).round() as usize;
+                data[idx.min(data.len() - 1)]
+            }
+            ManualObservationMetricSnapshot {
+                endpoint,
+                ok,
+                err,
+                latency_p50: percentile(&latency_vec, 0.5),
+                latency_p90: percentile(&latency_vec, 0.9),
+            }
+        })
+        .collect()
+}
+
+// ============================================================================
+// 3-LAYER MEMORY SEARCH METRICS (SEARCH.md)
+// ============================================================================
+
+/// Layer-specific request counter for 3-layer memory search
+/// Labels: layer (search|timeline|fetch), status (ok|err)
+pub static MEMORY_SEARCH_LAYER_REQUESTS: Lazy<IntCounterVec> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "memory_search_requests_total",
+        "Memory search requests by layer (search/timeline/fetch)",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let cv = IntCounterVec::new(opts, &["layer", "status"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
+/// Layer-specific latency histogram for 3-layer memory search
+pub static MEMORY_SEARCH_LAYER_LATENCY_MS: Lazy<HistogramVec> = Lazy::new(|| {
+    use prometheus::histogram_opts;
+    let (service, env_name) = service_and_env();
+    let buckets = vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+    let mut opts = histogram_opts!(
+        "memory_search_latency_ms",
+        "Latency for memory search layers in milliseconds"
+    );
+    opts.common_opts = opts
+        .common_opts
+        .const_label("service", service)
+        .const_label("env", env_name);
+    opts.buckets = buckets;
+    let hv = HistogramVec::new(opts, &["layer"]).unwrap();
+    REGISTRY.register(Box::new(hv.clone())).ok();
+    hv
+});
+
+/// Estimated tokens saved by using 3-layer approach
+pub static MEMORY_SEARCH_TOKENS_SAVED: Lazy<IntCounter> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "memory_search_tokens_saved_total",
+        "Estimated tokens saved by using 3-layer memory search",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let c = IntCounter::with_opts(opts).unwrap();
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+/// Record a memory search layer request
+/// layer: "search" | "timeline" | "fetch"
+pub fn record_memory_search_layer(layer: &str, success: bool, duration_ms: f64) {
+    let status = if success { "ok" } else { "err" };
+    MEMORY_SEARCH_LAYER_REQUESTS
+        .with_label_values(&[layer, status])
+        .inc();
+    MEMORY_SEARCH_LAYER_LATENCY_MS
+        .with_label_values(&[layer])
+        .observe(duration_ms);
+}
+
+/// Record estimated tokens saved (e.g., when using Layer 1 instead of Layer 3)
+pub fn record_tokens_saved(tokens: u64) {
+    MEMORY_SEARCH_TOKENS_SAVED.inc_by(tokens);
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemorySearchLayerStats {
+    pub layer: String,
+    pub requests_ok: u64,
+    pub requests_err: u64,
+    pub latency_p50_ms: f64,
+    pub latency_p99_ms: f64,
+}
+
+/// Get snapshot of 3-layer memory search metrics
+pub fn memory_search_layer_stats() -> Vec<MemorySearchLayerStats> {
+    let mut stats = Vec::new();
+    
+    for layer in &["search", "timeline", "fetch"] {
+        let ok = MEMORY_SEARCH_LAYER_REQUESTS
+            .with_label_values(&[layer, "ok"])
+            .get();
+        let err = MEMORY_SEARCH_LAYER_REQUESTS
+            .with_label_values(&[layer, "err"])
+            .get();
+        
+        // Get histogram data for latency percentiles
+        let histogram = MEMORY_SEARCH_LAYER_LATENCY_MS.with_label_values(&[layer]);
+        let sample_count = histogram.get_sample_count();
+        let sample_sum = histogram.get_sample_sum();
+        let avg_latency = if sample_count > 0 {
+            sample_sum / sample_count as f64
+        } else {
+            0.0
+        };
+        
+        stats.push(MemorySearchLayerStats {
+            layer: layer.to_string(),
+            requests_ok: ok,
+            requests_err: err,
+            latency_p50_ms: avg_latency, // Approximation
+            latency_p99_ms: avg_latency * 2.0, // Rough estimate
+        });
+    }
+    
+    stats
+}
+
+/// Get total tokens saved
+pub fn memory_search_tokens_saved_total() -> u64 {
+    MEMORY_SEARCH_TOKENS_SAVED.get()
 }
