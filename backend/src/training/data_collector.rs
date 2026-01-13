@@ -182,10 +182,7 @@ impl TrainingDataCollector {
         buffer.push(example);
 
         if buffer.len() >= self.buffer_size {
-            info!(
-                count = buffer.len(),
-                "Auto-flushing training data buffer"
-            );
+            info!(count = buffer.len(), "Auto-flushing training data buffer");
             self.flush_internal(&mut buffer)?;
         }
 
@@ -296,7 +293,8 @@ impl TrainingDataCollector {
         let mut usable = 0;
         let mut quality_sum: u32 = 0;
         let mut quality_count = 0;
-        let mut by_mode: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut by_mode: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut last_collected: Option<DateTime<Utc>> = None;
 
         for example in &examples {
@@ -321,7 +319,10 @@ impl TrainingDataCollector {
             }
 
             // Track latest timestamp
-            if last_collected.map(|lc| example.timestamp > lc).unwrap_or(true) {
+            if last_collected
+                .map(|lc| example.timestamp > lc)
+                .unwrap_or(true)
+            {
                 last_collected = Some(example.timestamp);
             }
         }

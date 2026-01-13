@@ -272,10 +272,11 @@ impl AgentMemory {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<ManualObservationSummary>> {
-        let mut query =
-            String::from("SELECT id, entry_type, title, project, created_at FROM manual_observations WHERE 1=1");
+        let mut query = String::from(
+            "SELECT id, entry_type, title, project, created_at FROM manual_observations WHERE 1=1",
+        );
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        
+
         if let Some(ty) = entry_type {
             query.push_str(&format!(" AND entry_type = ?{}", params_vec.len() + 1));
             params_vec.push(Box::new(ty.to_string()));
@@ -284,7 +285,10 @@ impl AgentMemory {
             query.push_str(&format!(" AND project = ?{}", params_vec.len() + 1));
             params_vec.push(Box::new(proj.to_string()));
         }
-        query.push_str(&format!(" ORDER BY created_at DESC LIMIT ?{}", params_vec.len() + 1));
+        query.push_str(&format!(
+            " ORDER BY created_at DESC LIMIT ?{}",
+            params_vec.len() + 1
+        ));
         params_vec.push(Box::new(limit as i64));
 
         let mut stmt = self.conn.prepare(&query)?;
@@ -510,21 +514,24 @@ impl AgentMemory {
 
         // Build query with optional project filter
         let mut results = Vec::new();
-        
+
         // Fetch observations before anchor
         let mut before_items: Vec<ManualObservationSummary> = if let Some(proj) = project {
             let mut stmt = self.conn.prepare(
                 "SELECT id, entry_type, title, project, created_at FROM manual_observations WHERE created_at < ?1 AND project = ?3 ORDER BY created_at DESC LIMIT ?2"
             )?;
-            let rows = stmt.query_map(params![&anchor.created_at, depth_before as i64, proj], |row| {
-                Ok(ManualObservationSummary {
-                    id: row.get(0)?,
-                    entry_type: row.get(1)?,
-                    title: row.get(2)?,
-                    project: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            })?;
+            let rows = stmt.query_map(
+                params![&anchor.created_at, depth_before as i64, proj],
+                |row| {
+                    Ok(ManualObservationSummary {
+                        id: row.get(0)?,
+                        entry_type: row.get(1)?,
+                        title: row.get(2)?,
+                        project: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )?;
             rows.filter_map(Result::ok).collect()
         } else {
             let mut stmt = self.conn.prepare(
@@ -557,15 +564,18 @@ impl AgentMemory {
             let mut stmt = self.conn.prepare(
                 "SELECT id, entry_type, title, project, created_at FROM manual_observations WHERE created_at > ?1 AND project = ?3 ORDER BY created_at ASC LIMIT ?2"
             )?;
-            let rows = stmt.query_map(params![&anchor.created_at, depth_after as i64, proj], |row| {
-                Ok(ManualObservationSummary {
-                    id: row.get(0)?,
-                    entry_type: row.get(1)?,
-                    title: row.get(2)?,
-                    project: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            })?;
+            let rows = stmt.query_map(
+                params![&anchor.created_at, depth_after as i64, proj],
+                |row| {
+                    Ok(ManualObservationSummary {
+                        id: row.get(0)?,
+                        entry_type: row.get(1)?,
+                        title: row.get(2)?,
+                        project: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )?;
             rows.filter_map(Result::ok).collect()
         } else {
             let mut stmt = self.conn.prepare(

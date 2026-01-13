@@ -40,6 +40,8 @@ seahash = "4.1.0"
 rayon = "1.10"
 regex = "1.10"
 lru = "0.12"
+fastembed = { version = "5.8.1", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }
+infer = "0.16"  # MIME type detection from file magic bytes
 
 # Logging & Tracing
 tracing = "0.1"

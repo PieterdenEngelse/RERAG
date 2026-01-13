@@ -59,6 +59,9 @@ pub struct ApiConfig {
     pub redis_url: Option<String>,
     pub redis_ttl: u64,
 
+    // Retrieval tuning
+    pub search_top_k: usize,
+
     // Chunking snapshot logging
     pub chunking_log_enabled: bool,
     pub admin_api_token: Option<String>,
@@ -142,6 +145,12 @@ impl ApiConfig {
             .parse()
             .unwrap_or(3600);
 
+        let search_top_k = env::var("SEARCH_TOP_K")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse()
+            .map(|v: usize| v.max(1))
+            .unwrap_or(10);
+
         let chunking_log_enabled = env::var("CHUNKING_SNAPSHOT_LOGGING")
             .map(|v| v.to_lowercase() != "false" && v != "0")
             .unwrap_or(true);
@@ -168,6 +177,7 @@ impl ApiConfig {
             redis_enabled,
             redis_url,
             redis_ttl,
+            search_top_k,
             chunking_log_enabled,
             admin_api_token,
         }

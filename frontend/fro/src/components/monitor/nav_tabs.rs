@@ -11,10 +11,12 @@ pub fn NavTabs(props: NavTabsProps) -> Element {
     let tabs = vec![
         ("Overview", Route::MonitorOverview {}),
         ("Agentic", Route::MonitorAgentic {}),
+        ("Tools", Route::MonitorTools {}),
         ("Requests", Route::MonitorRequests {}),
         ("Cache", Route::MonitorCache {}),
         ("Index", Route::MonitorIndex {}),
-        ("Observations", Route::MonitorObservations {}),
+        ("RAG", Route::MonitorRag {}),
+        ("Agent", Route::MonitorObservations {}),
         ("Rate Limits", Route::MonitorRateLimits {}),
         ("Logs", Route::MonitorLogs {}),
     ];

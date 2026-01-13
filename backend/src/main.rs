@@ -127,7 +127,8 @@ async fn main() -> std::io::Result<()> {
 
     let mut retriever =
         match Retriever::new_with_paths(pm.index_path("tantivy"), pm.vector_store_path()) {
-            Ok(ret) => {
+            Ok(mut ret) => {
+                ret.set_search_top_k(config.search_top_k);
                 let duration_ms = retriever_start.elapsed().as_millis() as u64;
                 info!(duration_ms = duration_ms, "✓ Retriever initialized");
                 // Initialize Prometheus app_info and initial gauges
@@ -224,6 +225,17 @@ async fn main() -> std::io::Result<()> {
             }
         });
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // PHASE 7.5: Start File Watcher for Auto-Indexing
+    // ─────────────────────────────────────────────────────────────
+
+    let file_watcher_config = ag::file_watcher::FileWatcherConfig::from_env();
+    let _file_watcher_handle = ag::file_watcher::start_file_watcher(
+        ag::api::UPLOAD_DIR,
+        Arc::clone(&retriever),
+        file_watcher_config,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 8: Start Server Immediately (Server Ready Before Indexing Done)

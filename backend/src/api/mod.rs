@@ -72,6 +72,10 @@ pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
     let _ = RETRIEVER.set(handle);
 }
 
+pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
+    RETRIEVER.get().map(|h| Arc::clone(h))
+}
+
 // Shared agent session state for chat commands
 #[derive(Default, Clone)]
 struct AgentChatState {
@@ -869,6 +873,20 @@ async fn toggle_chunking_logging(query: web::Query<LoggingQuery>) -> Result<Http
     })))
 }
 
+/// GET /config/chunk_size - Fetch current chunk configuration
+async fn get_chunk_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = chunk_settings::global_config();
+    let snapshot = ChunkerConfigSnapshot::from(&config);
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "message": "Chunk configuration loaded",
+        "request_id": request_id,
+        "chunker_config": snapshot
+    })))
+}
+
 async fn commit_chunk_config(
     config: web::Data<ApiConfig>,
     payload: web::Json<ChunkConfigCommitRequest>,
@@ -1067,18 +1085,20 @@ async fn get_prompt_caching() -> Result<HttpResponse, Error> {
 }
 
 /// Set prompt caching state
-async fn set_prompt_caching(payload: web::Json<PromptCachingRequest>) -> Result<HttpResponse, Error> {
+async fn set_prompt_caching(
+    payload: web::Json<PromptCachingRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let body = payload.into_inner();
     let previous = set_prompt_caching_enabled(body.enabled);
-    
+
     tracing::info!(
         request_id = %request_id,
         enabled = body.enabled,
         previous = previous,
         "Prompt caching state changed"
     );
-    
+
     Ok(HttpResponse::Ok().json(PromptCachingResponse {
         status: "ok".into(),
         message: if body.enabled {
@@ -1600,6 +1620,20 @@ async fn get_rate_limit_monitor_info(
     Ok(HttpResponse::Ok().json(response))
 }
 
+/// Get inference gateway statistics
+async fn get_inference_gateway_stats() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let stats = crate::inference_gateway::gateway_stats();
+
+    // Also refresh the Prometheus gauges
+    metrics::refresh_inference_gateway_gauges();
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "request_id": request_id,
+        "gateway": stats
+    })))
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct SetRateLimitEnabledRequest {
     enabled: bool,
@@ -1696,9 +1730,24 @@ async fn upload_document_inner(
         let ext = Path::new(&filename)
             .extension()
             .and_then(|s| s.to_str())
-            .unwrap_or("");
-        if ext != "txt" && ext != "pdf" && ext != "md" {
-            return Ok(HttpResponse::BadRequest().body("Only .txt/.pdf/.md allowed"));
+            .unwrap_or("")
+            .to_lowercase();
+        
+        // Allow documents and code files that mime_detect.rs supports
+        let allowed_extensions = [
+            // Documents
+            "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "xml", "json",
+            // Code files
+            "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs",
+            "cpp", "cc", "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh",
+            "sql", "yaml", "yml", "toml",
+        ];
+        
+        if !allowed_extensions.contains(&ext.as_str()) {
+            return Ok(HttpResponse::BadRequest().body(format!(
+                "File type '{}' not supported. Allowed: documents (pdf, txt, md, html, xml, json) and code files (rs, py, js, ts, go, java, etc.)",
+                ext
+            )));
         }
 
         let filepath = format!("{}/{}", UPLOAD_DIR, filename);
@@ -2462,7 +2511,11 @@ async fn list_manual_observations(
         let mem = AgentMemory::new(path_resolver::agent_db_path_str())
             .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
         let results = mem
-            .list_manual_observations(query.entry_type.as_deref(), query.project.as_deref(), query.limit)
+            .list_manual_observations(
+                query.entry_type.as_deref(),
+                query.project.as_deref(),
+                query.limit,
+            )
             .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
         Ok(HttpResponse::Ok().json(json!({
             "observations": results,
@@ -2700,7 +2753,11 @@ async fn get_recent_observations(
     let mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     let results = mem
-        .list_manual_observations(query.entry_type.as_deref(), query.project.as_deref(), query.limit)
+        .list_manual_observations(
+            query.entry_type.as_deref(),
+            query.project.as_deref(),
+            query.limit,
+        )
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     Ok(HttpResponse::Ok().json(json!({
         "observations": results,
@@ -3797,7 +3854,7 @@ async fn stream_openai_response(
     use futures_util::stream::StreamExt;
 
     let url = "https://api.openai.com/v1/chat/completions";
-    
+
     tracing::info!(
         model = %model,
         request_id = %request_id,
@@ -3838,7 +3895,7 @@ async fn stream_openai_response(
                             if line.is_empty() {
                                 continue;
                             }
-                            
+
                             // OpenAI SSE format: "data: {...}" or "data: [DONE]"
                             if let Some(data) = line.strip_prefix("data: ") {
                                 if data == "[DONE]" {
@@ -3847,7 +3904,9 @@ async fn stream_openai_response(
                                         "chunks_used": chunks_count
                                     });
                                     output.push_str(&format!("data: {}\n\n", event));
-                                } else if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                } else if let Ok(json) =
+                                    serde_json::from_str::<serde_json::Value>(data)
+                                {
                                     // Extract content from choices[0].delta.content
                                     if let Some(content) = json
                                         .get("choices")
@@ -3926,11 +3985,17 @@ async fn stream_anthropic_response(
     use futures_util::stream::StreamExt;
 
     let url = "https://api.anthropic.com/v1/messages";
-    
+
     // Build the request body
-    let system = payload.get("system").cloned().unwrap_or(serde_json::Value::Null);
-    let messages = payload.get("messages").cloned().unwrap_or(serde_json::json!([]));
-    
+    let system = payload
+        .get("system")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let messages = payload
+        .get("messages")
+        .cloned()
+        .unwrap_or(serde_json::json!([]));
+
     let mut body = serde_json::json!({
         "model": model,
         "max_tokens": max_tokens,
@@ -3938,12 +4003,12 @@ async fn stream_anthropic_response(
         "stream": true,
         "messages": messages
     });
-    
+
     // Add system if present
     if !system.is_null() {
         body["system"] = system;
     }
-    
+
     tracing::info!(
         model = %model,
         request_id = %request_id,
@@ -3956,7 +4021,7 @@ async fn stream_anthropic_response(
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .header("Content-Type", "application/json");
-    
+
     // Add beta header for prompt caching if enabled
     if use_caching {
         request = request.header("anthropic-beta", "prompt-caching-2024-07-31");
@@ -3990,7 +4055,7 @@ async fn stream_anthropic_response(
                             if line.is_empty() {
                                 continue;
                             }
-                            
+
                             // Anthropic SSE format: "event: type" followed by "data: {...}"
                             if let Some(event_type) = line.strip_prefix("event: ") {
                                 current_event_type = event_type.to_string();
@@ -4009,13 +4074,16 @@ async fn stream_anthropic_response(
                                                         "type": "token",
                                                         "content": text_content
                                                     });
-                                                    output.push_str(&format!("data: {}\n\n", event));
+                                                    output
+                                                        .push_str(&format!("data: {}\n\n", event));
                                                 }
                                             }
                                         }
                                         "message_stop" | "message_delta" => {
                                             // Check if this is the final message
-                                            if json.get("type").and_then(|t| t.as_str()) == Some("message_stop") {
+                                            if json.get("type").and_then(|t| t.as_str())
+                                                == Some("message_stop")
+                                            {
                                                 let event = serde_json::json!({
                                                     "type": "done",
                                                     "chunks_used": chunks_count
@@ -4075,9 +4143,9 @@ async fn stream_anthropic_response(
 
 // Streaming agent endpoint using Server-Sent Events
 async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
+    use crate::memory::prompt_cache::CacheOptimizedPrompt;
     use actix_web::web::Bytes;
     use futures_util::stream::StreamExt;
-    use crate::memory::prompt_cache::CacheOptimizedPrompt;
 
     let request_id = generate_request_id();
 
@@ -4232,7 +4300,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     "num_predict": config.max_tokens,
                     "repeat_penalty": config.repeat_penalty
                 });
-                let body = cache_prompt.build_ollama_chat_request(&final_model, true, Some(options));
+                let body =
+                    cache_prompt.build_ollama_chat_request(&final_model, true, Some(options));
                 (format!("{}/api/chat", ollama_url), body)
             } else {
                 // Use /api/generate (no caching)
@@ -4256,7 +4325,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
             // OpenAI API with automatic prefix caching
             let api_key = std::env::var("OPENAI_API_KEY")
                 .unwrap_or_else(|_| crate::db::api_keys::global_config().openai_api_key.clone());
-            
+
             if api_key.is_empty() {
                 tracing::warn!("OpenAI API key not configured, falling back to Ollama");
                 let fallback_body = serde_json::json!({
@@ -4296,14 +4365,18 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     body,
                     chunks_count,
                     request_id,
-                ).await;
+                )
+                .await;
             }
         }
         crate::db::param_hardware::BackendType::Anthropic => {
             // Anthropic API with explicit cache_control
-            let api_key = std::env::var("ANTHROPIC_API_KEY")
-                .unwrap_or_else(|_| crate::db::api_keys::global_config().anthropic_api_key.clone());
-            
+            let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_else(|_| {
+                crate::db::api_keys::global_config()
+                    .anthropic_api_key
+                    .clone()
+            });
+
             if api_key.is_empty() {
                 tracing::warn!("Anthropic API key not configured, falling back to Ollama");
                 let fallback_body = serde_json::json!({
@@ -4342,7 +4415,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     chunks_count,
                     request_id,
                     prompt_caching,
-                ).await;
+                )
+                .await;
             }
         }
         _ => {
@@ -4387,7 +4461,9 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                             }
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
                                 // Try /api/generate format first ("response" field)
-                                let response_text = json.get("response").and_then(|v| v.as_str())
+                                let response_text = json
+                                    .get("response")
+                                    .and_then(|v| v.as_str())
                                     // Then try /api/chat format ("message.content" field)
                                     .or_else(|| {
                                         json.get("message")
@@ -4590,11 +4666,11 @@ where
     let _guard = span.enter();
     let result = f();
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-    
+
     // Record both the general manual observation metric and the layer-specific metric
     metrics::record_manual_observation(layer, result.is_ok(), duration_ms);
     metrics::record_memory_search_layer(layer, result.is_ok(), duration_ms);
-    
+
     result
 }
 
@@ -4736,6 +4812,10 @@ pub fn start_api_server(
                         web::get().to(agentic_monitor_routes::get_tool_stats),
                     )
                     .route(
+                        "/tools/executions",
+                        web::get().to(agentic_monitor_routes::get_tool_executions),
+                    )
+                    .route(
                         "/observations/metrics",
                         web::get().to(get_manual_observation_metrics),
                     )
@@ -4756,6 +4836,7 @@ pub fn start_api_server(
             .route("/upload", web::post().to(upload_document_inner))
             .route("/documents", web::get().to(list_documents))
             .route("/documents/{filename}", web::delete().to(delete_document))
+            .route("/config/chunk_size", web::get().to(get_chunk_config))
             .route("/config/chunk_size", web::post().to(commit_chunk_config))
             .route("/config/llm", web::get().to(get_llm_config))
             .route("/config/llm", web::post().to(commit_llm_config))
@@ -4788,6 +4869,10 @@ pub fn start_api_server(
             .route(
                 "/monitor/rate_limits/enabled",
                 web::post().to(set_rate_limit_enabled),
+            )
+            .route(
+                "/monitor/inference_gateway",
+                web::get().to(get_inference_gateway_stats),
             )
             .route("/monitor/logs/recent", web::get().to(get_recent_logs))
             // ============================================================================
@@ -4833,7 +4918,10 @@ pub fn start_api_server(
             // ============================================================================
             // TRAINING DATA COLLECTION ROUTES (Phase 20)
             // ============================================================================
-            .route("/training/feedback", web::post().to(submit_training_feedback))
+            .route(
+                "/training/feedback",
+                web::post().to(submit_training_feedback),
+            )
             .route("/training/stats", web::get().to(get_training_stats))
             .route("/training/export", web::post().to(export_training_data))
             .route("/training/clear", web::post().to(clear_training_data))

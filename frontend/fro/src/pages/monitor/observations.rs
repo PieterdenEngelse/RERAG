@@ -1,5 +1,5 @@
 use crate::api;
-use crate::api::{ManualObservationMetric, ManualObservationSummary, RagMemoryItem};
+use crate::api::{ManualObservationMetric, ManualObservationSummary};
 use crate::app::Route;
 use crate::components::monitor::*;
 use dioxus::prelude::*;
@@ -10,7 +10,6 @@ struct ObservationsState {
     error: Option<String>,
     metrics: Vec<ManualObservationMetric>,
     observations: Vec<ManualObservationSummary>,
-    rag_memories: Vec<RagMemoryItem>,
 }
 
 #[component]
@@ -25,30 +24,26 @@ pub fn MonitorObservations() -> Element {
                 error: None,
                 metrics: vec![],
                 observations: vec![],
-                rag_memories: vec![],
             });
 
             let metrics_result = api::fetch_manual_observation_metrics().await;
-            let observations_result = api::fetch_recent_observations(20).await;
-            let rag_result = api::fetch_rag_memories(20).await;
+            let observations_result = api::fetch_recent_observations(50).await;
 
-            match (metrics_result, observations_result, rag_result) {
-                (Ok(m), Ok(o), Ok(r)) => {
+            match (metrics_result, observations_result) {
+                (Ok(m), Ok(o)) => {
                     state.set(ObservationsState {
                         loading: false,
                         error: None,
                         metrics: m.metrics,
                         observations: o.observations,
-                        rag_memories: r.memories,
                     });
                 }
-                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                (Err(e), _) | (_, Err(e)) => {
                     state.set(ObservationsState {
                         loading: false,
                         error: Some(e),
                         metrics: vec![],
                         observations: vec![],
-                        rag_memories: vec![],
                     });
                 }
             }
@@ -63,71 +58,85 @@ pub fn MonitorObservations() -> Element {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
                     BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
-                    BreadcrumbItem::new("Observations", None::<Route>),
+                    BreadcrumbItem::new("Agent", None::<Route>),
                 ],
             }
 
             NavTabs { active: Route::MonitorObservations {} }
+
+            // Page header
+            Panel { title: Some("Agent Work Log".into()), refresh: None::<String>,
+                div { class: "text-sm text-gray-300 space-y-2",
+                    p { "The Agent is an autonomous system that reasons, plans, executes tools, and logs its work history. This page shows the agent's decisions, actions, and discoveries." }
+                    div { class: "flex flex-wrap gap-4 mt-3 text-xs",
+                        div { class: "flex items-center gap-2",
+                            span { class: "w-2 h-2 rounded-full bg-purple-500" }
+                            span { class: "text-gray-400", "Has autonomy — decides what to do" }
+                        }
+                        div { class: "flex items-center gap-2",
+                            span { class: "w-2 h-2 rounded-full bg-purple-500" }
+                            span { class: "text-gray-400", "Stateful — remembers past actions" }
+                        }
+                        div { class: "flex items-center gap-2",
+                            span { class: "w-2 h-2 rounded-full bg-purple-500" }
+                            span { class: "text-gray-400", "Action-centric — tools, decisions, outcomes" }
+                        }
+                    }
+                }
+            }
 
             if snapshot.loading {
                 div { class: "text-gray-400 text-sm", "Loading…" }
             } else if let Some(err) = snapshot.error.clone() {
                 div { class: "text-red-400 text-sm", "Failed to load: {err}" }
             } else {
-                // RAG Memories Section (LLM Context)
-                Panel { title: Some("RAG Memories (LLM Context)".into()), refresh: None::<String>,
-                    if snapshot.rag_memories.is_empty() {
-                        div { class: "text-gray-400 text-sm",
-                            "No RAG memories stored yet. Use "
-                            span { class: "font-mono bg-gray-800 px-1 rounded", "POST /memory/store_rag" }
-                            " to add memories for LLM context."
+                // Stats row
+                div { class: "grid grid-cols-1 md:grid-cols-4 gap-4",
+                    StatCard {
+                        title: "Total Observations".into(),
+                        value: snapshot.observations.len().to_string().into(),
+                        unit: None,
+                    }
+                    StatCard {
+                        title: "Bugfixes".into(),
+                        value: snapshot.observations.iter().filter(|o| o.entry_type == "bugfix").count().to_string().into(),
+                        unit: None,
+                    }
+                    StatCard {
+                        title: "Features".into(),
+                        value: snapshot.observations.iter().filter(|o| o.entry_type == "feature").count().to_string().into(),
+                        unit: None,
+                    }
+                    StatCard {
+                        title: "Decisions".into(),
+                        value: snapshot.observations.iter().filter(|o| o.entry_type == "decision").count().to_string().into(),
+                        unit: None,
+                    }
+                }
+
+                // Main table
+                Panel { title: Some("Work History".into()), refresh: None::<String>,
+                    if snapshot.observations.is_empty() {
+                        div { class: "text-gray-400 text-sm py-8 text-center",
+                            div { class: "mb-2", "No agent observations yet." }
+                            div { class: "text-xs",
+                                "Use "
+                                span { class: "font-mono bg-gray-800 px-1 rounded", "POST /memory/observations" }
+                                " to log agent work."
+                            }
                         }
                     } else {
                         table { class: "w-full text-sm text-left",
                             thead { class: "text-gray-400 uppercase tracking-wide border-b border-gray-800",
                                 tr {
-                                    th { class: "py-2", "Type" }
-                                    th { class: "py-2", "Content" }
-                                    th { class: "py-2", "Agent" }
+                                    th { class: "py-2", "Action Type" }
+                                    th { class: "py-2", "Description" }
                                     th { class: "py-2", "Timestamp" }
                                 }
                             }
                             tbody {
-                                for mem in snapshot.rag_memories.iter() {
-                                    tr { class: "border-b border-gray-800 last:border-0",
-                                        td { class: "py-2",
-                                            span { class: "px-2 py-0.5 rounded text-xs bg-blue-900 text-blue-200", "{mem.memory_type}" }
-                                        }
-                                        td { class: "py-2 text-white max-w-md truncate", "{mem.content}" }
-                                        td { class: "py-2 text-gray-400 text-xs", "{mem.agent_id}" }
-                                        td { class: "py-2 text-gray-400 text-xs", "{mem.timestamp}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Manual Observations Section (Structured Work History)
-                Panel { title: Some("Manual Observations (Work History)".into()), refresh: None::<String>,
-                    if snapshot.observations.is_empty() {
-                        div { class: "text-gray-400 text-sm",
-                            "No observations stored yet. Use "
-                            span { class: "font-mono bg-gray-800 px-1 rounded", "POST /memory/observations" }
-                            " to create structured observations."
-                        }
-                    } else {
-                        table { class: "w-full text-sm text-left",
-                            thead { class: "text-gray-400 uppercase tracking-wide border-b border-gray-800",
-                                tr {
-                                    th { class: "py-2", "Type" }
-                                    th { class: "py-2", "Title" }
-                                    th { class: "py-2", "Created" }
-                                }
-                            }
-                            tbody {
                                 for obs in snapshot.observations.iter() {
-                                    tr { class: "border-b border-gray-800 last:border-0",
+                                    tr { class: "border-b border-gray-800 last:border-0 hover:bg-gray-800/50",
                                         td { class: "py-2",
                                             span { class: "px-2 py-0.5 rounded text-xs bg-purple-900 text-purple-200", "{obs.entry_type}" }
                                         }
@@ -140,10 +149,10 @@ pub fn MonitorObservations() -> Element {
                     }
                 }
 
-                // Endpoint Metrics Section
-                Panel { title: Some("Endpoint Metrics".into()), refresh: None::<String>,
+                // API Metrics
+                Panel { title: Some("Agent API Metrics".into()), refresh: None::<String>,
                     if snapshot.metrics.is_empty() {
-                        div { class: "text-gray-400 text-sm", "No endpoint metrics yet. Hit the memory APIs to populate this view." }
+                        div { class: "text-gray-400 text-sm", "No API metrics yet. Hit the agent endpoints to populate this view." }
                     } else {
                         table { class: "w-full text-sm text-left",
                             thead { class: "text-gray-400 uppercase tracking-wide border-b border-gray-800",
@@ -170,28 +179,24 @@ pub fn MonitorObservations() -> Element {
                     }
                 }
 
-                // Info Section
-                Panel { title: Some("Memory Types".into()), refresh: None::<String>,
-                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-4 text-sm",
+                // Observation types info
+                Panel { title: Some("Observation Types".into()), refresh: None::<String>,
+                    div { class: "grid grid-cols-2 md:grid-cols-4 gap-4 text-sm",
                         div { class: "bg-gray-800/50 rounded p-3",
-                            div { class: "text-blue-300 font-semibold mb-2", "RAG Memories" }
-                            div { class: "text-gray-400 mb-2", "Simple key-value memories for LLM context retrieval." }
-                            ul { class: "text-gray-400 list-disc pl-4 space-y-1",
-                                li { "conversation - Past exchanges" }
-                                li { "note - User-added notes" }
-                                li { "fact - Factual information" }
-                                li { "preference - User preferences" }
-                            }
+                            div { class: "text-purple-300 font-semibold mb-1", "bugfix" }
+                            div { class: "text-gray-400 text-xs", "Bug resolutions and fixes" }
                         }
                         div { class: "bg-gray-800/50 rounded p-3",
-                            div { class: "text-purple-300 font-semibold mb-2", "Manual Observations" }
-                            div { class: "text-gray-400 mb-2", "Structured work history with rich metadata." }
-                            ul { class: "text-gray-400 list-disc pl-4 space-y-1",
-                                li { "bugfix - Bug resolutions" }
-                                li { "feature - New features" }
-                                li { "decision - Architectural choices" }
-                                li { "discovery - Learnings" }
-                            }
+                            div { class: "text-purple-300 font-semibold mb-1", "feature" }
+                            div { class: "text-gray-400 text-xs", "New features implemented" }
+                        }
+                        div { class: "bg-gray-800/50 rounded p-3",
+                            div { class: "text-purple-300 font-semibold mb-1", "decision" }
+                            div { class: "text-gray-400 text-xs", "Architectural choices made" }
+                        }
+                        div { class: "bg-gray-800/50 rounded p-3",
+                            div { class: "text-purple-300 font-semibold mb-1", "discovery" }
+                            div { class: "text-gray-400 text-xs", "Learnings and insights" }
                         }
                     }
                 }

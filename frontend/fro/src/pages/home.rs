@@ -99,7 +99,7 @@ pub fn Home() -> Element {
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut selected_model = use_signal(|| "phi:latest".to_string());
     let mut cancel_requested = use_signal(|| false);
-    
+
     // Available models for dropdown
     let available_models: Signal<Vec<api::ModelInfo>> = use_signal(Vec::new);
     let models_loading = use_signal(|| false);
@@ -109,16 +109,17 @@ pub fn Home() -> Element {
     let mut documents = use_signal(|| Vec::<String>::new());
     let mut upload_status = use_signal(|| Option::<String>::None);
     let mut is_uploading = use_signal(|| false);
+    let mut show_file_types_info = use_signal(|| false);
 
     // Chat mode: "rag", "llm", or "hybrid"
     let mut chat_mode = use_signal(|| "hybrid".to_string());
 
     // Info panel state (global context)
     let mut show_info = use_context::<Signal<ShowRagInfo>>();
-    
+
     // Clear chat signal (triggered by Home link in header)
     let mut clear_chat = use_context::<Signal<ClearChat>>();
-    
+
     // Watch for clear chat signal
     use_effect(move || {
         if clear_chat().0 {
@@ -182,7 +183,7 @@ pub fn Home() -> Element {
             // Try to load hardware config (with a quick retry) to keep home page in sync
             let mut last_error = None;
             let mut backend_type = String::new();
-            
+
             for attempt in 0..2 {
                 match api::fetch_hardware_config().await {
                     Ok(resp) => {
@@ -210,7 +211,7 @@ pub fn Home() -> Element {
                 )));
                 return;
             }
-            
+
             // Load available models for the backend
             if !backend_type.is_empty() {
                 models_loading.set(true);
@@ -453,7 +454,8 @@ pub fn Home() -> Element {
 
                         // Update context if chunks were used
                         let ctx = if chunks_used > 0 {
-                            let ctx_str = format!("Used {} chunks from knowledge base", chunks_used);
+                            let ctx_str =
+                                format!("Used {} chunks from knowledge base", chunks_used);
                             if let Some(msg) = messages.write().get_mut(msg_index) {
                                 msg.context = Some(ctx_str.clone());
                             }
@@ -461,7 +463,7 @@ pub fn Home() -> Element {
                         } else {
                             None
                         };
-                        
+
                         // Track for feedback buttons
                         last_query.set(user_input.clone());
                         last_response.set(accumulated_text);
@@ -771,13 +773,13 @@ pub fn Home() -> Element {
         // Welcome text with RAG toggle - fixed centered relative to full viewport (aligns with header title)
         if messages().is_empty() {
             div {
-                class: "fixed inset-x-0 text-center z-10",
+                class: "fixed inset-x-0 text-center z-10 pointer-events-none",
                 style: "top: 3rem;",
                 p { class: "text-sm text-base-content/50", "Type a message or use /help for commands" }
 
                 // Mode selector - centered (offset 3cm lower, scaled 20% bigger)
                 div {
-                    class: "flex justify-center",
+                    class: "flex justify-center pointer-events-auto",
                     style: "margin-top: 5cm; transform: scale(1.2); transform-origin: top center;",
                     div {
                         class: "flex flex-col items-center gap-2",
@@ -907,7 +909,7 @@ pub fn Home() -> Element {
 
                 // Add Documents and RAG Memories buttons - aligned with gaps between mode buttons
                 div {
-                    class: "flex justify-center",
+                    class: "flex justify-center pointer-events-auto",
                     style: "gap: 1.08rem;",
                     // Spacer to match RAG button width
                     div { style: "width: 5.5rem;" }
@@ -955,7 +957,7 @@ pub fn Home() -> Element {
                 div {
                     class: "flex justify-center items-center gap-2",
                     style: "margin-top: calc(0.5rem + 5mm);",
-                    
+
                     // Toggle switch
                     label {
                         class: "flex items-center gap-2 cursor-pointer",
@@ -983,7 +985,7 @@ pub fn Home() -> Element {
                             "⚡ KV Cache"
                         }
                     }
-                    
+
                     // Info button
                     button {
                         class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
@@ -1001,7 +1003,7 @@ pub fn Home() -> Element {
                         }
                     }
                 }
-                
+
                 // Cache status indicator
                 p {
                     class: "text-xs",
@@ -1027,14 +1029,36 @@ pub fn Home() -> Element {
             // Left sidebar - Document Upload Panel (collapsible)
             if show_upload_panel() {
                 div {
-                    class: "w-64 lg:w-72 bg-base-100 border-r border-base-300 flex flex-col flex-shrink-0 h-full",
+                    class: "w-64 lg:w-72 bg-base-100 border-r border-base-300 flex flex-col flex-shrink-0 h-full z-20",
 
                     // Panel header
                     div {
                         class: "p-2 border-b border-base-300 flex justify-between items-center flex-shrink-0",
-                        h2 {
-                            class: "font-bold text-sm",
-                            "📁 Documents"
+                        div {
+                            class: "flex items-center gap-2",
+                            h2 {
+                                class: "font-bold text-sm",
+                                "📁 Documents"
+                            }
+                            // Info button for supported file types
+                            button {
+                                class: "w-5 h-5 min-w-5 min-h-5 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80 pointer-events-auto",
+                                style: "background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                onclick: move |evt| {
+                                    evt.stop_propagation();
+                                    show_file_types_info.set(true);
+                                },
+                                svg {
+                                    class: "w-4 h-4 text-white",
+                                    view_box: "0 0 20 20",
+                                    fill: "none",
+                                    stroke: "currentColor",
+                                    stroke_width: "1.5",
+                                    circle { cx: "10", cy: "10", r: "9" }
+                                    line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                                    circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                }
+                            }
                         }
                         button {
                             class: "btn btn-ghost btn-xs",
@@ -1050,59 +1074,90 @@ pub fn Home() -> Element {
                         // File input
                         div {
                             class: "mb-1",
-                            label {
+                            p {
                                 class: "block text-xs text-base-content/70 mb-1",
-                                "Upload .txt, .md, or .pdf"
+                                "Upload documents or code"
                             }
-                            input {
-                                r#type: "file",
-                                class: "file-input file-input-bordered file-input-xs w-full",
-                                accept: ".txt,.md,.pdf",
-                                disabled: is_uploading(),
-                                onchange: move |_evt| {
-                                    spawn(async move {
-                                        is_uploading.set(true);
-                                        upload_status.set(Some("Uploading...".to_string()));
+                            // Use label wrapper pattern for reliable file input
+                            label {
+                                class: "btn btn-xs btn-outline w-full cursor-pointer pointer-events-auto",
+                                class: if is_uploading() { "btn-disabled" } else { "" },
+                                input {
+                                    r#type: "file",
+                                    class: "hidden",
+                                    // Documents: pdf, txt, md, html, xml, json
+                                    // Code: rs, py, js, ts, go, java, cs, cpp, c, rb, php, sh, sql, yaml, toml
+                                    accept: ".pdf,.txt,.text,.md,.markdown,.html,.htm,.xml,.xhtml,.json,.rs,.py,.pyw,.js,.mjs,.cjs,.ts,.tsx,.go,.java,.cs,.cpp,.cc,.cxx,.hpp,.c,.h,.rb,.php,.sh,.bash,.zsh,.sql,.yaml,.yml,.toml",
+                                    disabled: is_uploading(),
+                                    onchange: {
+                                        let is_uploading = is_uploading.clone();
+                                        let upload_status = upload_status.clone();
+                                        let documents = documents.clone();
+                                        move |evt: dioxus::prelude::Event<dioxus::prelude::FormData>| {
+                                            let mut is_uploading = is_uploading.clone();
+                                            let mut upload_status = upload_status.clone();
+                                            let mut documents = documents.clone();
+                                            spawn(async move {
+                                                is_uploading.set(true);
+                                                upload_status.set(Some("Uploading...".to_string()));
 
-                                        // Get file from event using web_sys
-                                        let window = web_sys::window().unwrap();
-                                        let document = window.document().unwrap();
-                                        let input: web_sys::HtmlInputElement = document
-                                            .query_selector("input[type='file']")
-                                            .unwrap()
-                                            .unwrap()
-                                            .dyn_into()
-                                            .unwrap();
+                                                // Use Dioxus 0.6 file handling
+                                                if let Some(file_engine) = evt.files() {
+                                                    let files = file_engine.files();
+                                                    let total_files = files.len();
+                                                    let mut success_count = 0;
+                                                    
+                                                    for file_name in files {
+                                                        upload_status.set(Some(format!("Uploading: {}", file_name)));
+                                                        
+                                                        if let Some(file_data) = file_engine.read_file(&file_name).await {
+                                                            match api::upload_document(&file_name, &file_data).await {
+                                                                Ok(_resp) => {
+                                                                    success_count += 1;
+                                                                }
+                                                                Err(e) => {
+                                                                    upload_status.set(Some(format!("✗ {}", e)));
+                                                                }
+                                                            }
+                                                        } else {
+                                                            upload_status.set(Some(format!("✗ Failed to read: {}", file_name)));
+                                                        }
+                                                    }
 
-                                        if let Some(files) = input.files() {
-                                            if let Some(file) = files.get(0) {
-                                                let filename = file.name();
+                                                    // Show final status
+                                                    if success_count == total_files {
+                                                        upload_status.set(Some(format!("✓ {} file(s) uploaded", success_count)));
+                                                    } else if success_count > 0 {
+                                                        upload_status.set(Some(format!("⚠ {}/{} uploaded", success_count, total_files)));
+                                                    }
 
-                                                // Read file content
-                                                let array_buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
-                                                    .await
-                                                    .unwrap();
-                                                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-                                                let data = uint8_array.to_vec();
-
-                                                match api::upload_document(&filename, &data).await {
-                                                    Ok(_resp) => {
-                                                        upload_status.set(Some(format!("✓ {}", filename)));
-                                                        // Refresh document list
+                                                    // Refresh document list
+                                                    if success_count > 0 {
                                                         if let Ok(docs) = api::list_documents().await {
                                                             documents.set(docs.documents);
                                                         }
                                                     }
-                                                    Err(e) => {
-                                                        upload_status.set(Some(format!("✗ {}", e)));
-                                                    }
+                                                } else {
+                                                    upload_status.set(Some("✗ No files selected".to_string()));
                                                 }
-                                            }
-                                        }
 
-                                        is_uploading.set(false);
-                                    });
-                                },
+                                                is_uploading.set(false);
+
+                                                // Clear status after 3 seconds using spawn
+                                                let mut upload_status_clear = upload_status.clone();
+                                                spawn(async move {
+                                                    gloo_timers::future::TimeoutFuture::new(3000).await;
+                                                    upload_status_clear.set(None);
+                                                });
+                                            });
+                                        }
+                                    },
+                                }
+                                if is_uploading() {
+                                    "Uploading..."
+                                } else {
+                                    "📂 Browse Files"
+                                }
                             }
                         }
 
@@ -1223,7 +1278,7 @@ pub fn Home() -> Element {
                                 }
                             }
                         }
-                        
+
                         // Feedback bar for last response
                         if !last_response().is_empty() && !last_response_rated() && !is_loading() {
                             div {
@@ -1315,7 +1370,7 @@ pub fn Home() -> Element {
                                 }
                             }
                         }
-                        
+
                         // Show "Rated" confirmation
                         if last_response_rated() && !is_loading() {
                             div {
@@ -1362,7 +1417,7 @@ pub fn Home() -> Element {
                                     }
                                 });
                             },
-                            
+
                             if models_loading() {
                                 option { value: "", "Loading..." }
                             } else if available_models().is_empty() {
@@ -1455,7 +1510,7 @@ pub fn Home() -> Element {
                                 strong { "How it works:" }
                                 ul {
                                     class: "list-disc list-inside mt-1",
-                                    li { "Upload documents (.txt, .md, .pdf)" }
+                                    li { "Upload documents (PDF, text, markdown, HTML, JSON, XML) or code files" }
                                     li { "Ask questions in the chat" }
                                     li { "Relevant content is found and sent to the LLM" }
                                     li { "Get answers grounded in your documents" }
@@ -1676,41 +1731,41 @@ pub fn Home() -> Element {
 
                         div {
                             class: "text-sm space-y-2",
-                            
+
                             // What changes
                             div {
                                 class: "bg-base-200 p-2 rounded",
                                 p { class: "font-medium", "What changes:" }
                                 div {
                                     class: "text-xs mt-1 space-y-1",
-                                    p { 
+                                    p {
                                         span { class: "text-red-400 font-medium", "OFF: " }
                                         "Raw text prompt. K/V recomputed each request."
                                     }
-                                    p { 
+                                    p {
                                         span { class: "text-green-400 font-medium", "ON: " }
                                         "Structured messages. All providers cache K/V for matching prefixes."
                                     }
                                 }
                             }
-                            
+
                             // Example
                             div {
                                 class: "bg-base-200 p-2 rounded",
                                 p { class: "font-medium", "Example (follow-up question):" }
                                 div {
                                     class: "text-xs mt-1 space-y-1",
-                                    p { 
+                                    p {
                                         span { class: "text-red-400", "Without: " }
                                         "5000 tokens computed twice"
                                     }
-                                    p { 
+                                    p {
                                         span { class: "text-green-400", "With: " }
                                         "5000 tokens cached, only new tokens computed"
                                     }
                                 }
                             }
-                            
+
                             // Per backend
                             div {
                                 class: "bg-base-200 p-2 rounded",
@@ -1723,34 +1778,34 @@ pub fn Home() -> Element {
                                 }
                                 p { class: "text-xs text-green-400 mt-1", "✓ All backends supported" }
                             }
-                            
+
                             // Why disabled by default
                             div {
                                 class: "bg-base-200 p-2 rounded",
                                 p { class: "font-medium text-yellow-400", "Why Disabled by Default:" }
                                 ul {
                                     class: "text-xs mt-1 space-y-1",
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Not universally beneficial: " }
                                         "Short prompts (<1024 tokens) don't benefit"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Resource usage: " }
                                         "KV cache consumes GPU/CPU memory"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Debugging simplicity: " }
                                         "Stateless requests are easier to debug"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Cost for cloud: " }
                                         "Anthropic charges extra to write to cache"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Cache misses: " }
                                         "First request has no benefit; varied prompts have low hit rates"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Different API behavior: " }
                                         button {
                                             class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
@@ -1760,30 +1815,30 @@ pub fn Home() -> Element {
                                     }
                                 }
                             }
-                            
+
                             // When to enable
                             div {
                                 class: "bg-base-200 p-2 rounded",
                                 p { class: "font-medium text-green-400", "When to Enable:" }
                                 ul {
                                     class: "text-xs mt-1 space-y-1",
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "High-volume apps: " }
                                         "Many similar requests benefit from cache reuse"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Long system prompts: " }
                                         "2000+ token system prompts get cached"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "RAG with stable context: " }
                                         "Same documents retrieved repeatedly"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Cost-sensitive production: " }
                                         "Up to 10x cheaper on cloud API costs"
                                     }
-                                    li { 
+                                    li {
                                         span { class: "font-medium", "Latency-sensitive: " }
                                         "Up to 85% faster for long cached prompts"
                                     }
@@ -1822,7 +1877,7 @@ pub fn Home() -> Element {
 
                         div {
                             class: "text-sm space-y-3",
-                            
+
                             // Comparison table
                             div {
                                 class: "overflow-x-auto",
@@ -1869,7 +1924,7 @@ pub fn Home() -> Element {
                                     }
                                 }
                             }
-                            
+
                             // Synthetic assistant message warning
                             div {
                                 class: "bg-yellow-900/30 border border-yellow-600/50 p-3 rounded",
@@ -1881,12 +1936,12 @@ pub fn Home() -> Element {
                                         "{{ \"role\": \"assistant\", \"content\": \"I'll use this context to help answer your questions.\" }}"
                                     }
                                 }
-                                p { class: "text-xs mt-2", 
+                                p { class: "text-xs mt-2",
                                     "This is "
                                     span { class: "font-medium", "injected automatically" }
                                     " to help maintain cache alignment. It's not a real response - it's a trick to make the message prefix more stable for caching."
                                 }
-                                p { class: "text-xs mt-2 text-yellow-300", 
+                                p { class: "text-xs mt-2 text-yellow-300",
                                     "This can affect behavior because the model \"sees\" this as part of the conversation history, potentially influencing its responses."
                                 }
                             }
@@ -1910,6 +1965,66 @@ pub fn Home() -> Element {
                                 "Close All"
                             }
                         }
+                    }
+                }
+            }
+
+        }
+
+        // File Types Info Modal (outside overflow-hidden container)
+        if show_file_types_info() {
+            div {
+                class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show_file_types_info.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-md max-h-[90vh] overflow-y-auto shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "Supported File Types" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_file_types_info.set(false),
+                            "×"
+                        }
+                    }
+                    div { class: "text-sm text-gray-300 space-y-4",
+                        // Documents section
+                        div {
+                            h3 { class: "font-semibold text-blue-300 mb-2", "Documents" }
+                            ul { class: "list-disc list-inside space-y-1 text-gray-400",
+                                li { span { class: "text-gray-200", "PDF:" } " .pdf" }
+                                li { span { class: "text-gray-200", "Text:" } " .txt, .text" }
+                                li { span { class: "text-gray-200", "Markdown:" } " .md, .markdown" }
+                                li { span { class: "text-gray-200", "HTML:" } " .html, .htm, .xhtml" }
+                                li { span { class: "text-gray-200", "XML:" } " .xml" }
+                                li { span { class: "text-gray-200", "JSON:" } " .json" }
+                            }
+                        }
+                        // Code Files section
+                        div {
+                            h3 { class: "font-semibold text-purple-300 mb-2", "Code Files" }
+                            ul { class: "list-disc list-inside space-y-1 text-gray-400",
+                                li { span { class: "text-gray-200", "Rust:" } " .rs" }
+                                li { span { class: "text-gray-200", "Python:" } " .py, .pyw" }
+                                li { span { class: "text-gray-200", "JavaScript:" } " .js, .mjs, .cjs" }
+                                li { span { class: "text-gray-200", "TypeScript:" } " .ts, .tsx" }
+                                li { span { class: "text-gray-200", "Go:" } " .go" }
+                                li { span { class: "text-gray-200", "Java:" } " .java" }
+                                li { span { class: "text-gray-200", "C#:" } " .cs" }
+                                li { span { class: "text-gray-200", "C/C++:" } " .c, .h, .cpp, .cc, .cxx, .hpp" }
+                                li { span { class: "text-gray-200", "Ruby:" } " .rb" }
+                                li { span { class: "text-gray-200", "PHP:" } " .php" }
+                                li { span { class: "text-gray-200", "Shell:" } " .sh, .bash, .zsh" }
+                                li { span { class: "text-gray-200", "SQL:" } " .sql" }
+                                li { span { class: "text-gray-200", "YAML:" } " .yaml, .yml" }
+                                li { span { class: "text-gray-200", "TOML:" } " .toml" }
+                            }
+                        }
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm mt-4 w-full",
+                        onclick: move |_| show_file_types_info.set(false),
+                        "Got it!"
                     }
                 }
             }

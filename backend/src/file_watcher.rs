@@ -1,0 +1,197 @@
+//! File watcher for automatic document indexing
+//!
+//! Watches the documents folder for new files and automatically indexes them.
+
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
+
+use crate::config::ChunkerMode;
+use crate::index;
+use crate::monitoring::metrics;
+use crate::retriever::Retriever;
+
+/// Configuration for the file watcher
+#[derive(Debug, Clone)]
+pub struct FileWatcherConfig {
+    /// Whether file watching is enabled
+    pub enabled: bool,
+    /// Debounce duration to avoid processing the same file multiple times
+    pub debounce_ms: u64,
+    /// Chunker mode to use for indexing
+    pub chunker_mode: ChunkerMode,
+}
+
+impl FileWatcherConfig {
+    pub fn from_env() -> Self {
+        Self {
+            enabled: std::env::var("FILE_WATCHER_ENABLED")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(true), // Enabled by default
+            debounce_ms: std::env::var("FILE_WATCHER_DEBOUNCE_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500),
+            chunker_mode: ChunkerMode::from_env(),
+        }
+    }
+}
+
+/// Start the file watcher in a background task
+pub fn start_file_watcher(
+    watch_dir: &str,
+    retriever: Arc<Mutex<Retriever>>,
+    config: FileWatcherConfig,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !config.enabled {
+        info!("📁 File watcher disabled (set FILE_WATCHER_ENABLED=true to enable)");
+        return None;
+    }
+
+    let watch_path = watch_dir.to_string();
+    
+    // Ensure the directory exists
+    if let Err(e) = std::fs::create_dir_all(&watch_path) {
+        error!("Failed to create watch directory {}: {}", watch_path, e);
+        return None;
+    }
+
+    info!("👁️ Starting file watcher on: {}", watch_path);
+
+    let handle = actix_web::rt::spawn(async move {
+        if let Err(e) = run_watcher(&watch_path, retriever, config).await {
+            error!("File watcher error: {}", e);
+        }
+    });
+
+    Some(handle)
+}
+
+async fn run_watcher(
+    watch_path: &str,
+    retriever: Arc<Mutex<Retriever>>,
+    config: FileWatcherConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (tx, mut rx) = mpsc::channel::<Event>(100);
+
+    // Create the watcher
+    let mut watcher = RecommendedWatcher::new(
+        move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                // Only send create and modify events
+                match &event.kind {
+                    EventKind::Create(_) | EventKind::Modify(_) => {
+                        let _ = tx.blocking_send(event);
+                    }
+                    _ => {}
+                }
+            }
+        },
+        Config::default().with_poll_interval(Duration::from_millis(config.debounce_ms)),
+    )?;
+
+    // Start watching
+    watcher.watch(Path::new(watch_path), RecursiveMode::NonRecursive)?;
+    info!("👁️ File watcher active on: {}", watch_path);
+
+    // Track recently processed files to debounce
+    let mut recent_files: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
+    let debounce_duration = Duration::from_millis(config.debounce_ms);
+
+    // Process events
+    while let Some(event) = rx.recv().await {
+        for path in event.paths {
+            // Skip directories
+            if path.is_dir() {
+                continue;
+            }
+
+            // Skip temporary files and hidden files
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if filename.starts_with('.') || filename.ends_with(".tmp") || filename.ends_with("~") {
+                continue;
+            }
+
+            // Check file extension
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            let allowed_extensions = [
+                // Documents
+                "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "xml", "json",
+                // Code files
+                "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs",
+                "cpp", "cc", "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh",
+                "sql", "yaml", "yml", "toml",
+            ];
+
+            if !allowed_extensions.contains(&ext.as_str()) {
+                debug!("Skipping unsupported file type: {}", path.display());
+                continue;
+            }
+
+            // Debounce: skip if we processed this file recently
+            let path_str = path.to_string_lossy().to_string();
+            let now = std::time::Instant::now();
+            if let Some(last_processed) = recent_files.get(&path_str) {
+                if now.duration_since(*last_processed) < debounce_duration {
+                    debug!("Debouncing file: {}", path.display());
+                    continue;
+                }
+            }
+            recent_files.insert(path_str.clone(), now);
+
+            // Clean up old entries from recent_files
+            recent_files.retain(|_, v| now.duration_since(*v) < Duration::from_secs(60));
+
+            // Wait a bit for the file to be fully written
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Check if file exists and is readable
+            if !path.exists() {
+                debug!("File no longer exists: {}", path.display());
+                continue;
+            }
+
+            info!("📄 New file detected: {}", path.display());
+
+            // Index the file
+            match retriever.lock() {
+                Ok(mut ret) => {
+                    let chunker = index::default_chunker(config.chunker_mode);
+                    match index::index_file(&mut *ret, &path, config.chunker_mode, chunker.as_ref())
+                    {
+                        Ok(chunks) => {
+                            info!(
+                                "✅ Auto-indexed {} ({} chunks)",
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                                chunks
+                            );
+                            // Commit after each file
+                            if let Err(e) = ret.commit() {
+                                warn!("Failed to commit after indexing: {}", e);
+                            }
+                            // Update metrics
+                            metrics::refresh_retriever_gauges(&ret);
+                        }
+                        Err(e) => {
+                            warn!("Failed to index {}: {}", path.display(), e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to acquire retriever lock: {}", e);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

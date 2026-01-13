@@ -25,21 +25,70 @@ pub struct ChunkMetadata {
     pub extra: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SourceType {
     Pdf,
     Text,
     Markdown,
     Html,
     Code,
+    Json,
+    Xml,
+    Binary,
 }
 
-// Default values optimized for small local models like phi (2K context)
-pub const DEFAULT_TARGET_SIZE: usize = 384; // Target tokens per chunk
-pub const DEFAULT_MIN_SIZE: usize = 192; // Minimum tokens
-pub const DEFAULT_MAX_SIZE: usize = 512; // Maximum tokens
-pub const DEFAULT_OVERLAP: usize = 50; // Overlap tokens
+impl SourceType {
+    /// Detect source type from file bytes using MIME type detection.
+    /// Falls back to extension-based detection if magic bytes don't match.
+    pub fn detect(bytes: &[u8], filename: Option<&str>) -> Self {
+        use crate::mime_detect::detect_content_type;
+        
+        let content_type = detect_content_type(bytes, filename);
+        Self::from_content_type(&content_type)
+    }
+
+    /// Detect source type from file extension only (legacy method)
+    pub fn from_extension(filename: &str) -> Self {
+        use crate::mime_detect::detect_from_extension;
+        
+        let content_type = detect_from_extension(filename);
+        Self::from_content_type(&content_type)
+    }
+
+    /// Convert from mime_detect::ContentType
+    fn from_content_type(ct: &crate::mime_detect::ContentType) -> Self {
+        use crate::mime_detect::ContentType;
+        
+        match ct {
+            ContentType::Pdf => SourceType::Pdf,
+            ContentType::Text => SourceType::Text,
+            ContentType::Markdown => SourceType::Markdown,
+            ContentType::Html => SourceType::Html,
+            ContentType::Code(_) => SourceType::Code,
+            ContentType::Json => SourceType::Json,
+            ContentType::Xml => SourceType::Xml,
+            ContentType::Binary => SourceType::Binary,
+            ContentType::Unknown => SourceType::Text, // Default to text
+        }
+    }
+
+    /// Check if this source type can be chunked as text
+    pub fn is_chunkable(&self) -> bool {
+        !matches!(self, SourceType::Binary)
+    }
+}
+
+// Default values optimized for BGE-small-en-v1.5 (512 token max sequence length)
+// These defaults balance retrieval quality with embedding model constraints
+pub const DEFAULT_TARGET_SIZE: usize = 256; // Target tokens per chunk (leaves room for query)
+pub const DEFAULT_MIN_SIZE: usize = 128; // Minimum tokens (avoid too-small chunks)
+pub const DEFAULT_MAX_SIZE: usize = 384; // Maximum tokens (stay well under 512 limit)
+pub const DEFAULT_OVERLAP: usize = 32; // Overlap tokens (helps with context continuity)
 pub const DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD: f32 = 0.78;
+
+// BGE-small-en-v1.5 specific constants
+pub const BGE_SMALL_MAX_TOKENS: usize = 512; // Model's max sequence length
+pub const BGE_SMALL_OPTIMAL_CHUNK: usize = 256; // Optimal chunk size for retrieval quality
 
 #[derive(Debug, Clone)]
 pub struct ChunkerConfig {
@@ -107,33 +156,73 @@ impl ChunkerConfig {
         }
     }
 
-    /// Create config optimized for different model sizes
+    /// Create config optimized for different LLM context sizes
     pub fn for_model(model_context_size: usize) -> Self {
         match model_context_size {
             // Small models (phi, tinyllama) - 2K context
             0..=2048 => Self {
-                target_size: 384,
-                min_size: 192,
-                max_size: 512,
-                overlap: 50,
+                target_size: 256,
+                min_size: 128,
+                max_size: 384,
+                overlap: 32,
                 semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
             },
             // Medium models (llama2-7b) - 4K context
             2049..=4096 => Self {
-                target_size: 512,
-                min_size: 256,
-                max_size: 768,
-                overlap: 75,
+                target_size: 384,
+                min_size: 192,
+                max_size: 512,
+                overlap: 48,
                 semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
             },
             // Large models (llama3, mistral) - 8K+ context
             _ => Self {
-                target_size: 768,
-                min_size: 384,
-                max_size: 1024,
-                overlap: 100,
+                target_size: 512,
+                min_size: 256,
+                max_size: 768,
+                overlap: 64,
                 semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
             },
+        }
+    }
+
+    /// Create config optimized for specific embedding models
+    pub fn for_embedding_model(model_name: &str) -> Self {
+        match model_name.to_lowercase().as_str() {
+            // BGE-small-en-v1.5: 512 token max, 384-dim embeddings
+            "bge-small-en-v1.5" | "bge-small-en-v1.5q" | "bge-small" => Self {
+                target_size: 256,                    // ~50% of max to leave room for query context
+                min_size: 128,                       // Avoid too-small chunks that lose context
+                max_size: 384,                       // Stay well under 512 limit
+                overlap: 32,                         // ~12% overlap for continuity
+                semantic_similarity_threshold: 0.75, // Slightly lower for better recall
+            },
+            // BGE-base-en-v1.5: 512 token max, 768-dim embeddings
+            "bge-base-en-v1.5" | "bge-base" => Self {
+                target_size: 256,
+                min_size: 128,
+                max_size: 384,
+                overlap: 32,
+                semantic_similarity_threshold: 0.75,
+            },
+            // BGE-large-en-v1.5: 512 token max, 1024-dim embeddings
+            "bge-large-en-v1.5" | "bge-large" => Self {
+                target_size: 256,
+                min_size: 128,
+                max_size: 384,
+                overlap: 32,
+                semantic_similarity_threshold: 0.75,
+            },
+            // all-MiniLM-L6-v2: 256 token max, 384-dim embeddings
+            "all-minilm-l6-v2" | "minilm" => Self {
+                target_size: 128,
+                min_size: 64,
+                max_size: 192,
+                overlap: 16,
+                semantic_similarity_threshold: 0.78,
+            },
+            // Default: assume BGE-small-like constraints
+            _ => Self::default(),
         }
     }
 }
@@ -205,8 +294,29 @@ impl SemanticChunker {
         match source_type {
             SourceType::Pdf | SourceType::Text => self.split_by_paragraphs(content),
             SourceType::Markdown => self.split_markdown(content),
-            SourceType::Html => self.split_html(content),
+            SourceType::Html | SourceType::Xml => self.split_html(content),
             SourceType::Code => self.split_code(content),
+            SourceType::Json => self.split_json(content),
+            SourceType::Binary => vec![], // Binary files cannot be chunked as text
+        }
+    }
+
+    /// Split JSON by top-level keys or array elements
+    fn split_json(&self, content: &str) -> Vec<SemanticUnit> {
+        // For JSON, we try to split by logical sections
+        // If it's an object, split by top-level keys
+        // If it's an array, split by elements
+        // Fall back to paragraph splitting if parsing fails
+        
+        let trimmed = content.trim();
+        
+        // Simple heuristic: if it looks like a JSON object or array, try to split smartly
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            // For now, use paragraph-based splitting which works reasonably for formatted JSON
+            // A more sophisticated approach would parse the JSON and split by structure
+            self.split_by_paragraphs(content)
+        } else {
+            self.split_by_paragraphs(content)
         }
     }
 
@@ -495,5 +605,36 @@ mod tests {
 
         // Should be roughly 9-12 tokens for this sentence
         assert!(tokens >= 8 && tokens <= 15);
+    }
+
+    #[test]
+    fn test_bge_small_config() {
+        let config = ChunkerConfig::for_embedding_model("bge-small-en-v1.5");
+
+        // BGE-small has 512 token max, so max_size should be well under that
+        assert!(config.max_size <= 384);
+        assert!(config.target_size <= config.max_size);
+        assert!(config.min_size <= config.target_size);
+        assert!(config.overlap < config.min_size);
+    }
+
+    #[test]
+    fn test_minilm_config() {
+        let config = ChunkerConfig::for_embedding_model("all-minilm-l6-v2");
+
+        // MiniLM has 256 token max, so max_size should be well under that
+        assert!(config.max_size <= 192);
+        assert!(config.target_size <= config.max_size);
+    }
+
+    #[test]
+    fn test_default_config_values() {
+        let config = ChunkerConfig::default();
+
+        // Verify new BGE-optimized defaults
+        assert_eq!(config.target_size, 256);
+        assert_eq!(config.min_size, 128);
+        assert_eq!(config.max_size, 384);
+        assert_eq!(config.overlap, 32);
     }
 }

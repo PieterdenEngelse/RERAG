@@ -18,6 +18,21 @@ static SNAPSHOTS: Lazy<Mutex<VecDeque<ChunkingStatsSnapshot>>> =
 static LOGGING_ENABLED: Lazy<std::sync::atomic::AtomicBool> =
     Lazy::new(|| std::sync::atomic::AtomicBool::new(true));
 
+/// Detection info for observability - tracks raw inputs vs derived conclusions
+#[derive(Clone, Serialize, Debug, Default)]
+pub struct DetectionInfo {
+    /// Raw input: MIME type from magic bytes (if detected)
+    pub mime_type: Option<String>,
+    /// Raw input: File extension
+    pub extension: Option<String>,
+    /// Derived conclusion: Detected content type
+    pub detected_format: String,
+    /// Derived conclusion: Chosen chunking strategy
+    pub chosen_strategy: String,
+    /// Detection method used (magic_bytes, extension, heuristic)
+    pub detection_method: String,
+}
+
 #[derive(Clone, Serialize, Debug)]
 pub struct ChunkingStatsSnapshot {
     pub recorded_at: String,
@@ -27,6 +42,8 @@ pub struct ChunkingStatsSnapshot {
     pub tokens: usize,
     pub duration_ms: u64,
     pub stats: Option<ChunkingStats>,
+    /// Detection observability: raw inputs and derived conclusions
+    pub detection: Option<DetectionInfo>,
 }
 
 impl ChunkingStatsSnapshot {
@@ -46,6 +63,29 @@ impl ChunkingStatsSnapshot {
             tokens,
             duration_ms,
             stats,
+            detection: None,
+        }
+    }
+
+    /// Create snapshot with detection info for full observability
+    pub fn with_detection(
+        file: &str,
+        chunker_mode: ChunkerMode,
+        chunks: usize,
+        tokens: usize,
+        duration_ms: u64,
+        stats: Option<ChunkingStats>,
+        detection: DetectionInfo,
+    ) -> Self {
+        Self {
+            recorded_at: Utc::now().to_rfc3339(),
+            file: file.to_string(),
+            chunker_mode: format!("{:?}", chunker_mode),
+            chunks,
+            tokens,
+            duration_ms,
+            stats,
+            detection: Some(detection),
         }
     }
 }

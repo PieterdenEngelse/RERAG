@@ -589,7 +589,7 @@ pub async fn get_prompt_caching() -> Result<PromptCachingResponse, String> {
 pub async fn set_prompt_caching(enabled: bool) -> Result<PromptCachingResponse, String> {
     let url = format!("{}/config/prompt_caching", API_BASE_URL);
     let body = serde_json::json!({ "enabled": enabled });
-    
+
     gloo_net::http::Request::post(&url)
         .json(&body)
         .map_err(|e| format!("Failed to create request: {}", e))?
@@ -654,9 +654,11 @@ pub struct TrainingExportResponse {
 }
 
 /// Submit feedback for training data collection
-pub async fn submit_training_feedback(feedback: TrainingFeedbackRequest) -> Result<TrainingFeedbackResponse, String> {
+pub async fn submit_training_feedback(
+    feedback: TrainingFeedbackRequest,
+) -> Result<TrainingFeedbackResponse, String> {
     let url = format!("{}/training/feedback", API_BASE_URL);
-    
+
     gloo_net::http::Request::post(&url)
         .json(&feedback)
         .map_err(|e| format!("Failed to create request: {}", e))?
@@ -676,7 +678,7 @@ pub async fn get_training_stats() -> Result<TrainingStatsResponse, String> {
 /// Export training data for Unsloth
 pub async fn export_training_data() -> Result<TrainingExportResponse, String> {
     let url = format!("{}/training/export", API_BASE_URL);
-    
+
     gloo_net::http::Request::post(&url)
         .send()
         .await
@@ -689,7 +691,7 @@ pub async fn export_training_data() -> Result<TrainingExportResponse, String> {
 /// Clear all training data
 pub async fn clear_training_data() -> Result<serde_json::Value, String> {
     let url = format!("{}/training/clear", API_BASE_URL);
-    
+
     gloo_net::http::Request::post(&url)
         .send()
         .await
@@ -774,6 +776,18 @@ pub async fn reindex_async() -> Result<ReindexAsyncResponse, String> {
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChunkConfigResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub chunker_config: ChunkerConfigSnapshot,
+}
+
+pub async fn fetch_chunk_config() -> Result<ChunkConfigResponse, String> {
+    fetch_json::<ChunkConfigResponse>("/config/chunk_size").await
 }
 
 pub async fn commit_chunk_config(
@@ -971,14 +985,28 @@ pub async fn fetch_recent_logs(limit: usize) -> Result<LogsResponse, String> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IndexedFile {
+    pub file: String,
+    pub chunks_indexed: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IndexError {
+    pub file: Option<String>,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UploadResponse {
     pub status: String,
     #[serde(default)]
     pub uploaded_files: Vec<String>,
     #[serde(default)]
-    pub indexed_files: Vec<String>,
+    pub indexed_files: Vec<IndexedFile>,
     #[serde(default)]
-    pub index_errors: Vec<String>,
+    pub index_errors: Vec<IndexError>,
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 pub async fn upload_document(filename: &str, data: &[u8]) -> Result<UploadResponse, String> {
@@ -1281,4 +1309,98 @@ pub async fn store_rag_memory(req: &StoreRagRequest) -> Result<StoreRagResponse,
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Chunking Stats API - Detection Observability
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Detection info for observability - tracks raw inputs vs derived conclusions
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DetectionInfo {
+    /// Raw input: MIME type from magic bytes (if detected)
+    pub mime_type: Option<String>,
+    /// Raw input: File extension
+    pub extension: Option<String>,
+    /// Derived conclusion: Detected content type
+    pub detected_format: String,
+    /// Derived conclusion: Chosen chunking strategy
+    pub chosen_strategy: String,
+    /// Detection method used (magic_bytes, extension, heuristic)
+    pub detection_method: String,
+}
+
+/// Chunking stats from semantic chunker
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ChunkingStats {
+    pub semantic_similarity_threshold: f32,
+    pub semantic_flushes: usize,
+    pub heading_flushes: usize,
+    pub size_flushes: usize,
+    pub total_segments: usize,
+    pub similarity_sum: f32,
+    pub similarity_count: usize,
+}
+
+/// Snapshot of chunking operation with detection info
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChunkingStatsSnapshot {
+    pub recorded_at: String,
+    pub file: String,
+    pub chunker_mode: String,
+    pub chunks: usize,
+    pub tokens: usize,
+    pub duration_ms: u64,
+    pub stats: Option<ChunkingStats>,
+    pub detection: Option<DetectionInfo>,
+}
+
+/// Response from chunking stats endpoint
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChunkingStatsResponse {
+    pub status: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub snapshots: Vec<ChunkingStatsSnapshot>,
+    #[serde(default)]
+    pub count: Option<usize>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Fetch chunking stats history for observability
+pub async fn fetch_chunking_stats(limit: usize) -> Result<ChunkingStatsResponse, String> {
+    fetch_json(&format!("/monitoring/chunking/latest?limit={}", limit)).await
+}
+
+// ============ Tool Execution Monitoring ============
+
+/// Record of a single tool execution
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolExecution {
+    pub tool_type: String,
+    pub query: String,
+    pub success: bool,
+    pub result_preview: String,
+    pub execution_time_ms: u64,
+    pub confidence: f32,
+    pub timestamp: String,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Response from tool executions endpoint
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolExecutionResponse {
+    pub status: String,
+    #[serde(default)]
+    pub request_id: String,
+    pub executions: Vec<ToolExecution>,
+    pub count: usize,
+}
+
+/// Fetch recent tool executions
+pub async fn fetch_tool_executions(limit: usize) -> Result<ToolExecutionResponse, String> {
+    fetch_json(&format!("/monitoring/tools/executions?limit={}", limit)).await
 }

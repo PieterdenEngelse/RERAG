@@ -25,6 +25,7 @@ pub mod performance_analysis;
 pub mod pprof;
 pub mod rate_limit_middleware;
 pub mod resource_attribution;
+pub mod tool_stats;
 pub mod trace_alerting;
 pub mod trace_context;
 pub mod trace_middleware;
@@ -42,7 +43,7 @@ pub use alerting_hooks::{AlertingHooksConfig, ReindexCompletionEvent};
 pub use chunking_stats::{
     chunking_logging_enabled, chunking_snapshot_history, latest_chunking_snapshot,
     record_chunking_snapshot, set_chunking_history_capacity, set_chunking_logging_enabled,
-    ChunkingStatsSnapshot,
+    ChunkingStatsSnapshot, DetectionInfo,
 };
 pub use config::MonitoringConfig;
 pub use health::HealthStatus;
@@ -52,6 +53,11 @@ pub use trace_alerting::{start_trace_alerting, TraceAlertingConfig, TraceAnomaly
 pub use trace_context::{clear_trace_id, get_trace_id, set_trace_id};
 pub use ui_metrics::{
     get_requests_snapshot, record_http_request, RequestChartPoint, RequestsSnapshot,
+};
+pub use tool_stats::{
+    record_tool_execution, get_recent_executions, get_tool_stats, get_tool_stat,
+    clear_history as clear_tool_history, ToolExecution, ToolAggregateStats,
+    ToolExecutionResponse, ToolStatsResponse,
 };
 
 use std::sync::Arc;

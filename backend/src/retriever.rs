@@ -173,6 +173,7 @@ pub struct Retriever {
     l3_cache: Option<RedisCache>,
     pub metrics: RetrieverMetrics,
     index_dir_path: String,
+    search_top_k: usize,
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -454,6 +455,7 @@ impl Retriever {
                 ..Default::default()
             },
             index_dir_path: index_dir.to_string(),
+            search_top_k: 10,
         };
 
         // Now load from the CORRECT path - clone the path to avoid borrow issues
@@ -566,6 +568,15 @@ impl Retriever {
         };
     }
 
+    pub fn set_search_top_k(&mut self, top_k: usize) {
+        self.search_top_k = top_k.max(1);
+        debug!(top_k = self.search_top_k, "Updated search_top_k");
+        crate::monitoring::metrics::set_search_top_k(self.search_top_k as i64);
+    }
+
+    pub fn current_search_top_k(&self) -> usize {
+        self.search_top_k
+    }
     pub fn begin_batch(&mut self) -> Result<(), RetrieverError> {
         if self.index_writer.is_some() {
             return Err(RetrieverError::IndexError(
@@ -660,6 +671,9 @@ impl Retriever {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or(Duration::from_secs(0))
                     .as_secs();
+                crate::monitoring::metrics::set_cache_hit_rate_percent(
+                    self.metrics.cache_hit_rate(),
+                );
                 return Ok(cached.clone());
             }
         }
@@ -671,7 +685,7 @@ impl Retriever {
         let parser =
             QueryParser::for_index(&self.index, vec![self.title_field, self.content_field]);
         let query = parser.parse_query(query_str)?;
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(self.search_top_k))?;
         let mut results = Vec::new();
         for (_score, doc_address) in top_docs {
             let doc = searcher.doc::<tantivy::TantivyDocument>(doc_address)?;
@@ -699,6 +713,7 @@ impl Retriever {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs();
+        crate::monitoring::metrics::set_cache_hit_rate_percent(self.metrics.cache_hit_rate());
         Ok(results)
     }
 

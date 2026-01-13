@@ -126,6 +126,121 @@ pub static SEARCH_LATENCY_MS: Lazy<Histogram> = Lazy::new(|| {
     h
 });
 
+// Embedding metrics
+pub static EMBEDDING_LATENCY_MS: Lazy<Histogram> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let default = vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+    let buckets = parse_buckets_env("EMBEDDING_HISTO_BUCKETS").unwrap_or(default);
+    let mut opts = HistogramOpts::new(
+        "embedding_latency_ms",
+        "Embedding generation latency in milliseconds",
+    )
+    .buckets(buckets);
+    opts.common_opts = opts
+        .common_opts
+        .const_label("service", service)
+        .const_label("env", env_name);
+    let h = Histogram::with_opts(opts).unwrap();
+    REGISTRY.register(Box::new(h.clone())).ok();
+    h
+});
+
+pub static EMBEDDING_BATCH_SIZE: Lazy<Histogram> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let buckets = vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0];
+    let mut opts = HistogramOpts::new(
+        "embedding_batch_size",
+        "Number of texts per embedding batch",
+    )
+    .buckets(buckets);
+    opts.common_opts = opts
+        .common_opts
+        .const_label("service", service)
+        .const_label("env", env_name);
+    let h = Histogram::with_opts(opts).unwrap();
+    REGISTRY.register(Box::new(h.clone())).ok();
+    h
+});
+
+pub static EMBEDDING_CACHE_HITS: Lazy<IntCounter> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let c = IntCounter::with_opts(
+        Opts::new("embedding_cache_hits_total", "Total embedding cache hits")
+            .const_label("service", service)
+            .const_label("env", env_name),
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+pub static EMBEDDING_CACHE_MISSES: Lazy<IntCounter> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let c = IntCounter::with_opts(
+        Opts::new(
+            "embedding_cache_misses_total",
+            "Total embedding cache misses",
+        )
+        .const_label("service", service)
+        .const_label("env", env_name),
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+pub static EMBEDDING_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let c = IntCounter::with_opts(
+        Opts::new("embedding_total", "Total embeddings generated")
+            .const_label("service", service)
+            .const_label("env", env_name),
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+// Inference gateway metrics
+pub static INFERENCE_PERMITS_ACQUIRED: Lazy<IntCounterVec> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "inference_permits_acquired_total",
+        "Total inference permits acquired",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let cv = IntCounterVec::new(opts, &["type"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
+pub static INFERENCE_PERMITS_REJECTED: Lazy<IntCounterVec> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "inference_permits_rejected_total",
+        "Total inference permits rejected (timeout/unavailable)",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let cv = IntCounterVec::new(opts, &["type"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
+pub static INFERENCE_PERMITS_AVAILABLE: Lazy<prometheus::IntGaugeVec> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "inference_permits_available",
+        "Currently available inference permits",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let gv = prometheus::IntGaugeVec::new(opts, &["type"]).unwrap();
+    REGISTRY.register(Box::new(gv.clone())).ok();
+    gv
+});
+
 pub static CACHE_HITS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     let (service, env_name) = service_and_env();
     let c = IntCounter::with_opts(
@@ -215,6 +330,36 @@ pub static INDEX_SIZE_BYTES: Lazy<IntGauge> = Lazy::new(|| {
     g
 });
 
+pub static CACHE_HIT_RATE_PERCENT: Lazy<IntGauge> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let g = IntGauge::with_opts(
+        Opts::new(
+            "search_cache_hit_rate_percent",
+            "Search cache hit rate (0-100)",
+        )
+        .const_label("service", service)
+        .const_label("env", env_name),
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(g.clone())).ok();
+    g
+});
+
+pub static SEARCH_TOP_K_GAUGE: Lazy<IntGauge> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let g = IntGauge::with_opts(
+        Opts::new(
+            "search_top_k_config",
+            "Configured keyword search top-k limit",
+        )
+        .const_label("service", service)
+        .const_label("env", env_name),
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(g.clone())).ok();
+    g
+});
+
 pub static REQUEST_LATENCY_MS: Lazy<prometheus::HistogramVec> = Lazy::new(|| {
     use prometheus::{histogram_opts, HistogramVec};
     let (service, env_name) = service_and_env();
@@ -261,9 +406,20 @@ pub static MANUAL_OBS_LATENCY_MS: Lazy<HistogramVec> = Lazy::new(|| {
 pub fn refresh_retriever_gauges(retriever: &crate::retriever::Retriever) {
     DOCUMENTS_TOTAL.set(retriever.metrics.total_documents_indexed as i64);
     VECTORS_TOTAL.set(retriever.metrics.total_vectors as i64);
+    set_search_top_k(retriever.current_search_top_k() as i64);
+    set_cache_hit_rate_percent(retriever.metrics.cache_hit_rate());
     if let Ok(size) = retriever.metrics.get_index_size_bytes() {
         INDEX_SIZE_BYTES.set(size as i64);
     }
+}
+
+pub fn set_cache_hit_rate_percent(hit_rate_fraction: f64) {
+    let hit_rate = (hit_rate_fraction * 100.0).round() as i64;
+    CACHE_HIT_RATE_PERCENT.set(hit_rate.clamp(0, 100));
+}
+
+pub fn set_search_top_k(top_k: i64) {
+    SEARCH_TOP_K_GAUGE.set(top_k.max(1));
 }
 
 // Observe search latency in ms
@@ -274,6 +430,64 @@ pub fn observe_search_latency_ms(duration_ms: f64) {
 // Record reindex duration in ms
 pub fn observe_reindex_duration_ms(duration_ms: f64) {
     REINDEX_DURATION_MS.observe(duration_ms);
+}
+
+// Observe embedding latency in ms
+pub fn observe_embedding_latency_ms(duration_ms: f64) {
+    EMBEDDING_LATENCY_MS.observe(duration_ms);
+}
+
+// Record embedding batch size
+pub fn observe_embedding_batch_size(size: usize) {
+    EMBEDDING_BATCH_SIZE.observe(size as f64);
+}
+
+// Record embedding cache hit
+pub fn record_embedding_cache_hit() {
+    EMBEDDING_CACHE_HITS.inc();
+}
+
+// Record embedding cache miss
+pub fn record_embedding_cache_miss() {
+    EMBEDDING_CACHE_MISSES.inc();
+}
+
+// Record embedding generated
+pub fn record_embedding_generated(count: u64) {
+    EMBEDDING_TOTAL.inc_by(count);
+}
+
+/// Get embedding cache stats snapshot
+pub fn embedding_cache_stats() -> (u64, u64) {
+    (EMBEDDING_CACHE_HITS.get(), EMBEDDING_CACHE_MISSES.get())
+}
+
+// Record inference permit acquired
+pub fn record_inference_permit_acquired(permit_type: &str) {
+    INFERENCE_PERMITS_ACQUIRED
+        .with_label_values(&[permit_type])
+        .inc();
+}
+
+// Record inference permit rejected
+pub fn record_inference_permit_rejected(permit_type: &str) {
+    INFERENCE_PERMITS_REJECTED
+        .with_label_values(&[permit_type])
+        .inc();
+}
+
+// Update available permits gauge
+pub fn set_inference_permits_available(permit_type: &str, count: i64) {
+    INFERENCE_PERMITS_AVAILABLE
+        .with_label_values(&[permit_type])
+        .set(count);
+}
+
+/// Refresh inference gateway gauges
+pub fn refresh_inference_gateway_gauges() {
+    let stats = crate::inference_gateway::gateway_stats();
+    set_inference_permits_available("embedding", stats.embedding_permits_available as i64);
+    set_inference_permits_available("llm", stats.llm_permits_available as i64);
 }
 
 // Exporter for Prometheus text format
@@ -503,7 +717,7 @@ pub struct MemorySearchLayerStats {
 /// Get snapshot of 3-layer memory search metrics
 pub fn memory_search_layer_stats() -> Vec<MemorySearchLayerStats> {
     let mut stats = Vec::new();
-    
+
     for layer in &["search", "timeline", "fetch"] {
         let ok = MEMORY_SEARCH_LAYER_REQUESTS
             .with_label_values(&[layer, "ok"])
@@ -511,7 +725,7 @@ pub fn memory_search_layer_stats() -> Vec<MemorySearchLayerStats> {
         let err = MEMORY_SEARCH_LAYER_REQUESTS
             .with_label_values(&[layer, "err"])
             .get();
-        
+
         // Get histogram data for latency percentiles
         let histogram = MEMORY_SEARCH_LAYER_LATENCY_MS.with_label_values(&[layer]);
         let sample_count = histogram.get_sample_count();
@@ -521,16 +735,16 @@ pub fn memory_search_layer_stats() -> Vec<MemorySearchLayerStats> {
         } else {
             0.0
         };
-        
+
         stats.push(MemorySearchLayerStats {
             layer: layer.to_string(),
             requests_ok: ok,
             requests_err: err,
-            latency_p50_ms: avg_latency, // Approximation
+            latency_p50_ms: avg_latency,       // Approximation
             latency_p99_ms: avg_latency * 2.0, // Rough estimate
         });
     }
-    
+
     stats
 }
 

@@ -8,7 +8,5 @@
 pub mod data_collector;
 pub mod feedback;
 
-pub use data_collector::{
-    AlpacaFormat, TrainingDataCollector, TrainingExample, TrainingStats,
-};
+pub use data_collector::{AlpacaFormat, TrainingDataCollector, TrainingExample, TrainingStats};
 pub use feedback::QualityScore;

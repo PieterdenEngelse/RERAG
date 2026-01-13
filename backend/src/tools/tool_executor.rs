@@ -3,6 +3,15 @@
 // Handles actual tool execution with result passing
 
 use crate::tools::calculator::CalculatorTool;
+use crate::tools::classifier::ClassifierTool;
+use crate::tools::code_execution::CodeExecutionTool;
+use crate::tools::database_query::DatabaseQueryTool;
+use crate::tools::file_analyzer::FileAnalyzerTool;
+use crate::tools::image_generation::ImageGenerationTool;
+use crate::tools::notification::NotificationTool;
+use crate::tools::query_rewriter::QueryRewriterTool;
+use crate::tools::semantic_search::SemanticSearchTool;
+use crate::tools::summarizer::SummarizerTool;
 use crate::tools::url_fetch::URLFetchTool;
 use crate::tools::web_search::WebSearchTool;
 use crate::tools::{Tool, ToolResult, ToolType};
@@ -46,23 +55,54 @@ impl ToolExecutor {
                 url_fetch.execute(&input_query).await?
             }
             ToolType::SemanticSearch => {
-                // Fallback to semantic search description
-                ToolResult {
-                    tool: ToolType::SemanticSearch,
-                    success: true,
-                    result: format!("Semantic search for: {}", input_query),
-                    metadata: crate::tools::ToolMetadata {
-                        execution_time_ms: start.elapsed().as_millis() as u64,
-                        confidence: 0.70,
-                        source: Some("SemanticSearch".to_string()),
-                        cost: Some(0.0),
-                    },
-                }
+                let semantic_search = SemanticSearchTool::new();
+                semantic_search.execute(&input_query).await?
             }
-            _ => {
-                return Err(format!("Tool {:?} not implemented", tool_type));
+            ToolType::DatabaseQuery => {
+                let db_query = DatabaseQueryTool::new();
+                db_query.execute(&input_query).await?
+            }
+            ToolType::CodeExecution => {
+                let code_exec = CodeExecutionTool::new();
+                code_exec.execute(&input_query).await?
+            }
+            ToolType::ImageGeneration => {
+                let image_gen = ImageGenerationTool::new();
+                image_gen.execute(&input_query).await?
+            }
+            ToolType::Summarizer => {
+                let summarizer = SummarizerTool::new();
+                summarizer.execute(&input_query).await?
+            }
+            ToolType::QueryRewriter => {
+                let rewriter = QueryRewriterTool::new();
+                rewriter.execute(&input_query).await?
+            }
+            ToolType::Classifier => {
+                let classifier = ClassifierTool::new();
+                classifier.execute(&input_query).await?
+            }
+            ToolType::FileAnalyzer => {
+                let analyzer = FileAnalyzerTool::new();
+                analyzer.execute(&input_query).await?
+            }
+            ToolType::Notification => {
+                let notifier = NotificationTool::new();
+                notifier.execute(&input_query).await?
             }
         };
+
+        // Record execution for monitoring
+        let execution_time = start.elapsed().as_millis() as u64;
+        crate::monitoring::record_tool_execution(
+            &tool_type.to_string(),
+            query,
+            result.success,
+            &result.result,
+            execution_time,
+            result.metadata.confidence,
+            result.metadata.source.as_deref(),
+        );
 
         Ok(result)
     }

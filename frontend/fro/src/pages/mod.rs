@@ -20,7 +20,7 @@ pub use home::Home;
 pub use memories::ConfigMemories;
 pub use monitor::{
     MonitorAgentic, MonitorCache, MonitorIndex, MonitorLogs, MonitorObservations, MonitorOverview,
-    MonitorRateLimits, MonitorRequests,
+    MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools,
 };
 pub use not_found::PageNotFound;
 pub use other::ConfigOther;

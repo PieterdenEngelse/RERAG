@@ -1,6 +1,6 @@
 // src/memory/prompt_cache.rs
 // Prompt Caching Support for LLM Providers
-// 
+//
 // Implements KV cache optimization hints for:
 // - Anthropic: Explicit cache_control breakpoints
 // - OpenAI: Automatic caching (prefix matching)
@@ -148,10 +148,7 @@ impl CacheOptimizedPrompt {
 
     /// Estimate token count (rough: ~4 chars per token)
     pub fn estimate_tokens(&self) -> usize {
-        self.segments
-            .iter()
-            .map(|s| s.content.len() / 4)
-            .sum()
+        self.segments.iter().map(|s| s.content.len() / 4).sum()
     }
 
     /// Estimate cacheable token count
@@ -181,7 +178,7 @@ impl CacheOptimizedPrompt {
     }
 
     /// Build messages array for Ollama /api/chat endpoint (enables context caching)
-    /// 
+    ///
     /// Ollama 0.3+ supports KV cache reuse when using the chat endpoint with
     /// consistent message history. The server keeps the K/V cache warm for
     /// the conversation prefix.
@@ -218,7 +215,7 @@ impl CacheOptimizedPrompt {
                     // Parse history into alternating user/assistant messages
                     // For now, add as context
                     messages.push(serde_json::json!({
-                        "role": "user", 
+                        "role": "user",
                         "content": format!("Previous conversation:\n{}", segment.content)
                     }));
                 }
@@ -504,8 +501,7 @@ mod tests {
 
     #[test]
     fn test_token_estimation() {
-        let prompt = CacheOptimizedPrompt::new()
-            .with_system_prompt("a".repeat(4000)); // ~1000 tokens
+        let prompt = CacheOptimizedPrompt::new().with_system_prompt("a".repeat(4000)); // ~1000 tokens
 
         assert!(prompt.estimate_tokens() >= 900);
         assert!(prompt.estimate_tokens() <= 1100);
@@ -519,7 +515,7 @@ mod tests {
             .with_user_query("What is this about?");
 
         let messages = prompt.build_ollama_chat_messages();
-        
+
         // Should have: system, user (context), assistant (ack), user (query)
         assert!(messages.len() >= 3);
         assert_eq!(messages[0]["role"], "system");
@@ -532,7 +528,7 @@ mod tests {
             .with_user_query("Hello");
 
         let request = prompt.build_ollama_chat_request("llama3", true, None);
-        
+
         assert_eq!(request["model"], "llama3");
         assert_eq!(request["stream"], true);
         assert_eq!(request["keep_alive"], "1h");

@@ -6,10 +6,19 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub mod calculator;
+pub mod classifier;
+pub mod code_execution;
+pub mod database_query;
+pub mod file_analyzer;
+pub mod image_generation;
+pub mod notification;
 pub mod query_optimizer;
+pub mod query_rewriter;
 pub mod result_cache;
 pub mod result_compressor;
 pub mod result_formatter;
+pub mod semantic_search;
+pub mod summarizer;
 pub mod tool_composer;
 pub mod tool_executor;
 pub mod tool_selector;
@@ -22,6 +31,13 @@ pub mod rate_limiter;
 pub use connection_pool::ConnectionPool;
 pub use rate_limiter::RateLimiter;
 
+// Re-export agent tools
+pub use classifier::ClassifierTool;
+pub use file_analyzer::FileAnalyzerTool;
+pub use notification::NotificationTool;
+pub use query_rewriter::QueryRewriterTool;
+pub use summarizer::SummarizerTool;
+
 // ============ Tool Types ============
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -33,6 +49,12 @@ pub enum ToolType {
     URLFetch,
     CodeExecution,
     ImageGeneration,
+    // Agent tools
+    Summarizer,
+    QueryRewriter,
+    Classifier,
+    FileAnalyzer,
+    Notification,
 }
 
 impl ToString for ToolType {
@@ -45,6 +67,11 @@ impl ToString for ToolType {
             ToolType::URLFetch => "URLFetch".to_string(),
             ToolType::CodeExecution => "CodeExecution".to_string(),
             ToolType::ImageGeneration => "ImageGeneration".to_string(),
+            ToolType::Summarizer => "Summarizer".to_string(),
+            ToolType::QueryRewriter => "QueryRewriter".to_string(),
+            ToolType::Classifier => "Classifier".to_string(),
+            ToolType::FileAnalyzer => "FileAnalyzer".to_string(),
+            ToolType::Notification => "Notification".to_string(),
         }
     }
 }

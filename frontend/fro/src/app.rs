@@ -3,7 +3,7 @@ use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigHardware, ConfigMemories, ConfigOther, ConfigPrompt, ConfigSampling, Home,
     MonitorAgentic, MonitorCache, MonitorIndex, MonitorLogs, MonitorObservations, MonitorOverview,
-    MonitorRateLimits, MonitorRequests, PageNotFound, Parameters, Train,
+    MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 
@@ -41,10 +41,14 @@ pub enum Route {
         MonitorIndex {},
         #[route("/monitor/observations")]
         MonitorObservations {},
+        #[route("/monitor/rag")]
+        MonitorRag {},
         #[route("/monitor/rate-limits")]
         MonitorRateLimits {},
         #[route("/monitor/logs")]
         MonitorLogs {},
+        #[route("/monitor/tools")]
+        MonitorTools {},
         #[route("/train")]
         Train {},
     #[end_layout]

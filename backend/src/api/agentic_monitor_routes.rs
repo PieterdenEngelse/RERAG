@@ -648,37 +648,56 @@ pub async fn get_memory_stats() -> ActixResult<HttpResponse> {
 }
 
 /// GET /monitoring/tools/stats
-/// Returns tool usage statistics (placeholder - needs tool tracking implementation)
+/// Returns tool usage statistics from the monitoring system
 pub async fn get_tool_stats() -> ActixResult<HttpResponse> {
-    // Tool stats would require tracking tool executions
-    // For now, return placeholder data
+    let stats = crate::monitoring::get_tool_stats();
+    
+    let total_executions: usize = stats.iter().map(|s| s.total_calls).sum();
+    let total_confidence: f32 = stats.iter().map(|s| s.avg_confidence * s.total_calls as f32).sum();
+    let avg_confidence = if total_executions > 0 {
+        total_confidence / total_executions as f32
+    } else {
+        0.0
+    };
+    
+    let total_failures: usize = stats.iter().map(|s| s.failure_count).sum();
+    let fallback_rate = if total_executions > 0 {
+        total_failures as f64 / total_executions as f64
+    } else {
+        0.0
+    };
+    
+    let tool_distribution: Vec<ToolUsageEntry> = stats.iter().map(|s| {
+        ToolUsageEntry {
+            tool_name: s.tool_type.clone(),
+            count: s.total_calls,
+            percentage: if total_executions > 0 {
+                s.total_calls as f64 / total_executions as f64 * 100.0
+            } else {
+                0.0
+            },
+        }
+    }).collect();
+    
     Ok(HttpResponse::Ok().json(ToolStatsResponse {
-        tool_executions: 0,
-        avg_confidence: 0.0,
-        fallback_rate: 0.0,
-        tool_distribution: vec![
-            ToolUsageEntry {
-                tool_name: "SemanticSearch".to_string(),
-                count: 0,
-                percentage: 0.0,
-            },
-            ToolUsageEntry {
-                tool_name: "Calculator".to_string(),
-                count: 0,
-                percentage: 0.0,
-            },
-            ToolUsageEntry {
-                tool_name: "WebSearch".to_string(),
-                count: 0,
-                percentage: 0.0,
-            },
-            ToolUsageEntry {
-                tool_name: "URLFetch".to_string(),
-                count: 0,
-                percentage: 0.0,
-            },
-        ],
+        tool_executions: total_executions,
+        avg_confidence: avg_confidence as f64,
+        fallback_rate,
+        tool_distribution,
         timestamp: Utc::now().to_rfc3339(),
+    }))
+}
+
+/// GET /monitoring/tools/executions
+/// Returns recent tool executions for the monitoring dashboard
+pub async fn get_tool_executions(query: web::Query<LimitQuery>) -> ActixResult<HttpResponse> {
+    let executions = crate::monitoring::get_recent_executions(query.limit);
+    
+    Ok(HttpResponse::Ok().json(crate::monitoring::ToolExecutionResponse {
+        status: "ok".to_string(),
+        request_id: uuid::Uuid::new_v4().to_string(),
+        count: executions.len(),
+        executions,
     }))
 }
 
@@ -693,5 +712,9 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
             .route("/reflections", web::get().to(get_reflections)),
     )
     .service(web::scope("/monitoring/memory").route("/stats", web::get().to(get_memory_stats)))
-    .service(web::scope("/monitoring/tools").route("/stats", web::get().to(get_tool_stats)));
+    .service(
+        web::scope("/monitoring/tools")
+            .route("/stats", web::get().to(get_tool_stats))
+            .route("/executions", web::get().to(get_tool_executions)),
+    );
 }

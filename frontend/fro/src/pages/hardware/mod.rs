@@ -104,6 +104,8 @@ pub fn ConfigHardware() -> Element {
     let mut sampling_config = use_signal(api::LlmConfig::default);
     let sampling_loading = use_signal(|| false);
     let sampling_error = use_signal(|| Option::<String>::None);
+
+
     let show_temperature_info = use_signal(|| false);
     let show_top_k_info = use_signal(|| false);
     let show_top_p_info = use_signal(|| false);
@@ -326,18 +328,21 @@ pub fn ConfigHardware() -> Element {
                 let hw_result = api::commit_hardware_config(&hw_payload).await;
                 // Save sampling config
                 let sampling_result = api::commit_llm_config(&sampling_payload).await;
-                
-                match (hw_result, sampling_result) {
+
+                match (&hw_result, &sampling_result) {
                     (Ok(hw_resp), Ok(sampling_resp)) => {
                         status.set(Some("✓ Settings saved".to_string()));
-                        hardware_config.set(hw_resp.config);
-                        sampling_config.set(sampling_resp.config);
+                        hardware_config.set(hw_resp.config.clone());
+                        sampling_config.set(sampling_resp.config.clone());
                     }
                     (Err(hw_err), _) => {
                         error.set(Some(format!("Failed to save hardware config: {}", hw_err)));
                     }
                     (_, Err(sampling_err)) => {
-                        error.set(Some(format!("Failed to save sampling config: {}", sampling_err)));
+                        error.set(Some(format!(
+                            "Failed to save sampling config: {}",
+                            sampling_err
+                        )));
                     }
                 }
                 saving.set(false);
@@ -525,13 +530,13 @@ pub fn ConfigHardware() -> Element {
                         } else if let Some(err) = error() {
                             div { class: "text-xs text-red-400", "{err}" }
                         } else if let Some(msg) = status() {
-                            div { 
-                                class: if msg.contains("saved") || msg.contains("Saved") { 
-                                    "text-xs text-green-400 font-medium" 
-                                } else { 
-                                    "text-xs text-gray-400" 
+                            div {
+                                class: if msg.contains("saved") || msg.contains("Saved") {
+                                    "text-xs text-green-400 font-medium"
+                                } else {
+                                    "text-xs text-gray-400"
                                 },
-                                "{msg}" 
+                                "{msg}"
                             }
                         }
                         div { class: "flex flex-col md:flex-row md:items-start gap-4",
