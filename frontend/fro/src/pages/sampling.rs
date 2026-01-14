@@ -12,7 +12,6 @@ const TEMP_MAX: f32 = 2.0;
 const PARAM_BLOCK_CLASS: &str = "flex flex-col gap-1 text-xs text-gray-200";
 const STOP_BLOCK_CLASS: &str = "flex flex-col gap-1 text-xs text-gray-200";
 const PARAM_COLUMN_CLASS: &str = "space-y-5 md:w-[18rem]";
-const PARAM_COLUMN_SHIFT_CLASS: &str = "md-shift-left";
 const PARAM_INPUT_ROW_CLASS: &str = "flex items-end gap-2";
 const PARAM_LABEL_CLASS: &str = "text-gray-400 whitespace-nowrap";
 const PARAM_ICON_BUTTON_CLASS: &str =

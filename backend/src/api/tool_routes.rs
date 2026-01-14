@@ -57,6 +57,13 @@ pub struct ToolInfo {
     pub success_rate: f32,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ToolSuggestionResponse {
+    pub intent: String,
+    pub suggestions: Vec<String>,
+    pub timestamp: String,
+}
+
 // ============ Tool Route Handlers ============
 
 /// Analyze query and suggest best tool
@@ -147,13 +154,43 @@ pub async fn list_available_tools() -> ActixResult<HttpResponse> {
         },
         ToolInfo {
             name: "SemanticSearch".to_string(),
-            description: "Search knowledge base with semantic understanding".to_string(),
+            description: "Search the local knowledge base semantically".to_string(),
             success_rate: 0.75,
         },
         ToolInfo {
             name: "DatabaseQuery".to_string(),
             description: "Query structured data from databases".to_string(),
             success_rate: 0.90,
+        },
+        ToolInfo {
+            name: "Translator".to_string(),
+            description: "Translate text between supported languages offline".to_string(),
+            success_rate: 0.88,
+        },
+        ToolInfo {
+            name: "SentimentAnalyzer".to_string(),
+            description: "Classify the sentiment of text with confidence scores".to_string(),
+            success_rate: 0.90,
+        },
+        ToolInfo {
+            name: "EntityExtractor".to_string(),
+            description: "Extract people, places, organizations, and other entities".to_string(),
+            success_rate: 0.87,
+        },
+        ToolInfo {
+            name: "SpellChecker".to_string(),
+            description: "Detect and correct spelling mistakes with suggestions".to_string(),
+            success_rate: 0.96,
+        },
+        ToolInfo {
+            name: "Scheduler".to_string(),
+            description: "Create lightweight reminders like 'schedule sync in 30 minutes'".to_string(),
+            success_rate: 0.90,
+        },
+        ToolInfo {
+            name: "Memory".to_string(),
+            description: "Store, search, and forget agent memories in the local DB".to_string(),
+            success_rate: 0.88,
         },
     ];
 
@@ -180,6 +217,21 @@ pub async fn detect_intent(
     })))
 }
 
+/// Suggest tools without executing them
+pub async fn suggest_tools(
+    req: web::Json<ToolQueryRequest>,
+) -> ActixResult<HttpResponse> {
+    let selection = ToolSelector::select_tools(&req.query);
+    let mut suggestions = vec![selection.primary_tool.to_string()];
+    suggestions.extend(selection.secondary_tools.iter().map(|t| t.to_string()));
+
+    Ok(HttpResponse::Ok().json(ToolSuggestionResponse {
+        intent: selection.intent.to_string(),
+        suggestions,
+        timestamp: Utc::now().to_rfc3339(),
+    }))
+}
+
 // ============ Route Configuration ============
 
 pub fn configure_tool_routes(cfg: &mut web::ServiceConfig) {
@@ -189,5 +241,6 @@ pub fn configure_tool_routes(cfg: &mut web::ServiceConfig) {
             .route("/execute", web::post().to(execute_with_tools))
             .route("/available", web::get().to(list_available_tools))
             .route("/detect-intent", web::post().to(detect_intent))
+            .route("/suggest", web::post().to(suggest_tools))
     );
 }

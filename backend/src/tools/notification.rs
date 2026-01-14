@@ -120,7 +120,7 @@ impl NotificationTool {
     /// Parse notification from input
     fn parse_notification(&self, input: &str) -> (NotificationType, Priority, String, String) {
         let input_lower = input.to_lowercase();
-        
+
         // Detect type
         let notification_type = if input_lower.contains("error") || input_lower.contains("fail") {
             NotificationType::Error
@@ -222,9 +222,13 @@ impl NotificationTool {
     }
 
     /// Create and send notification
-    async fn send_notification(&self, input: &str, channel: Option<&str>) -> Result<Notification, String> {
+    async fn send_notification(
+        &self,
+        input: &str,
+        channel: Option<&str>,
+    ) -> Result<Notification, String> {
         let (notification_type, priority, title, message) = self.parse_notification(input);
-        
+
         let notification = Notification {
             id: uuid::Uuid::new_v4().to_string(),
             notification_type,
@@ -329,7 +333,7 @@ impl Tool for NotificationTool {
                 output.push_str(&format!("**Title:** {}\n", notification.title));
                 output.push_str(&format!("**Message:** {}\n", notification.message));
                 output.push_str(&format!("**Timestamp:** {}\n", notification.timestamp));
-                
+
                 if self.webhook_url.is_some() {
                     output.push_str("\n*Webhook delivery attempted*");
                 }

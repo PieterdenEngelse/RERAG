@@ -1,0 +1,3 @@
+pkill -f dx
+cd /home/pde/ag
+dx serve --package fro --platform web --port 1789

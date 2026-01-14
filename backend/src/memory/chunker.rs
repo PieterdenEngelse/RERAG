@@ -42,7 +42,7 @@ impl SourceType {
     /// Falls back to extension-based detection if magic bytes don't match.
     pub fn detect(bytes: &[u8], filename: Option<&str>) -> Self {
         use crate::mime_detect::detect_content_type;
-        
+
         let content_type = detect_content_type(bytes, filename);
         Self::from_content_type(&content_type)
     }
@@ -50,7 +50,7 @@ impl SourceType {
     /// Detect source type from file extension only (legacy method)
     pub fn from_extension(filename: &str) -> Self {
         use crate::mime_detect::detect_from_extension;
-        
+
         let content_type = detect_from_extension(filename);
         Self::from_content_type(&content_type)
     }
@@ -58,7 +58,7 @@ impl SourceType {
     /// Convert from mime_detect::ContentType
     fn from_content_type(ct: &crate::mime_detect::ContentType) -> Self {
         use crate::mime_detect::ContentType;
-        
+
         match ct {
             ContentType::Pdf => SourceType::Pdf,
             ContentType::Text => SourceType::Text,
@@ -307,9 +307,9 @@ impl SemanticChunker {
         // If it's an object, split by top-level keys
         // If it's an array, split by elements
         // Fall back to paragraph splitting if parsing fails
-        
+
         let trimmed = content.trim();
-        
+
         // Simple heuristic: if it looks like a JSON object or array, try to split smartly
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
             // For now, use paragraph-based splitting which works reasonably for formatted JSON

@@ -8,6 +8,12 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::monitoring::tool_alerts;
+use crate::monitoring::tool_alerts::ToolAlertStatus;
+use crate::monitoring::tool_trends::{self, TimeWindow};
+use crate::tools::tool_cache::ToolCacheStats;
+use crate::tools::tool_rate_limiter::{get_all_rate_limit_status, ToolRateLimitStatus};
+
 // ============ Response Types ============
 
 #[derive(Debug, Serialize)]
@@ -99,14 +105,72 @@ pub struct ToolUsageEntry {
     pub percentage: f64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ToolCacheResponse {
+    pub request_id: String,
+    pub caches: Vec<ToolCacheStats>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolRateLimitResponse {
+    pub request_id: String,
+    pub statuses: Vec<ToolRateLimitStatus>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ToolTrendsResponse {
+    pub request_id: String,
+    pub window: String,
+    pub trends: Vec<tool_trends::ToolTrend>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolAlertsResponse {
+    pub request_id: String,
+    pub alerts: Vec<tool_alerts::ToolAlert>,
+    pub status: Vec<ToolAlertStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolCostResponse {
+    pub request_id: String,
+    pub timestamp: String,
+    pub costs: Vec<crate::monitoring::ToolCostStats>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolDependencyResponse {
+    pub request_id: String,
+    pub graph: crate::monitoring::ToolDependencyGraph,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitQuery {
     #[serde(default = "default_limit")]
     pub limit: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TrendQuery {
+    pub window: Option<String>,
+}
+
 fn default_limit() -> usize {
     20
+}
+
+fn parse_time_window(param: Option<String>) -> TimeWindow {
+    match param
+        .unwrap_or_else(|| "hour".to_string())
+        .to_lowercase()
+        .as_str()
+    {
+        "day" | "24h" => TimeWindow::Day,
+        "week" | "7d" => TimeWindow::Week,
+        _ => TimeWindow::Hour,
+    }
 }
 
 // ============ Database Helpers ============
@@ -651,24 +715,28 @@ pub async fn get_memory_stats() -> ActixResult<HttpResponse> {
 /// Returns tool usage statistics from the monitoring system
 pub async fn get_tool_stats() -> ActixResult<HttpResponse> {
     let stats = crate::monitoring::get_tool_stats();
-    
+
     let total_executions: usize = stats.iter().map(|s| s.total_calls).sum();
-    let total_confidence: f32 = stats.iter().map(|s| s.avg_confidence * s.total_calls as f32).sum();
+    let total_confidence: f32 = stats
+        .iter()
+        .map(|s| s.avg_confidence * s.total_calls as f32)
+        .sum();
     let avg_confidence = if total_executions > 0 {
         total_confidence / total_executions as f32
     } else {
         0.0
     };
-    
+
     let total_failures: usize = stats.iter().map(|s| s.failure_count).sum();
     let fallback_rate = if total_executions > 0 {
         total_failures as f64 / total_executions as f64
     } else {
         0.0
     };
-    
-    let tool_distribution: Vec<ToolUsageEntry> = stats.iter().map(|s| {
-        ToolUsageEntry {
+
+    let tool_distribution: Vec<ToolUsageEntry> = stats
+        .iter()
+        .map(|s| ToolUsageEntry {
             tool_name: s.tool_type.clone(),
             count: s.total_calls,
             percentage: if total_executions > 0 {
@@ -676,9 +744,9 @@ pub async fn get_tool_stats() -> ActixResult<HttpResponse> {
             } else {
                 0.0
             },
-        }
-    }).collect();
-    
+        })
+        .collect();
+
     Ok(HttpResponse::Ok().json(ToolStatsResponse {
         tool_executions: total_executions,
         avg_confidence: avg_confidence as f64,
@@ -692,12 +760,80 @@ pub async fn get_tool_stats() -> ActixResult<HttpResponse> {
 /// Returns recent tool executions for the monitoring dashboard
 pub async fn get_tool_executions(query: web::Query<LimitQuery>) -> ActixResult<HttpResponse> {
     let executions = crate::monitoring::get_recent_executions(query.limit);
-    
-    Ok(HttpResponse::Ok().json(crate::monitoring::ToolExecutionResponse {
-        status: "ok".to_string(),
+
+    Ok(
+        HttpResponse::Ok().json(crate::monitoring::ToolExecutionResponse {
+            status: "ok".to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            count: executions.len(),
+            executions,
+        }),
+    )
+}
+
+/// GET /monitoring/tools/cache
+/// Returns cache stats for each tool
+pub async fn get_tool_cache_stats_endpoint() -> ActixResult<HttpResponse> {
+    let caches = crate::tools::tool_cache::get_cache_stats();
+    Ok(HttpResponse::Ok().json(ToolCacheResponse {
         request_id: uuid::Uuid::new_v4().to_string(),
-        count: executions.len(),
-        executions,
+        caches,
+        timestamp: Utc::now().to_rfc3339(),
+    }))
+}
+
+/// GET /monitoring/tools/rate-limits
+/// Returns per-tool rate limit information
+pub async fn get_tool_rate_limits_endpoint() -> ActixResult<HttpResponse> {
+    let statuses = get_all_rate_limit_status();
+    Ok(HttpResponse::Ok().json(ToolRateLimitResponse {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        statuses,
+        timestamp: Utc::now().to_rfc3339(),
+    }))
+}
+
+/// GET /monitoring/tools/trends
+/// Returns tool performance trends for the requested window
+pub async fn get_tool_trends_endpoint(query: web::Query<TrendQuery>) -> ActixResult<HttpResponse> {
+    let window = parse_time_window(query.window.clone());
+    let trends = tool_trends::get_all_trends(window);
+    Ok(HttpResponse::Ok().json(ToolTrendsResponse {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        window: format!("{:?}", window),
+        trends,
+    }))
+}
+
+/// GET /monitoring/tools/alerts
+/// Returns recent tool alerts and current statuses
+pub async fn get_tool_alerts_endpoint(query: web::Query<LimitQuery>) -> ActixResult<HttpResponse> {
+    let alerts = tool_alerts::get_alerts(query.limit);
+    let status = tool_alerts::get_alert_status();
+    Ok(HttpResponse::Ok().json(ToolAlertsResponse {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        alerts,
+        status,
+    }))
+}
+
+/// GET /monitoring/tools/costs
+/// Returns aggregate tool cost information
+pub async fn get_tool_costs_endpoint() -> ActixResult<HttpResponse> {
+    let costs = crate::monitoring::get_tool_costs();
+    Ok(HttpResponse::Ok().json(ToolCostResponse {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        timestamp: Utc::now().to_rfc3339(),
+        costs,
+    }))
+}
+
+/// GET /monitoring/tools/dependencies
+pub async fn get_tool_dependencies_endpoint() -> ActixResult<HttpResponse> {
+    let graph = crate::monitoring::get_tool_dependency_graph();
+    Ok(HttpResponse::Ok().json(ToolDependencyResponse {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        graph,
     }))
 }
 
@@ -715,6 +851,15 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
     .service(
         web::scope("/monitoring/tools")
             .route("/stats", web::get().to(get_tool_stats))
-            .route("/executions", web::get().to(get_tool_executions)),
+            .route("/executions", web::get().to(get_tool_executions))
+            .route("/cache", web::get().to(get_tool_cache_stats_endpoint))
+            .route("/rate-limits", web::get().to(get_tool_rate_limits_endpoint))
+            .route("/trends", web::get().to(get_tool_trends_endpoint))
+            .route("/alerts", web::get().to(get_tool_alerts_endpoint))
+            .route("/costs", web::get().to(get_tool_costs_endpoint))
+            .route(
+                "/dependencies",
+                web::get().to(get_tool_dependencies_endpoint),
+            ),
     );
 }

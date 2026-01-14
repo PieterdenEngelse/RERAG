@@ -1,5 +1,6 @@
 use crate::Route;
 use dioxus::prelude::*;
+use dioxus_router::Link;
 
 const NAVBAR_CSS: Asset = asset!("/assets/styling/navbar.css");
 

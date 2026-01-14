@@ -1,6 +1,6 @@
 use crate::app::Route;
 use dioxus::prelude::*;
-use dioxus_router::prelude::Link;
+use dioxus_router::Link;
 
 #[derive(Clone, PartialEq)]
 pub enum ConfigTab {

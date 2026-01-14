@@ -14,9 +14,9 @@ pub fn RowHeader(props: RowHeaderProps) -> Element {
     rsx! {
         div { class: "flex items-center justify-between text-sm mb-2",
             div {
-                h4 { class: "text-gray-200 font-semibold", {props.title.clone()} }
+                h4 { class: "text-gray-200 font-semibold", {props.title.as_ref()} }
                 if let Some(desc) = &props.description {
-                    p { class: "text-xs text-gray-500", {desc.clone()} }
+                    p { class: "text-xs text-gray-500", {desc.as_ref()} }
                 }
             }
         }

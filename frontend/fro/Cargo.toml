@@ -5,9 +5,10 @@ authors = ["pde"]
 edition = "2021"
 
 [dependencies]
-dioxus = { version = "0.6.3" }
-# Use compatible manganis version for Dioxus 0.6.3
-manganis = "0.6"
+dioxus = { version = "0.7.2" }
+# Use compatible manganis version for Dioxus 0.7
+manganis = "0.7"
+dioxus-router = { version = "0.7.2" }
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "DomTokenList", "Storage", "Navigator", "Clipboard", "console", "Blob", "BlobPropertyBag", "FormData", "FileList", "File", "Request", "RequestInit", "RequestMode", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader"] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
@@ -19,7 +20,7 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 
 # State management
-dioxus-signals = "0.6.3"
+dioxus-signals = "0.7.0"
 
 # HTTP client improvements
 reqwest = { version = "0.11", features = ["json", "stream"] }
@@ -34,5 +35,5 @@ markdown = "1.0"
 
 [features]
 default = ["web"]
-web = ["dioxus/web", "dioxus/router"]
+web = ["dioxus/web"]
 

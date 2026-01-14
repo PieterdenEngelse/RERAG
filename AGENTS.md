@@ -229,6 +229,7 @@ REDIS_TTL=3600
 ### Monitoring
 - Prometheus scrape target: `http://<host>:3010/monitoring/metrics`.
 - Grafana dashboards in `grafana-*.json` visualize latency, error budgets, and rate-limit activity; alert rules live alongside under `docs/TRACE_ALERTING*.md`.
+- The Dioxus **Monitor → Tools** page now consumes `/monitoring/tools/{stats,executions,cache,rate-limits,costs,dependencies}` to show cache health, per-tool rate limiter utilization, cost totals, and the observed tool-chain graph. Any missing endpoint surfaces an inline hint so operators know which API to fix.
 
 ---
 

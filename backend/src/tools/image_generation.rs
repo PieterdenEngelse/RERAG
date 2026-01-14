@@ -82,11 +82,18 @@ impl ImageGenerationTool {
     }
 
     /// Generate image using configured API
-    async fn generate_with_api(&self, prompt: &str, size: &str, style: Option<&str>) -> Result<String, String> {
+    async fn generate_with_api(
+        &self,
+        prompt: &str,
+        size: &str,
+        style: Option<&str>,
+    ) -> Result<String, String> {
         let endpoint = self.api_endpoint.as_ref()
             .ok_or_else(|| "Image generation API not configured. Set IMAGE_GEN_API_ENDPOINT and IMAGE_GEN_API_KEY environment variables.".to_string())?;
-        
-        let api_key = self.api_key.as_ref()
+
+        let api_key = self
+            .api_key
+            .as_ref()
             .ok_or_else(|| "API key not configured".to_string())?;
 
         // Build request body
@@ -117,7 +124,9 @@ impl ImageGenerationTool {
             return Err(format!("API error {}: {}", status, error_text));
         }
 
-        let result: serde_json::Value = response.json().await
+        let result: serde_json::Value = response
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse response: {}", e))?;
 
         // Extract image URL from response
@@ -138,8 +147,10 @@ impl ImageGenerationTool {
 
     /// Generate a placeholder response when no API is configured
     fn generate_placeholder(&self, prompt: &str, size: &str, style: Option<&str>) -> String {
-        let style_str = style.map(|s| format!(" in {} style", s)).unwrap_or_default();
-        
+        let style_str = style
+            .map(|s| format!(" in {} style", s))
+            .unwrap_or_default();
+
         format!(
             "🎨 Image Generation Request\n\n\
             Prompt: \"{}\"\n\
@@ -187,7 +198,8 @@ impl Tool for ImageGenerationTool {
             return Ok(ToolResult {
                 tool: ToolType::ImageGeneration,
                 success: false,
-                result: "Please provide a description of the image you want to generate.".to_string(),
+                result: "Please provide a description of the image you want to generate."
+                    .to_string(),
                 metadata: ToolMetadata {
                     execution_time_ms: start.elapsed().as_millis() as u64,
                     confidence: 0.0,
@@ -201,7 +213,10 @@ impl Tool for ImageGenerationTool {
 
         // Try to use API if configured
         if self.api_endpoint.is_some() && self.api_key.is_some() {
-            match self.generate_with_api(&prompt, &size, style.as_deref()).await {
+            match self
+                .generate_with_api(&prompt, &size, style.as_deref())
+                .await
+            {
                 Ok(image_url) => {
                     return Ok(ToolResult {
                         tool: ToolType::ImageGeneration,
@@ -270,7 +285,7 @@ mod tests {
     #[test]
     fn test_prompt_parsing() {
         let tool = ImageGenerationTool::new();
-        
+
         let (prompt, size, style) = tool.parse_prompt("A cat sitting on a chair 1024x1024");
         assert_eq!(prompt, "A cat sitting on a chair");
         assert_eq!(size, "1024x1024");

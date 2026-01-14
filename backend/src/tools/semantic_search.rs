@@ -102,24 +102,22 @@ impl Tool for SemanticSearchTool {
 
         // Perform the search
         let search_results = match retriever_handle.lock() {
-            Ok(mut retriever) => {
-                match retriever.search(query) {
-                    Ok(results) => results,
-                    Err(e) => {
-                        return Ok(ToolResult {
-                            tool: ToolType::SemanticSearch,
-                            success: false,
-                            result: format!("Search failed: {}", e),
-                            metadata: ToolMetadata {
-                                execution_time_ms: start.elapsed().as_millis() as u64,
-                                confidence: 0.0,
-                                source: Some("SemanticSearch".to_string()),
-                                cost: Some(0.0),
-                            },
-                        });
-                    }
+            Ok(mut retriever) => match retriever.search(query) {
+                Ok(results) => results,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        tool: ToolType::SemanticSearch,
+                        success: false,
+                        result: format!("Search failed: {}", e),
+                        metadata: ToolMetadata {
+                            execution_time_ms: start.elapsed().as_millis() as u64,
+                            confidence: 0.0,
+                            source: Some("SemanticSearch".to_string()),
+                            cost: Some(0.0),
+                        },
+                    });
                 }
-            }
+            },
             Err(e) => {
                 return Ok(ToolResult {
                     tool: ToolType::SemanticSearch,
@@ -150,7 +148,11 @@ impl Tool for SemanticSearchTool {
         }
 
         // Format results - search returns Vec<String> (content chunks)
-        let mut result_text = format!("Found {} results for '{}':\n\n", search_results.len(), query);
+        let mut result_text = format!(
+            "Found {} results for '{}':\n\n",
+            search_results.len(),
+            query
+        );
 
         for (i, content) in search_results.iter().take(self.top_k).enumerate() {
             // Truncate content for display
@@ -160,11 +162,7 @@ impl Tool for SemanticSearchTool {
                 content.clone()
             };
 
-            result_text.push_str(&format!(
-                "{}. {}\n\n",
-                i + 1,
-                content_preview,
-            ));
+            result_text.push_str(&format!("{}. {}\n\n", i + 1, content_preview,));
         }
 
         Ok(ToolResult {

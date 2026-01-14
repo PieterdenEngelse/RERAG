@@ -1,5 +1,6 @@
 use crate::Route;
 use dioxus::prelude::*;
+use dioxus_router::Link;
 
 const BLOG_CSS: Asset = asset!("/assets/styling/blog.css");
 

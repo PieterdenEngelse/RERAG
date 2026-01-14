@@ -1,0 +1,35 @@
+[workspace]
+members = [
+    "backend",
+    "frontend/fro",
+    "tools/memory_cli"
+]
+default-members = ["backend"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+authors = ["pde"]
+
+[workspace.dependencies]
+num_cpus = "1.16.0"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = "s"        # Good balance
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

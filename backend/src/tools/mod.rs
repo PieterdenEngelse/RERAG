@@ -9,19 +9,29 @@ pub mod calculator;
 pub mod classifier;
 pub mod code_execution;
 pub mod database_query;
+pub mod entity_extractor;
 pub mod file_analyzer;
 pub mod image_generation;
+pub mod memory_tool;
 pub mod notification;
 pub mod query_optimizer;
 pub mod query_rewriter;
 pub mod result_cache;
 pub mod result_compressor;
 pub mod result_formatter;
+pub mod scheduler;
 pub mod semantic_search;
+pub mod sentiment;
+pub mod spell_checker;
 pub mod summarizer;
+pub mod tool_cache;
+pub mod tool_chain_executor;
 pub mod tool_composer;
 pub mod tool_executor;
+pub mod tool_permissions;
+pub mod tool_rate_limiter;
 pub mod tool_selector;
+pub mod translator;
 pub mod url_fetch;
 pub mod web_search;
 pub use query_optimizer::QueryOptimizer;
@@ -33,10 +43,16 @@ pub use rate_limiter::RateLimiter;
 
 // Re-export agent tools
 pub use classifier::ClassifierTool;
+pub use entity_extractor::EntityExtractorTool;
 pub use file_analyzer::FileAnalyzerTool;
+pub use memory_tool::MemoryTool;
 pub use notification::NotificationTool;
 pub use query_rewriter::QueryRewriterTool;
+pub use scheduler::SchedulerTool;
+pub use sentiment::SentimentAnalyzerTool;
+pub use spell_checker::SpellCheckerTool;
 pub use summarizer::SummarizerTool;
+pub use translator::TranslatorTool;
 
 // ============ Tool Types ============
 
@@ -55,6 +71,12 @@ pub enum ToolType {
     Classifier,
     FileAnalyzer,
     Notification,
+    Translator,
+    SentimentAnalyzer,
+    EntityExtractor,
+    SpellChecker,
+    Scheduler,
+    Memory,
 }
 
 impl ToString for ToolType {
@@ -72,6 +94,12 @@ impl ToString for ToolType {
             ToolType::Classifier => "Classifier".to_string(),
             ToolType::FileAnalyzer => "FileAnalyzer".to_string(),
             ToolType::Notification => "Notification".to_string(),
+            ToolType::Translator => "Translator".to_string(),
+            ToolType::SentimentAnalyzer => "SentimentAnalyzer".to_string(),
+            ToolType::EntityExtractor => "EntityExtractor".to_string(),
+            ToolType::SpellChecker => "SpellChecker".to_string(),
+            ToolType::Scheduler => "Scheduler".to_string(),
+            ToolType::Memory => "Memory".to_string(),
         }
     }
 }

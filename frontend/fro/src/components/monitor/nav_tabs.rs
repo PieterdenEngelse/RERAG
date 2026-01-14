@@ -1,5 +1,6 @@
 use crate::app::Route;
 use dioxus::prelude::*;
+use dioxus_router::Link;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct NavTabsProps {

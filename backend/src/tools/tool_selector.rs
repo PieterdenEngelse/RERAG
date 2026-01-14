@@ -21,6 +21,8 @@ pub enum QueryIntent {
     Database,
     CodeExecution,
     ImageGeneration,
+    Scheduler,
+    Memory,
     SemanticSearch,
     Unknown,
 }
@@ -34,6 +36,8 @@ impl ToString for QueryIntent {
             QueryIntent::Database => "Database".to_string(),
             QueryIntent::CodeExecution => "CodeExecution".to_string(),
             QueryIntent::ImageGeneration => "ImageGeneration".to_string(),
+            QueryIntent::Scheduler => "Scheduler".to_string(),
+            QueryIntent::Memory => "Memory".to_string(),
             QueryIntent::SemanticSearch => "SemanticSearch".to_string(),
             QueryIntent::Unknown => "Unknown".to_string(),
         }
@@ -77,6 +81,14 @@ impl ToolSelector {
             return QueryIntent::ImageGeneration;
         }
 
+        if Self::is_scheduler_query(&q) {
+            return QueryIntent::Scheduler;
+        }
+
+        if Self::is_memory_query(&q) {
+            return QueryIntent::Memory;
+        }
+
         QueryIntent::SemanticSearch
     }
 
@@ -111,6 +123,8 @@ impl ToolSelector {
                 vec![ToolType::SemanticSearch],
                 0.65,
             ),
+            QueryIntent::Scheduler => (ToolType::Scheduler, vec![ToolType::SemanticSearch], 0.78),
+            QueryIntent::Memory => (ToolType::Memory, vec![ToolType::SemanticSearch], 0.70),
             QueryIntent::SemanticSearch => {
                 (ToolType::SemanticSearch, vec![ToolType::WebSearch], 0.60)
             }
@@ -274,6 +288,37 @@ impl ToolSelector {
         ];
 
         image_keywords.iter().any(|kw| query.contains(kw))
+    }
+
+    fn is_scheduler_query(query: &str) -> bool {
+        let scheduler_keywords = vec![
+            "schedule",
+            "remind",
+            "reminder",
+            "follow up",
+            "in 30 minutes",
+            "tomorrow",
+            "next week",
+            "list tasks",
+            "show reminders",
+            "calendar",
+        ];
+        scheduler_keywords.iter().any(|kw| query.contains(kw))
+    }
+
+    fn is_memory_query(query: &str) -> bool {
+        let memory_keywords = vec![
+            "memory",
+            "remember",
+            "store",
+            "save note",
+            "note that",
+            "remember that",
+            "recall",
+            "forget",
+            "what did we store",
+        ];
+        memory_keywords.iter().any(|kw| query.contains(kw))
     }
 }
 

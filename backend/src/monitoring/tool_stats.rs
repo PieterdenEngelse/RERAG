@@ -69,7 +69,7 @@ pub fn record_tool_execution(
     source: Option<&str>,
 ) {
     let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    
+
     // Create preview (truncate result)
     let result_preview = if result.len() > 100 {
         format!("{}...", &result[..100])
@@ -100,13 +100,14 @@ pub fn record_tool_execution(
         history.executions.push_front(execution);
 
         // Update aggregate stats
-        let stats = history.stats.entry(tool_type.to_string()).or_insert_with(|| {
-            ToolAggregateStats {
+        let stats = history
+            .stats
+            .entry(tool_type.to_string())
+            .or_insert_with(|| ToolAggregateStats {
                 tool_type: tool_type.to_string(),
                 min_latency_ms: u64::MAX,
                 ..Default::default()
-            }
-        });
+            });
 
         stats.total_calls += 1;
         if success {
@@ -118,12 +119,12 @@ pub fn record_tool_execution(
         stats.avg_latency_ms = stats.total_latency_ms as f64 / stats.total_calls as f64;
         stats.min_latency_ms = stats.min_latency_ms.min(execution_time_ms);
         stats.max_latency_ms = stats.max_latency_ms.max(execution_time_ms);
-        
+
         // Running average for confidence
         let prev_avg = stats.avg_confidence;
         let n = stats.total_calls as f32;
         stats.avg_confidence = prev_avg + (confidence - prev_avg) / n;
-        
+
         stats.last_used = Some(timestamp);
     }
 }

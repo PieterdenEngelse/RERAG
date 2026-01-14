@@ -40,7 +40,6 @@ seahash = "4.1.0"
 rayon = "1.10"
 regex = "1.10"
 lru = "0.12"
-fastembed = { version = "5.8.1", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }
 infer = "0.16"  # MIME type detection from file magic bytes
 
 # Logging & Tracing
@@ -117,3 +116,8 @@ rl_yaml = ["serde_yaml"]
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# fastembed is only available on Linux/macOS (ONNX Runtime doesn't support Windows GNU target)
+# On Windows, the hash-based fallback embedder is used automatically
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+fastembed = { version = "5.8.1", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }

@@ -18,7 +18,7 @@ fn has_issues(entry: &ChunkingStatsSnapshot) -> bool {
     if entry.chunks == 0 {
         return true;
     }
-    
+
     if let Some(ref detection) = entry.detection {
         // Issue: fallback detection method
         if detection.detection_method == "fallback" {
@@ -36,7 +36,7 @@ fn has_issues(entry: &ChunkingStatsSnapshot) -> bool {
         // Issue: no detection info at all
         return true;
     }
-    
+
     false
 }
 
@@ -249,7 +249,7 @@ pub fn MonitorRag() -> Element {
                             } else {
                                 snapshot.chunking_history.iter().collect()
                             };
-                            
+
                             if filtered_entries.is_empty() && show_issues_only() {
                                 rsx! {
                                     div { class: "text-green-400 text-sm py-4 text-center",

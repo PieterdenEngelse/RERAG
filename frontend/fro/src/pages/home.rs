@@ -6,6 +6,37 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
+fn backend_origin() -> String {
+    if let Some(window) = web_sys::window() {
+        let location = window.location();
+        if let Ok(origin) = location.origin() {
+            let is_loopback = origin.contains("127.0.0.1") || origin.contains("localhost");
+            if !is_loopback {
+                return origin;
+            }
+
+            let hostname = location
+                .hostname()
+                .unwrap_or_else(|_| "127.0.0.1".into())
+                .trim()
+                .to_string();
+            let scheme = location
+                .protocol()
+                .unwrap_or_else(|_| "http:".into())
+                .trim_end_matches(':')
+                .to_string();
+
+            if hostname.is_empty() {
+                return "http://127.0.0.1:3010".to_string();
+            }
+
+            return format!("{}://{}:3010", scheme, hostname);
+        }
+    }
+
+    "http://127.0.0.1:3010".to_string()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatMessage {
     pub role: String, // "user" or "assistant"
@@ -13,8 +44,13 @@ pub struct ChatMessage {
     pub context: Option<String>, // RAG context used (if any)
 }
 
-const BACKEND_AGENT_URL: &str = "http://127.0.0.1:3010/agent";
-const BACKEND_STREAM_URL: &str = "http://127.0.0.1:3010/agent/stream";
+fn backend_agent_url() -> String {
+    format!("{}/agent", backend_origin())
+}
+
+fn backend_stream_url() -> String {
+    format!("{}/agent/stream", backend_origin())
+}
 
 /// Check if input is a chat command (starts with /)
 fn is_chat_command(input: &str) -> bool {
@@ -108,7 +144,7 @@ pub fn Home() -> Element {
     let mut show_upload_panel = use_signal(|| false);
     let mut documents = use_signal(|| Vec::<String>::new());
     let mut upload_status = use_signal(|| Option::<String>::None);
-    let mut is_uploading = use_signal(|| false);
+    let is_uploading = use_signal(|| false);
     let mut show_file_types_info = use_signal(|| false);
 
     // Chat mode: "rag", "llm", or "hybrid"
@@ -118,7 +154,7 @@ pub fn Home() -> Element {
     let mut show_info = use_context::<Signal<ShowRagInfo>>();
 
     // Clear chat signal (triggered by Home link in header)
-    let mut clear_chat = use_context::<Signal<ClearChat>>();
+    let clear_chat = use_context::<Signal<ClearChat>>();
 
     // Watch for clear chat signal
     use_effect(move || {
@@ -126,7 +162,12 @@ pub fn Home() -> Element {
             messages.write().clear();
             input_text.set(String::new());
             error_msg.set(None);
-            clear_chat.set(ClearChat(false)); // Reset the signal
+
+            let mut clear_chat = clear_chat.clone();
+            spawn(async move {
+                gloo_timers::future::TimeoutFuture::new(0).await;
+                clear_chat.set(ClearChat(false));
+            });
         }
     });
 
@@ -171,7 +212,7 @@ pub fn Home() -> Element {
                 }
             });
         });
-    }
+    };
 
     // Load active model and available models from hardware config once on mount
     {
@@ -183,21 +224,35 @@ pub fn Home() -> Element {
             // Try to load hardware config (with a quick retry) to keep home page in sync
             let mut last_error = None;
             let mut backend_type = String::new();
+            let origin = backend_origin();
 
             for attempt in 0..2 {
-                match api::fetch_hardware_config().await {
+                let fetch_result = match api::fetch_hardware_config_with_origin(&origin).await {
+                    Ok(resp) => Ok(resp),
+                    Err(primary_err) => match api::fetch_hardware_config().await {
+                        Ok(resp) => Ok(resp),
+                        Err(fallback_err) => {
+                            last_error = Some(format!(
+                                "primary: {}; fallback: {}",
+                                primary_err, fallback_err
+                            ));
+                            Err(())
+                        }
+                    },
+                };
+
+                match fetch_result {
                     Ok(resp) => {
                         let active_model = resp.config.model.trim().to_string();
                         if !active_model.is_empty() {
                             selected_model.set(active_model);
                         }
                         backend_type = resp.config.backend_type.clone();
+                        last_error = None;
                         break;
                     }
-                    Err(e) => {
-                        last_error = Some(e);
+                    Err(()) => {
                         if attempt == 0 {
-                            // Small delay before retrying
                             gloo_timers::future::TimeoutFuture::new(250).await;
                         }
                     }
@@ -226,7 +281,7 @@ pub fn Home() -> Element {
                 models_loading.set(false);
             }
         });
-    }
+    };
 
     let send_message = move |_evt: Event<MouseData>| {
         let user_input = input_text().trim().to_string();
@@ -259,7 +314,7 @@ pub fn Home() -> Element {
             // Check if this is a chat command - route to backend
             if is_chat_command(&user_input) {
                 let body = serde_json::json!({ "query": user_input, "mode": mode });
-                let request = gloo_net::http::Request::post(BACKEND_AGENT_URL)
+                let request = gloo_net::http::Request::post(&backend_agent_url())
                     .header("Content-Type", "application/json")
                     .body(body.to_string())
                     .unwrap();
@@ -322,12 +377,13 @@ pub fn Home() -> Element {
 
             // Create fetch request with streaming
             let window = web_sys::window().unwrap();
-            let mut opts = RequestInit::new();
-            opts.method("POST");
-            opts.mode(RequestMode::Cors);
-            opts.body(Some(&JsValue::from_str(&body.to_string())));
+            let opts = RequestInit::new();
+            opts.set_method("POST");
+            opts.set_mode(RequestMode::Cors);
+            let body_value = JsValue::from_str(&body.to_string());
+            opts.set_body(&body_value);
 
-            let request = Request::new_with_str_and_init(BACKEND_STREAM_URL, &opts).unwrap();
+            let request = Request::new_with_str_and_init(&backend_stream_url(), &opts).unwrap();
             request
                 .headers()
                 .set("Content-Type", "application/json")
@@ -493,7 +549,6 @@ pub fn Home() -> Element {
                 return;
             }
 
-            // Handle /clear command locally
             if user_input.trim() == "/clear" {
                 messages.write().clear();
                 input_text.set(String::new());
@@ -515,10 +570,9 @@ pub fn Home() -> Element {
             let mode = chat_mode();
 
             spawn(async move {
-                // Check if this is a chat command - route to backend
                 if is_chat_command(&user_input) {
                     let body = serde_json::json!({ "query": user_input, "mode": mode });
-                    let request = gloo_net::http::Request::post(BACKEND_AGENT_URL)
+                    let request = gloo_net::http::Request::post(&backend_agent_url())
                         .header("Content-Type", "application/json")
                         .body(body.to_string())
                         .unwrap();
@@ -532,7 +586,6 @@ pub fn Home() -> Element {
                                 match response.json::<AgentCommandResponse>().await {
                                     Ok(data) => {
                                         if !cancel_flag() {
-                                            // Check if this is a help response - show in modal
                                             if user_input.trim() == "/help"
                                                 || data
                                                     .response
@@ -572,8 +625,6 @@ pub fn Home() -> Element {
                     return;
                 }
 
-                // Regular message - use streaming for LLM/Hybrid modes
-                // Add an empty assistant message that we'll update with streamed content
                 messages.write().push(ChatMessage {
                     role: "assistant".to_string(),
                     content: String::new(),
@@ -581,17 +632,16 @@ pub fn Home() -> Element {
                 });
                 let msg_index = messages().len() - 1;
 
-                // Use streaming endpoint
                 let body = serde_json::json!({ "query": user_input, "mode": mode });
 
-                // Create fetch request with streaming
                 let window = web_sys::window().unwrap();
-                let mut opts = RequestInit::new();
-                opts.method("POST");
-                opts.mode(RequestMode::Cors);
-                opts.body(Some(&JsValue::from_str(&body.to_string())));
+                let opts = RequestInit::new();
+                opts.set_method("POST");
+                opts.set_mode(RequestMode::Cors);
+                let body_value = JsValue::from_str(&body.to_string());
+                opts.set_body(&body_value);
 
-                let request = Request::new_with_str_and_init(BACKEND_STREAM_URL, &opts).unwrap();
+                let request = Request::new_with_str_and_init(&backend_stream_url(), &opts).unwrap();
                 request
                     .headers()
                     .set("Content-Type", "application/json")
@@ -1101,26 +1151,30 @@ pub fn Home() -> Element {
                                                 is_uploading.set(true);
                                                 upload_status.set(Some("Uploading...".to_string()));
 
-                                                // Use Dioxus 0.6 file handling
-                                                if let Some(file_engine) = evt.files() {
-                                                    let files = file_engine.files();
-                                                    let total_files = files.len();
-                                                    let mut success_count = 0;
-                                                    
-                                                    for file_name in files {
+                                                // Use Dioxus 0.7 file handling
+                                                let files = evt.files();
+                                                let total_files = files.len();
+                                                let mut success_count = 0;
+
+                                                if total_files > 0 {
+                                                    for file_data in &files {
+                                                        let file_name = file_data.name();
                                                         upload_status.set(Some(format!("Uploading: {}", file_name)));
-                                                        
-                                                        if let Some(file_data) = file_engine.read_file(&file_name).await {
-                                                            match api::upload_document(&file_name, &file_data).await {
-                                                                Ok(_resp) => {
-                                                                    success_count += 1;
-                                                                }
-                                                                Err(e) => {
-                                                                    upload_status.set(Some(format!("✗ {}", e)));
+
+                                                        match file_data.read_bytes().await {
+                                                            Ok(contents) => {
+                                                                match api::upload_document(&file_name, &contents).await {
+                                                                    Ok(_resp) => {
+                                                                        success_count += 1;
+                                                                    }
+                                                                    Err(e) => {
+                                                                        upload_status.set(Some(format!("✗ {}", e)));
+                                                                    }
                                                                 }
                                                             }
-                                                        } else {
-                                                            upload_status.set(Some(format!("✗ Failed to read: {}", file_name)));
+                                                            Err(e) => {
+                                                                upload_status.set(Some(format!("✗ Failed to read: {}", e)));
+                                                            }
                                                         }
                                                     }
 

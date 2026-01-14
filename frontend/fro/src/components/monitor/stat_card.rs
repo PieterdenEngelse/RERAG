@@ -38,7 +38,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
             // Title row (only if there's a title)
             if has_title {
                 div { class: "flex items-center gap-2 mb-1",
-                    div { class: "text-xs text-gray-400", {props.title.clone()} }
+                    div { class: "text-xs text-gray-400", {props.title.as_ref()} }
                 }
             }
 
@@ -61,7 +61,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                             }
                             div {
                                 class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed",
-                                {tooltip.clone()}
+                                {tooltip.as_ref()}
                             }
                         }
                     }
@@ -72,9 +72,9 @@ pub fn StatCard(props: StatCardProps) -> Element {
                 div { class: "flex items-start gap-4",
                     div { class: "flex-shrink-0",
                         div { class: "flex items-center gap-2",
-                            div { class: "text-2xl font-bold text-gray-100", {props.value.clone()} }
+                            div { class: "text-2xl font-bold text-gray-100", {props.value.as_ref()} }
                             if let Some(unit) = &props.unit {
-                                span { class: "text-sm text-gray-500", {unit.clone()} }
+                                span { class: "text-sm text-gray-500", {unit.as_ref()} }
                             }
                             if has_tooltip {
                                 button {
@@ -99,16 +99,16 @@ pub fn StatCard(props: StatCardProps) -> Element {
                         div {
                             class: "text-[10px] text-gray-400 leading-relaxed",
                             style: "white-space: pre-line;",
-                            {desc.clone()}
+                            {desc.as_ref()}
                         }
                     }
                 }
             } else if !has_title {
                 // No title - value and info button inline on same row
                 div { class: "flex items-center gap-2",
-                    span { class: "text-sm font-semibold text-gray-200", {props.value.clone()} }
+                    span { class: "text-sm font-semibold text-gray-200", {props.value.as_ref()} }
                     if let Some(unit) = &props.unit {
-                        span { class: "text-sm text-gray-500", {unit.clone()} }
+                        span { class: "text-sm text-gray-500", {unit.as_ref()} }
                     }
                     if has_tooltip {
                         button {
@@ -131,9 +131,9 @@ pub fn StatCard(props: StatCardProps) -> Element {
             } else {
                 // Has title - show value below, with optional info button in title row
                 div { class: "flex items-center gap-2",
-                    div { class: "text-2xl font-bold text-gray-100", {props.value.clone()} }
+                    div { class: "text-2xl font-bold text-gray-100", {props.value.as_ref()} }
                     if let Some(unit) = &props.unit {
-                        span { class: "text-sm text-gray-500", {unit.clone()} }
+                        span { class: "text-sm text-gray-500", {unit.as_ref()} }
                     }
                     if has_tooltip {
                         button {
@@ -155,7 +155,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                 }
             }
             if let Some(trend) = &props.trend {
-                div { class: "text-xs text-gray-500", {trend.clone()} }
+                div { class: "text-xs text-gray-500", {trend.as_ref()} }
             }
             if let Some(points) = &props.sparkline {
                 div { class: "text-[10px] text-gray-600", "sparkline: {points.len()} pts" }

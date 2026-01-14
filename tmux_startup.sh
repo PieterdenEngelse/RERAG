@@ -183,9 +183,9 @@ MENU_MIN_LINES=${MENU_MIN_LINES:-7}
     if tmux list-windows -t "$SESSION" 2>/dev/null | grep -q "Q"; then
         if [ "$SESSION_CREATED" -eq 1 ]; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting qodo in Q window (one-time for this session)"
-            tmux_safe "qodo login" send-keys -t "$SESSION:Q" "qodo login" C-m || true
+            tmux_safe "q --login" send-keys -t "$SESSION:Q" "q --login" C-m || true
             sleep 1
-            tmux_safe "qodo gui" send-keys -t "$SESSION:Q" "qodo --gui" C-m || true
+            tmux_safe "q --gui" send-keys -t "$SESSION:Q" "q --gui" C-m || true
         else
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Q window ready (session already existed; skipping auto qodo commands)"
         fi

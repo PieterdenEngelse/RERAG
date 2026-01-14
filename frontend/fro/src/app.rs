@@ -6,6 +6,7 @@ use crate::pages::{
     MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
+use dioxus_router::{Outlet, Routable, Router};
 
 #[derive(Routable, Clone, PartialEq)]
 #[rustfmt::skip]

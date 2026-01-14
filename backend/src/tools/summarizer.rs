@@ -18,9 +18,9 @@ pub struct SummarizerTool {
 
 #[derive(Debug, Clone, Copy)]
 pub enum SummaryLength {
-    Brief,      // ~50 words
-    Standard,   // ~150 words
-    Detailed,   // ~300 words
+    Brief,    // ~50 words
+    Standard, // ~150 words
+    Detailed, // ~300 words
 }
 
 impl Default for SummaryLength {
@@ -47,7 +47,7 @@ impl SummarizerTool {
     /// Parse input to extract text and optional parameters
     fn parse_input(&self, input: &str) -> (String, SummaryLength) {
         let input_lower = input.to_lowercase();
-        
+
         // Check for length hints
         let length = if input_lower.contains("brief") || input_lower.contains("short") {
             SummaryLength::Brief
@@ -97,7 +97,7 @@ impl SummarizerTool {
             .collect();
 
         let summary = summary_sentences.join(". ");
-        
+
         if !summary.ends_with('.') {
             format!("{}.", summary)
         } else {

@@ -105,7 +105,6 @@ pub fn ConfigHardware() -> Element {
     let sampling_loading = use_signal(|| false);
     let sampling_error = use_signal(|| Option::<String>::None);
 
-
     let show_temperature_info = use_signal(|| false);
     let show_top_k_info = use_signal(|| false);
     let show_top_p_info = use_signal(|| false);

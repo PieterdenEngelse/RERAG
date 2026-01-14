@@ -654,9 +654,28 @@ The monitoring dashboard fetches data from these endpoints:
 | `GET /monitoring/agents/goals` | All goals with status breakdown |
 | `GET /monitoring/agents/reflections?limit=N` | Recent reflections |
 | `GET /monitoring/memory/stats` | Memory system statistics |
-| `GET /monitoring/tools/stats` | Tool usage statistics |
+| `GET /monitoring/tools/stats` | Aggregate per-tool usage + fallback metrics |
+| `GET /monitoring/tools/executions?limit=N` | Recent execution log (tool, query, confidence, latency) |
+| `GET /monitoring/tools/cache` | Cache TTLs, hit rates, and entry counts per tool cache layer |
+| `GET /monitoring/tools/rate-limits` | Live token bucket state for each tool limiter (enabled flag, utilization) |
+| `GET /monitoring/tools/costs` | Cost ledger (total, average, executions, last update) per tool |
+| `GET /monitoring/tools/dependencies` | Tool-chain nodes/edges observed by the executor |
 
-### 11.8 Example Response from `/monitoring/agents/stats`
+### 11.8 Monitor Tools UI Data Map
+
+The refreshed `Monitor → Tools` Dioxus page consumes those endpoints in four sections so ops can see cache health, limiter utilization, cost drift, and dependency graphs without leaving the UI:
+
+| UI Panel | Endpoint(s) | Notes |
+|----------|-------------|-------|
+| **Usage Overview & Recent Executions** | `/monitoring/tools/stats`, `/monitoring/tools/executions?limit=50` | Drives the KPI tiles (total executions, avg confidence, fallback rate) plus the detailed execution table and pie chart. |
+| **Cache Layers** | `/monitoring/tools/cache` | Surfaces enabled caches, entry counts vs max capacity, TTLs, and per-tool hit rate bars. |
+| **Rate Limiters** | `/monitoring/tools/rate-limits` | Shows enabled state, configured window/tokens, and live utilization spark bars for every per-tool limiter. |
+| **Cost Tracking** | `/monitoring/tools/costs` | Provides total spend, execution counts, top spender badge, and per-tool cost/avg cost columns. |
+| **Dependency Graph** | `/monitoring/tools/dependencies` | Supplies node/edge counts plus the "most active tools" and "top tool-to-tool hops" lists so teams can audit chaining behavior. |
+
+If any endpoint is unreachable, the page renders a contextual hint (e.g., "Ensure `/monitoring/tools/cache` is reachable") so operators immediately know which API to debug.
+
+### 11.9 Example Response from `/monitoring/agents/stats`
 
 ```json
 {

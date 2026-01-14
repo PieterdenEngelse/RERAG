@@ -20,10 +20,10 @@ pub fn HealthCard(props: HealthCardProps) -> Element {
 
     rsx! {
         div { class: "rounded p-4 bg-gray-800 border border-gray-700",
-            div { class: "text-xs text-gray-400", {props.name.clone()} }
-            div { class: "text-xl font-semibold {status_class}", {props.status.clone()} }
+            div { class: "text-xs text-gray-400", {props.name.as_ref()} }
+            div { class: "text-xl font-semibold {status_class}", {props.status.as_ref()} }
             if let Some(detail) = &props.detail {
-                div { class: "text-xs text-gray-500", {detail.clone()} }
+                div { class: "text-xs text-gray-500", {detail.as_ref()} }
             }
         }
     }

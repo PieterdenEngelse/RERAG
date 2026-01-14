@@ -570,35 +570,37 @@ pub fn MonitorIndex() -> Element {
                                         move |evt: dioxus::prelude::Event<dioxus::prelude::FormData>| {
                                             let mut state = state.clone();
                                             spawn(async move {
-                                                if let Some(file_engine) = evt.files() {
-                                                    let files = file_engine.files();
-                                                    let total = files.len();
+                                                // Use Dioxus 0.7 file handling
+                                                let files = evt.files();
+                                                let total = files.len();
 
-                                                    if total == 0 {
-                                                        return;
-                                                    }
+                                                if total == 0 {
+                                                    return;
+                                                }
 
-                                                    // Start upload
+                                                // Start upload
+                                                {
+                                                    let mut s = state.write();
+                                                    s.upload_running = true;
+                                                    s.upload_total_files = total;
+                                                    s.upload_completed_files = 0;
+                                                    s.upload_failed_files = 0;
+                                                    s.upload_current_file = None;
+                                                    s.upload_message = Some(format!("Starting upload of {} file(s)...", total));
+                                                }
+
+                                                for file_data in &files {
+                                                    let file_name = file_data.name();
+                                                    // Update current file
                                                     {
                                                         let mut s = state.write();
-                                                        s.upload_running = true;
-                                                        s.upload_total_files = total;
-                                                        s.upload_completed_files = 0;
-                                                        s.upload_failed_files = 0;
-                                                        s.upload_current_file = None;
-                                                        s.upload_message = Some(format!("Starting upload of {} file(s)...", total));
+                                                        s.upload_current_file = Some(file_name.clone());
+                                                        s.upload_message = Some(format!("Uploading: {}", file_name));
                                                     }
 
-                                                    for file_name in files {
-                                                        // Update current file
-                                                        {
-                                                            let mut s = state.write();
-                                                            s.upload_current_file = Some(file_name.clone());
-                                                            s.upload_message = Some(format!("Uploading: {}", file_name));
-                                                        }
-
-                                                        if let Some(file_data) = file_engine.read_file(&file_name).await {
-                                                            match api::upload_document(&file_name, &file_data).await {
+                                                    match file_data.read_bytes().await {
+                                                        Ok(contents) => {
+                                                            match api::upload_document(&file_name, &contents).await {
                                                                 Ok(_) => {
                                                                     let mut s = state.write();
                                                                     s.upload_completed_files += 1;
@@ -609,24 +611,26 @@ pub fn MonitorIndex() -> Element {
                                                                     s.upload_message = Some(format!("Failed: {} - {}", file_name, err));
                                                                 }
                                                             }
-                                                        } else {
+                                                        }
+                                                        Err(err) => {
                                                             let mut s = state.write();
                                                             s.upload_failed_files += 1;
+                                                            s.upload_message = Some(format!("Failed to read: {} - {}", file_name, err));
                                                         }
                                                     }
+                                                }
 
-                                                    // Complete
-                                                    {
-                                                        let mut s = state.write();
-                                                        let completed = s.upload_completed_files;
-                                                        let failed = s.upload_failed_files;
-                                                        s.upload_running = false;
-                                                        s.upload_current_file = None;
-                                                        s.upload_message = Some(format!(
-                                                            "Upload complete: {} succeeded, {} failed",
-                                                            completed, failed
-                                                        ));
-                                                    }
+                                                // Complete
+                                                {
+                                                    let mut s = state.write();
+                                                    let completed = s.upload_completed_files;
+                                                    let failed = s.upload_failed_files;
+                                                    s.upload_running = false;
+                                                    s.upload_current_file = None;
+                                                    s.upload_message = Some(format!(
+                                                        "Upload complete: {} succeeded, {} failed",
+                                                        completed, failed
+                                                    ));
                                                 }
                                             });
                                         }

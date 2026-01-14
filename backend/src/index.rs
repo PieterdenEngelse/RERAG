@@ -33,20 +33,32 @@ pub fn index_all_documents(
             let (content_type, detection_info) = match detect_file_type_with_info(&path) {
                 Ok(result) => result,
                 Err(e) => {
-                    debug!("index_all_documents: failed to detect type for '{}': {}", path_str, e);
+                    debug!(
+                        "index_all_documents: failed to detect type for '{}': {}",
+                        path_str, e
+                    );
                     continue;
                 }
             };
-            
+
             debug!(
                 "index_all_documents: considering file='{}' content_type={:?} method={}",
                 path_str, content_type, detection_info.detection_method
             );
-            
+
             // Only index text-based files
             if content_type.is_text_based() {
-                match index_file_with_detection(retriever, &path, chunker_mode, chunker, detection_info) {
-                    Ok(chunks) => debug!("indexed file='{}' chunks={} type={:?}", path_str, chunks, content_type),
+                match index_file_with_detection(
+                    retriever,
+                    &path,
+                    chunker_mode,
+                    chunker,
+                    detection_info,
+                ) {
+                    Ok(chunks) => debug!(
+                        "indexed file='{}' chunks={} type={:?}",
+                        path_str, chunks, content_type
+                    ),
                     Err(e) => warn!("index_file failed for '{}': {}", path_str, e),
                 }
             } else {
@@ -87,9 +99,13 @@ fn index_file_with_detection(
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
-    debug!("index_file: start file='{}' detected_format={} strategy={}", 
-        path.to_string_lossy(), detection_info.detected_format, detection_info.chosen_strategy);
-    
+    debug!(
+        "index_file: start file='{}' detected_format={} strategy={}",
+        path.to_string_lossy(),
+        detection_info.detected_format,
+        detection_info.chosen_strategy
+    );
+
     let content = match extract_text(path) {
         Some(text) => text,
         None => {
@@ -166,7 +182,7 @@ fn index_file_with_detection(
                 chunk_duration.as_millis() as u64,
                 Some(stats),
                 detection_info,
-            )
+            ),
         );
     } else {
         crate::monitoring::record_chunking_snapshot(
@@ -178,7 +194,7 @@ fn index_file_with_detection(
                 chunk_duration.as_millis() as u64,
                 None,
                 detection_info,
-            )
+            ),
         );
     }
     Ok(ok)
@@ -189,13 +205,16 @@ fn index_file_with_detection(
 fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo), String> {
     let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
     let filename = path.file_name().and_then(|n| n.to_str());
-    let extension = path.extension().and_then(|e| e.to_str()).map(|s| s.to_string());
-    
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_string());
+
     // Try magic byte detection first
     let mime_type = infer::get(&bytes).map(|k| k.mime_type().to_string());
-    
+
     let content_type = detect_content_type(&bytes, filename);
-    
+
     // Determine detection method
     let detection_method = if mime_type.is_some() {
         "magic_bytes".to_string()
@@ -204,7 +223,7 @@ fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo
     } else {
         "heuristic".to_string()
     };
-    
+
     // Map content type to strategy
     let (detected_format, chosen_strategy) = match &content_type {
         ContentType::Pdf => ("PDF".to_string(), "character_split".to_string()),
@@ -217,7 +236,7 @@ fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo
         ContentType::Binary => ("Binary".to_string(), "skip".to_string()),
         ContentType::Unknown => ("Unknown".to_string(), "fallback_paragraph".to_string()),
     };
-    
+
     let detection_info = DetectionInfo {
         mime_type,
         extension,
@@ -225,7 +244,7 @@ fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo
         chosen_strategy,
         detection_method,
     };
-    
+
     Ok((content_type, detection_info))
 }
 
@@ -234,7 +253,7 @@ fn extract_text(path: &Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     let filename = path.file_name().and_then(|n| n.to_str());
     let content_type = detect_content_type(&bytes, filename);
-    
+
     match content_type {
         ContentType::Pdf => {
             // PDF parsing - could use pdf-extract crate here

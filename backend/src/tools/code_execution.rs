@@ -3,9 +3,9 @@
 
 use crate::tools::{Tool, ToolMetadata, ToolResult, ToolType};
 use async_trait::async_trait;
+use std::io::Write;
 use std::process::Command;
 use std::time::Instant;
-use std::io::Write;
 use tempfile::NamedTempFile;
 use tracing::{debug, warn};
 
@@ -42,7 +42,7 @@ impl CodeExecutionTool {
     /// Detect language from code or explicit marker
     fn detect_language(&self, code: &str) -> Option<String> {
         let code_lower = code.to_lowercase();
-        
+
         // Check for explicit language markers
         if code_lower.starts_with("```python") || code_lower.starts_with("# python") {
             return Some("python3".to_string());
@@ -68,7 +68,7 @@ impl CodeExecutionTool {
     /// Clean code by removing markdown fences
     fn clean_code(&self, code: &str) -> String {
         let mut cleaned = code.to_string();
-        
+
         // Remove markdown code fences
         if cleaned.starts_with("```") {
             if let Some(newline_pos) = cleaned.find('\n') {
@@ -95,7 +95,7 @@ impl CodeExecutionTool {
             "rm -r /",
             "dd if=",
             "mkfs",
-            ":(){ :|:& };:",  // Fork bomb
+            ":(){ :|:& };:", // Fork bomb
             "chmod 777 /",
             "sudo",
             "su -",
@@ -117,12 +117,7 @@ impl CodeExecutionTool {
 
         // Python-specific checks
         if language.contains("python") {
-            let python_dangerous = [
-                "open('/etc/",
-                "open('/dev/",
-                "open('/proc/",
-                "open('/sys/",
-            ];
+            let python_dangerous = ["open('/etc/", "open('/dev/", "open('/proc/", "open('/sys/"];
             for pattern in python_dangerous {
                 if code_lower.contains(pattern) {
                     return Err(format!("Blocked access to system path: {}", pattern));
@@ -137,8 +132,9 @@ impl CodeExecutionTool {
     fn execute_python(&self, code: &str) -> Result<String, String> {
         let mut temp_file = NamedTempFile::with_suffix(".py")
             .map_err(|e| format!("Failed to create temp file: {}", e))?;
-        
-        temp_file.write_all(code.as_bytes())
+
+        temp_file
+            .write_all(code.as_bytes())
             .map_err(|e| format!("Failed to write code: {}", e))?;
 
         let output = Command::new("python3")
@@ -164,8 +160,9 @@ impl CodeExecutionTool {
     fn execute_bash(&self, code: &str) -> Result<String, String> {
         let mut temp_file = NamedTempFile::with_suffix(".sh")
             .map_err(|e| format!("Failed to create temp file: {}", e))?;
-        
-        temp_file.write_all(code.as_bytes())
+
+        temp_file
+            .write_all(code.as_bytes())
             .map_err(|e| format!("Failed to write code: {}", e))?;
 
         let output = Command::new("bash")
@@ -217,7 +214,8 @@ impl Tool for CodeExecutionTool {
                 return Ok(ToolResult {
                     tool: ToolType::CodeExecution,
                     success: false,
-                    result: "Could not detect language. Please specify with ```python or ```bash".to_string(),
+                    result: "Could not detect language. Please specify with ```python or ```bash"
+                        .to_string(),
                     metadata: ToolMetadata {
                         execution_time_ms: start.elapsed().as_millis() as u64,
                         confidence: 0.0,
@@ -233,7 +231,10 @@ impl Tool for CodeExecutionTool {
             return Ok(ToolResult {
                 tool: ToolType::CodeExecution,
                 success: false,
-                result: format!("Language '{}' not allowed. Supported: {:?}", language, self.allowed_languages),
+                result: format!(
+                    "Language '{}' not allowed. Supported: {:?}",
+                    language, self.allowed_languages
+                ),
                 metadata: ToolMetadata {
                     execution_time_ms: start.elapsed().as_millis() as u64,
                     confidence: 0.0,
@@ -312,28 +313,42 @@ mod tests {
     #[test]
     fn test_language_detection() {
         let tool = CodeExecutionTool::new();
-        
-        assert_eq!(tool.detect_language("```python\nprint('hello')```"), Some("python3".to_string()));
-        assert_eq!(tool.detect_language("```bash\necho hello```"), Some("bash".to_string()));
-        assert_eq!(tool.detect_language("print('hello')"), Some("python3".to_string()));
+
+        assert_eq!(
+            tool.detect_language("```python\nprint('hello')```"),
+            Some("python3".to_string())
+        );
+        assert_eq!(
+            tool.detect_language("```bash\necho hello```"),
+            Some("bash".to_string())
+        );
+        assert_eq!(
+            tool.detect_language("print('hello')"),
+            Some("python3".to_string())
+        );
         assert_eq!(tool.detect_language("echo hello"), Some("bash".to_string()));
     }
 
     #[test]
     fn test_code_cleaning() {
         let tool = CodeExecutionTool::new();
-        
-        assert_eq!(tool.clean_code("```python\nprint('hello')\n```"), "print('hello')");
+
+        assert_eq!(
+            tool.clean_code("```python\nprint('hello')\n```"),
+            "print('hello')"
+        );
         assert_eq!(tool.clean_code("print('hello')"), "print('hello')");
     }
 
     #[test]
     fn test_safety_check() {
         let tool = CodeExecutionTool::new();
-        
+
         assert!(tool.is_safe_code("print('hello')", "python").is_ok());
         assert!(tool.is_safe_code("rm -rf /", "bash").is_err());
-        assert!(tool.is_safe_code("os.system('rm -rf /')", "python").is_err());
+        assert!(tool
+            .is_safe_code("os.system('rm -rf /')", "python")
+            .is_err());
     }
 
     #[tokio::test]

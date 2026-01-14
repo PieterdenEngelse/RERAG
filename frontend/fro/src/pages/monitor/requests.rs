@@ -334,7 +334,11 @@ fn build_request_counts(points: &[api::RequestChartPoint]) -> Vec<f64> {
 async fn run_sample_traffic() -> Result<(), String> {
     for i in 0..3 {
         let query = format!("monitor-test-{}", i);
-        let url = format!("{}/search?q={}", api::API_BASE_URL, encode(&query));
+        let url = format!(
+            "{}/search?q={}",
+            api::resolve_api_base_url(),
+            encode(&query)
+        );
         Request::get(&url)
             .send()
             .await

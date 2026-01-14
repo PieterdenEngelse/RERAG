@@ -78,7 +78,10 @@ pub fn detect_content_type(bytes: &[u8], filename: Option<&str>) -> ContentType 
             "application/json" => ContentType::Json,
             // infer doesn't detect plain text well, fall through to extension check
             _ if mime.starts_with("text/") => ContentType::Text,
-            _ if mime.starts_with("image/") || mime.starts_with("audio/") || mime.starts_with("video/") => {
+            _ if mime.starts_with("image/")
+                || mime.starts_with("audio/")
+                || mime.starts_with("video/") =>
+            {
                 ContentType::Binary
             }
             _ => ContentType::Unknown,
@@ -134,7 +137,9 @@ pub fn detect_from_extension(filename: &str) -> ContentType {
         Some("go") => ContentType::Code(CodeLanguage::Go),
         Some("java") => ContentType::Code(CodeLanguage::Java),
         Some("cs") => ContentType::Code(CodeLanguage::CSharp),
-        Some("cpp") | Some("cc") | Some("cxx") | Some("hpp") => ContentType::Code(CodeLanguage::Cpp),
+        Some("cpp") | Some("cc") | Some("cxx") | Some("hpp") => {
+            ContentType::Code(CodeLanguage::Cpp)
+        }
         Some("c") | Some("h") => ContentType::Code(CodeLanguage::C),
         Some("rb") => ContentType::Code(CodeLanguage::Ruby),
         Some("php") => ContentType::Code(CodeLanguage::Php),

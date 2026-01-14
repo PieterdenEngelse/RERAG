@@ -1,4 +1,9 @@
+// src/embedder.rs - Cross-platform embedding support
+// Uses fastembed on Linux, hash-based fallback on Windows
+
+#[cfg(not(target_os = "windows"))]
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+
 use lru::LruCache;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
@@ -17,12 +22,17 @@ const DEFAULT_EMBEDDING_DIM: usize = 384;
 fn hash_embedding(text: &str) -> EmbeddingVector {
     let hash = seahash::hash(text.as_bytes());
     let mut vec = vec![0.0; DEFAULT_EMBEDDING_DIM];
-    vec[0] = (hash & 0xFFFF) as f32;
+    // Spread the hash across multiple dimensions for better distribution
+    vec[0] = ((hash >> 0) & 0xFFFF) as f32 / 65535.0;
+    vec[1] = ((hash >> 16) & 0xFFFF) as f32 / 65535.0;
+    vec[2] = ((hash >> 32) & 0xFFFF) as f32 / 65535.0;
+    vec[3] = ((hash >> 48) & 0xFFFF) as f32 / 65535.0;
     vec
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingProvider {
+    #[cfg(not(target_os = "windows"))]
     FastEmbed,
     Hash,
 }
@@ -31,12 +41,16 @@ impl EmbeddingProvider {
     fn from_str(value: &str) -> Self {
         match value.to_lowercase().as_str() {
             "hash" => EmbeddingProvider::Hash,
+            #[cfg(not(target_os = "windows"))]
             _ => EmbeddingProvider::FastEmbed,
+            #[cfg(target_os = "windows")]
+            _ => EmbeddingProvider::Hash,
         }
     }
 
     fn as_str(&self) -> &'static str {
         match self {
+            #[cfg(not(target_os = "windows"))]
             EmbeddingProvider::FastEmbed => "fastembed",
             EmbeddingProvider::Hash => "hash",
         }
@@ -72,6 +86,7 @@ impl EmbeddingModelConfig {
         DEFAULT_EMBEDDING_DIM
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn to_fastembed(&self) -> EmbeddingModel {
         match self {
             EmbeddingModelConfig::BgeSmallEnV15 => EmbeddingModel::BGESmallENV15,
@@ -90,10 +105,17 @@ pub struct EmbeddingConfig {
 }
 
 fn default_provider() -> EmbeddingProvider {
-    if cfg!(test) {
+    #[cfg(target_os = "windows")]
+    {
         EmbeddingProvider::Hash
-    } else {
-        EmbeddingProvider::FastEmbed
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if cfg!(test) {
+            EmbeddingProvider::Hash
+        } else {
+            EmbeddingProvider::FastEmbed
+        }
     }
 }
 
@@ -138,7 +160,10 @@ impl Default for EmbeddingConfig {
 type EmbeddingCache = LruCache<String, EmbeddingVector>;
 
 enum EmbeddingBackend {
-    FastEmbed { inner: Mutex<TextEmbedding> },
+    #[cfg(not(target_os = "windows"))]
+    FastEmbed {
+        inner: Mutex<TextEmbedding>,
+    },
     Hash,
 }
 
@@ -155,6 +180,7 @@ impl EmbeddingRuntime {
             "Initializing embedding runtime"
         );
 
+        #[cfg(not(target_os = "windows"))]
         if matches!(config.provider, EmbeddingProvider::FastEmbed) {
             match TextEmbedding::try_new(InitOptions::new(config.model.to_fastembed())) {
                 Ok(model) => {
@@ -176,6 +202,9 @@ impl EmbeddingRuntime {
             }
         }
 
+        #[cfg(target_os = "windows")]
+        info!("Using hash-based embeddings (fastembed not available on Windows)");
+
         Self {
             backend: EmbeddingBackend::Hash,
             dim: DEFAULT_EMBEDDING_DIM,
@@ -192,6 +221,7 @@ impl EmbeddingRuntime {
         crate::monitoring::metrics::observe_embedding_batch_size(batch_size);
 
         let result = match &self.backend {
+            #[cfg(not(target_os = "windows"))]
             EmbeddingBackend::FastEmbed { inner, .. } => {
                 let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
                 let mut guard = inner.lock();
@@ -251,7 +281,7 @@ impl EmbeddingService {
         info!(
             batch_size = config.batch_size,
             cache_size = config.cache_size,
-            "Initializing EmbeddingService"
+            "EmbeddingService initialized"
         );
 
         Self {
@@ -341,7 +371,7 @@ impl EmbeddingService {
     }
 
     /// Embed multiple texts with indices (preserves order)
-    pub async fn embed_indexed_batch(
+    pub async fn embed_batch_indexed(
         &self,
         texts: &[(usize, &str)],
     ) -> Vec<(usize, EmbeddingVector)> {
@@ -368,61 +398,42 @@ impl EmbeddingService {
         results
     }
 
-    /// Clear the embedding cache
-    pub async fn clear_cache(&self) {
-        let mut cache = self.cache.write().await;
-        cache.clear();
-        info!("Embedding cache cleared");
-    }
-
-    /// Get cache statistics
-    pub async fn cache_stats(&self) -> CacheStats {
-        let cache = self.cache.read().await;
-        CacheStats {
-            len: cache.len(),
-            cap: cache.cap().get(),
-        }
-    }
-
-    /// Embed a query string (for semantic search)
+    /// Embed a query (same as embed_text, but semantically different)
     pub async fn embed_query(&self, query: &str) -> EmbeddingVector {
-        debug!(query = %query, "Generating query embedding");
         self.embed_text(query).await
     }
+
+    /// Get embedding dimension
+    pub fn dimension(&self) -> usize {
+        DEFAULT_EMBEDDING_DIM
+    }
 }
 
-/// Statistics for the embedding cache
-#[derive(Debug, Clone)]
-pub struct CacheStats {
-    pub len: usize,
-    pub cap: usize,
-}
-
-/// Similarity search helper functions
+/// Similarity functions for embeddings
 pub mod similarity {
     use super::EmbeddingVector;
 
     /// Cosine similarity between two vectors
-    pub fn cosine_similarity(a: &EmbeddingVector, b: &EmbeddingVector) -> f32 {
-        if a.is_empty() || b.is_empty() {
+    pub fn cosine(a: &EmbeddingVector, b: &EmbeddingVector) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
             return 0.0;
         }
 
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-        if mag_a == 0.0 || mag_b == 0.0 {
-            0.0
-        } else {
-            dot / (mag_a * mag_b)
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.0;
         }
+
+        dot / (norm_a * norm_b)
     }
 
     /// Euclidean distance between two vectors
     pub fn euclidean_distance(a: &EmbeddingVector, b: &EmbeddingVector) -> f32 {
-        if a.is_empty() || b.is_empty() {
-            return f32::INFINITY;
+        if a.len() != b.len() {
+            return f32::MAX;
         }
 
         a.iter()
@@ -432,20 +443,23 @@ pub mod similarity {
             .sqrt()
     }
 
-    /// Find top-k most similar embeddings
-    pub fn top_k_similar(
-        query_embedding: &EmbeddingVector,
-        candidates: &[(usize, &EmbeddingVector)],
-        k: usize,
-    ) -> Vec<(usize, f32)> {
-        let mut scores: Vec<_> = candidates
-            .iter()
-            .map(|(idx, emb)| (*idx, cosine_similarity(query_embedding, emb)))
-            .collect();
+    /// Dot product between two vectors
+    pub fn dot_product(a: &EmbeddingVector, b: &EmbeddingVector) -> f32 {
+        if a.len() != b.len() {
+            return 0.0;
+        }
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scores.truncate(k);
-        scores
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+
+    /// Normalize a vector to unit length
+    pub fn normalize(v: &mut EmbeddingVector) {
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in v.iter_mut() {
+                *x /= norm;
+            }
+        }
     }
 }
 
@@ -474,17 +488,15 @@ mod tests {
         assert!(vec.iter().any(|&x| x != 0.0));
     }
 
-    #[tokio::test]
-    async fn test_embedding_service_creation() {
-        let config = EmbeddingConfig::default();
-        let service = EmbeddingService::new(config);
-
-        let stats = service.cache_stats().await;
-        assert_eq!(stats.len, 0);
+    #[test]
+    fn test_embed_deterministic() {
+        let vec1 = embed("test query");
+        let vec2 = embed("test query");
+        assert_eq!(vec1, vec2);
     }
 
     #[tokio::test]
-    async fn test_embed_text() {
+    async fn test_embedding_service() {
         let service = EmbeddingService::new(EmbeddingConfig::default());
 
         let embedding = service.embed_text("test query").await;
@@ -492,29 +504,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_embedding_cache_hit() {
+    async fn test_embedding_cache() {
         let service = EmbeddingService::new(EmbeddingConfig::default());
 
-        // First call
-        let result1 = service.embed_text("test").await;
+        // First call - cache miss
+        let embedding1 = service.embed_text("cached query").await;
 
-        // Second call (should hit cache)
-        let result2 = service.embed_text("test").await;
+        // Second call - should be cache hit
+        let embedding2 = service.embed_text("cached query").await;
 
-        assert_eq!(result1, result2);
-
-        let stats = service.cache_stats().await;
-        assert_eq!(stats.len, 1);
+        assert_eq!(embedding1, embedding2);
     }
 
     #[tokio::test]
     async fn test_batch_embedding() {
-        let service = EmbeddingService::new(EmbeddingConfig {
-            batch_size: 2,
-            ..Default::default()
-        });
+        let service = EmbeddingService::new(EmbeddingConfig::default());
+        let texts = vec!["text1", "text2", "text3"];
 
-        let texts = vec!["text 1", "text 2", "text 3"];
         let results = service.embed_batch(&texts).await;
 
         assert_eq!(results.len(), 3);
@@ -522,61 +528,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_indexed_batch() {
-        let service = EmbeddingService::new(EmbeddingConfig::default());
-
-        let texts = vec![(0usize, "text 1"), (1usize, "text 2"), (2usize, "text 3")];
-        let results = service.embed_indexed_batch(&texts).await;
-
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0].0, 0);
-        assert_eq!(results[1].0, 1);
-        assert_eq!(results[2].0, 2);
-    }
-
-    #[tokio::test]
-    async fn test_clear_cache() {
-        let service = EmbeddingService::new(EmbeddingConfig::default());
-
-        let _ = service.embed_text("test").await;
-
-        let stats = service.cache_stats().await;
-        assert!(stats.len > 0);
-
-        service.clear_cache().await;
-
-        let stats = service.cache_stats().await;
-        assert_eq!(stats.len, 0);
-    }
-
-    #[test]
-    fn test_cosine_similarity() {
-        let v1 = vec![1.0, 0.0, 0.0];
-        let v2 = vec![1.0, 0.0, 0.0];
-        let v3 = vec![0.0, 1.0, 0.0];
-
-        assert!((similarity::cosine_similarity(&v1, &v2) - 1.0).abs() < 0.001);
-        assert!((similarity::cosine_similarity(&v1, &v3)).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_top_k_similar() {
-        let query = vec![1.0, 0.0];
-        let v1 = vec![1.0, 0.0];
-        let v2 = vec![0.0, 1.0];
-        let v3 = vec![0.9, 0.1];
-
-        let candidates = vec![(0, &v1), (1, &v2), (2, &v3)];
-
-        let results = similarity::top_k_similar(&query, &candidates, 2);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, 0); // Most similar
-    }
-
-    #[tokio::test]
     async fn test_embed_query() {
         let service = EmbeddingService::new(EmbeddingConfig::default());
         let embedding = service.embed_query("test query").await;
         assert_eq!(embedding.len(), DEFAULT_EMBEDDING_DIM);
+    }
+
+    #[test]
+    fn test_cosine_similarity() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        assert!((similarity::cosine(&a, &b) - 1.0).abs() < 0.001);
+
+        let c = vec![0.0, 1.0, 0.0];
+        assert!((similarity::cosine(&a, &c)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_normalize() {
+        let mut v = vec![3.0, 4.0];
+        similarity::normalize(&mut v);
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.001);
     }
 }

@@ -1,5 +1,6 @@
 use crate::app::Route;
 use dioxus::prelude::*;
+use dioxus_router::Link;
 
 #[component]
 pub fn PageNotFound(#[props(default = vec![])] segments: Vec<String>) -> Element {

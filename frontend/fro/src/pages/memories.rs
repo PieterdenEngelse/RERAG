@@ -400,7 +400,7 @@ fn FilterTab(
 
 #[component]
 pub fn ConfigMemories() -> Element {
-    let mut state = use_signal(MemoriesState::default);
+    let state = use_signal(MemoriesState::default);
     let mut form = use_signal(FormState::default);
     let mut show_info_modal = use_signal(|| Option::<String>::None);
     let mut show_list_modal = use_signal(|| Option::<String>::None);

@@ -142,6 +142,8 @@ impl ToolComposer {
             QueryIntent::Database => ToolType::DatabaseQuery,
             QueryIntent::CodeExecution => ToolType::CodeExecution,
             QueryIntent::ImageGeneration => ToolType::ImageGeneration,
+            QueryIntent::Scheduler => ToolType::Scheduler,
+            QueryIntent::Memory => ToolType::Memory,
             _ => ToolType::SemanticSearch,
         }
     }
@@ -155,6 +157,8 @@ impl ToolComposer {
             QueryIntent::Database => 0.75,
             QueryIntent::CodeExecution => 0.70,
             QueryIntent::ImageGeneration => 0.65,
+            QueryIntent::Scheduler => 0.78,
+            QueryIntent::Memory => 0.70,
             _ => 0.60,
         }
     }

@@ -1,5 +1,6 @@
 use crate::app::Route;
 use dioxus::prelude::*;
+use dioxus_router::Link;
 
 /// Global context to track which dropdown is currently open (by title)
 #[derive(Clone, Default)]

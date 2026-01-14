@@ -62,7 +62,7 @@ impl FileAnalyzerTool {
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            
+
             let (file_type, mime) = match ext.as_str() {
                 "rs" => ("Rust Source", "text/x-rust"),
                 "py" => ("Python Source", "text/x-python"),
@@ -93,7 +93,7 @@ impl FileAnalyzerTool {
                 "log" => ("Log File", "text/plain"),
                 _ => ("Unknown", "application/octet-stream"),
             };
-            
+
             if file_type != "Unknown" {
                 return (file_type.to_string(), mime.to_string());
             }
@@ -101,13 +101,16 @@ impl FileAnalyzerTool {
 
         // Detect from content
         let content_start = &content[..content.len().min(500)];
-        
+
         if content_start.contains("fn ") && content_start.contains("let ") {
             ("Rust Source".to_string(), "text/x-rust".to_string())
         } else if content_start.contains("def ") && content_start.contains("import ") {
             ("Python Source".to_string(), "text/x-python".to_string())
         } else if content_start.contains("function") || content_start.contains("const ") {
-            ("JavaScript Source".to_string(), "text/javascript".to_string())
+            (
+                "JavaScript Source".to_string(),
+                "text/javascript".to_string(),
+            )
         } else if content_start.starts_with('{') || content_start.starts_with('[') {
             ("JSON".to_string(), "application/json".to_string())
         } else if content_start.starts_with("<!DOCTYPE") || content_start.starts_with("<html") {
@@ -124,22 +127,33 @@ impl FileAnalyzerTool {
     /// Detect language of text content
     fn detect_language(&self, content: &str) -> Option<String> {
         let content_lower = content.to_lowercase();
-        
+
         // Simple language detection based on common words
-        let english_words = ["the", "is", "are", "and", "or", "but", "in", "on", "at", "to", "for"];
-        let spanish_words = ["el", "la", "los", "las", "es", "son", "y", "o", "pero", "en", "de"];
-        let french_words = ["le", "la", "les", "est", "sont", "et", "ou", "mais", "dans", "de"];
-        let german_words = ["der", "die", "das", "ist", "sind", "und", "oder", "aber", "in", "von"];
+        let english_words = [
+            "the", "is", "are", "and", "or", "but", "in", "on", "at", "to", "for",
+        ];
+        let spanish_words = [
+            "el", "la", "los", "las", "es", "son", "y", "o", "pero", "en", "de",
+        ];
+        let french_words = [
+            "le", "la", "les", "est", "sont", "et", "ou", "mais", "dans", "de",
+        ];
+        let german_words = [
+            "der", "die", "das", "ist", "sind", "und", "oder", "aber", "in", "von",
+        ];
 
         let words: Vec<&str> = content_lower.split_whitespace().collect();
-        
+
         let english_count = words.iter().filter(|w| english_words.contains(w)).count();
         let spanish_count = words.iter().filter(|w| spanish_words.contains(w)).count();
         let french_count = words.iter().filter(|w| french_words.contains(w)).count();
         let german_count = words.iter().filter(|w| german_words.contains(w)).count();
 
-        let max_count = english_count.max(spanish_count).max(french_count).max(german_count);
-        
+        let max_count = english_count
+            .max(spanish_count)
+            .max(french_count)
+            .max(german_count);
+
         if max_count < 3 {
             return None;
         }
@@ -194,10 +208,20 @@ impl FileAnalyzerTool {
     /// Analyze document structure
     fn analyze_structure(&self, content: &str) -> DocumentStructure {
         DocumentStructure {
-            has_headers: content.contains("# ") || content.contains("## ") || content.contains("<h1") || content.contains("<h2"),
-            has_lists: content.contains("- ") || content.contains("* ") || content.contains("1. ") || content.contains("<li"),
-            has_code_blocks: content.contains("```") || content.contains("<code") || content.contains("<pre"),
-            has_links: content.contains("](") || content.contains("href=") || content.contains("http"),
+            has_headers: content.contains("# ")
+                || content.contains("## ")
+                || content.contains("<h1")
+                || content.contains("<h2"),
+            has_lists: content.contains("- ")
+                || content.contains("* ")
+                || content.contains("1. ")
+                || content.contains("<li"),
+            has_code_blocks: content.contains("```")
+                || content.contains("<code")
+                || content.contains("<pre"),
+            has_links: content.contains("](")
+                || content.contains("href=")
+                || content.contains("http"),
             has_images: content.contains("![") || content.contains("<img"),
             sections: content.matches("# ").count() + content.matches("## ").count(),
         }
@@ -208,19 +232,31 @@ impl FileAnalyzerTool {
         let mut score: f32 = 0.5; // Base score
 
         let word_count = content.split_whitespace().count();
-        
+
         // Length bonus
-        if word_count > 100 { score += 0.1; }
-        if word_count > 500 { score += 0.1; }
-        
+        if word_count > 100 {
+            score += 0.1;
+        }
+        if word_count > 500 {
+            score += 0.1;
+        }
+
         // Structure bonus
-        if structure.has_headers { score += 0.1; }
-        if structure.has_lists { score += 0.05; }
-        if structure.sections > 2 { score += 0.1; }
-        
+        if structure.has_headers {
+            score += 0.1;
+        }
+        if structure.has_lists {
+            score += 0.05;
+        }
+        if structure.sections > 2 {
+            score += 0.1;
+        }
+
         // Penalize very short content
-        if word_count < 20 { score -= 0.2; }
-        
+        if word_count < 20 {
+            score -= 0.2;
+        }
+
         score.max(0.0).min(1.0)
     }
 
@@ -254,7 +290,8 @@ impl Tool for FileAnalyzerTool {
     }
 
     fn description(&self) -> String {
-        "Analyze file contents, extract metadata, detect language, and identify entities".to_string()
+        "Analyze file contents, extract metadata, detect language, and identify entities"
+            .to_string()
     }
 
     fn success_rate(&self) -> f32 {
@@ -297,26 +334,44 @@ impl Tool for FileAnalyzerTool {
         };
 
         let analysis = self.analyze(content, filename);
-        
+
         let mut output = String::from("File Analysis Results\n\n");
-        output.push_str(&format!("Type: {} ({})\n", analysis.file_type, analysis.mime_type));
-        
+        output.push_str(&format!(
+            "Type: {} ({})\n",
+            analysis.file_type, analysis.mime_type
+        ));
+
         if let Some(lang) = &analysis.language {
             output.push_str(&format!("Language: {}\n", lang));
         }
-        
+
         output.push_str(&format!("Encoding: {}\n", analysis.encoding));
-        output.push_str(&format!("Statistics: {} lines, {} words, {} characters\n", 
-            analysis.line_count, analysis.word_count, analysis.char_count));
-        output.push_str(&format!("Quality Score: {:.0}%\n", analysis.quality_score * 100.0));
+        output.push_str(&format!(
+            "Statistics: {} lines, {} words, {} characters\n",
+            analysis.line_count, analysis.word_count, analysis.char_count
+        ));
+        output.push_str(&format!(
+            "Quality Score: {:.0}%\n",
+            analysis.quality_score * 100.0
+        ));
 
         if let Some(structure) = &analysis.structure {
             output.push_str("\nStructure:\n");
-            if structure.has_headers { output.push_str("  - Has headers\n"); }
-            if structure.has_lists { output.push_str("  - Has lists\n"); }
-            if structure.has_code_blocks { output.push_str("  - Has code blocks\n"); }
-            if structure.has_links { output.push_str("  - Has links\n"); }
-            if structure.has_images { output.push_str("  - Has images\n"); }
+            if structure.has_headers {
+                output.push_str("  - Has headers\n");
+            }
+            if structure.has_lists {
+                output.push_str("  - Has lists\n");
+            }
+            if structure.has_code_blocks {
+                output.push_str("  - Has code blocks\n");
+            }
+            if structure.has_links {
+                output.push_str("  - Has links\n");
+            }
+            if structure.has_images {
+                output.push_str("  - Has images\n");
+            }
             if structure.sections > 0 {
                 output.push_str(&format!("  - {} sections\n", structure.sections));
             }
@@ -325,13 +380,15 @@ impl Tool for FileAnalyzerTool {
         if !analysis.entities.is_empty() {
             output.push_str("\nEntities Found:\n");
             for entity in analysis.entities.iter().take(10) {
-                let display_value = if entity.value.len() > 30 { 
-                    format!("{}...", &entity.value[..30]) 
-                } else { 
-                    entity.value.clone() 
+                let display_value = if entity.value.len() > 30 {
+                    format!("{}...", &entity.value[..30])
+                } else {
+                    entity.value.clone()
                 };
-                output.push_str(&format!("  - {} ({}): {} occurrence(s)\n", 
-                    entity.entity_type, display_value, entity.count));
+                output.push_str(&format!(
+                    "  - {} ({}): {} occurrence(s)\n",
+                    entity.entity_type, display_value, entity.count
+                ));
             }
         }
 
@@ -373,7 +430,8 @@ mod tests {
     #[tokio::test]
     async fn test_markdown_detection() {
         let tool = FileAnalyzerTool::new();
-        let content = "# Title\n\n## Section 1\n\nSome text here.\n\n## Section 2\n\n- Item 1\n- Item 2";
+        let content =
+            "# Title\n\n## Section 1\n\nSome text here.\n\n## Section 2\n\n- Item 1\n- Item 2";
         let result = tool.execute(content).await;
         assert!(result.is_ok());
         let res = result.unwrap();

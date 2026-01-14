@@ -13,6 +13,12 @@ use crate::monitoring::rate_limit_middleware::{MatchKind, RateLimitOptions, Rout
 use crate::retriever::Retriever;
 use crate::security::rate_limiter::{RateLimiter, RateLimiterState};
 use crate::tools::calculator::CalculatorTool;
+use crate::tools::entity_extractor::EntityExtractorTool;
+use crate::tools::memory_tool::MemoryTool;
+use crate::tools::scheduler::SchedulerTool;
+use crate::tools::sentiment::SentimentAnalyzerTool;
+use crate::tools::spell_checker::SpellCheckerTool;
+use crate::tools::translator::TranslatorTool;
 use crate::tools::url_fetch::URLFetchTool;
 use crate::tools::web_search::WebSearchTool;
 use crate::tools::Tool;
@@ -1732,17 +1738,16 @@ async fn upload_document_inner(
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();
-        
+
         // Allow documents and code files that mime_detect.rs supports
         let allowed_extensions = [
             // Documents
             "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "xml", "json",
             // Code files
-            "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs",
-            "cpp", "cc", "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh",
-            "sql", "yaml", "yml", "toml",
+            "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs", "cpp", "cc",
+            "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh", "sql", "yaml", "yml", "toml",
         ];
-        
+
         if !allowed_extensions.contains(&ext.as_str()) {
             return Ok(HttpResponse::BadRequest().body(format!(
                 "File type '{}' not supported. Allowed: documents (pdf, txt, md, html, xml, json) and code files (rs, py, js, ts, go, java, etc.)",
@@ -3289,6 +3294,81 @@ async fn run_web_search_tool(input: &str) -> Result<String, String> {
     }
 }
 
+async fn run_translator_tool(input: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err("Provide text to translate, e.g. 'translate hello to spanish'.".to_string());
+    }
+    let tool = TranslatorTool::new();
+    let result = tool.execute(input).await?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
+async fn run_sentiment_tool(input: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err("Provide text to analyze, e.g. 'sentiment I love this product'.".to_string());
+    }
+    let tool = SentimentAnalyzerTool::new();
+    let result = tool.execute(input).await?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
+async fn run_entity_tool(input: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err(
+            "Provide text to extract entities from, e.g. 'entities Elon Musk founded SpaceX'."
+                .to_string(),
+        );
+    }
+    let tool = EntityExtractorTool::new();
+    let result = tool.execute(input).await?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
+async fn run_spell_checker_tool(input: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err("Provide text to spell check, e.g. 'spellcheck teh quikc fox'.".to_string());
+    }
+    let tool = SpellCheckerTool::new();
+    let result = tool.execute(input).await?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
+async fn run_scheduler_tool(input: &str) -> Result<String, String> {
+    let tool = SchedulerTool::new();
+    let result = tool.execute(input).await?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
+async fn run_memory_tool(input: &str) -> Result<String, String> {
+    let tool = MemoryTool::new(None);
+    let result = tool.execute(input).await?;
+    if result.success {
+        Ok(result.result)
+    } else {
+        Err(result.result)
+    }
+}
+
 fn normalize_pipe_separators(command: &str) -> String {
     command
         .split('|')
@@ -3321,8 +3401,26 @@ async fn run_tool_command(command: &str) -> Result<String, String> {
         } else {
             preview_url_content(url).await
         }
+    } else if trimmed.starts_with("translate") {
+        let request = trimmed.strip_prefix("translate").unwrap_or("").trim();
+        run_translator_tool(request).await
+    } else if trimmed.starts_with("sentiment") {
+        let request = trimmed.strip_prefix("sentiment").unwrap_or("").trim();
+        run_sentiment_tool(request).await
+    } else if trimmed.starts_with("entities") {
+        let request = trimmed.strip_prefix("entities").unwrap_or("").trim();
+        run_entity_tool(request).await
+    } else if trimmed.starts_with("spell") {
+        let request = trimmed.strip_prefix("spell").unwrap_or("").trim();
+        run_spell_checker_tool(request).await
+    } else if trimmed.starts_with("schedule") {
+        let request = trimmed.strip_prefix("schedule").unwrap_or("").trim();
+        run_scheduler_tool(request).await
+    } else if trimmed.starts_with("memory") {
+        let request = trimmed.strip_prefix("memory").unwrap_or("").trim();
+        run_memory_tool(request).await
     } else {
-        Err("Unknown tool. Use 'calculator', 'search', or 'fetch'.".to_string())
+        Err("Unknown tool. Use 'calculator', 'search', 'fetch', 'translate', 'sentiment', 'entities', 'spell', 'schedule', or 'memory'.".to_string())
     }
 }
 

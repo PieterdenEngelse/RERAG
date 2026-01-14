@@ -3,7 +3,7 @@
 # Version: 2.1
 # Initialize tmux session "main" with standard windows
 # Handles all tmux session/window management and auto-attach
-# Fixed: qodo login/gui handling with fallback support
+# Fixed: q login/gui handling with fallback support
 set -euo pipefail
 
 LOG_FILE="$HOME/.tmux_startup.log"
@@ -48,7 +48,7 @@ LOG_FILE="$HOME/.tmux_startup.log"
     # Send commands to specific windows
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up window commands"
 
-    # Q window: auto-run qodo login/gui only once per new tmux session
+    # Q window: auto-run q login/gui only once per new tmux session
     if tmux list-windows -t "$SESSION" | grep -q "Q"; then
         if [ "$SESSION_CREATED" -eq 1 ]; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Q window created - attempting qodo startup"
@@ -57,7 +57,7 @@ LOG_FILE="$HOME/.tmux_startup.log"
             if command -v qodo &> /dev/null; then
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] qodo found in PATH - starting login"
                 # Use nohup to prevent qodo from blocking tmux
-                tmux send-keys -t "$SESSION:Q" "{ qodo login && sleep 2 && qodo --gui; } || echo 'qodo startup failed'" C-m
+                tmux send-keys -t "$SESSION:Q" "{ q --login && sleep 2 && q --gui; } || echo 'q startup failed'" C-m
             else
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: qodo NOT found in PATH"
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Q window will start as shell only"
@@ -106,7 +106,7 @@ LOG_FILE="$HOME/.tmux_startup.log"
         tmux send-keys -t "$SESSION:tem" "sudo systemctl status tempo.service && sudo journalctl -u tempo.service -f" C-m
     fi
 
-    # qodo gui: qodo-gui.service status and logs
+    # q gui: qodo-gui.service status and logs
     if tmux list-windows -t "$SESSION" | grep -q "q2"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting qodo-gui.service status and logs in q2 window"
         sleep 1

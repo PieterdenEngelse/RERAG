@@ -25,7 +25,11 @@ pub mod performance_analysis;
 pub mod pprof;
 pub mod rate_limit_middleware;
 pub mod resource_attribution;
+pub mod tool_alerts;
+pub mod tool_costs;
+pub mod tool_dependencies;
 pub mod tool_stats;
+pub mod tool_trends;
 pub mod trace_alerting;
 pub mod trace_context;
 pub mod trace_middleware;
@@ -49,15 +53,27 @@ pub use config::MonitoringConfig;
 pub use health::HealthStatus;
 pub use histogram_config::HistogramBuckets;
 pub use resource_attribution::{start_resource_attribution, ResourceAttributionConfig};
+pub use tool_alerts::{
+    acknowledge_alert, get_alert_config, get_alert_status, get_alerts, get_tool_alerts,
+    record_and_check as record_tool_alert, set_alert_config, set_webhook_url, ToolAlert,
+};
+pub use tool_costs::{get_tool_costs, record_tool_cost, ToolCostStats};
+pub use tool_dependencies::{
+    get_tool_dependency_graph, record_tool_dependency, ToolDependencyEdge, ToolDependencyGraph,
+    ToolDependencyNode,
+};
+pub use tool_stats::{
+    clear_history as clear_tool_history, get_recent_executions, get_tool_stat, get_tool_stats,
+    record_tool_execution, ToolAggregateStats, ToolExecution, ToolExecutionResponse,
+    ToolStatsResponse,
+};
+pub use tool_trends::{
+    compare_windows as compare_trends, get_all_trends, get_tool_trend, record_execution, ToolTrend,
+};
 pub use trace_alerting::{start_trace_alerting, TraceAlertingConfig, TraceAnomalyEvent};
 pub use trace_context::{clear_trace_id, get_trace_id, set_trace_id};
 pub use ui_metrics::{
     get_requests_snapshot, record_http_request, RequestChartPoint, RequestsSnapshot,
-};
-pub use tool_stats::{
-    record_tool_execution, get_recent_executions, get_tool_stats, get_tool_stat,
-    clear_history as clear_tool_history, ToolExecution, ToolAggregateStats,
-    ToolExecutionResponse, ToolStatsResponse,
 };
 
 use std::sync::Arc;

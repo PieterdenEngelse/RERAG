@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use std::borrow::Cow;
 
 use crate::app::Route;
@@ -36,10 +37,10 @@ pub fn Breadcrumb(props: BreadcrumbProps) -> Element {
                     Link {
                         to: route.clone(),
                         class: "text-white/80 hover:text-white transition-colors",
-                        {item.label.clone()}
+                        {item.label.as_ref()}
                     }
                 } else {
-                    span { class: "text-white font-bold", {item.label.clone()} }
+                    span { class: "text-white font-bold", {item.label.as_ref()} }
                 }
 
                 if idx < props.items.len() - 1 {

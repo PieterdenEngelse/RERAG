@@ -52,7 +52,7 @@ pub fn start_file_watcher(
     }
 
     let watch_path = watch_dir.to_string();
-    
+
     // Ensure the directory exists
     if let Err(e) = std::fs::create_dir_all(&watch_path) {
         error!("Failed to create watch directory {}: {}", watch_path, e);
@@ -127,9 +127,9 @@ async fn run_watcher(
                 // Documents
                 "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "xml", "json",
                 // Code files
-                "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs",
-                "cpp", "cc", "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh",
-                "sql", "yaml", "yml", "toml",
+                "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs", "cpp", "cc",
+                "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh", "sql", "yaml", "yml",
+                "toml",
             ];
 
             if !allowed_extensions.contains(&ext.as_str()) {

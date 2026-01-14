@@ -6,12 +6,18 @@ use crate::tools::calculator::CalculatorTool;
 use crate::tools::classifier::ClassifierTool;
 use crate::tools::code_execution::CodeExecutionTool;
 use crate::tools::database_query::DatabaseQueryTool;
+use crate::tools::entity_extractor::EntityExtractorTool;
 use crate::tools::file_analyzer::FileAnalyzerTool;
 use crate::tools::image_generation::ImageGenerationTool;
+use crate::tools::memory_tool::MemoryTool;
 use crate::tools::notification::NotificationTool;
 use crate::tools::query_rewriter::QueryRewriterTool;
+use crate::tools::scheduler::SchedulerTool;
 use crate::tools::semantic_search::SemanticSearchTool;
+use crate::tools::sentiment::SentimentAnalyzerTool;
+use crate::tools::spell_checker::SpellCheckerTool;
 use crate::tools::summarizer::SummarizerTool;
+use crate::tools::translator::TranslatorTool;
 use crate::tools::url_fetch::URLFetchTool;
 use crate::tools::web_search::WebSearchTool;
 use crate::tools::{Tool, ToolResult, ToolType};
@@ -90,6 +96,30 @@ impl ToolExecutor {
                 let notifier = NotificationTool::new();
                 notifier.execute(&input_query).await?
             }
+            ToolType::Translator => {
+                let translator = TranslatorTool::new();
+                translator.execute(&input_query).await?
+            }
+            ToolType::SentimentAnalyzer => {
+                let sentiment = SentimentAnalyzerTool::new();
+                sentiment.execute(&input_query).await?
+            }
+            ToolType::EntityExtractor => {
+                let extractor = EntityExtractorTool::new();
+                extractor.execute(&input_query).await?
+            }
+            ToolType::SpellChecker => {
+                let spell_checker = SpellCheckerTool::new();
+                spell_checker.execute(&input_query).await?
+            }
+            ToolType::Scheduler => {
+                let scheduler = SchedulerTool::new();
+                scheduler.execute(&input_query).await?
+            }
+            ToolType::Memory => {
+                let memory = MemoryTool::new(None);
+                memory.execute(&input_query).await?
+            }
         };
 
         // Record execution for monitoring
@@ -103,6 +133,18 @@ impl ToolExecutor {
             result.metadata.confidence,
             result.metadata.source.as_deref(),
         );
+        crate::monitoring::record_execution(
+            &tool_type.to_string(),
+            result.success,
+            execution_time,
+            result.metadata.confidence,
+            result.metadata.cost.unwrap_or(0.0) as f64,
+        );
+        if let Some(cost) = result.metadata.cost {
+            if cost > 0.0 {
+                crate::monitoring::record_tool_cost(&tool_type.to_string(), cost);
+            }
+        }
 
         Ok(result)
     }

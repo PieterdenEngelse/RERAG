@@ -156,7 +156,7 @@ impl Chunker for SemanticAdaptiveChunker {
 
             let similarity_score = chunk_embedding_sum
                 .as_ref()
-                .map(|sum| similarity::cosine_similarity(sum, &seg_embedding));
+                .map(|sum| similarity::cosine(sum, &seg_embedding));
 
             if let Some(score) = similarity_score {
                 stats.similarity_observations += 1;

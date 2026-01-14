@@ -5,10 +5,10 @@ cd "$HOME/ag"
 : > qodo_pane.log
 : > server.log
 {
-  echo "==== qodo --login output ===="
-  QODO_LOG_LEVEL=debug qodo --login
+  echo "==== q --login output ===="
+  QODO_LOG_LEVEL=debug q --login
 } &> qodo_gui_launch.log
 {
-  echo "==== qodo --gui output ===="
-  QODO_LOG_LEVEL=debug qodo --gui
+  echo "==== q --gui output ===="
+  QODO_LOG_LEVEL=debug q --gui
 } &> qodo_pane.log

@@ -1,6 +1,42 @@
 use serde::{Deserialize, Serialize};
 
+/// Default base URL used when running outside of a browser (e.g., dx serve)
 pub const API_BASE_URL: &str = "http://127.0.0.1:3010";
+
+pub fn resolve_api_base_url() -> String {
+    if let Some(window) = web_sys::window() {
+        let location = window.location();
+        if let Ok(origin) = location.origin() {
+            let is_loopback = origin.contains("127.0.0.1") || origin.contains("localhost");
+            if !is_loopback {
+                return origin;
+            }
+
+            let hostname = location
+                .hostname()
+                .unwrap_or_else(|_| "127.0.0.1".into())
+                .trim()
+                .to_string();
+            let scheme = location
+                .protocol()
+                .unwrap_or_else(|_| "http:".into())
+                .trim_end_matches(':')
+                .to_string();
+
+            if hostname.is_empty() {
+                return API_BASE_URL.to_string();
+            }
+
+            return format!("{}://{}:3010", scheme, hostname);
+        }
+    }
+
+    API_BASE_URL.to_string()
+}
+
+pub fn api_url(path: &str) -> String {
+    format!("{}{}", resolve_api_base_url(), path)
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HealthResponse {
@@ -587,7 +623,7 @@ pub async fn get_prompt_caching() -> Result<PromptCachingResponse, String> {
 
 /// Set prompt caching state
 pub async fn set_prompt_caching(enabled: bool) -> Result<PromptCachingResponse, String> {
-    let url = format!("{}/config/prompt_caching", API_BASE_URL);
+    let url = api_url("/config/prompt_caching");
     let body = serde_json::json!({ "enabled": enabled });
 
     gloo_net::http::Request::post(&url)
@@ -657,7 +693,7 @@ pub struct TrainingExportResponse {
 pub async fn submit_training_feedback(
     feedback: TrainingFeedbackRequest,
 ) -> Result<TrainingFeedbackResponse, String> {
-    let url = format!("{}/training/feedback", API_BASE_URL);
+    let url = api_url("/training/feedback");
 
     gloo_net::http::Request::post(&url)
         .json(&feedback)
@@ -677,7 +713,7 @@ pub async fn get_training_stats() -> Result<TrainingStatsResponse, String> {
 
 /// Export training data for Unsloth
 pub async fn export_training_data() -> Result<TrainingExportResponse, String> {
-    let url = format!("{}/training/export", API_BASE_URL);
+    let url = api_url("/training/export");
 
     gloo_net::http::Request::post(&url)
         .send()
@@ -690,7 +726,7 @@ pub async fn export_training_data() -> Result<TrainingExportResponse, String> {
 
 /// Clear all training data
 pub async fn clear_training_data() -> Result<serde_json::Value, String> {
-    let url = format!("{}/training/clear", API_BASE_URL);
+    let url = api_url("/training/clear");
 
     gloo_net::http::Request::post(&url)
         .send()
@@ -703,7 +739,7 @@ pub async fn clear_training_data() -> Result<serde_json::Value, String> {
 
 /// Check backend health
 pub async fn health_check() -> Result<HealthResponse, String> {
-    let url = format!("{}/monitoring/health", API_BASE_URL);
+    let url = api_url("/monitoring/health");
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -716,7 +752,11 @@ pub async fn health_check() -> Result<HealthResponse, String> {
 
 /// Search documents
 pub async fn search(query: &str) -> Result<SearchResponse, String> {
-    let url = format!("{}/search?q={}", API_BASE_URL, urlencoding::encode(query));
+    let url = format!(
+        "{}/search?q={}",
+        resolve_api_base_url(),
+        urlencoding::encode(query)
+    );
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -729,7 +769,7 @@ pub async fn search(query: &str) -> Result<SearchResponse, String> {
 
 /// List all documents
 pub async fn list_documents() -> Result<DocumentsResponse, String> {
-    let url = format!("{}/documents", API_BASE_URL);
+    let url = api_url("/documents");
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -742,7 +782,7 @@ pub async fn list_documents() -> Result<DocumentsResponse, String> {
 
 /// Delete a document
 pub async fn delete_document(filename: &str) -> Result<serde_json::Value, String> {
-    let url = format!("{}/documents/{}", API_BASE_URL, filename);
+    let url = format!("{}/documents/{}", resolve_api_base_url(), filename);
 
     gloo_net::http::Request::delete(&url)
         .send()
@@ -755,7 +795,7 @@ pub async fn delete_document(filename: &str) -> Result<serde_json::Value, String
 
 /// Trigger reindexing
 pub async fn reindex() -> Result<serde_json::Value, String> {
-    let url = format!("{}/reindex", API_BASE_URL);
+    let url = api_url("/reindex");
 
     gloo_net::http::Request::post(&url)
         .send()
@@ -767,7 +807,7 @@ pub async fn reindex() -> Result<serde_json::Value, String> {
 }
 
 pub async fn reindex_async() -> Result<ReindexAsyncResponse, String> {
-    let url = format!("{}/reindex/async", API_BASE_URL);
+    let url = api_url("/reindex/async");
 
     gloo_net::http::Request::post(&url)
         .send()
@@ -793,7 +833,7 @@ pub async fn fetch_chunk_config() -> Result<ChunkConfigResponse, String> {
 pub async fn commit_chunk_config(
     payload: &ChunkCommitRequest,
 ) -> Result<ChunkCommitResponse, String> {
-    let url = format!("{}/config/chunk_size", API_BASE_URL);
+    let url = api_url("/config/chunk_size");
     gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(
@@ -814,7 +854,7 @@ pub async fn fetch_llm_config() -> Result<LlmConfigResponse, String> {
 }
 
 pub async fn commit_llm_config(payload: &LlmConfig) -> Result<LlmConfigResponse, String> {
-    let url = format!("{}/config/llm", API_BASE_URL);
+    let url = api_url("/config/llm");
     gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(
@@ -834,10 +874,31 @@ pub async fn fetch_hardware_config() -> Result<HardwareConfigResponse, String> {
     fetch_json::<HardwareConfigResponse>("/config/hardware").await
 }
 
+pub async fn fetch_hardware_config_with_origin(
+    origin: &str,
+) -> Result<HardwareConfigResponse, String> {
+    let url = format!("{}/config/hardware", origin.trim_end_matches('/'));
+    let response = gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 pub async fn commit_hardware_config(
     payload: &HardwareConfig,
 ) -> Result<HardwareConfigResponse, String> {
-    let url = format!("{}/config/hardware", API_BASE_URL);
+    let url = api_url("/config/hardware");
     gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(
@@ -858,7 +919,7 @@ pub async fn fetch_api_keys() -> Result<ApiKeysResponse, String> {
 }
 
 pub async fn save_api_keys(payload: &ApiKeysRequest) -> Result<ApiKeysResponse, String> {
-    let url = format!("{}/config/api_keys", API_BASE_URL);
+    let url = api_url("/config/api_keys");
     gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(
@@ -875,7 +936,7 @@ pub async fn save_api_keys(payload: &ApiKeysRequest) -> Result<ApiKeysResponse, 
 }
 
 pub async fn delete_api_key(provider: &str) -> Result<serde_json::Value, String> {
-    let url = format!("{}/config/api_keys/{}", API_BASE_URL, provider);
+    let url = format!("{}/config/api_keys/{}", resolve_api_base_url(), provider);
     gloo_net::http::Request::delete(&url)
         .send()
         .await
@@ -886,7 +947,7 @@ pub async fn delete_api_key(provider: &str) -> Result<serde_json::Value, String>
 }
 
 pub async fn fetch_reindex_status(job_id: &str) -> Result<ReindexStatusResponse, String> {
-    let url = format!("{}/reindex/status/{}", API_BASE_URL, job_id);
+    let url = format!("{}/reindex/status/{}", resolve_api_base_url(), job_id);
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -899,7 +960,7 @@ pub async fn fetch_reindex_status(job_id: &str) -> Result<ReindexStatusResponse,
 
 /// Fetch request metrics snapshot for the Monitor UI
 pub async fn fetch_requests_snapshot() -> Result<RequestsSnapshot, String> {
-    let url = format!("{}/monitoring/ui/requests", API_BASE_URL);
+    let url = api_url("/monitoring/ui/requests");
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -925,7 +986,7 @@ pub async fn set_chunking_logging(enabled: bool) -> Result<ChunkingLoggingRespon
 }
 
 pub async fn fetch_cache_info() -> Result<CacheInfoResponse, String> {
-    let url = format!("{}/monitor/cache/info", API_BASE_URL);
+    let url = api_url("/monitor/cache/info");
     let response = gloo_net::http::Request::get(&url)
         .send()
         .await
@@ -942,7 +1003,7 @@ pub async fn fetch_cache_info() -> Result<CacheInfoResponse, String> {
 }
 
 pub async fn fetch_rate_limit_info() -> Result<RateLimitInfoResponse, String> {
-    let url = format!("{}/monitor/rate_limits/info", API_BASE_URL);
+    let url = api_url("/monitor/rate_limits/info");
     gloo_net::http::Request::get(&url)
         .send()
         .await
@@ -960,7 +1021,7 @@ pub struct SetRateLimitEnabledResponse {
 }
 
 pub async fn set_rate_limit_enabled(enabled: bool) -> Result<SetRateLimitEnabledResponse, String> {
-    let url = format!("{}/monitor/rate_limits/enabled", API_BASE_URL);
+    let url = api_url("/monitor/rate_limits/enabled");
     gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(serde_json::json!({ "enabled": enabled }).to_string())
@@ -974,7 +1035,11 @@ pub async fn set_rate_limit_enabled(enabled: bool) -> Result<SetRateLimitEnabled
 }
 
 pub async fn fetch_recent_logs(limit: usize) -> Result<LogsResponse, String> {
-    let url = format!("{}/monitor/logs/recent?limit={}", API_BASE_URL, limit);
+    let url = format!(
+        "{}/monitor/logs/recent?limit={}",
+        resolve_api_base_url(),
+        limit
+    );
     gloo_net::http::Request::get(&url)
         .send()
         .await
@@ -1014,7 +1079,7 @@ pub async fn upload_document(filename: &str, data: &[u8]) -> Result<UploadRespon
     use js_sys::{Array, Uint8Array};
     use web_sys::{Blob, BlobPropertyBag, FormData};
 
-    let url = format!("{}/upload", API_BASE_URL);
+    let url = api_url("/upload");
 
     // Create a Uint8Array from the data
     let uint8_array = Uint8Array::new_with_length(data.len() as u32);
@@ -1023,8 +1088,8 @@ pub async fn upload_document(filename: &str, data: &[u8]) -> Result<UploadRespon
     // Create blob from the array
     let array = Array::new();
     array.push(&uint8_array);
-    let mut blob_options = BlobPropertyBag::new();
-    blob_options.type_("application/octet-stream");
+    let blob_options = BlobPropertyBag::new();
+    blob_options.set_type("application/octet-stream");
     let blob = Blob::new_with_u8_array_sequence_and_options(&array, &blob_options)
         .map_err(|_| "Failed to create blob".to_string())?;
 
@@ -1058,7 +1123,7 @@ async fn fetch_json<T>(path: &str) -> Result<T, String>
 where
     T: for<'de> serde::Deserialize<'de>,
 {
-    let url = format!("{}{}", API_BASE_URL, path);
+    let url = api_url(path);
     let response = gloo_net::http::Request::get(&url)
         .send()
         .await
@@ -1177,6 +1242,119 @@ pub struct ToolStatsResponse {
     pub timestamp: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolCacheStats {
+    pub tool_type: String,
+    pub enabled: bool,
+    pub ttl_secs: u64,
+    pub max_entries: usize,
+    pub current_entries: usize,
+    pub hits: usize,
+    pub misses: usize,
+    pub hit_rate: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolCacheResponse {
+    pub request_id: String,
+    pub caches: Vec<ToolCacheStats>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolRateLimitStatus {
+    pub tool_type: String,
+    pub enabled: bool,
+    pub max_requests: usize,
+    pub window_secs: u64,
+    pub tokens_available: f64,
+    pub tokens_max: f64,
+    pub utilization: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolRateLimitResponse {
+    pub request_id: String,
+    pub statuses: Vec<ToolRateLimitStatus>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolCostEntry {
+    pub tool_type: String,
+    pub total_cost: f32,
+    pub executions: usize,
+    pub avg_cost: f32,
+    pub last_updated: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolCostResponse {
+    pub request_id: String,
+    pub timestamp: String,
+    pub costs: Vec<ToolCostEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolTrendBucket {
+    pub timestamp: String,
+    pub executions: usize,
+    pub successes: usize,
+    pub failures: usize,
+    pub avg_latency_ms: f64,
+    pub avg_confidence: f32,
+    pub total_cost: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolTrendSummary {
+    pub total_executions: usize,
+    pub success_rate: f64,
+    pub avg_latency_ms: f64,
+    pub p50_latency_ms: f64,
+    pub p95_latency_ms: f64,
+    pub p99_latency_ms: f64,
+    pub avg_confidence: f32,
+    pub total_cost: f64,
+    pub trend_direction: String,
+    pub latency_trend: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolTrend {
+    pub tool_type: String,
+    pub window: String,
+    pub buckets: Vec<ToolTrendBucket>,
+    pub summary: ToolTrendSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolTrendsResponse {
+    pub request_id: String,
+    pub window: String,
+    pub trends: Vec<ToolTrend>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolDependencyNode {
+    pub tool_type: String,
+    pub executions: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolDependencyEdge {
+    pub from: String,
+    pub to: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolDependencyResponse {
+    pub request_id: String,
+    pub nodes: Vec<ToolDependencyNode>,
+    pub edges: Vec<ToolDependencyEdge>,
+}
+
 /// Fetch agent statistics
 pub async fn fetch_agent_stats() -> Result<AgentStatsResponse, String> {
     fetch_json("/monitoring/agents/stats").await
@@ -1205,6 +1383,26 @@ pub async fn fetch_memory_stats() -> Result<MemoryStatsResponse, String> {
 /// Fetch tool statistics
 pub async fn fetch_tool_stats() -> Result<ToolStatsResponse, String> {
     fetch_json("/monitoring/tools/stats").await
+}
+
+pub async fn fetch_tool_cache_stats() -> Result<ToolCacheResponse, String> {
+    fetch_json("/monitoring/tools/cache").await
+}
+
+pub async fn fetch_tool_rate_limits() -> Result<ToolRateLimitResponse, String> {
+    fetch_json("/monitoring/tools/rate-limits").await
+}
+
+pub async fn fetch_tool_costs() -> Result<ToolCostResponse, String> {
+    fetch_json("/monitoring/tools/costs").await
+}
+
+pub async fn fetch_tool_dependencies() -> Result<ToolDependencyResponse, String> {
+    fetch_json("/monitoring/tools/dependencies").await
+}
+
+pub async fn fetch_tool_trends(window: &str) -> Result<ToolTrendsResponse, String> {
+    fetch_json(&format!("/monitoring/tools/trends?window={}", window)).await
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -1290,7 +1488,7 @@ pub struct StoreRagResponse {
 }
 
 pub async fn store_rag_memory(req: &StoreRagRequest) -> Result<StoreRagResponse, String> {
-    let url = format!("{}/memory/store_rag", API_BASE_URL);
+    let url = api_url("/memory/store_rag");
     let response = gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(req).map_err(|e| format!("Failed to serialize: {}", e))?)
