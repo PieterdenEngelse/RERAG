@@ -30,7 +30,8 @@ pub fn Header() -> Element {
     });
 
     rsx! {
-        header { class: "sticky top-0 shadow-md py-0 px-0.5 z-50 transition-colors {header_bg} flex items-center relative",
+        header { class: "sticky top-0 shadow-md py-0 px-0.5 transition-colors {header_bg} flex items-center relative",
+            style: "z-index: 60;",
 
             // Rust icon
             div {
@@ -216,7 +217,8 @@ pub fn Header() -> Element {
         // Status Info Modal
         if show_status_info() {
             div {
-                class: "fixed inset-0 z-[100] flex items-center justify-center bg-black/60",
+                class: "fixed inset-0 flex items-center justify-center bg-black/60",
+                style: "z-index: 1100;",
                 onclick: move |_| show_status_info.set(false),
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-md shadow-xl",
