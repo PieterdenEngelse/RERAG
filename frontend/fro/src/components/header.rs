@@ -50,7 +50,7 @@ pub fn Header() -> Element {
                     "healthy" | "ok" => "bg-green-500",
                     "degraded" => "bg-yellow-500",
                     "offline" | "unhealthy" => "bg-red-500",
-                    "unknown" => "bg-gray-500",
+                    "unknown" => "bg-gray-400",
                     _ => "bg-orange-500",
                 };
                 rsx! {
