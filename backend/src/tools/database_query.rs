@@ -32,13 +32,24 @@ impl DatabaseQueryTool {
         }
     }
 
-    /// Get the database path, falling back to global config
+    /// Get the database path, falling back to agent memory database
     fn get_db_path(&self) -> Option<PathBuf> {
         if self.db_path.is_some() {
             return self.db_path.clone();
         }
-        // Try to get from global chunk settings
-        crate::db::chunk_settings::get_db_path()
+        // Try to get from global chunk settings first
+        if let Some(path) = crate::db::chunk_settings::get_db_path() {
+            return Some(path);
+        }
+        // Fall back to agent memory database
+        let data_dir = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("ag");
+        let agent_db = data_dir.join("agent.db");
+        if agent_db.exists() {
+            return Some(agent_db);
+        }
+        None
     }
 
     /// Check if a query is safe (read-only)

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Kill all ag backend processes (debug and release builds)
+
+# Check if any ag processes are running
+if pgrep -f "target/(debug|release)/ag" > /dev/null 2>&1; then
+    echo "Killing ag backend processes..."
+    pkill -9 -f "target/(debug|release)/ag"
+    sleep 0.5
+    
+    # Verify they're gone
+    if pgrep -f "target/(debug|release)/ag" > /dev/null 2>&1; then
+        echo "⚠️  Some processes still running:"
+        pgrep -af "target/(debug|release)/ag"
+    else
+        echo "✓ All ag processes killed"
+    fi
+else
+    echo "No ag backend processes running"
+fi

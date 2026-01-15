@@ -62,6 +62,22 @@ pub fn record_tool_dependency(from: &ToolType, to: &ToolType) {
     }
 }
 
+/// Record tool dependency using string names (for use outside of ToolType enum)
+pub fn record_tool_dependency_str(from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+
+    if let Ok(mut state) = get_state().lock() {
+        *state
+            .edges
+            .entry((from.to_string(), to.to_string()))
+            .or_insert(0) += 1;
+        *state.nodes.entry(from.to_string()).or_insert(0) += 1;
+        *state.nodes.entry(to.to_string()).or_insert(0) += 1;
+    }
+}
+
 pub fn get_tool_dependency_graph() -> ToolDependencyGraph {
     if let Ok(state) = get_state().lock() {
         let nodes = state

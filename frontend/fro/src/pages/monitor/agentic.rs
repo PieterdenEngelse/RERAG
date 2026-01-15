@@ -91,6 +91,49 @@ With local LLM and limited resources, heuristics with LLM fallback keeps things 
 
 NOTE: Currently, goals must be explicitly created. Automatic detection is not yet implemented."#;
 
+/// Agent vs Tools explanation tooltip
+const AGENT_INFO_TOOLTIP: &str = r#"AGENT vs AGENT TOOLS
+
+┌─────────────────────────────────────────────────────────────┐
+│                        THE AGENT                            │
+├─────────────────────────────────────────────────────────────┤
+│ The brain/orchestrator that decides what to do              │
+│                                                             │
+│ • Receives user queries                                     │
+│ • Decides which mode to use (RAG, LLM, Hybrid)              │
+│ • Coordinates the workflow: retrieve → reason → respond     │
+│ • Tracks goals and manages memory                           │
+│ • There is ONE agent that handles all queries               │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                      AGENT TOOLS                            │
+├─────────────────────────────────────────────────────────────┤
+│ The capabilities/actions the agent can use                  │
+│                                                             │
+│ • search         - Search documents in Tantivy              │
+│ • vector_search  - Semantic similarity search               │
+│ • llm_generate   - Call Ollama for text generation          │
+│ • store_memory   - Save to agent memory                     │
+│ • retrieve_memory- Recall from memory                       │
+│ • set_goal       - Create a new goal                        │
+│ • update_goal    - Update goal status                       │
+└─────────────────────────────────────────────────────────────┘
+
+ANALOGY
+
+  Agent = A chef (1 person)
+  Tools = Kitchen equipment (knives, pans, oven, mixer...)
+
+The chef (agent) decides what to cook and which tools to use.
+The tools don't make decisions - they just execute when the
+chef uses them.
+
+KEY DIFFERENCE
+
+• Agent: Makes decisions, orchestrates workflow (1 instance)
+• Tools: Execute specific actions when called (many types)"#;
+
 #[derive(Clone, Default)]
 struct AgenticState {
     loading: bool,
@@ -211,11 +254,20 @@ pub fn MonitorAgentic() -> Element {
                     div { class: "text-gray-400 text-sm", "Loading agent stats…" }
                 } else {
                     div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
-                        StatCard {
-                            title: "Active Agents".into(),
-                            value: agent_stats.active_agents.to_string().into(),
-                            unit: None,
-                            description: Some("Registered agent instances".into()),
+                        // Active Agents with info button
+                        div { class: "rounded p-4 bg-gray-800 border border-gray-700",
+                            div { class: "flex items-center gap-2 mb-2",
+                                span { class: "text-2xl font-bold text-gray-100",
+                                    "{agent_stats.active_agents}"
+                                }
+                                span { class: "text-sm font-semibold text-gray-200",
+                                    "Active Agent"
+                                }
+                                AgentInfoButton {}
+                            }
+                            div { class: "text-xs text-gray-400",
+                                "The orchestrator that coordinates retrieval, reasoning, and response"
+                            }
                         }
                         // Episodes/hr with Success Rate below
                         div { class: "rounded p-4 bg-gray-800 border border-gray-700",
@@ -503,6 +555,56 @@ fn EpisodeInfoButton() -> Element {
                     div {
                         class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed",
                         {EPISODE_INFO_TOOLTIP}
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Info button for Agent vs Tools explanation
+#[component]
+fn AgentInfoButton() -> Element {
+    let mut show_tooltip = use_signal(|| false);
+
+    const INFO_BUTTON_CLASS: &str =
+        "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded border border-blue-500/40 bg-blue-500/10 flex items-center justify-center cursor-pointer hover:bg-blue-500/20";
+
+    rsx! {
+        button {
+            class: INFO_BUTTON_CLASS,
+            onclick: move |_| show_tooltip.set(!show_tooltip()),
+            title: "What is an Agent?",
+            svg {
+                class: "w-3 h-3 text-blue-400",
+                view_box: "0 0 20 20",
+                fill: "none",
+                stroke: "currentColor",
+                stroke_width: "2",
+                circle { cx: "10", cy: "10", r: "9" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+            }
+        }
+
+        if *show_tooltip.read() {
+            div {
+                class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show_tooltip.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[95vh] overflow-y-auto shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "Agent vs Agent Tools" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_tooltip.set(false),
+                            "×"
+                        }
+                    }
+                    div {
+                        class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed font-mono",
+                        {AGENT_INFO_TOOLTIP}
                     }
                 }
             }

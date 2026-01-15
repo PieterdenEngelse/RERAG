@@ -771,6 +771,168 @@ pub async fn get_tool_executions(query: web::Query<LimitQuery>) -> ActixResult<H
     )
 }
 
+/// Tool availability info
+#[derive(Debug, Serialize)]
+pub struct AvailableTool {
+    pub name: String,
+    pub description: String,
+    pub status: String,  // "active", "placeholder", "disabled"
+    pub icon: String,
+    pub category: String,
+}
+
+/// GET /monitoring/tools/available
+/// Returns list of all available tools with their status
+pub async fn get_available_tools() -> ActixResult<HttpResponse> {
+    // Define all tools with their actual status
+    let tools = vec![
+        // Core retrieval tools - ACTIVE
+        AvailableTool {
+            name: "SemanticSearch".into(),
+            description: "Search indexed documents using semantic similarity (vector search)".into(),
+            status: "active".into(),
+            icon: "📚".into(),
+            category: "retrieval".into(),
+        },
+        AvailableTool {
+            name: "LLMGenerate".into(),
+            description: "Generate text responses using Ollama LLM (phi, llama, etc.)".into(),
+            status: "active".into(),
+            icon: "🤖".into(),
+            category: "llm".into(),
+        },
+        AvailableTool {
+            name: "Calculator".into(),
+            description: "Mathematical calculations and arithmetic operations".into(),
+            status: "active".into(),
+            icon: "🧮".into(),
+            category: "utility".into(),
+        },
+        AvailableTool {
+            name: "Memory".into(),
+            description: "Store and retrieve agent memory (RAG context, goals, reflections)".into(),
+            status: "active".into(),
+            icon: "🧠".into(),
+            category: "agent".into(),
+        },
+        AvailableTool {
+            name: "Summarizer".into(),
+            description: "Summarize long text into concise summaries".into(),
+            status: "active".into(),
+            icon: "📝".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "QueryRewriter".into(),
+            description: "Rewrite queries for better search results".into(),
+            status: "active".into(),
+            icon: "✏️".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "Classifier".into(),
+            description: "Classify text into categories".into(),
+            status: "active".into(),
+            icon: "🏷️".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "SentimentAnalyzer".into(),
+            description: "Analyze sentiment of text (positive/negative/neutral)".into(),
+            status: "active".into(),
+            icon: "😊".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "EntityExtractor".into(),
+            description: "Extract named entities (people, places, organizations)".into(),
+            status: "active".into(),
+            icon: "🔍".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "SpellChecker".into(),
+            description: "Check and correct spelling errors".into(),
+            status: "active".into(),
+            icon: "✅".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "Translator".into(),
+            description: "Translate text between languages (local, no API keys)".into(),
+            status: "active".into(),
+            icon: "🌐".into(),
+            category: "text".into(),
+        },
+        AvailableTool {
+            name: "FileAnalyzer".into(),
+            description: "Analyze file contents and metadata".into(),
+            status: "active".into(),
+            icon: "📄".into(),
+            category: "utility".into(),
+        },
+        AvailableTool {
+            name: "Notification".into(),
+            description: "Send notifications and alerts".into(),
+            status: "active".into(),
+            icon: "🔔".into(),
+            category: "utility".into(),
+        },
+        AvailableTool {
+            name: "Scheduler".into(),
+            description: "Schedule tasks and reminders".into(),
+            status: "active".into(),
+            icon: "📅".into(),
+            category: "utility".into(),
+        },
+        // External tools
+        AvailableTool {
+            name: "WebSearch".into(),
+            description: "Search the web using DuckDuckGo (no API key needed)".into(),
+            status: "active".into(),
+            icon: "🔍".into(),
+            category: "external".into(),
+        },
+        AvailableTool {
+            name: "URLFetch".into(),
+            description: "Fetch and extract text content from URLs".into(),
+            status: "active".into(),
+            icon: "🌐".into(),
+            category: "utility".into(),
+        },
+        AvailableTool {
+            name: "DatabaseQuery".into(),
+            description: "Execute read-only SQL queries on the agent database".into(),
+            status: "active".into(),
+            icon: "🗄️".into(),
+            category: "utility".into(),
+        },
+        AvailableTool {
+            name: "CodeExecution".into(),
+            description: "Execute Python or Bash code snippets (sandboxed)".into(),
+            status: "active".into(),
+            icon: "💻".into(),
+            category: "utility".into(),
+        },
+        AvailableTool {
+            name: "ImageGeneration".into(),
+            description: "Generate images from text descriptions (requires API)".into(),
+            status: "placeholder".into(),
+            icon: "🎨".into(),
+            category: "external".into(),
+        },
+    ];
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "request_id": uuid::Uuid::new_v4().to_string(),
+        "tools": tools,
+        "total": tools.len(),
+        "active": tools.iter().filter(|t| t.status == "active").count(),
+        "placeholder": tools.iter().filter(|t| t.status == "placeholder").count(),
+        "timestamp": Utc::now().to_rfc3339(),
+    })))
+}
+
 /// GET /monitoring/tools/cache
 /// Returns cache stats for each tool
 pub async fn get_tool_cache_stats_endpoint() -> ActixResult<HttpResponse> {
@@ -852,6 +1014,7 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
         web::scope("/monitoring/tools")
             .route("/stats", web::get().to(get_tool_stats))
             .route("/executions", web::get().to(get_tool_executions))
+            .route("/available", web::get().to(get_available_tools))
             .route("/cache", web::get().to(get_tool_cache_stats_endpoint))
             .route("/rate-limits", web::get().to(get_tool_rate_limits_endpoint))
             .route("/trends", web::get().to(get_tool_trends_endpoint))

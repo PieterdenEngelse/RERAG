@@ -1285,8 +1285,9 @@ pub fn Home() -> Element {
                 }
 
                 // Messages area - scrollable, takes remaining space
+                // pb-32 provides space for the fixed input box at bottom
                 div {
-                    class: "flex-1 overflow-y-auto min-h-0 p-2 sm:p-4",
+                    class: "flex-1 overflow-y-auto min-h-0 p-2 sm:p-4 pb-32",
 
                     // Messages container
                     div {

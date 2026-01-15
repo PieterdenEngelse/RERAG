@@ -44,6 +44,18 @@ pub struct HealthResponse {
     pub documents: Option<usize>,
     pub vectors: Option<usize>,
     pub index_path: Option<String>,
+    pub message: Option<String>,
+    pub load: Option<LoadMetrics>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LoadMetrics {
+    pub cpu_percent: f32,
+    pub memory_percent: f32,
+    pub active_tasks: u32,
+    pub queue_depth: u32,
+    pub indexing: bool,
+    pub llm_active: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -219,7 +231,7 @@ impl Default for LlmConfig {
             mirostat_tau: 5.0,
             repeat_last_n: 64,
             penalize_newline: true,
-            num_predict: -1,
+            num_predict: 1024, // Match max_tokens default, -1 means unlimited
             num_keep: 0,
         }
     }
@@ -1227,6 +1239,25 @@ pub struct MemoryStatsResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AvailableTool {
+    pub name: String,
+    pub description: String,
+    pub status: String,
+    pub icon: String,
+    pub category: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AvailableToolsResponse {
+    pub request_id: String,
+    pub tools: Vec<AvailableTool>,
+    pub total: usize,
+    pub active: usize,
+    pub placeholder: usize,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ToolUsageEntry {
     pub tool_name: String,
     pub count: usize,
@@ -1349,10 +1380,15 @@ pub struct ToolDependencyEdge {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct ToolDependencyResponse {
-    pub request_id: String,
+pub struct ToolDependencyGraph {
     pub nodes: Vec<ToolDependencyNode>,
     pub edges: Vec<ToolDependencyEdge>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolDependencyResponse {
+    pub request_id: String,
+    pub graph: ToolDependencyGraph,
 }
 
 /// Fetch agent statistics
@@ -1383,6 +1419,11 @@ pub async fn fetch_memory_stats() -> Result<MemoryStatsResponse, String> {
 /// Fetch tool statistics
 pub async fn fetch_tool_stats() -> Result<ToolStatsResponse, String> {
     fetch_json("/monitoring/tools/stats").await
+}
+
+/// Fetch available tools list
+pub async fn fetch_available_tools() -> Result<AvailableToolsResponse, String> {
+    fetch_json("/monitoring/tools/available").await
 }
 
 pub async fn fetch_tool_cache_stats() -> Result<ToolCacheResponse, String> {

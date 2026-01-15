@@ -439,7 +439,7 @@ pub struct ToolCacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::ToolMetadata;
+    use crate::tools::{ToolMetadata, ToolType};
 
     fn make_result() -> ToolResult {
         ToolResult {

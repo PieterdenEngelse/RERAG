@@ -22,6 +22,11 @@ async fn main() -> std::io::Result<()> {
 
     dotenvy::dotenv().ok();
 
+    // ─────────────────────────────────────────────────────────────
+    // PHASE 0.5: Clean up stale locks from previous crashes
+    // ─────────────────────────────────────────────────────────────
+    cleanup_stale_locks();
+
     // Load monitoring config from environment
     let monitoring_config = MonitoringConfig::from_env();
 
@@ -31,6 +36,9 @@ async fn main() -> std::io::Result<()> {
 
     // Initialize tracing/logging
     let _tracing_guard = init_tracing(&monitoring_config).expect("Failed to initialize tracing");
+
+    // Initialize global health tracker for load metrics
+    ag::monitoring::init_health_tracker();
 
     info!("🚀 Starting agentic-rag v{}", env!("CARGO_PKG_VERSION"));
 
@@ -198,6 +206,9 @@ async fn main() -> std::io::Result<()> {
         actix_web::rt::spawn(async move {
             let indexing_start = Instant::now();
             debug!("Background indexing task started");
+            
+            // Mark indexing as started for health status
+            ag::monitoring::mark_indexing_started();
 
             match retriever_clone.lock() {
                 Ok(mut ret) => {
@@ -223,6 +234,9 @@ async fn main() -> std::io::Result<()> {
                     );
                 }
             }
+            
+            // Mark indexing as finished for health status
+            ag::monitoring::mark_indexing_finished();
         });
     }
 
@@ -271,4 +285,66 @@ async fn main() -> std::io::Result<()> {
     );
 
     start_api_server(&config).await
+}
+
+/// Clean up stale lock files from previous crashes or kill -9
+/// This runs before any other initialization to ensure clean startup
+fn cleanup_stale_locks() {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let data_dir = format!("{}/.local/share/ag", home);
+    let project_dir = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    
+    let lock_patterns = [
+        // Tantivy index locks
+        format!("{}/tantivy_index/*.lock", data_dir),
+        format!("{}/tantivy_index/.tantivy-*", data_dir),
+        // Data directory locks
+        format!("{}/*.lock", data_dir),
+        format!("{}/data/*.lock", data_dir),
+        // SQLite WAL/SHM files (data dir)
+        format!("{}/*.db-wal", data_dir),
+        format!("{}/*.db-shm", data_dir),
+        // Project directory locks
+        format!("{}/*.lock", project_dir),
+        // SQLite WAL/SHM files (project dir)
+        format!("{}/*.db-wal", project_dir),
+        format!("{}/*.db-shm", project_dir),
+    ];
+    
+    let mut cleaned = 0;
+    for pattern in &lock_patterns {
+        if let Ok(entries) = glob::glob(pattern) {
+            for entry in entries.flatten() {
+                if entry.is_file() {
+                    match std::fs::remove_file(&entry) {
+                        Ok(_) => {
+                            cleaned += 1;
+                            eprintln!("  Cleaned stale lock: {}", entry.display());
+                        }
+                        Err(e) => {
+                            eprintln!("  Warning: Could not remove {}: {}", entry.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Also clean /tmp/ag_* files
+    if let Ok(entries) = glob::glob("/tmp/ag_*") {
+        for entry in entries.flatten() {
+            if entry.is_file() {
+                if let Ok(_) = std::fs::remove_file(&entry) {
+                    cleaned += 1;
+                    eprintln!("  Cleaned temp file: {}", entry.display());
+                }
+            }
+        }
+    }
+    
+    if cleaned > 0 {
+        eprintln!("🧹 Cleaned {} stale lock/temp files", cleaned);
+    }
 }

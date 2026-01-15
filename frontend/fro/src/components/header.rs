@@ -8,8 +8,18 @@ use dioxus_router::{use_route, Link};
 #[component]
 pub fn Header() -> Element {
     let mut menu_open = use_signal(|| false);
-    let mut health_status = use_signal(|| "unknown".to_string());
+    let mut health_status = use_signal(|| "checking".to_string());
     let mut show_status_info = use_signal(|| false);
+    let mut show_initial_status_details = use_signal(|| false);
+    let mut show_green_details = use_signal(|| false);
+    let mut show_yellow_details = use_signal(|| false);
+    let mut show_red_details = use_signal(|| false);
+    let mut show_orange_details = use_signal(|| false);
+    let mut show_tantivy_details = use_signal(|| false);
+    let mut show_inverted_index_details = use_signal(|| false);
+    let mut show_busy_details = use_signal(|| false);
+    let mut show_checking_details = use_signal(|| false);
+    let mut show_indices_details = use_signal(|| false);
     let current_route = use_route::<Route>();
 
     let is_dark = use_context::<Signal<bool>>();
@@ -19,12 +29,36 @@ pub fn Header() -> Element {
 
     let header_bg = "bg-gray-900";
 
+    // Store last health response for load metrics display
+    let mut last_health_response: Signal<Option<api::HealthResponse>> = use_signal(|| None);
+    // Track consecutive timeouts to show "checking" state
+    let mut timeout_count: Signal<u32> = use_signal(|| 0);
+
     use_future(move || async move {
         loop {
             match api::health_check().await {
-                Ok(resp) => health_status.set(resp.status),
-                Err(_) => health_status.set("offline".to_string()),
+                Ok(resp) => {
+                    health_status.set(resp.status.clone());
+                    last_health_response.set(Some(resp));
+                    timeout_count.set(0); // Reset timeout counter on success
+                }
+                Err(e) => {
+                    // Check if it's likely a timeout (request failed)
+                    if e.contains("timeout") || e.contains("Timeout") || e.contains("Request failed") {
+                        let count = timeout_count() + 1;
+                        timeout_count.set(count);
+                        if count >= 2 {
+                            // After 2 consecutive timeouts, show checking
+                            health_status.set("checking".to_string());
+                        }
+                    } else {
+                        health_status.set("offline".to_string());
+                        last_health_response.set(None);
+                        timeout_count.set(0);
+                    }
+                }
             }
+            
             gloo_timers::future::TimeoutFuture::new(5000).await;
         }
     });
@@ -46,18 +80,33 @@ pub fn Header() -> Element {
             // Status light - 0.5cm to the right, centered vertically
             {
                 let status = health_status();
-                let bg_color = match status.as_str() {
-                    "healthy" | "ok" => "bg-green-500",
-                    "degraded" => "bg-yellow-500",
-                    "offline" | "unhealthy" => "bg-red-500",
-                    "unknown" => "bg-gray-400",
-                    _ => "bg-orange-500",
+                let (bg_color, style_override, extra_class) = match status.as_str() {
+                    "healthy" | "ok" => ("bg-green-500", Some("background-color: #22c55e;"), ""), // Green
+                    "busy" => ("bg-pink-500", Some("background-color: #ec4899;"), ""), // Pink for busy
+                    "degraded" => ("bg-yellow-500", Some("background-color: #eab308;"), ""), // Yellow
+                    "checking" => ("bg-purple-400", Some("background-color: #c084fc;"), "animate-pulse"), // Purple pulsing
+                    "offline" | "unhealthy" => ("bg-red-500", Some("background-color: #ef4444;"), ""), // Red
+                    "unknown" => ("bg-blue-400", Some("background-color: #60a5fa;"), ""), // Blue
+                    _ => ("bg-orange-500", Some("background-color: #f97316;"), ""), // Orange fallback
                 };
+                // Determine which modal to open based on status
+                let status_for_click = status.clone();
                 rsx! {
                     div { class: "flex items-center gap-1",
                         div {
-                            class: "ml-2 w-4 h-4 rounded-full border-2 border-gray-900 {bg_color}",
-                            title: format!("Status: {}", status),
+                            class: "ml-2 w-4 h-4 rounded-full border-2 border-gray-900 {bg_color} {extra_class} cursor-pointer hover:ring-2 hover:ring-white hover:ring-opacity-50 transition-all",
+                            style: style_override.unwrap_or(""),
+                            title: format!("Status: {} (click for details)", status),
+                            onclick: move |_| {
+                                match status_for_click.as_str() {
+                                    "healthy" | "ok" => show_green_details.set(true),
+                                    "degraded" => show_yellow_details.set(true),
+                                    "offline" | "unhealthy" => show_red_details.set(true),
+                                    "busy" => show_busy_details.set(true),
+                                    "checking" => show_checking_details.set(true),
+                                    _ => show_orange_details.set(true), // Orange fallback for unknown statuses
+                                }
+                            },
                         }
                         // Info button for status explanation
                         button {
@@ -214,6 +263,366 @@ pub fn Header() -> Element {
             }
         }
 
+        if show_initial_status_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_initial_status_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-white", "Initial status details" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "An async loop immediately calls api::health_check() before awaiting any delay—only after the response (or error) does it sleep for 5 seconds and repeat. The “unknown (initial state before first check)” label only applies right after the component ‘mounts’ (in Dioxus this means the Rust Header component that, through the rsx! macro, renders the header HTML where the status indicator lives). The very first health check happens immediately on mount, before the first 5-second timer runs."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "health_check() is the frontend’s lightweight “ping the backend” call. When health_check() runs on the frontend, it first calls api_url(\"/monitoring/health\"). That helper, in turn, invokes resolve_api_base_url() to figure out the proper scheme/host/port (current browser origin if available, otherwise fallback to http://127.0.0.1:3010). It then appends the path, returning the full URL. Finally, health_check() performs the GET request against that assembled URL."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "In a browser, “origin” means the combination of scheme://host:port of the page you’re running. The resolve_api_base_url() helper in frontend/fro/src/api.rs looks at window.location.origin() to reuse that origin whenever possible. window.location.origin is part of the standard browser DOM API. When Dioxus runs in the browser, it can call into Web APIs via web_sys. In frontend/fro/src/api.rs, the helper function resolve_api_base_url() does exactly that."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "The DOM (Document Object Model) API is the browser’s programming interface for web pages. Your Dioxus frontend leans on the browser’s DOM API via the web_sys bindings that Dioxus/Rust expose. Classic DOM operations (window/document access, class toggling, scrolling) are wrapped in Rust code through Dioxus’s web_sys interface. Class toggling means programmatically adding or removing CSS class names so styling changes dynamically—for example, Layout grabs document.documentElement() and toggles the dark class depending on the theme signal."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_initial_status_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_green_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_green_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-green-400", "Healthy (Green)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Green means the backend's /monitoring/health endpoint returned status: \"healthy\" (or \"ok\"). This indicates that retriever.health_check() passed all its internal validations."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "What retriever.health_check() validates: (1) The "
+                        a {
+                            class: "text-green-300 underline decoration-dotted cursor-pointer",
+                            href: "#tantivy-info",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                show_tantivy_details.set(true);
+                            },
+                            "Tantivy"
+                        }
+                        " index directory exists and is readable. (2) An index reader and searcher can be created. (3) Vector storage is consistent—the number of vectors matches document mappings, "
+                        a {
+                            class: "text-green-300 underline decoration-dotted cursor-pointer",
+                            href: "#indices-info",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                show_indices_details.set(true);
+                            },
+                            "all indices are in bounds"
+                        }
+                        ", and all vectors share the same dimension. (4) A basic search query executes successfully if documents exist. (5) The vector file (or its parent directory) is writable. (6) At least 100 MB of disk space remains."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "When all checks pass, the backend logs \"Health: OK\" with document and vector counts, and the frontend displays the green indicator."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_green_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_yellow_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_yellow_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-yellow-400", "Degraded (Yellow)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Yellow means the backend returned status: \"degraded\". This is a middle ground—the system is operational but some non-critical component isn't performing optimally."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Possible causes include: high latency on certain operations, cache layers partially unavailable, background indexing still in progress, or optional services (like Redis L3 cache) being unreachable while core functionality remains intact."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "The system can still serve requests, but you may notice slower responses or reduced functionality in some areas. Check /monitoring/metrics or logs for specifics."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_yellow_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_red_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_red_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-red-400", "Offline / Unhealthy (Red)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Red appears when either: (1) The frontend's health_check() request failed entirely (network error, timeout, backend not running), setting status to \"offline\". (2) The backend responded with status: \"unhealthy\" because retriever.health_check() failed."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Common failure reasons from retriever.health_check(): index directory missing or not a directory, unable to create index reader, vector/document mapping inconsistency, search test failure, vector file not writable, or insufficient disk space (< 100 MB)."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "When unhealthy, the backend returns HTTP 503 with an error message. Check that the backend process is running, the index directory exists and has correct permissions, and there's sufficient disk space."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_red_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_orange_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_orange_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-orange-400", "Unexpected Status (Orange)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Orange is the fallback color when the backend returns a status string that doesn't match any known value (\"healthy\", \"ok\", \"degraded\", \"offline\", \"unhealthy\", or \"unknown\")."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "This could indicate: a newer backend version returning new status values the frontend doesn't recognize yet, a bug in the backend's health response, or corrupted/malformed JSON in the response."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Check the 'Current status' field at the bottom of the status info panel to see the exact value returned. If this persists, verify frontend and backend versions are compatible."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_orange_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_tantivy_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1120;",
+                onclick: move |_| show_tantivy_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-blue-300", "Tantivy" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Think of Tantivy as a search engine that needs to be \"filled\" before an LLM can make use of it. Tantivy doesn't store raw data in a simple list. It transforms whatever you give it into an "
+                        a {
+                            class: "text-blue-300 underline decoration-dotted cursor-pointer",
+                            href: "#inverted-index-info",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                show_inverted_index_details.set(true);
+                            },
+                            "inverted index"
+                        }
+                        " and other optimized structures. That transformation step is the \"filling.\""
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "You're not limited to long documents or traditional RAG material. You can index anything that can be expressed as structured or semi-structured information: facts, events, tool calls, code symbols, logs, tasks, or even the metadata an LLM generates about its own reasoning. Once this material is indexed, the LLM can treat Tantivy as a kind of symbolic memory or knowledge substrate. Instead of relying on embeddings or similarity search, the model formulates precise search queries—essentially instructions for what it wants to retrieve—and Tantivy responds with the matching items. The LLM then interprets those results, reasons over them, or uses them to decide what to do next."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "This creates a dynamic loop. The LLM can enrich the index by producing summaries, tags, classifications, or extracted entities, and those become part of the searchable space. Later, the model can query that same space to recall past decisions, find relevant code paths, identify patterns in logs, or select appropriate tools or workflows. Tantivy becomes a fast, structured retrieval layer that complements the LLM's reasoning rather than a repository of text chunks."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_tantivy_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_inverted_index_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1130;",
+                onclick: move |_| show_inverted_index_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-blue-300", "Inverted Index" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "An inverted index is simply a clever way of organizing information so that you can find things by looking up the words or terms first, rather than scanning every item one by one. It flips the usual structure \"inside out,\" which is why it's called inverted."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "A normal list stores items in their natural order—documents, messages, facts, logs, whatever you're indexing. If you want to know which items contain the word \"error,\" you would have to scan everything."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "An inverted index turns this around. Instead of starting from the items, it starts from the terms. For each term, it keeps a list of all the items in which that term appears. So \"error\" points directly to the items that contain it, \"user\" points to its own list, and so on. This structure makes searching extremely fast because the system no longer needs to read through all the data; it jumps straight to the relevant pieces."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "It allows answering queries in milliseconds even when the underlying dataset is large. It's the foundational trick that makes full-text search efficient."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_inverted_index_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_indices_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1140;",
+                onclick: move |_| show_indices_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-green-300", "All Indices Are In Bounds" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "When the health check says that all indices are in bounds, it is confirming that every document in the index points to a valid position inside the vector store. The vector store contains embeddings arranged in a fixed sequence, starting at index 0 and ending at the last stored vector. If the store contains N vectors, then the only valid indices are from 0 up to N\u{2011}1. Any reference to an index outside that range\u{2014}such as a negative number or a number equal to or greater than the total number of vectors\u{2014}would be considered out of bounds."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "The health check walks through each document's recorded vector index and verifies that it falls within this valid range. It also ensures that the referenced vector actually exists, is readable, and has the correct dimensionality. This prevents situations where a document claims to have an embedding at a position that doesn't exist in the vector file, which could happen due to partial writes, crashes, or corruption during indexing."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "This validation is essential because an out\u{2011}of\u{2011}bounds index would cause the retriever to attempt to read a vector that isn't there, which can lead to crashes, undefined behavior, or incorrect search results. Ensuring that all indices are in bounds guarantees that the mapping between documents and vectors is internally consistent and safe to use during retrieval."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_indices_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_busy_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_busy_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-pink-400", "Healthy but Busy (Pink)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "The backend is healthy and responsive, but currently under heavy load. The system is processing resource-intensive tasks that may slow down response times."
+                    }
+                    
+                    // Show real-time load metrics
+                    div { class: "bg-gray-900 rounded-lg p-4 space-y-2",
+                        h4 { class: "text-pink-300 font-semibold mb-2", "Current Load Metrics" }
+                        {
+                            let load_opt = last_health_response().and_then(|r| r.load);
+                            if let Some(load) = load_opt {
+                                rsx! {
+                                    div { class: "grid grid-cols-2 gap-2 text-sm",
+                                        div { class: "text-gray-400", "CPU Usage:" }
+                                        div { class: "text-white font-mono", "{load.cpu_percent:.1}%" }
+                                        
+                                        div { class: "text-gray-400", "Memory Usage:" }
+                                        div { class: "text-white font-mono", "{load.memory_percent:.1}%" }
+                                        
+                                        div { class: "text-gray-400", "Active Tasks:" }
+                                        div { class: "text-white font-mono", "{load.active_tasks}" }
+                                        
+                                        div { class: "text-gray-400", "Queue Depth:" }
+                                        div { class: "text-white font-mono", "{load.queue_depth}" }
+                                        
+                                        div { class: "text-gray-400", "Indexing:" }
+                                        div { class: if load.indexing { "text-pink-400 font-semibold" } else { "text-gray-500" },
+                                            if load.indexing { "Yes ⚡" } else { "No" }
+                                        }
+                                        
+                                        div { class: "text-gray-400", "LLM Active:" }
+                                        div { class: if load.llm_active { "text-pink-400 font-semibold" } else { "text-gray-500" },
+                                            if load.llm_active { "Yes 🤖" } else { "No" }
+                                        }
+                                    }
+                                }
+                            } else {
+                                rsx! {
+                                    p { class: "text-gray-400 italic", "Load metrics not available" }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Show message if available
+                    {
+                        let msg_opt = last_health_response().and_then(|r| r.message);
+                        if let Some(msg) = msg_opt {
+                            rsx! {
+                                div { class: "bg-pink-900/30 border border-pink-700 rounded p-3",
+                                    span { class: "text-pink-300", "{msg}" }
+                                }
+                            }
+                        } else {
+                            rsx! {}
+                        }
+                    }
+                    
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Common causes: initial document indexing on startup, large LLM generation requests, bulk document uploads, or reindexing operations."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_busy_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        if show_checking_details() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_checking_details.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h3 { class: "text-lg font-semibold text-purple-400", "Checking / Slow Response (Purple Pulsing)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Purple pulsing means the frontend's health check request is taking longer than expected (over 8 seconds). This is a transitional state indicating the backend might be very busy or experiencing issues."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Unlike \"offline\" (red), this state means we haven't given up yet—the request is still pending. The frontend will continue waiting and update the status once a response arrives or the next check cycle begins."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Possible causes: backend is processing a very large request, system is under extreme load, network latency issues, or the backend is starting up and loading models into memory."
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "If this persists, check the backend logs or /monitoring/metrics. The pulsing animation indicates active checking rather than a failed state."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_checking_details.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
         // Status Info Modal
         if show_status_info() {
             div {
@@ -235,12 +644,81 @@ pub fn Header() -> Element {
                         "The status light shows the health of the backend server:"
                     }
                     div { class: "space-y-3",
+                        // Unknown
+                        div { class: "flex items-center gap-3",
+                            div {
+                                class: "w-4 h-4 rounded-full bg-blue-400 border-2 border-gray-700",
+                                style: "background-color: #60a5fa;",
+                            }
+                            div {
+                                span { class: "text-blue-300 font-medium", "Blue" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#initial-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_initial_status_details.set(true);
+                                    },
+                                    "Initial state before first check"
+                                }
+                            }
+                        }
                         // Healthy
                         div { class: "flex items-center gap-3",
                             div { class: "w-4 h-4 rounded-full bg-green-500 border-2 border-gray-700" }
                             div {
                                 span { class: "text-green-400 font-medium", "Green" }
-                                span { class: "text-gray-400 text-sm ml-2", "— All components healthy" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#green-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_green_details.set(true);
+                                    },
+                                    "All components healthy"
+                                }
+                            }
+                        }
+                        // Busy
+                        div { class: "flex items-center gap-3",
+                            div {
+                                class: "w-4 h-4 rounded-full bg-pink-500 border-2 border-gray-700",
+                                style: "background-color: #ec4899;",
+                            }
+                            div {
+                                span { class: "text-pink-400 font-medium", "Pink" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#busy-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_busy_details.set(true);
+                                    },
+                                    "Healthy but busy"
+                                }
+                            }
+                        }
+                        // Checking
+                        div { class: "flex items-center gap-3",
+                            div {
+                                class: "w-4 h-4 rounded-full bg-purple-400 border-2 border-gray-700 animate-pulse",
+                                style: "background-color: #c084fc;",
+                            }
+                            div {
+                                span { class: "text-purple-400 font-medium", "Purple (pulsing)" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#checking-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_checking_details.set(true);
+                                    },
+                                    "Checking / slow response"
+                                }
                             }
                         }
                         // Degraded
@@ -248,7 +726,16 @@ pub fn Header() -> Element {
                             div { class: "w-4 h-4 rounded-full bg-yellow-500 border-2 border-gray-700" }
                             div {
                                 span { class: "text-yellow-400 font-medium", "Yellow" }
-                                span { class: "text-gray-400 text-sm ml-2", "— Some component degraded" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#yellow-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_yellow_details.set(true);
+                                    },
+                                    "Some component degraded"
+                                }
                             }
                         }
                         // Offline/Unhealthy
@@ -256,15 +743,16 @@ pub fn Header() -> Element {
                             div { class: "w-4 h-4 rounded-full bg-red-500 border-2 border-gray-700" }
                             div {
                                 span { class: "text-red-400 font-medium", "Red" }
-                                span { class: "text-gray-400 text-sm ml-2", "— Backend down or unhealthy" }
-                            }
-                        }
-                        // Unknown
-                        div { class: "flex items-center gap-3",
-                            div { class: "w-4 h-4 rounded-full bg-gray-500 border-2 border-gray-700" }
-                            div {
-                                span { class: "text-gray-300 font-medium", "Gray" }
-                                span { class: "text-gray-400 text-sm ml-2", "— Initial state before first check" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#red-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_red_details.set(true);
+                                    },
+                                    "Backend down or unhealthy"
+                                }
                             }
                         }
                         // Other
@@ -272,7 +760,16 @@ pub fn Header() -> Element {
                             div { class: "w-4 h-4 rounded-full bg-orange-500 border-2 border-gray-700" }
                             div {
                                 span { class: "text-orange-400 font-medium", "Orange" }
-                                span { class: "text-gray-400 text-sm ml-2", "— Unexpected status value" }
+                                span { class: "text-gray-400 text-sm ml-2", "— " }
+                                a {
+                                    class: "text-gray-400 text-sm underline decoration-dotted",
+                                    href: "#orange-status",
+                                    onclick: move |evt| {
+                                        evt.stop_propagation();
+                                        show_orange_details.set(true);
+                                    },
+                                    "Unexpected status value"
+                                }
                             }
                         }
                     }

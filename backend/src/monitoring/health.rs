@@ -20,6 +20,8 @@ pub enum ComponentStatus {
     Degraded,
     #[serde(rename = "unhealthy")]
     Unhealthy,
+    #[serde(rename = "busy")]
+    Busy,
 }
 
 impl std::fmt::Display for ComponentStatus {
@@ -28,6 +30,7 @@ impl std::fmt::Display for ComponentStatus {
             ComponentStatus::Healthy => write!(f, "healthy"),
             ComponentStatus::Degraded => write!(f, "degraded"),
             ComponentStatus::Unhealthy => write!(f, "unhealthy"),
+            ComponentStatus::Busy => write!(f, "busy"),
         }
     }
 }
@@ -39,6 +42,38 @@ pub struct HealthStatus {
     pub uptime_seconds: f64,
     pub components: ComponentHealth,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load: Option<LoadMetrics>,
+}
+
+/// System load metrics for "busy" status detection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadMetrics {
+    /// CPU usage percentage (0-100 per core, can exceed 100 on multi-core)
+    pub cpu_percent: f32,
+    /// Memory usage percentage (0-100)
+    pub memory_percent: f32,
+    /// Number of active long-running tasks (indexing, LLM calls, etc.)
+    pub active_tasks: u32,
+    /// Estimated queue depth for pending requests
+    pub queue_depth: u32,
+    /// Whether the system is currently indexing
+    pub indexing: bool,
+    /// Whether an LLM call is in progress
+    pub llm_active: bool,
+}
+
+impl Default for LoadMetrics {
+    fn default() -> Self {
+        Self {
+            cpu_percent: 0.0,
+            memory_percent: 0.0,
+            active_tasks: 0,
+            queue_depth: 0,
+            indexing: false,
+            llm_active: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,12 +95,18 @@ impl Default for ComponentHealth {
     }
 }
 
+use std::sync::atomic::AtomicU32;
+
 /// Tracks application health
 pub struct HealthTracker {
     is_ready: AtomicBool,
     is_live: AtomicBool,
     components: parking_lot::RwLock<ComponentHealth>,
     startup_time: std::time::Instant,
+    // Load tracking
+    active_tasks: AtomicU32,
+    indexing: AtomicBool,
+    llm_active: AtomicBool,
 }
 
 impl HealthTracker {
@@ -76,6 +117,9 @@ impl HealthTracker {
             is_live: AtomicBool::new(true), // Always live until told otherwise
             components: parking_lot::RwLock::new(ComponentHealth::default()),
             startup_time: std::time::Instant::now(),
+            active_tasks: AtomicU32::new(0),
+            indexing: AtomicBool::new(false),
+            llm_active: AtomicBool::new(false),
         }
     }
 
@@ -114,11 +158,70 @@ impl HealthTracker {
         tracing::debug!(component, status = %status, "Component status updated");
     }
 
+    /// Mark indexing as started
+    pub fn start_indexing(&self) {
+        self.indexing.store(true, Ordering::SeqCst);
+        self.active_tasks.fetch_add(1, Ordering::SeqCst);
+        tracing::debug!("Indexing started");
+    }
+
+    /// Mark indexing as finished
+    pub fn finish_indexing(&self) {
+        self.indexing.store(false, Ordering::SeqCst);
+        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+        tracing::debug!("Indexing finished");
+    }
+
+    /// Mark LLM call as started
+    pub fn start_llm_call(&self) {
+        self.llm_active.store(true, Ordering::SeqCst);
+        self.active_tasks.fetch_add(1, Ordering::SeqCst);
+        tracing::debug!("LLM call started");
+    }
+
+    /// Mark LLM call as finished
+    pub fn finish_llm_call(&self) {
+        self.llm_active.store(false, Ordering::SeqCst);
+        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+        tracing::debug!("LLM call finished");
+    }
+
+    /// Increment active tasks
+    pub fn start_task(&self) {
+        self.active_tasks.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Decrement active tasks
+    pub fn finish_task(&self) {
+        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Check if system is busy
+    pub fn is_busy(&self) -> bool {
+        self.indexing.load(Ordering::SeqCst) 
+            || self.llm_active.load(Ordering::SeqCst)
+            || self.active_tasks.load(Ordering::SeqCst) > 2
+    }
+
+    /// Get current load metrics
+    pub fn get_load_metrics(&self) -> LoadMetrics {
+        LoadMetrics {
+            cpu_percent: 0.0, // Would need sysinfo crate for real CPU usage
+            memory_percent: 0.0, // Would need sysinfo crate for real memory usage
+            active_tasks: self.active_tasks.load(Ordering::SeqCst),
+            queue_depth: 0, // Would need request queue tracking
+            indexing: self.indexing.load(Ordering::SeqCst),
+            llm_active: self.llm_active.load(Ordering::SeqCst),
+        }
+    }
+
     /// Get current health status
     pub fn get_status(&self) -> HealthStatus {
         let components = self.components.read().clone();
+        let load = self.get_load_metrics();
+        let is_busy = self.is_busy();
 
-        // Overall status is worst component status
+        // Overall status is worst component status, but can be "busy" if under load
         let overall_status = match components {
             _ if components.api == ComponentStatus::Unhealthy
                 || components.database == ComponentStatus::Unhealthy
@@ -126,6 +229,7 @@ impl HealthTracker {
             {
                 ComponentStatus::Unhealthy
             }
+            _ if is_busy => ComponentStatus::Busy,
             _ if components.api == ComponentStatus::Degraded
                 || components.database == ComponentStatus::Degraded
                 || components.configuration == ComponentStatus::Degraded =>
@@ -136,13 +240,25 @@ impl HealthTracker {
         };
 
         let uptime = self.startup_time.elapsed().as_secs_f64();
+        
+        let message = if is_busy {
+            Some(format!(
+                "System busy: {} active tasks{}{}",
+                load.active_tasks,
+                if load.indexing { ", indexing" } else { "" },
+                if load.llm_active { ", LLM processing" } else { "" }
+            ))
+        } else {
+            None
+        };
 
         HealthStatus {
             status: overall_status,
             timestamp: chrono::Utc::now().to_rfc3339(),
             uptime_seconds: uptime,
             components,
-            message: None,
+            message,
+            load: Some(load),
         }
     }
 

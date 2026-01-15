@@ -27,59 +27,111 @@ impl CalculatorTool {
             return Ok(num.to_string());
         }
 
-        // Handle simple cases with operators
-        if expr.contains("+") {
-            let parts: Vec<&str> = expr.split("+").collect();
-            if parts.len() == 2 {
-                if let (Ok(a), Ok(b)) = (
-                    parts[0].trim().parse::<f64>(),
-                    parts[1].trim().parse::<f64>(),
-                ) {
-                    return Ok((a + b).to_string());
-                }
-            }
-        }
-
-        if expr.contains("-") && !expr.starts_with("-") {
-            let parts: Vec<&str> = expr.split("-").collect();
-            if parts.len() == 2 {
-                if let (Ok(a), Ok(b)) = (
-                    parts[0].trim().parse::<f64>(),
-                    parts[1].trim().parse::<f64>(),
-                ) {
-                    return Ok((a - b).to_string());
-                }
-            }
-        }
-
-        if expr.contains("*") {
-            let parts: Vec<&str> = expr.split("*").collect();
-            if parts.len() == 2 {
-                if let (Ok(a), Ok(b)) = (
-                    parts[0].trim().parse::<f64>(),
-                    parts[1].trim().parse::<f64>(),
-                ) {
-                    return Ok((a * b).to_string());
-                }
-            }
-        }
-
-        if expr.contains("/") {
-            let parts: Vec<&str> = expr.split("/").collect();
-            if parts.len() == 2 {
-                if let (Ok(a), Ok(b)) = (
-                    parts[0].trim().parse::<f64>(),
-                    parts[1].trim().parse::<f64>(),
-                ) {
-                    if b != 0.0 {
-                        return Ok((a / b).to_string());
-                    }
-                }
-            }
-        }
-
-        Err("Could not evaluate expression".to_string())
+        // Tokenize the expression
+        let tokens = self.tokenize(expr)?;
+        
+        // Evaluate with proper precedence (shunting-yard style)
+        let result = self.evaluate_tokens(&tokens)?;
+        Ok(result.to_string())
     }
+    
+    fn tokenize(&self, expr: &str) -> Result<Vec<Token>, String> {
+        let mut tokens = Vec::new();
+        let mut num_buf = String::new();
+        
+        for ch in expr.chars() {
+            if ch.is_whitespace() {
+                if !num_buf.is_empty() {
+                    tokens.push(Token::Number(num_buf.parse().map_err(|_| "Invalid number")?));
+                    num_buf.clear();
+                }
+                continue;
+            }
+            
+            if ch.is_ascii_digit() || ch == '.' || (ch == '-' && num_buf.is_empty() && (tokens.is_empty() || matches!(tokens.last(), Some(Token::Op(_))))) {
+                num_buf.push(ch);
+            } else if "+-*/".contains(ch) {
+                if !num_buf.is_empty() {
+                    tokens.push(Token::Number(num_buf.parse().map_err(|_| "Invalid number")?));
+                    num_buf.clear();
+                }
+                tokens.push(Token::Op(ch));
+            } else {
+                return Err(format!("Invalid character: {}", ch));
+            }
+        }
+        
+        if !num_buf.is_empty() {
+            tokens.push(Token::Number(num_buf.parse().map_err(|_| "Invalid number")?));
+        }
+        
+        Ok(tokens)
+    }
+    
+    fn evaluate_tokens(&self, tokens: &[Token]) -> Result<f64, String> {
+        if tokens.is_empty() {
+            return Err("Empty expression".to_string());
+        }
+        
+        // First pass: handle * and /
+        let mut intermediate: Vec<Token> = Vec::new();
+        let mut i = 0;
+        
+        while i < tokens.len() {
+            match &tokens[i] {
+                Token::Op('*') | Token::Op('/') => {
+                    let op = if let Token::Op(c) = tokens[i] { c } else { unreachable!() };
+                    let left = match intermediate.pop() {
+                        Some(Token::Number(n)) => n,
+                        _ => return Err("Invalid expression".to_string()),
+                    };
+                    let right = match tokens.get(i + 1) {
+                        Some(Token::Number(n)) => *n,
+                        _ => return Err("Invalid expression".to_string()),
+                    };
+                    let result = if op == '*' { left * right } else {
+                        if right == 0.0 { return Err("Division by zero".to_string()); }
+                        left / right
+                    };
+                    intermediate.push(Token::Number(result));
+                    i += 2;
+                }
+                other => {
+                    intermediate.push(other.clone());
+                    i += 1;
+                }
+            }
+        }
+        
+        // Second pass: handle + and -
+        let mut result = match intermediate.first() {
+            Some(Token::Number(n)) => *n,
+            _ => return Err("Invalid expression".to_string()),
+        };
+        
+        let mut j = 1;
+        while j < intermediate.len() {
+            match (&intermediate[j], intermediate.get(j + 1)) {
+                (Token::Op('+'), Some(Token::Number(n))) => {
+                    result += n;
+                    j += 2;
+                }
+                (Token::Op('-'), Some(Token::Number(n))) => {
+                    result -= n;
+                    j += 2;
+                }
+                _ => return Err("Invalid expression".to_string()),
+            }
+        }
+        
+        Ok(result)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Token {
+    Number(f64),
+    Op(char),
 }
 
 #[async_trait]

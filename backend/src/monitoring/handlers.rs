@@ -34,6 +34,7 @@ pub async fn health_handler(ctx: web::Data<MonitoringContext>) -> ActixResult<Ht
     let status_code = match status.status {
         super::health::ComponentStatus::Healthy => actix_web::http::StatusCode::OK,
         super::health::ComponentStatus::Degraded => actix_web::http::StatusCode::OK,
+        super::health::ComponentStatus::Busy => actix_web::http::StatusCode::OK, // Still alive, just busy
         super::health::ComponentStatus::Unhealthy => {
             actix_web::http::StatusCode::SERVICE_UNAVAILABLE
         }

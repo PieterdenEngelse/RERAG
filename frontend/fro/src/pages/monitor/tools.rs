@@ -20,129 +20,12 @@ struct ToolsState {
     costs: Vec<api::ToolCostEntry>,
     cost_trends: Vec<api::ToolTrend>,
     dependencies: Option<api::ToolDependencyResponse>,
+    available_tools: Vec<api::AvailableTool>,
     last_updated: Option<String>,
 }
 
-/// Tool info for display
-struct ToolInfo {
-    name: &'static str,
-    description: &'static str,
-    status: &'static str,
-    icon: &'static str,
-}
-
-const TOOLS: &[ToolInfo] = &[
-    // Core Tools
-    ToolInfo {
-        name: "Calculator",
-        description: "Mathematical calculations and arithmetic operations",
-        status: "active",
-        icon: "🧮",
-    },
-    ToolInfo {
-        name: "WebSearch",
-        description: "Search the web for information",
-        status: "active",
-        icon: "🔍",
-    },
-    ToolInfo {
-        name: "URLFetch",
-        description: "Fetch and parse content from URLs",
-        status: "active",
-        icon: "🌐",
-    },
-    ToolInfo {
-        name: "SemanticSearch",
-        description: "Search indexed documents using semantic similarity",
-        status: "active",
-        icon: "📚",
-    },
-    ToolInfo {
-        name: "DatabaseQuery",
-        description: "Execute read-only SQL queries",
-        status: "active",
-        icon: "🗄️",
-    },
-    ToolInfo {
-        name: "CodeExecution",
-        description: "Execute Python or Bash code snippets",
-        status: "active",
-        icon: "💻",
-    },
-    ToolInfo {
-        name: "ImageGeneration",
-        description: "Generate images from text descriptions",
-        status: "placeholder",
-        icon: "🎨",
-    },
-    ToolInfo {
-        name: "Translator",
-        description: "Local language translation (no API keys required)",
-        status: "active",
-        icon: "🌐",
-    },
-    ToolInfo {
-        name: "SentimentAnalyzer",
-        description: "Lexicon-based sentiment classification",
-        status: "active",
-        icon: "😊",
-    },
-    ToolInfo {
-        name: "EntityExtractor",
-        description: "Named entity recognition for rich context",
-        status: "active",
-        icon: "🧠",
-    },
-    ToolInfo {
-        name: "SpellChecker",
-        description: "Detect and correct spelling mistakes",
-        status: "active",
-        icon: "✏️",
-    },
-    ToolInfo {
-        name: "Scheduler",
-        description: "Create lightweight reminders inside the agent",
-        status: "active",
-        icon: "⏱️",
-    },
-    ToolInfo {
-        name: "Memory",
-        description: "Store, search, and forget RAG memory",
-        status: "active",
-        icon: "🧾",
-    },
-    // Agent Tools
-    ToolInfo {
-        name: "Summarizer",
-        description: "Summarize text, documents, or search results",
-        status: "active",
-        icon: "📝",
-    },
-    ToolInfo {
-        name: "QueryRewriter",
-        description: "Improve queries by fixing typos and expanding abbreviations",
-        status: "active",
-        icon: "🔄",
-    },
-    ToolInfo {
-        name: "Classifier",
-        description: "Categorize content, detect intent, and extract tags",
-        status: "active",
-        icon: "🏷️",
-    },
-    ToolInfo {
-        name: "FileAnalyzer",
-        description: "Analyze file contents and extract metadata",
-        status: "active",
-        icon: "📊",
-    },
-    ToolInfo {
-        name: "Notification",
-        description: "Send alerts and notifications via webhooks",
-        status: "active",
-        icon: "🔔",
-    },
-];
+// Tools are now fetched from the backend API via /monitoring/tools/available
+// See api::AvailableTool and api::fetch_available_tools()
 
 const SPARKLINE_WIDTH: f64 = 80.0;
 const SPARKLINE_HEIGHT: f64 = 22.0;
@@ -295,6 +178,11 @@ pub fn MonitorTools() -> Element {
                     Err(err) => errors.push(format!("dependencies: {}", err)),
                 }
 
+                match api::fetch_available_tools().await {
+                    Ok(available) => next.available_tools = available.tools,
+                    Err(err) => errors.push(format!("available tools: {}", err)),
+                }
+
                 next.error = if errors.is_empty() {
                     None
                 } else {
@@ -308,7 +196,8 @@ pub fn MonitorTools() -> Element {
     }
 
     let snapshot = state.read().clone();
-    let tool_count = TOOLS.len();
+    let tool_count = if snapshot.available_tools.is_empty() { 18 } else { snapshot.available_tools.len() };
+    let active_tool_count = snapshot.available_tools.iter().filter(|t| t.status == "active").count();
     let enabled_caches = snapshot.cache_stats.iter().filter(|c| c.enabled).count();
     let total_cache_entries: usize = snapshot.cache_stats.iter().map(|c| c.current_entries).sum();
     let avg_cache_hit_rate = if snapshot.cache_stats.is_empty() {
@@ -348,18 +237,18 @@ pub fn MonitorTools() -> Element {
     let dependency_nodes = snapshot
         .dependencies
         .as_ref()
-        .map(|d| d.nodes.len())
+        .map(|d| d.graph.nodes.len())
         .unwrap_or(0);
     let dependency_edges = snapshot
         .dependencies
         .as_ref()
-        .map(|d| d.edges.len())
+        .map(|d| d.graph.edges.len())
         .unwrap_or(0);
 
     let mut top_dependency_edges: Vec<api::ToolDependencyEdge> = snapshot
         .dependencies
         .as_ref()
-        .map(|deps| deps.edges.clone())
+        .map(|deps| deps.graph.edges.clone())
         .unwrap_or_default();
     top_dependency_edges.sort_by(|a, b| b.count.cmp(&a.count));
     top_dependency_edges.truncate(6);
@@ -367,7 +256,7 @@ pub fn MonitorTools() -> Element {
     let mut top_dependency_nodes: Vec<api::ToolDependencyNode> = snapshot
         .dependencies
         .as_ref()
-        .map(|deps| deps.nodes.clone())
+        .map(|deps| deps.graph.nodes.clone())
         .unwrap_or_default();
     top_dependency_nodes.sort_by(|a, b| b.executions.cmp(&a.executions));
     top_dependency_nodes.truncate(6);
@@ -408,50 +297,63 @@ pub fn MonitorTools() -> Element {
             // Tools Grid
             RowHeader {
                 title: "Available Tools".into(),
-                description: Some(format!("{tool_count} tools registered in the agent tool registry").into()),
+                description: Some(format!("{active_tool_count} active / {tool_count} total tools in the agent tool registry").into()),
             }
 
             div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
-                for tool in TOOLS.iter() {
-                    div {
-                        class: "bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-gray-500 transition-colors cursor-pointer",
-                        onclick: {
-                            let tool_name = tool.name.to_string();
-                            move |_| {
-                                selected_tool.set(Some(tool_name.clone()));
-                                show_tool_info.set(true);
-                            }
-                        },
-                        div { class: "flex items-start justify-between mb-3",
-                            div { class: "flex items-center gap-3",
-                                span { class: "text-2xl", "{tool.icon}" }
+                if snapshot.available_tools.is_empty() {
+                    div { class: "col-span-3 text-gray-400 text-sm py-4", "Loading tools..." }
+                } else {
+                    for tool in snapshot.available_tools.iter() {
+                        {
+                            let tool_name = tool.name.clone();
+                            let tool_icon = tool.icon.clone();
+                            let tool_desc = tool.description.clone();
+                            let tool_status = tool.status.clone();
+                            let tool_category = tool.category.clone();
+                            rsx! {
                                 div {
-                                    h3 { class: "text-white font-semibold", "{tool.name}" }
-                                    p { class: "text-gray-400 text-xs", "{tool.description}" }
+                                    class: "bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-gray-500 transition-colors cursor-pointer",
+                                    onclick: {
+                                        let name = tool_name.clone();
+                                        move |_| {
+                                            selected_tool.set(Some(name.clone()));
+                                            show_tool_info.set(true);
+                                        }
+                                    },
+                                    div { class: "flex items-start justify-between mb-3",
+                                        div { class: "flex items-center gap-3",
+                                            span { class: "text-2xl", "{tool_icon}" }
+                                            div {
+                                                h3 { class: "text-white font-semibold", "{tool_name}" }
+                                                p { class: "text-gray-400 text-xs", "{tool_desc}" }
+                                            }
+                                        }
+                                        span {
+                                            class: match tool_status.as_str() {
+                                                "active" => "w-2 h-2 rounded-full bg-green-500",
+                                                "placeholder" => "w-2 h-2 rounded-full bg-yellow-500",
+                                                _ => "w-2 h-2 rounded-full bg-red-500",
+                                            },
+                                        }
+                                    }
+                                    div { class: "flex items-center justify-between text-xs text-gray-500",
+                                        span {
+                                            class: match tool_status.as_str() {
+                                                "active" => "text-green-400",
+                                                "placeholder" => "text-yellow-400",
+                                                _ => "text-red-400",
+                                            },
+                                            match tool_status.as_str() {
+                                                "active" => "● Ready",
+                                                "placeholder" => "○ Placeholder",
+                                                _ => "✕ Disabled",
+                                            }
+                                        }
+                                        span { class: "text-gray-600", "{tool_category}" }
+                                    }
                                 }
                             }
-                            span {
-                                class: match tool.status {
-                                    "active" => "w-2 h-2 rounded-full bg-green-500",
-                                    "placeholder" => "w-2 h-2 rounded-full bg-yellow-500",
-                                    _ => "w-2 h-2 rounded-full bg-red-500",
-                                },
-                            }
-                        }
-                        div { class: "flex items-center justify-between text-xs text-gray-500",
-                            span {
-                                class: match tool.status {
-                                    "active" => "text-green-400",
-                                    "placeholder" => "text-yellow-400",
-                                    _ => "text-red-400",
-                                },
-                                match tool.status {
-                                    "active" => "● Ready",
-                                    "placeholder" => "○ Placeholder",
-                                    _ => "✕ Disabled",
-                                }
-                            }
-                            span { "Click for details" }
                         }
                     }
                 }
@@ -995,15 +897,20 @@ pub fn MonitorTools() -> Element {
                         class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-lg shadow-xl",
                         onclick: move |evt| evt.stop_propagation(),
 
-                        // Find the tool info
+                        // Find the tool info from API data
                         {
-                            let tool = TOOLS.iter().find(|t| t.name == tool_name);
+                            let tool = snapshot.available_tools.iter().find(|t| t.name == tool_name);
                             if let Some(t) = tool {
+                                let t_icon = t.icon.clone();
+                                let t_name = t.name.clone();
+                                let t_desc = t.description.clone();
+                                let t_status = t.status.clone();
+                                let t_category = t.category.clone();
                                 rsx! {
                                     div { class: "flex items-center justify-between mb-4",
                                         div { class: "flex items-center gap-3",
-                                            span { class: "text-3xl", "{t.icon}" }
-                                            h2 { class: "text-lg font-semibold text-gray-100", "{t.name}" }
+                                            span { class: "text-3xl", "{t_icon}" }
+                                            h2 { class: "text-lg font-semibold text-gray-100", "{t_name}" }
                                         }
                                         button {
                                             class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
@@ -1015,42 +922,26 @@ pub fn MonitorTools() -> Element {
                                     div { class: "space-y-4",
                                         div {
                                             div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Description" }
-                                            p { class: "text-sm text-gray-300", "{t.description}" }
+                                            p { class: "text-sm text-gray-300", "{t_desc}" }
+                                        }
+
+                                        div {
+                                            div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Category" }
+                                            span { class: "px-2 py-1 rounded text-xs bg-gray-700 text-gray-300 capitalize", "{t_category}" }
                                         }
 
                                         div {
                                             div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Status" }
                                             span {
-                                                class: match t.status {
+                                                class: match t_status.as_str() {
                                                     "active" => "px-2 py-1 rounded text-xs bg-green-900/50 text-green-300",
                                                     "placeholder" => "px-2 py-1 rounded text-xs bg-yellow-900/50 text-yellow-300",
                                                     _ => "px-2 py-1 rounded text-xs bg-red-900/50 text-red-300",
                                                 },
-                                                match t.status {
+                                                match t_status.as_str() {
                                                     "active" => "Active - Fully implemented",
-                                                    "placeholder" => "Placeholder - API not configured",
+                                                    "placeholder" => "Placeholder - Requires external API/setup",
                                                     _ => "Disabled",
-                                                }
-                                            }
-                                        }
-
-                                        div {
-                                            div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Usage" }
-                                            div { class: "text-xs text-gray-400 bg-gray-700/50 rounded p-2 font-mono",
-                                                match t.name {
-                                                    "Calculator" => "Input: \"5 + 3\" or \"100 * 2\"",
-                                                    "WebSearch" => "Input: \"latest AI research papers\"",
-                                                    "URLFetch" => "Input: \"https://example.com\"",
-                                                    "SemanticSearch" => "Input: \"find documents about Rust\"",
-                                                    "DatabaseQuery" => "Input: \"SELECT * FROM users LIMIT 10\"",
-                                                    "CodeExecution" => "Input: \"```python\\nprint(2+2)\\n```\"",
-                                                    "ImageGeneration" => "Input: \"A sunset over mountains\"",
-                                                    "Summarizer" => "Input: \"Summarize this article about climate change...\"",
-                                                    "QueryRewriter" => "Input: \"hw to fix nulpointer exeption\"",
-                                                    "Classifier" => "Input: \"Is this email spam or legitimate?\"",
-                                                    "FileAnalyzer" => "Input: \"Analyze /path/to/document.pdf\"",
-                                                    "Notification" => "Input: \"Alert: Build failed on main branch\"",
-                                                    _ => "No usage example available",
                                                 }
                                             }
                                         }

@@ -1,0 +1,16 @@
+#!/bin/bash
+# Start ag backend with clean slate
+# Kills any existing processes first, then runs cargo run
+
+cd /home/pde/ag
+
+# Kill any existing ag processes
+if pgrep -f "target/(debug|release)/ag" > /dev/null 2>&1; then
+    echo "🔪 Killing existing ag processes..."
+    pkill -9 -f "target/(debug|release)/ag"
+    sleep 0.5
+fi
+
+# Run the backend
+echo "🚀 Starting ag backend..."
+cargo run

@@ -34,6 +34,7 @@ tempfile = "3"
 walkdir = "2"
 fs2 = "0.4"
 thiserror = "1.0"
+glob = "0.3"
 
 # Data Processing
 seahash = "4.1.0"

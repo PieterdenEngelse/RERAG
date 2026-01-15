@@ -247,7 +247,9 @@ pub fn ConfigHardware() -> Element {
             anthropic_llm_error.set(None);
             match api::fetch_llm_config().await {
                 Ok(resp) => {
-                    anthropic_llm_config.set(resp.config);
+                    let mut config = resp.config;
+                    config.num_predict = config.max_tokens as i64;
+                    anthropic_llm_config.set(config);
                 }
                 Err(err) => {
                     anthropic_llm_error.set(Some(format!("Failed to load LLM config: {}", err)));
@@ -267,7 +269,10 @@ pub fn ConfigHardware() -> Element {
             sampling_error.set(None);
             match api::fetch_llm_config().await {
                 Ok(resp) => {
-                    sampling_config.set(resp.config);
+                    let mut config = resp.config;
+                    // Sync num_predict from max_tokens (backend uses max_tokens)
+                    config.num_predict = config.max_tokens as i64;
+                    sampling_config.set(config);
                 }
                 Err(err) => {
                     sampling_error.set(Some(format!("Failed to load sampling config: {}", err)));
@@ -332,7 +337,9 @@ pub fn ConfigHardware() -> Element {
                     (Ok(hw_resp), Ok(sampling_resp)) => {
                         status.set(Some("✓ Settings saved".to_string()));
                         hardware_config.set(hw_resp.config.clone());
-                        sampling_config.set(sampling_resp.config.clone());
+                        let mut updated_sampling = sampling_resp.config.clone();
+                        updated_sampling.num_predict = updated_sampling.max_tokens as i64;
+                        sampling_config.set(updated_sampling);
                     }
                     (Err(hw_err), _) => {
                         error.set(Some(format!("Failed to save hardware config: {}", hw_err)));
@@ -1575,7 +1582,13 @@ pub fn ConfigHardware() -> Element {
                                         value: format!("{}", sampling_config().num_predict),
                                         onchange: move |evt| {
                                             if let Ok(value) = evt.value().parse::<i64>() {
-                                                sampling_config.with_mut(|cfg| cfg.num_predict = value.max(-2));
+                                                sampling_config.with_mut(|cfg| {
+                                                    cfg.num_predict = value.max(-2);
+                                                    // Sync to max_tokens (backend uses max_tokens)
+                                                    if value > 0 {
+                                                        cfg.max_tokens = value as usize;
+                                                    }
+                                                });
                                             }
                                         }
                                     }

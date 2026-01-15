@@ -15,8 +15,9 @@ fn path_manager() -> &'static PathManager {
     PATH_MANAGER.get_or_init(|| PathManager::new().expect("Failed to initialize PathManager"))
 }
 
-/// Resolve a database path taking into account absolute paths, the current working
-/// directory, and the configured AG_HOME base directory.
+/// Resolve a database path taking into account absolute paths and the configured
+/// AG_HOME base directory. Relative paths are always resolved against the base_dir,
+/// NOT the current working directory (to avoid confusion with multiple db files).
 pub fn resolve_db_path(db_path: &str) -> PathBuf {
     let target = if db_path.is_empty() {
         DEFAULT_AGENT_DB_FILE
@@ -25,21 +26,21 @@ pub fn resolve_db_path(db_path: &str) -> PathBuf {
     };
 
     let candidate = Path::new(target);
+    
+    // Only use absolute paths directly
     if candidate.is_absolute() {
         return candidate.to_path_buf();
     }
 
-    if candidate.exists() {
-        return candidate.to_path_buf();
-    }
-
-    let fallback = path_manager().base_dir().join(target);
-    if !fallback.exists() {
-        if let Some(parent) = fallback.parent() {
+    // For relative paths, always resolve against the configured base_dir
+    // This prevents accidentally using a db file in the current working directory
+    let resolved = path_manager().base_dir().join(target);
+    if !resolved.exists() {
+        if let Some(parent) = resolved.parent() {
             let _ = fs::create_dir_all(parent);
         }
     }
-    fallback
+    resolved
 }
 
 /// Return the resolved agent database path, honoring the optional AGENT_DB_PATH env var.

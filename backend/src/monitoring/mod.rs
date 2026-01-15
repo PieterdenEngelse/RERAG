@@ -59,8 +59,8 @@ pub use tool_alerts::{
 };
 pub use tool_costs::{get_tool_costs, record_tool_cost, ToolCostStats};
 pub use tool_dependencies::{
-    get_tool_dependency_graph, record_tool_dependency, ToolDependencyEdge, ToolDependencyGraph,
-    ToolDependencyNode,
+    get_tool_dependency_graph, record_tool_dependency, record_tool_dependency_str,
+    ToolDependencyEdge, ToolDependencyGraph, ToolDependencyNode,
 };
 pub use tool_stats::{
     clear_history as clear_tool_history, get_recent_executions, get_tool_stat, get_tool_stats,
@@ -76,8 +76,52 @@ pub use ui_metrics::{
     get_requests_snapshot, record_http_request, RequestChartPoint, RequestsSnapshot,
 };
 
+use once_cell::sync::OnceCell;
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Global health tracker for access from anywhere in the application
+static GLOBAL_HEALTH_TRACKER: OnceCell<Arc<health::HealthTracker>> = OnceCell::new();
+
+/// Initialize the global health tracker (call once at startup)
+pub fn init_health_tracker() {
+    let tracker = Arc::new(health::HealthTracker::new());
+    let _ = GLOBAL_HEALTH_TRACKER.set(tracker);
+    tracing::info!("Health tracker initialized");
+}
+
+/// Get the global health tracker (if initialized)
+pub fn get_health_tracker() -> Option<&'static Arc<health::HealthTracker>> {
+    GLOBAL_HEALTH_TRACKER.get()
+}
+
+/// Mark indexing as started (safe to call even if tracker not initialized)
+pub fn mark_indexing_started() {
+    if let Some(tracker) = GLOBAL_HEALTH_TRACKER.get() {
+        tracker.start_indexing();
+    }
+}
+
+/// Mark indexing as finished (safe to call even if tracker not initialized)
+pub fn mark_indexing_finished() {
+    if let Some(tracker) = GLOBAL_HEALTH_TRACKER.get() {
+        tracker.finish_indexing();
+    }
+}
+
+/// Mark LLM call as started (safe to call even if tracker not initialized)
+pub fn mark_llm_started() {
+    if let Some(tracker) = GLOBAL_HEALTH_TRACKER.get() {
+        tracker.start_llm_call();
+    }
+}
+
+/// Mark LLM call as finished (safe to call even if tracker not initialized)
+pub fn mark_llm_finished() {
+    if let Some(tracker) = GLOBAL_HEALTH_TRACKER.get() {
+        tracker.finish_llm_call();
+    }
+}
 
 /// Monitoring context shared across the application
 #[derive(Clone)]
@@ -100,6 +144,10 @@ impl MonitoringContext {
         // Metrics registry initialized on first use by Lazy statics
         // Initialize health tracker
         let health = Arc::new(health::HealthTracker::new());
+        
+        // Store in global for access from indexing/LLM code
+        let _ = GLOBAL_HEALTH_TRACKER.set(Arc::clone(&health));
+        
         let startup_time = Instant::now();
         // Log effective histogram buckets at startup for visibility
         let search_buckets =

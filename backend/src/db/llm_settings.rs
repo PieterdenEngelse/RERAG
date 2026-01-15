@@ -19,6 +19,8 @@ pub const DEFAULT_MIROSTAT: i32 = 0;
 pub const DEFAULT_MIROSTAT_ETA: f32 = 0.1;
 pub const DEFAULT_MIROSTAT_TAU: f32 = 5.0;
 pub const DEFAULT_REPEAT_LAST_N: usize = 64;
+pub const DEFAULT_NUM_KEEP: i64 = 0;
+pub const DEFAULT_PENALIZE_NEWLINE: bool = true;
 
 static GLOBAL_LLM_CONFIG: OnceLock<RwLock<LlmConfig>> = OnceLock::new();
 
@@ -39,6 +41,8 @@ static CONFIG_KEYS: LlmConfigKeys = LlmConfigKeys {
     mirostat_eta: "llm_mirostat_eta",
     mirostat_tau: "llm_mirostat_tau",
     repeat_last_n: "llm_repeat_last_n",
+    num_keep: "llm_num_keep",
+    penalize_newline: "llm_penalize_newline",
 };
 
 struct LlmConfigKeys {
@@ -58,6 +62,8 @@ struct LlmConfigKeys {
     mirostat_eta: &'static str,
     mirostat_tau: &'static str,
     repeat_last_n: &'static str,
+    num_keep: &'static str,
+    penalize_newline: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +84,8 @@ pub struct LlmConfig {
     pub mirostat_eta: f32,
     pub mirostat_tau: f32,
     pub repeat_last_n: usize,
+    pub num_keep: i64,
+    pub penalize_newline: bool,
 }
 
 impl Default for LlmConfig {
@@ -99,6 +107,8 @@ impl Default for LlmConfig {
             mirostat_eta: DEFAULT_MIROSTAT_ETA,
             mirostat_tau: DEFAULT_MIROSTAT_TAU,
             repeat_last_n: DEFAULT_REPEAT_LAST_N,
+            num_keep: DEFAULT_NUM_KEEP,
+            penalize_newline: DEFAULT_PENALIZE_NEWLINE,
         }
     }
 }
@@ -214,6 +224,11 @@ pub fn load_llm_config(conn: &Connection) -> Result<LlmConfig> {
     let repeat_last_n = read_int(conn, CONFIG_KEYS.repeat_last_n)?
         .map(|v| v as usize)
         .unwrap_or(DEFAULT_REPEAT_LAST_N);
+    let num_keep = read_int(conn, CONFIG_KEYS.num_keep)?
+        .unwrap_or(DEFAULT_NUM_KEEP);
+    let penalize_newline = read_value(conn, CONFIG_KEYS.penalize_newline)?
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(DEFAULT_PENALIZE_NEWLINE);
 
     Ok(LlmConfig {
         temperature,
@@ -232,6 +247,8 @@ pub fn load_llm_config(conn: &Connection) -> Result<LlmConfig> {
         mirostat_eta,
         mirostat_tau,
         repeat_last_n,
+        num_keep,
+        penalize_newline,
     })
 }
 
@@ -278,6 +295,12 @@ pub fn save_llm_config(conn: &Connection, cfg: &LlmConfig) -> Result<()> {
         conn,
         CONFIG_KEYS.repeat_last_n,
         cfg.repeat_last_n.to_string(),
+    )?;
+    write_value(conn, CONFIG_KEYS.num_keep, cfg.num_keep.to_string())?;
+    write_value(
+        conn,
+        CONFIG_KEYS.penalize_newline,
+        cfg.penalize_newline.to_string(),
     )?;
 
     conn.execute("COMMIT", []).map_err(db_err)?;
@@ -405,6 +428,8 @@ mod tests {
             mirostat_eta: 0.12,
             mirostat_tau: 6.0,
             repeat_last_n: 128,
+            num_keep: DEFAULT_NUM_KEEP,
+            penalize_newline: DEFAULT_PENALIZE_NEWLINE,
         };
         save_llm_config(&conn, &cfg).unwrap();
         let loaded = load_llm_config(&conn).unwrap();

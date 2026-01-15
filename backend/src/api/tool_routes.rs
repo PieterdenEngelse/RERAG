@@ -232,6 +232,94 @@ pub async fn suggest_tools(
     }))
 }
 
+/// Request to run a specific tool
+#[derive(Debug, Deserialize)]
+pub struct RunToolRequest {
+    pub tool: String,
+    pub input: String,
+}
+
+/// Response from running a tool
+#[derive(Debug, Serialize)]
+pub struct RunToolResponse {
+    pub tool: String,
+    pub input: String,
+    pub success: bool,
+    pub result: String,
+    pub execution_time_ms: u64,
+    pub confidence: f32,
+    pub timestamp: String,
+}
+
+/// Actually run a specific tool with input
+pub async fn run_tool(
+    req: web::Json<RunToolRequest>,
+) -> ActixResult<HttpResponse> {
+    use crate::tools::{ToolType, tool_executor::ToolExecutor};
+    
+    info!(tool = %req.tool, input = %req.input, "Running tool");
+    
+    // Parse tool type
+    let tool_type = match req.tool.to_lowercase().as_str() {
+        "calculator" => ToolType::Calculator,
+        "semanticsearch" => ToolType::SemanticSearch,
+        "summarizer" => ToolType::Summarizer,
+        "queryrewriter" => ToolType::QueryRewriter,
+        "classifier" => ToolType::Classifier,
+        "sentimentanalyzer" => ToolType::SentimentAnalyzer,
+        "entityextractor" => ToolType::EntityExtractor,
+        "spellchecker" => ToolType::SpellChecker,
+        "translator" => ToolType::Translator,
+        "fileanalyzer" => ToolType::FileAnalyzer,
+        "notification" => ToolType::Notification,
+        "scheduler" => ToolType::Scheduler,
+        "memory" => ToolType::Memory,
+        "websearch" => ToolType::WebSearch,
+        "urlfetch" => ToolType::URLFetch,
+        "databasequery" => ToolType::DatabaseQuery,
+        "codeexecution" => ToolType::CodeExecution,
+        "imagegeneration" => ToolType::ImageGeneration,
+        _ => {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Unknown tool: {}", req.tool),
+                "available_tools": ["Calculator", "SemanticSearch", "Summarizer", "QueryRewriter", 
+                    "Classifier", "SentimentAnalyzer", "EntityExtractor", "SpellChecker",
+                    "Translator", "FileAnalyzer", "Notification", "Scheduler", "Memory"]
+            })));
+        }
+    };
+    
+    // Execute the tool
+    let start = std::time::Instant::now();
+    let result = ToolExecutor::execute_tool(&tool_type, &req.input, None).await;
+    let elapsed = start.elapsed().as_millis() as u64;
+    
+    match result {
+        Ok(tool_result) => {
+            Ok(HttpResponse::Ok().json(RunToolResponse {
+                tool: req.tool.clone(),
+                input: req.input.clone(),
+                success: tool_result.success,
+                result: tool_result.result,
+                execution_time_ms: elapsed,
+                confidence: tool_result.metadata.confidence,
+                timestamp: Utc::now().to_rfc3339(),
+            }))
+        }
+        Err(e) => {
+            Ok(HttpResponse::Ok().json(RunToolResponse {
+                tool: req.tool.clone(),
+                input: req.input.clone(),
+                success: false,
+                result: e,
+                execution_time_ms: elapsed,
+                confidence: 0.0,
+                timestamp: Utc::now().to_rfc3339(),
+            }))
+        }
+    }
+}
+
 // ============ Route Configuration ============
 
 pub fn configure_tool_routes(cfg: &mut web::ServiceConfig) {
@@ -239,6 +327,7 @@ pub fn configure_tool_routes(cfg: &mut web::ServiceConfig) {
         web::scope("/api/tools")
             .route("/analyze", web::post().to(analyze_tools))
             .route("/execute", web::post().to(execute_with_tools))
+            .route("/run", web::post().to(run_tool))
             .route("/available", web::get().to(list_available_tools))
             .route("/detect-intent", web::post().to(detect_intent))
             .route("/suggest", web::post().to(suggest_tools))

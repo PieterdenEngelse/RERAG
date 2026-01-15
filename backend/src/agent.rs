@@ -426,6 +426,7 @@ impl<'a> Agent<'a> {
         }
 
         // Step 1: Recall recent memory (always do this)
+        let recall_start = std::time::Instant::now();
         let recalled: Vec<String> = if let Ok(mem) = AgentMemory::new(&self.memory_db_path) {
             mem.recall(self.agent_id)
                 .map(|items| items.into_iter().take(5).collect())
@@ -433,6 +434,18 @@ impl<'a> Agent<'a> {
         } else {
             Vec::new()
         };
+        let recall_time = recall_start.elapsed().as_millis() as u64;
+        
+        // Record memory recall tool execution
+        crate::monitoring::record_tool_execution(
+            "Memory",
+            &format!("recall: {}", &query[..query.len().min(50)]),
+            true,
+            &format!("{} items recalled", recalled.len()),
+            recall_time,
+            1.0,
+            Some("agent_memory"),
+        );
 
         if !recalled.is_empty() {
             steps.push(AgentStep {
@@ -441,19 +454,43 @@ impl<'a> Agent<'a> {
             });
         }
 
+        // Step 1b: Check active goals and find related goal
+        let active_goals = self.get_active_goals();
+        let related_goal = self.find_related_goal(query, &active_goals);
+        
+        if !active_goals.is_empty() {
+            let goal_msg = if let Some((_, ref goal_text)) = related_goal {
+                format!("Found {} active goals, query relates to: {}", active_goals.len(), goal_text)
+            } else {
+                format!("Found {} active goals (none directly related to query)", active_goals.len())
+            };
+            steps.push(AgentStep {
+                kind: "goals".into(),
+                message: goal_msg,
+            });
+        }
+
+        // Build goal context string for prompt injection
+        let goal_context_str = self.build_goal_context(&active_goals, related_goal.as_ref());
+        let goal_context_opt = if goal_context_str.is_empty() { None } else { Some(goal_context_str.as_str()) };
+
         // Handle LLM-only mode
         if matches!(mode, AgentMode::Llm) {
             steps.push(AgentStep {
                 kind: "mode".into(),
                 message: "LLM-only mode (no document search)".into(),
             });
-            let answer = self.call_llm(query, None, mode);
+            let answer = self.call_llm(query, None, mode, goal_context_opt);
             steps.push(AgentStep {
                 kind: "llm".into(),
                 message: "Generated response with LLM".into(),
             });
             self.store_memory(query, &answer);
             self.store_episode(query, &answer, 0, true);
+            // Record goal progress if query was related to a goal
+            if let Some((ref goal_id, _)) = related_goal {
+                self.record_goal_progress(goal_id, query, true);
+            }
             return AgentResponse {
                 answer,
                 steps,
@@ -465,17 +502,41 @@ impl<'a> Agent<'a> {
         let mut used_chunks: Vec<String> = Vec::new();
         let retrieval_msg: String;
         {
+            let search_start = std::time::Instant::now();
             if let Ok(mut r) = self.retriever.lock() {
                 match r.hybrid_search(query, None) {
                     Ok(mut results) => {
+                        let search_time = search_start.elapsed().as_millis() as u64;
                         if results.len() > top_k {
                             results.truncate(top_k);
                         }
+                        let result_count = results.len();
                         used_chunks = results;
-                        retrieval_msg = format!("Retrieved {} chunks", used_chunks.len());
+                        retrieval_msg = format!("Retrieved {} chunks", result_count);
+                        // Record tool execution for monitoring
+                        crate::monitoring::record_tool_execution(
+                            "SemanticSearch",
+                            query,
+                            true,
+                            &format!("{} chunks found", result_count),
+                            search_time,
+                            1.0, // confidence
+                            Some("retriever"),
+                        );
                     }
                     Err(e) => {
+                        let search_time = search_start.elapsed().as_millis() as u64;
                         retrieval_msg = format!("Retrieval failed: {}", e);
+                        // Record failed tool execution
+                        crate::monitoring::record_tool_execution(
+                            "SemanticSearch",
+                            query,
+                            false,
+                            &e.to_string(),
+                            search_time,
+                            0.0,
+                            Some("retriever"),
+                        );
                     }
                 }
             } else {
@@ -512,13 +573,20 @@ impl<'a> Agent<'a> {
                         kind: "plan".into(),
                         message: "No chunks found; falling back to LLM".into(),
                     });
-                    let answer = self.call_llm(query, None, mode);
+                    // Record tool chain: Memory -> Search (failed) -> LLM fallback
+                    crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                    crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                    let answer = self.call_llm(query, None, mode, goal_context_opt);
                     steps.push(AgentStep {
                         kind: "llm".into(),
                         message: "Generated response with LLM (fallback)".into(),
                     });
                     self.store_memory(query, &answer);
                     self.store_episode(query, &answer, 0, true);
+                    // Record goal progress if query was related to a goal
+                    if let Some((ref goal_id, _)) = related_goal {
+                        self.record_goal_progress(goal_id, query, true);
+                    }
                     return AgentResponse {
                         answer,
                         steps,
@@ -549,7 +617,10 @@ impl<'a> Agent<'a> {
                         used_chunks.len()
                     ),
                 });
-                self.call_llm(query, Some(&context), mode)
+                // Record tool chain: Memory -> Search -> LLM
+                crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                self.call_llm(query, Some(&context), mode, goal_context_opt)
             }
             AgentMode::Llm => unreachable!(), // Already handled above
         };
@@ -557,6 +628,16 @@ impl<'a> Agent<'a> {
         // Step 5: Store memory
         self.store_memory(query, &answer);
         self.store_episode(query, &answer, used_chunks.len(), true);
+        
+        // Record goal progress if query was related to a goal
+        if let Some((ref goal_id, _)) = related_goal {
+            self.record_goal_progress(goal_id, query, true);
+            steps.push(AgentStep {
+                kind: "goal_progress".into(),
+                message: format!("Recorded progress toward goal"),
+            });
+        }
+        
         steps.push(AgentStep {
             kind: "memory".into(),
             message: "Stored interaction in memory".into(),
@@ -571,7 +652,7 @@ impl<'a> Agent<'a> {
 
     /// Call LLM to generate a response (blocking)
     /// Uses mode-specific LlmConfig for optimal parameters
-    fn call_llm(&self, query: &str, context: Option<&str>, mode: AgentMode) -> String {
+    fn call_llm(&self, query: &str, context: Option<&str>, mode: AgentMode, goal_context: Option<&str>) -> String {
         use crate::db::llm_settings::LlmConfig;
 
         // Get mode-specific config
@@ -598,8 +679,8 @@ impl<'a> Agent<'a> {
         // Build system prompt from settings (includes memories)
         let system_prompt = self.settings.build_system_prompt();
 
-        // Build the full prompt
-        let prompt = self.build_prompt(query, context, &system_prompt);
+        // Build the full prompt with goal context
+        let prompt = self.build_prompt(query, context, &system_prompt, goal_context);
 
         let url = format!("{}/api/generate", ollama_url);
 
@@ -656,35 +737,61 @@ impl<'a> Agent<'a> {
             system: system_field,
         };
 
-        match client.post(&url).json(&request_body).send() {
+        // Mark LLM call as started for health status
+        crate::monitoring::mark_llm_started();
+        let llm_start = std::time::Instant::now();
+        
+        let (result, success) = match client.post(&url).json(&request_body).send() {
             Ok(response) => {
                 // Get the response text first
                 match response.text() {
                     Ok(text) => {
                         // Try to parse as JSON
                         match serde_json::from_str::<OllamaResponse>(&text) {
-                            Ok(data) => data.response.trim().to_string(),
-                            Err(e) => format!(
+                            Ok(data) => (data.response.trim().to_string(), true),
+                            Err(e) => (format!(
                                 "Failed to parse LLM response: {} - Raw: {}",
                                 e,
                                 &text[..text.len().min(200)]
-                            ),
+                            ), false),
                         }
                     }
-                    Err(e) => format!("Failed to read LLM response: {}", e),
+                    Err(e) => (format!("Failed to read LLM response: {}", e), false),
                 }
             }
-            Err(e) => format!("LLM error: {}. Make sure Ollama is running.", e),
-        }
+            Err(e) => (format!("LLM error: {}. Make sure Ollama is running.", e), false),
+        };
+        
+        let llm_time = llm_start.elapsed().as_millis() as u64;
+        
+        // Mark LLM call as finished for health status
+        crate::monitoring::mark_llm_finished();
+        
+        // Record tool execution for monitoring
+        crate::monitoring::record_tool_execution(
+            "LLMGenerate",
+            query,
+            success,
+            &if success { format!("{} chars generated", result.len()) } else { result.clone() },
+            llm_time,
+            if success { 0.9 } else { 0.0 },
+            Some("ollama"),
+        );
+        
+        result
     }
 
     /// Build the prompt with context and settings
-    fn build_prompt(&self, query: &str, context: Option<&str>, system_prompt: &str) -> String {
+    /// Note: System prompt/instructions are sent via the 'system' field to the LLM,
+    /// NOT included in the prompt. This prevents the LLM from echoing instructions to users.
+    fn build_prompt(&self, query: &str, context: Option<&str>, _system_prompt: &str, goal_context: Option<&str>) -> String {
         let mut prompt_parts = Vec::new();
 
-        // Add system prompt if present (for models that don't support system field)
-        if !system_prompt.is_empty() {
-            prompt_parts.push(format!("Instructions:\n{}", system_prompt));
+        // Add goal context if present
+        if let Some(goals) = goal_context {
+            if !goals.is_empty() {
+                prompt_parts.push(goals.to_string());
+            }
         }
 
         // Add context if present
@@ -704,12 +811,118 @@ impl<'a> Agent<'a> {
         prompt_parts.join("\n\n")
     }
 
-    fn store_memory(&self, query: &str, answer: &str) {
-        if let Ok(mem) = AgentMemory::new(&self.memory_db_path) {
-            let ts = Utc::now().to_rfc3339();
-            let _ = mem.store(self.agent_id, &format!("Q: {}", query), &ts);
-            let _ = mem.store(self.agent_id, &format!("A: {}", answer), &ts);
+    /// Fetch active goals for this agent
+    fn get_active_goals(&self) -> Vec<(String, String)> {
+        let mut goals = Vec::new();
+        if let Ok(conn) = Connection::open(&self.memory_db_path) {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT id, goal FROM goals WHERE agent_id = ?1 AND status = 'active' ORDER BY created_at DESC LIMIT 5"
+            ) {
+                if let Ok(rows) = stmt.query_map(rusqlite::params![self.agent_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                }) {
+                    for row in rows.flatten() {
+                        goals.push(row);
+                    }
+                }
+            }
         }
+        goals
+    }
+
+    /// Check if query relates to any active goal
+    fn find_related_goal(&self, query: &str, goals: &[(String, String)]) -> Option<(String, String)> {
+        let query_lower = query.to_lowercase();
+        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+        
+        for (goal_id, goal_text) in goals {
+            let goal_lower = goal_text.to_lowercase();
+            // Check if any significant words from the query appear in the goal
+            let matches = query_words.iter()
+                .filter(|w| w.len() > 3) // Skip short words
+                .filter(|w| goal_lower.contains(*w))
+                .count();
+            if matches >= 2 || (matches >= 1 && query_words.len() <= 5) {
+                return Some((goal_id.clone(), goal_text.clone()));
+            }
+        }
+        None
+    }
+
+    /// Build goal context for prompt
+    fn build_goal_context(&self, goals: &[(String, String)], related_goal: Option<&(String, String)>) -> String {
+        if goals.is_empty() {
+            return String::new();
+        }
+        
+        let mut parts = Vec::new();
+        parts.push("ACTIVE GOALS:".to_string());
+        
+        for (i, (_, goal_text)) in goals.iter().enumerate() {
+            let marker = if related_goal.map(|(_, g)| g == goal_text).unwrap_or(false) {
+                "→" // Mark the related goal
+            } else {
+                "•"
+            };
+            parts.push(format!("{} {}", marker, goal_text));
+            if i >= 2 { break; } // Limit to 3 goals in prompt
+        }
+        
+        if let Some((_, related_text)) = related_goal {
+            parts.push(format!("\nThis query appears related to goal: \"{}\". Consider how your response advances this goal.", related_text));
+        }
+        
+        parts.join("\n")
+    }
+
+    /// Update goal progress after a successful query
+    fn record_goal_progress(&self, goal_id: &str, query: &str, success: bool) {
+        if let Ok(conn) = Connection::open(&self.memory_db_path) {
+            // Create goal_progress table if not exists
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS goal_progress (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(goal_id) REFERENCES goals(id)
+                )",
+                [],
+            );
+            
+            let progress_id = Uuid::new_v4().to_string();
+            let created_at = Utc::now().timestamp();
+            let success_int = if success { 1 } else { 0 };
+            
+            let _ = conn.execute(
+                "INSERT INTO goal_progress (id, goal_id, agent_id, query, success, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![progress_id, goal_id, self.agent_id, query, success_int, created_at],
+            );
+        }
+    }
+
+    fn store_memory(&self, query: &str, answer: &str) {
+        let start = std::time::Instant::now();
+        let success = if let Ok(mem) = AgentMemory::new(&self.memory_db_path) {
+            let ts = Utc::now().to_rfc3339();
+            let r1 = mem.store(self.agent_id, &format!("Q: {}", query), &ts);
+            let r2 = mem.store(self.agent_id, &format!("A: {}", answer), &ts);
+            r1.is_ok() && r2.is_ok()
+        } else {
+            false
+        };
+        let elapsed = start.elapsed().as_millis() as u64;
+        crate::monitoring::record_tool_execution(
+            "Memory",
+            &format!("store: {}", &query[..query.len().min(50)]),
+            success,
+            if success { "stored Q&A" } else { "failed to store" },
+            elapsed,
+            if success { 1.0 } else { 0.0 },
+            Some("agent_memory"),
+        );
     }
 
     /// Store episode for monitoring dashboard

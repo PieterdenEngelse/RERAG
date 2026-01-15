@@ -472,6 +472,10 @@ struct LlmConfigRequest {
     mirostat_tau: f32,
     #[serde(default = "default_repeat_last_n")]
     repeat_last_n: usize,
+    #[serde(default = "default_num_keep")]
+    num_keep: i64,
+    #[serde(default = "default_penalize_newline")]
+    penalize_newline: bool,
 }
 
 fn default_min_p() -> f32 {
@@ -494,6 +498,12 @@ fn default_mirostat_tau() -> f32 {
 }
 fn default_repeat_last_n() -> usize {
     llm_settings::DEFAULT_REPEAT_LAST_N
+}
+fn default_num_keep() -> i64 {
+    llm_settings::DEFAULT_NUM_KEEP
+}
+fn default_penalize_newline() -> bool {
+    llm_settings::DEFAULT_PENALIZE_NEWLINE
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -734,16 +744,58 @@ fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> 
 
 pub async fn health_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
+    
+    // Get load metrics from global health tracker
+    let (load, is_busy, message) = if let Some(tracker) = crate::monitoring::get_health_tracker() {
+        let load = tracker.get_load_metrics();
+        let is_busy = tracker.is_busy();
+        let message = if is_busy {
+            Some(format!(
+                "System busy: {} active tasks{}{}",
+                load.active_tasks,
+                if load.indexing { ", indexing" } else { "" },
+                if load.llm_active { ", LLM processing" } else { "" }
+            ))
+        } else {
+            None
+        };
+        (Some(load), is_busy, message)
+    } else {
+        (None, false, None)
+    };
+    
     if let Some(retriever) = RETRIEVER.get() {
         let retriever = retriever.lock().unwrap();
         match retriever.health_check() {
-            Ok(()) => Ok(HttpResponse::Ok().json(json!({
-                "status": "healthy",
-                "documents": retriever.metrics.total_documents_indexed,
-                "vectors": retriever.metrics.total_vectors,
-                "index_path": retriever.metrics.index_path,
-                "request_id": request_id
-            }))),
+            Ok(()) => {
+                let status = if is_busy { "busy" } else { "healthy" };
+                let mut response = json!({
+                    "status": status,
+                    "documents": retriever.metrics.total_documents_indexed,
+                    "vectors": retriever.metrics.total_vectors,
+                    "index_path": retriever.metrics.index_path,
+                    "request_id": request_id
+                });
+                
+                // Add load metrics if available
+                if let Some(load) = load {
+                    response["load"] = json!({
+                        "cpu_percent": load.cpu_percent,
+                        "memory_percent": load.memory_percent,
+                        "active_tasks": load.active_tasks,
+                        "queue_depth": load.queue_depth,
+                        "indexing": load.indexing,
+                        "llm_active": load.llm_active
+                    });
+                }
+                
+                // Add message if busy
+                if let Some(msg) = message {
+                    response["message"] = json!(msg);
+                }
+                
+                Ok(HttpResponse::Ok().json(response))
+            },
             Err(e) => {
                 error!("[{}] Health check failed: {}", request_id, e);
                 Ok(HttpResponse::ServiceUnavailable().json(json!({
@@ -1017,6 +1069,8 @@ async fn commit_llm_config(payload: web::Json<LlmConfigRequest>) -> Result<HttpR
         mirostat_eta: body.mirostat_eta,
         mirostat_tau: body.mirostat_tau,
         repeat_last_n: body.repeat_last_n,
+        num_keep: body.num_keep,
+        penalize_newline: body.penalize_newline,
     };
 
     match llm_settings::save_llm_config_default_db(&new_cfg) {
@@ -2134,9 +2188,23 @@ pub async fn index_info_handler() -> Result<HttpResponse, Error> {
 
 async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
+    let start = std::time::Instant::now();
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
         let results = retriever.search(&query.q).unwrap_or_default();
+        let elapsed = start.elapsed().as_millis() as u64;
+        
+        // Record tool execution
+        crate::monitoring::record_tool_execution(
+            "SemanticSearch",
+            &query.q,
+            true,
+            &format!("{} results", results.len()),
+            elapsed,
+            1.0,
+            Some("api/search"),
+        );
+        
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "results": results,
@@ -4257,6 +4325,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     let hardware_config = crate::db::param_hardware::global_config();
     let backend_type = hardware_config.backend_type;
     let prompt_caching = get_prompt_caching_enabled();
+    let thread_count = hardware_config.num_thread.max(1);
 
     // Get Ollama config (used for Ollama backend)
     let ollama_url =
@@ -4317,16 +4386,29 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
 
     // For Hybrid mode, first get RAG context
     if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
+        let search_start = std::time::Instant::now();
         if let Some(retriever) = RETRIEVER.get() {
             if let Ok(mut r) = retriever.lock() {
                 if let Ok(mut results) = r.hybrid_search(&req.query, None) {
+                    let search_time = search_start.elapsed().as_millis() as u64;
                     if results.len() > req.top_k {
                         results.truncate(req.top_k);
                     }
+                    let result_count = results.len();
                     if !results.is_empty() {
                         context = results.join("\n\n");
                         used_chunks = results;
                     }
+                    // Record tool execution
+                    crate::monitoring::record_tool_execution(
+                        "SemanticSearch",
+                        &req.query,
+                        true,
+                        &format!("{} chunks", result_count),
+                        search_time,
+                        1.0,
+                        Some("api/chat/stream"),
+                    );
                 }
             }
         }
@@ -4335,15 +4417,30 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     // Get chat settings for prompt building
     let chat_settings = get_current_chat_settings();
     let system_prompt = chat_settings.build_system_prompt();
+    
+    // Debug: log what's in the system prompt
+    tracing::warn!(
+        request_id = %request_id,
+        system_prompt_len = system_prompt.len(),
+        system_prompt_full = %system_prompt,
+        memories_count = chat_settings.memories.len(),
+        "DEBUG: Full system prompt being sent"
+    );
+    for (i, mem) in chat_settings.memories.iter().enumerate() {
+        tracing::warn!(
+            request_id = %request_id,
+            memory_index = i,
+            memory_type = %mem.memory_type,
+            memory_content = %mem.content,
+            "DEBUG: Memory item"
+        );
+    }
 
     // Build prompt with settings
+    // Note: System prompt/instructions are sent via the 'system' field, not in the prompt
+    // This prevents the LLM from echoing instructions back to the user
     let prompt = {
         let mut parts = Vec::new();
-
-        // Add system prompt if present
-        if !system_prompt.is_empty() {
-            parts.push(format!("Instructions:\n{}", system_prompt));
-        }
 
         // Add context if present
         if !context.is_empty() {
@@ -4396,7 +4493,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     "top_p": config.top_p,
                     "top_k": config.top_k,
                     "num_predict": config.max_tokens,
-                    "repeat_penalty": config.repeat_penalty
+                    "repeat_penalty": config.repeat_penalty,
+                    "num_thread": thread_count
                 });
                 let body =
                     cache_prompt.build_ollama_chat_request(&final_model, true, Some(options));
@@ -4412,7 +4510,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                         "top_p": config.top_p,
                         "top_k": config.top_k,
                         "num_predict": config.max_tokens,
-                        "repeat_penalty": config.repeat_penalty
+                        "repeat_penalty": config.repeat_penalty,
+                        "num_thread": thread_count
                     },
                     "system": if system_prompt.is_empty() { serde_json::Value::Null } else { serde_json::json!(system_prompt) }
                 });
@@ -4435,7 +4534,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                         "top_p": config.top_p,
                         "top_k": config.top_k,
                         "num_predict": config.max_tokens,
-                        "repeat_penalty": config.repeat_penalty
+                        "repeat_penalty": config.repeat_penalty,
+                        "num_thread": thread_count
                     }
                 });
                 (format!("{}/api/generate", ollama_url), fallback_body)
@@ -4486,7 +4586,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                         "top_p": config.top_p,
                         "top_k": config.top_k,
                         "num_predict": config.max_tokens,
-                        "repeat_penalty": config.repeat_penalty
+                        "repeat_penalty": config.repeat_penalty,
+                        "num_thread": thread_count
                     }
                 });
                 (format!("{}/api/generate", ollama_url), fallback_body)
@@ -4528,7 +4629,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     "top_p": config.top_p,
                     "top_k": config.top_k,
                     "num_predict": config.max_tokens,
-                    "repeat_penalty": config.repeat_penalty
+                    "repeat_penalty": config.repeat_penalty,
+                    "num_thread": thread_count
                 },
                 "system": if system_prompt.is_empty() { serde_json::Value::Null } else { serde_json::json!(system_prompt) }
             });
@@ -4714,6 +4816,7 @@ fn parse_log_line(line: &str) -> LogEntry {
 
 pub mod agentic_monitor_routes;
 pub mod sys_routes;
+pub mod tool_routes;
 
 fn require_admin(req: &HttpRequest, config: &ApiConfig) -> Result<(), Error> {
     if let Some(expected) = &config.admin_api_token {
@@ -4914,6 +5017,30 @@ pub fn start_api_server(
                         web::get().to(agentic_monitor_routes::get_tool_executions),
                     )
                     .route(
+                        "/tools/available",
+                        web::get().to(agentic_monitor_routes::get_available_tools),
+                    )
+                    .route(
+                        "/tools/cache",
+                        web::get().to(agentic_monitor_routes::get_tool_cache_stats_endpoint),
+                    )
+                    .route(
+                        "/tools/rate-limits",
+                        web::get().to(agentic_monitor_routes::get_tool_rate_limits_endpoint),
+                    )
+                    .route(
+                        "/tools/costs",
+                        web::get().to(agentic_monitor_routes::get_tool_costs_endpoint),
+                    )
+                    .route(
+                        "/tools/trends",
+                        web::get().to(agentic_monitor_routes::get_tool_trends_endpoint),
+                    )
+                    .route(
+                        "/tools/dependencies",
+                        web::get().to(agentic_monitor_routes::get_tool_dependencies_endpoint),
+                    )
+                    .route(
                         "/observations/metrics",
                         web::get().to(get_manual_observation_metrics),
                     )
@@ -5047,6 +5174,7 @@ pub fn start_api_server(
                 web::post().to(agentic_monitor_routes::fail_goal),
             )
             .service(web::scope("/sys").configure(sys_routes::sys_routes))
+            .configure(tool_routes::configure_tool_routes)
     });
     if force_single_worker {
         http_server = http_server.workers(1);
