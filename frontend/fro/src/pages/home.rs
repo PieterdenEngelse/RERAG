@@ -191,6 +191,8 @@ pub fn Home() -> Element {
     let mut prompt_caching_enabled = use_signal(|| false);
     let mut show_cache_info = use_signal(|| false);
     let mut show_api_behavior = use_signal(|| false);
+    let mut show_kv_details = use_signal(|| false);
+    let mut show_attention_details = use_signal(|| false);
 
     // Load documents on mount
     use_effect(move || {
@@ -1005,12 +1007,12 @@ pub fn Home() -> Element {
 
                 // Prompt Caching Toggle
                 div {
-                    class: "flex justify-center items-center gap-2",
+                    class: "flex justify-center items-center gap-2 pointer-events-auto",
                     style: "margin-top: calc(0.5rem + 5mm);",
 
                     // Toggle switch
                     label {
-                        class: "flex items-center gap-2 cursor-pointer",
+                        class: "flex items-center gap-2 cursor-pointer pointer-events-auto",
                         input {
                             r#type: "checkbox",
                             class: "toggle toggle-sm !border !border-white",
@@ -1038,7 +1040,7 @@ pub fn Home() -> Element {
 
                     // Info button
                     button {
-                        class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                        class: "shrink-0 rounded flex items-center justify-center cursor-pointer pointer-events-auto",
                         style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
                         onclick: move |_| show_cache_info.set(true),
                         title: "Info about KV caching",
@@ -1767,11 +1769,12 @@ pub fn Home() -> Element {
             // KV Cache Info Modal
             if show_cache_info() {
                 div {
-                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto",
+                    class: "fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto pointer-events-auto",
+                    style: "z-index: 1000;",
                     onclick: move |_| show_cache_info.set(false),
 
                     div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-lg my-4",
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-lg my-4 pointer-events-auto",
                         onclick: move |evt| evt.stop_propagation(),
 
                         div {
@@ -1787,6 +1790,23 @@ pub fn Home() -> Element {
                         div {
                             class: "text-sm space-y-2",
 
+                            // Link to attention explanation
+                            div {
+                                class: "bg-base-200 p-2 rounded border border-base-300",
+                                h4 { class: "text-xs font-semibold text-base-content/70", "Need a refresher?" }
+                                p {
+                                    class: "text-xs mt-1",
+                                    a {
+                                        class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
+                                        onclick: move |_| {
+                                            show_attention_details.set(true);
+                                            show_cache_info.set(false);
+                                        },
+                                        "What is attention?"
+                                    }
+                                }
+                            }
+
                             // What changes
                             div {
                                 class: "bg-base-200 p-2 rounded",
@@ -1794,12 +1814,28 @@ pub fn Home() -> Element {
                                 div {
                                     class: "text-xs mt-1 space-y-1",
                                     p {
-                                        span { class: "text-red-400 font-medium", "OFF: " }
-                                        "Raw text prompt. K/V recomputed each request."
+                                        span {
+                                            class: "text-red-400 font-medium",
+                                            "OFF: "
+                                        }
+                                        span {
+                                            class: "text-blue-300 underline cursor-pointer",
+                                            onclick: move |_| show_kv_details.set(true),
+                                            "K/V"
+                                        }
+                                        " recomputed each request."
                                     }
                                     p {
-                                        span { class: "text-green-400 font-medium", "ON: " }
-                                        "Structured messages. All providers cache K/V for matching prefixes."
+                                        span {
+                                            class: "text-green-400 font-medium",
+                                            "ON: "
+                                        }
+                                        span {
+                                            class: "text-blue-300 underline cursor-pointer",
+                                            onclick: move |_| show_kv_details.set(true),
+                                            "K/V"
+                                        }
+                                        " cached; only new tokens computed."
                                     }
                                 }
                             }
@@ -1818,6 +1854,19 @@ pub fn Home() -> Element {
                                         span { class: "text-green-400", "With: " }
                                         "5000 tokens cached, only new tokens computed"
                                     }
+                                }
+                                p {
+                                    class: "text-[11px] text-base-content/60 mt-1",
+                                    "KV cache is just an attention shortcut—see the "
+                                    a {
+                                        class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
+                                        onclick: move |_| {
+                                            show_attention_details.set(true);
+                                            show_cache_info.set(false);
+                                        },
+                                        "attention explainer"
+                                    }
+                                    " for the math."
                                 }
                             }
 
@@ -1864,7 +1913,11 @@ pub fn Home() -> Element {
                                         span { class: "font-medium", "Different API behavior: " }
                                         button {
                                             class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
-                                            onclick: move |_| show_api_behavior.set(true),
+                                            onclick: move |_| {
+                                                show_api_behavior.set(true);
+                                                show_cache_info.set(false);
+                                                show_kv_details.set(false);
+                                            },
                                             "Ollama: /api/chat vs /api/generate have different semantics →"
                                         }
                                     }
@@ -1913,11 +1966,12 @@ pub fn Home() -> Element {
             // API Behavior Modal (linked from KV Cache modal)
             if show_api_behavior() {
                 div {
-                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto",
+                    class: "fixed inset-0 bg-black/65 flex items-center justify-center overflow-y-auto pointer-events-auto",
+                    style: "z-index: 1200;",
                     onclick: move |_| show_api_behavior.set(false),
 
                     div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-2xl my-4",
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-2xl my-4 pointer-events-auto",
                         onclick: move |evt| evt.stop_propagation(),
 
                         div {
@@ -1932,6 +1986,35 @@ pub fn Home() -> Element {
 
                         div {
                             class: "text-sm space-y-3",
+
+                            // Use cases for /api/generate
+                            div {
+                                class: "bg-base-200 p-3 rounded",
+                                h4 { class: "font-semibold", "Use cases for /api/generate" }
+                                ul {
+                                    class: "list-disc list-inside text-xs mt-2 space-y-1",
+                                    li { strong { "Single-shot completions — " } "One-off text generation without conversation context" }
+                                    li { strong { "Custom prompt templates — " } "When you want full control over the exact prompt format, bypassing the model's built-in chat template" }
+                                    li { strong { "Text completion tasks — " } "Finishing a sentence, code completion, fill-in-the-blank" }
+                                    li { strong { "Embeddings workaround — " } "Some setups use it with \"raw\": true for specific tokenization needs" }
+                                    li { strong { "Legacy/simpler integrations — " } "When you just need \"text in, text out\"" }
+                                    li { strong { "Benchmarking — " } "Testing raw model performance without chat template overhead" }
+                                }
+                            }
+
+                            // Use cases for /api/chat
+                            div {
+                                class: "bg-base-200 p-3 rounded",
+                                h4 { class: "font-semibold", "Use cases for /api/chat" }
+                                ul {
+                                    class: "list-disc list-inside text-xs mt-2 space-y-1",
+                                    li { strong { "Multi-turn conversations — " } "Chatbots, assistants, agentic loops with KV cache reuse" }
+                                    li { strong { "Role-based prompting — " } "Clean separation of system, user, assistant" }
+                                    li { strong { "Model-native formatting — " } "Correct chat template applied automatically" }
+                                    li { strong { "Agentic workflows — " } "Tool use loops with fast back-and-forth" }
+                                    li { strong { "Lower latency on follow-ups — " } "Subsequent turns skip reprocessing history" }
+                                }
+                            }
 
                             // Comparison table
                             div {
@@ -2019,6 +2102,129 @@ pub fn Home() -> Element {
                                 },
                                 "Close All"
                             }
+                        }
+                    }
+                }
+            }
+
+            // KV Fundamentals Modal
+            if show_kv_details() {
+                div {
+                    class: "fixed inset-0 bg-black/70 flex items-center justify-center overflow-y-auto pointer-events-auto",
+                    style: "z-index: 1500;",
+                    onclick: move |_| show_kv_details.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-5 max-w-lg my-6 pointer-events-auto",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "K/V Fundamentals" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_kv_details.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-2",
+                            p {
+                                "K (key) and V (value) vectors are core components of the attention mechanism, most famously in transformers."
+                            }
+                            p { "Here's the intuition:" }
+                            ul {
+                                class: "list-disc list-inside text-xs space-y-1",
+                                li { strong { "Q (query) — " } "\"what am I looking for?\"" }
+                                li { strong { "K (key) — " } "\"what do I contain?\" (used to compute relevance)" }
+                                li { strong { "V (value) — " } "\"what information do I actually pass along?\"" }
+                            }
+                            p { "The attention score is computed by taking the dot product of Q with all K vectors (measuring similarity), then using those scores to create a weighted sum of the V vectors." }
+                            p {
+                                class: "text-xs",
+                                a {
+                                    class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
+                                    onclick: move |_| {
+                                        show_attention_details.set(true);
+                                        show_kv_details.set(false);
+                                        show_cache_info.set(false);
+                                    },
+                                    "Dive deeper into attention"
+                                }
+                            }
+                        }
+
+                        button {
+                            class: "btn btn-primary btn-xs w-full mt-3",
+                            onclick: move |_| show_kv_details.set(false),
+                            "Close"
+                        }
+                    }
+                }
+            }
+
+            // Attention Fundamentals Modal
+            if show_attention_details() {
+                div {
+                    class: "fixed inset-0 bg-black/80 flex items-center justify-center overflow-y-auto pointer-events-auto",
+                    style: "z-index: 2147483646;",
+                    onclick: move |_| show_attention_details.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-5 max-w-3xl my-6 pointer-events-auto",
+                        style: "z-index: 2147483647;",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "Attention 101" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_attention_details.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-3",
+                            p {
+                                "The attention mechanism lets a model dynamically weigh how much each token in a sequence should influence the representation of every other token."
+                            }
+                            h4 { class: "font-semibold text-base-content", "Core idea" }
+                            p {
+                                "For each token, you compute three vectors from its embedding: a query (what am I looking for?), a key (what do I contain?), and a value (what information do I carry?)."
+                            }
+                            p {
+                                "Attention scores are computed by taking the dot product of a query with all keys, then softmaxing to get weights, and finally using those weights to sum the values."
+                            }
+                            h4 { class: "font-semibold text-base-content", "Multi-head attention" }
+                            p {
+                                "Rather than computing a single attention function, transformers run several attention \"heads\" in parallel, each with its own learned Q/K/V projections."
+                            }
+                            p {
+                                "This lets the model attend to information from different representation subspaces—one head might capture syntactic relationships, another semantic similarity, another positional patterns. The outputs are concatenated and projected back down."
+                            }
+                            h4 { class: "font-semibold text-base-content", "Self-attention vs cross-attention" }
+                            p {
+                                "In self-attention (used in both encoder and decoder), Q, K, and V all come from the same sequence—each token attends to all others."
+                            }
+                            p {
+                                "In cross-attention (decoder attending to encoder outputs), queries come from the decoder while keys and values come from the encoder, letting the model ground its generation in the input."
+                            }
+                            h4 { class: "font-semibold text-base-content", "Why it matters" }
+                            p {
+                                "Unlike RNNs, attention connects any two positions with O(1) sequential operations, making long-range dependencies much easier to learn."
+                            }
+                            p {
+                                "The trade-off is O(n²) memory in sequence length, which drives much of the work on efficient attention variants like sparse attention, linear attention, or sliding window approaches."
+                            }
+                        }
+
+                        button {
+                            class: "btn btn-primary btn-xs w-full mt-3",
+                            onclick: move |_| show_attention_details.set(false),
+                            "Close"
                         }
                     }
                 }
