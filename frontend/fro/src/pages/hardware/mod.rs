@@ -727,15 +727,16 @@ pub fn ConfigHardware() -> Element {
                 }
             }
 
+            // For Ollama: show simple Model Loading board
+            if is_ollama_backend {
             Panel { title: None, refresh: None,
                 div { class: "flex flex-wrap gap-4 items-stretch",
                 div { class: "rounded border border-gray-600 p-4 w-fit",
                     span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Model Loading" }
                     div { class: "flex flex-wrap gap-10 justify-start",
-                        // Column 1: Threading
-                    div { class: PARAM_COLUMN_CLASS,
-                        span { class: "text-gray-300 font-semibold", "Threading" }
-                        if supports_threads {
+                        // Threading
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold", "Threading" }
                             div { class: PARAM_BLOCK_CLASS,
                                 label { class: PARAM_LABEL_CLASS, "num_thread" }
                                 div { class: "flex items-end gap-2",
@@ -752,150 +753,64 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
+                                        style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| num_thread_info_signal.set(true),
                                         title: "Thread help",
                                         InfoIcon {}
                                     }
                                 }
                             }
-                        }
-                        div { class: PARAM_BLOCK_CLASS,
-                            label { class: PARAM_LABEL_CLASS, "num_ctx" }
-                            div { class: "flex items-end gap-2",
-                                input {
-                                    r#type: "number",
-                                    min: "256",
-                                    step: "128",
-                                    class: PARAM_NUMBER_INPUT_CLASS,
-                                    value: format!("{}", hardware_values.num_ctx),
-                                    onchange: move |evt| {
-                                        if let Ok(value) = evt.value().parse::<usize>() {
-                                            hardware_config.with_mut(|cfg| cfg.num_ctx = value.max(256));
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_ctx" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "256",
+                                        step: "128",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_ctx),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_ctx = value.max(256));
+                                            }
                                         }
                                     }
-                                }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| num_ctx_info_signal.set(true),
-                                    title: "Context size help",
-                                    InfoIcon {}
-                                }
-                            }
-                        }
-                        div { class: PARAM_BLOCK_CLASS,
-                            label { class: PARAM_LABEL_CLASS, "num_batch" }
-                            div { class: "flex items-end gap-2",
-                                input {
-                                    r#type: "number",
-                                    min: "1",
-                                    class: PARAM_NUMBER_INPUT_CLASS,
-                                    value: format!("{}", hardware_values.num_batch),
-                                    onchange: move |evt| {
-                                        if let Ok(value) = evt.value().parse::<usize>() {
-                                            hardware_config.with_mut(|cfg| cfg.num_batch = value.max(1));
-                                        }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_ctx_info_signal.set(true),
+                                        title: "Context size help",
+                                        InfoIcon {}
                                     }
                                 }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| num_batch_info_signal.set(true),
-                                    title: "Batch size help",
-                                    InfoIcon {}
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_batch" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_batch),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_batch = value.max(1));
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_batch_info_signal.set(true),
+                                        title: "Batch size help",
+                                        InfoIcon {}
+                                    }
                                 }
                             }
                         }
-                    }
-
-                    // Column 2: Memory
-                    div { class: PARAM_COLUMN_CLASS,
-                        span { class: "text-gray-300 font-semibold", "Memory" }
-                        div { class: PARAM_BLOCK_CLASS,
-                            label { class: PARAM_LABEL_CLASS, "NUMA" }
-                            div { class: "flex items-end gap-2",
-                                input {
-                                    r#type: "checkbox",
-                                    class: "toggle toggle-sm !border !border-white",
-                                    style: {
-                                        format!(
-                                            "border: 1px solid white; background-color: {};",
-                                            if hardware_values.numa { "" } else { "#d1d5db" }
-                                        )
-                                    },
-                                    checked: hardware_values.numa,
-                                    onchange: move |_| {
-                                        hardware_config.with_mut(|cfg| cfg.numa = !cfg.numa);
-                                    },
-                                }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| numa_info_signal.set(true),
-                                    title: "NUMA help",
-                                    InfoIcon {}
-                                }
-                            }
-                        }
-                        div { class: PARAM_BLOCK_CLASS,
-                            label { class: PARAM_LABEL_CLASS, "use_mmap" }
-                            div { class: "flex items-end gap-2",
-                                input {
-                                    r#type: "checkbox",
-                                    class: "toggle toggle-sm !border !border-white",
-                                    style: {
-                                        format!(
-                                            "border: 1px solid white; background-color: {};",
-                                            if hardware_values.use_mmap { "" } else { "#d1d5db" }
-                                        )
-                                    },
-                                    checked: hardware_values.use_mmap,
-                                    onchange: move |_| {
-                                        hardware_config.with_mut(|cfg| cfg.use_mmap = !cfg.use_mmap);
-                                    },
-                                }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| mmap_info_signal.set(true),
-                                    title: "mmap help",
-                                    InfoIcon {}
-                                }
-                            }
-                        }
-                        div { class: PARAM_BLOCK_CLASS,
-                            label { class: PARAM_LABEL_CLASS, "use_mlock" }
-                            div { class: "flex items-end gap-2",
-                                input {
-                                    r#type: "checkbox",
-                                    class: "toggle toggle-sm !border !border-white",
-                                    style: {
-                                        format!(
-                                            "border: 1px solid white; background-color: {};",
-                                            if hardware_values.use_mlock { "" } else { "#d1d5db" }
-                                        )
-                                    },
-                                    checked: hardware_values.use_mlock,
-                                    onchange: move |_| {
-                                        hardware_config.with_mut(|cfg| cfg.use_mlock = !cfg.use_mlock);
-                                    },
-                                }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| mlock_info_signal.set(true),
-                                    title: "mlock help",
-                                    InfoIcon {}
-                                }
-                            }
-                        }
-                    }
-
-                    // Column 3: GPU
-                    div { class: PARAM_COLUMN_CLASS,
-                        span { class: "text-gray-300 font-semibold", "GPU" }
-                        if supports_gpu {
+                        // GPU
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold", "GPU" }
                             div { class: PARAM_BLOCK_CLASS,
                                 label { class: PARAM_LABEL_CLASS, "num_gpu" }
                                 div { class: "flex items-end gap-2",
@@ -912,230 +827,958 @@ pub fn ConfigHardware() -> Element {
                                     }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
+                                        style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| num_gpu_info_signal.set(true),
                                         title: "num_gpu help",
                                         InfoIcon {}
                                     }
                                 }
                             }
-                            div { class: PARAM_BLOCK_CLASS,
-                                label { class: PARAM_LABEL_CLASS, "main_gpu" }
-                                div { class: "flex items-end gap-2",
-                                    input {
-                                        r#type: "number",
-                                        min: "0",
-                                        class: PARAM_NUMBER_INPUT_CLASS,
-                                        value: format!("{}", hardware_values.main_gpu),
-                                        onchange: move |evt| {
-                                            if let Ok(value) = evt.value().parse::<usize>() {
-                                                hardware_config.with_mut(|cfg| cfg.main_gpu = value);
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| main_gpu_info_signal.set(true),
-                                        title: "main_gpu help",
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                        }
-                        if supports_gpu_layers {
-                            div { class: PARAM_BLOCK_CLASS,
-                                label { class: PARAM_LABEL_CLASS, "gpu_layers" }
-                                div { class: "flex items-end gap-2",
-                                    input {
-                                        r#type: "number",
-                                        min: "0",
-                                        class: PARAM_NUMBER_INPUT_CLASS,
-                                        value: format!("{}", hardware_values.gpu_layers),
-                                        onchange: move |evt| {
-                                            if let Ok(value) = evt.value().parse::<usize>() {
-                                                hardware_config.with_mut(|cfg| cfg.gpu_layers = value);
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| gpu_layers_info_signal.set(true),
-                                        title: "gpu_layers help",
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                        }
-                        // Advanced options
-                        span { class: "text-gray-300 font-semibold mt-2", "Advanced" }
-                        if supports_memory {
-                            div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-2",
-                                    label { class: "{PARAM_LABEL_CLASS} inline-block w-16", "low_vram" }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| low_vram_info_signal.set(true),
-                                        title: "low_vram help",
-                                        InfoIcon {}
-                                    }
-                                }
-                                input {
-                                    r#type: "checkbox",
-                                    class: "toggle toggle-sm !border !border-white",
-                                    style: {
-                                        format!(
-                                            "border: 1px solid white; background-color: {};",
-                                            if hardware_values.low_vram { "" } else { "#d1d5db" }
-                                        )
-                                    },
-                                    checked: hardware_values.low_vram,
-                                    onchange: move |_| {
-                                        hardware_config.with_mut(|cfg| cfg.low_vram = !cfg.low_vram);
-                                    },
-                                }
-                            }
-                            div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-2",
-                                    label { class: "{PARAM_LABEL_CLASS} inline-block w-16", "f16_kv" }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| f16_kv_info_signal.set(true),
-                                        title: "f16_kv help",
-                                        InfoIcon {}
-                                    }
-                                }
-                                input {
-                                    r#type: "checkbox",
-                                    class: "toggle toggle-sm !border !border-white",
-                                    style: {
-                                        format!(
-                                            "border: 1px solid white; background-color: {};",
-                                            if hardware_values.f16_kv { "" } else { "#d1d5db" }
-                                        )
-                                    },
-                                    checked: hardware_values.f16_kv,
-                                    onchange: move |_| {
-                                        hardware_config.with_mut(|cfg| cfg.f16_kv = !cfg.f16_kv);
-                                    },
-                                }
-                            }
-                        }
-                        div { class: PARAM_BLOCK_CLASS,
-                            div { class: "flex items-center gap-2",
-                                label { class: "{PARAM_LABEL_CLASS} inline-block w-16", "logits_all" }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| logits_all_info_signal.set(true),
-                                    title: "logits_all help",
-                                    InfoIcon {}
-                                }
-                            }
-                            input {
-                                r#type: "checkbox",
-                                class: "toggle toggle-sm !border !border-white",
-                                style: {
-                                    format!(
-                                        "border: 1px solid white; background-color: {};",
-                                        if hardware_values.logits_all { "" } else { "#d1d5db" }
-                                    )
-                                },
-                                checked: hardware_values.logits_all,
-                                onchange: move |_| {
-                                    hardware_config.with_mut(|cfg| cfg.logits_all = !cfg.logits_all);
-                                },
-                            }
                         }
                     }
                 }
-                    if supports_rope {
-                        div { class: "mt-4 flex flex-wrap gap-10 justify-start",
+                }
+            }
+            }
+
+            // For llama.cpp and other local backends: show 4 category boards
+            if !is_ollama_backend && !is_cloud_backend {
+            Panel { title: None, refresh: None,
+                div { class: "flex flex-wrap gap-4 items-stretch",
+
+                // ═══════════════════════════════════════════════════════════════
+                // CATEGORY 1: MODEL PARAMS (requires restart)
+                // ═══════════════════════════════════════════════════════════════
+                div { class: "rounded border border-gray-600 p-4 w-fit",
+                    div { class: "flex items-center gap-2 mb-3",
+                        span { class: "text-sm text-gray-300 font-semibold", "1. Model Params" }
+                        span { class: "text-xs text-gray-500 italic", "(restart required)" }
+                    }
+                    div { class: "flex flex-wrap gap-6 justify-start",
+                        // GPU offloading
                         div { class: PARAM_COLUMN_CLASS,
-                            span { class: "text-gray-300 font-semibold", "RoPE" }
-                            div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-2",
-                                    label { class: PARAM_LABEL_CLASS_TIGHT, "rope_frequency_base" }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| rope_base_info_signal.set(true),
-                                        title: "RoPE base help",
-                                        InfoIcon {}
-                                    }
-                                }
-                                input {
-                                    r#type: "number",
-                                    min: "1",
-                                    step: "100",
-                                    class: PARAM_NUMBER_INPUT_CLASS,
-                                    value: format!("{:.0}", hardware_values.rope_frequency_base),
-                                    onchange: move |evt| {
-                                        if let Ok(value) = evt.value().parse::<f32>() {
-                                            hardware_config.with_mut(|cfg| cfg.rope_frequency_base = value.max(1.0));
+                            span { class: "text-gray-300 font-semibold text-xs", "GPU Offload" }
+                            if supports_gpu_layers {
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "gpu_layers" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            min: "0",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", hardware_values.gpu_layers),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<usize>() {
+                                                    hardware_config.with_mut(|cfg| cfg.gpu_layers = value);
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| gpu_layers_info_signal.set(true),
+                                            title: "gpu_layers help",
+                                            InfoIcon {}
                                         }
                                     }
                                 }
                             }
-                            div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-2",
-                                    label { class: PARAM_LABEL_CLASS_TIGHT, "rope_frequency_scale" }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| rope_scale_info_signal.set(true),
-                                        title: "RoPE scale help",
-                                        InfoIcon {}
-                                    }
-                                }
-                                input {
-                                    r#type: "number",
-                                    step: "0.1",
-                                    class: PARAM_NUMBER_INPUT_CLASS,
-                                    value: format!("{:.2}", hardware_values.rope_frequency_scale),
-                                    onchange: move |evt| {
-                                        if let Ok(value) = evt.value().parse::<f32>() {
-                                            hardware_config.with_mut(|cfg| cfg.rope_frequency_scale = value.max(0.1));
+                            if supports_gpu {
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "main_gpu" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            min: "0",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", hardware_values.main_gpu),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<usize>() {
+                                                    hardware_config.with_mut(|cfg| cfg.main_gpu = value);
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| main_gpu_info_signal.set(true),
+                                            title: "main_gpu help",
+                                            InfoIcon {}
                                         }
                                     }
                                 }
                             }
+                        }
+                        // Multi-GPU
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold text-xs", "Multi-GPU" }
                             div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-2",
-                                    label { class: PARAM_LABEL_CLASS, "vocab_only" }
+                                label { class: PARAM_LABEL_CLASS, "split_mode" }
+                                div { class: "flex items-end gap-2",
+                                    select {
+                                        class: "select select-xs select-bordered bg-gray-700 text-gray-200",
+                                        value: "{hardware_values.split_mode}",
+                                        onchange: move |evt| {
+                                            hardware_config.with_mut(|cfg| cfg.split_mode = evt.value());
+                                        },
+                                        option { value: "none", "None" }
+                                        option { value: "layer", "Layer" }
+                                        option { value: "row", "Row" }
+                                    }
+                                }
+                            }
+                        }
+                        // Memory mapping
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold text-xs", "Memory" }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "use_mmap" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.use_mmap { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.use_mmap,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.use_mmap = !cfg.use_mmap),
+                                    }
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| mmap_info_signal.set(true),
+                                        title: "mmap help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "use_mlock" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.use_mlock { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.use_mlock,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.use_mlock = !cfg.use_mlock),
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| mlock_info_signal.set(true),
+                                        title: "mlock help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "vocab_only" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.vocab_only { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.vocab_only,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.vocab_only = !cfg.vocab_only),
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
                                         onclick: move |_| vocab_only_info_signal.set(true),
                                         title: "vocab_only help",
                                         InfoIcon {}
                                     }
                                 }
-                                input {
-                                    r#type: "checkbox",
-                                    class: "toggle toggle-sm !border !border-white",
-                                    style: {
-                                        format!(
-                                            "border: 1px solid white; background-color: {};",
-                                            if hardware_values.vocab_only { "" } else { "#d1d5db" }
-                                        )
-                                    },
-                                    checked: hardware_values.vocab_only,
-                                    onchange: move |_| {
-                                        hardware_config.with_mut(|cfg| cfg.vocab_only = !cfg.vocab_only);
-                                    },
+                            }
+                        }
+                    }
+                }
+
+                // ═══════════════════════════════════════════════════════════════
+                // CATEGORY 2: CONTEXT PARAMS (context creation)
+                // ═══════════════════════════════════════════════════════════════
+                div { class: "rounded border border-gray-600 p-4 w-fit",
+                    div { class: "flex items-center gap-2 mb-3",
+                        span { class: "text-sm text-gray-300 font-semibold", "2. Context Params" }
+                        span { class: "text-xs text-gray-500 italic", "(new context)" }
+                    }
+                    div { class: "flex flex-wrap gap-6 justify-start",
+                        // Context size
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold text-xs", "Size" }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_ctx" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "256",
+                                        step: "128",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_ctx),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_ctx = value.max(256));
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_ctx_info_signal.set(true),
+                                        title: "Context size help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_batch" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_batch),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_batch = value.max(1));
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_batch_info_signal.set(true),
+                                        title: "Batch size help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_ubatch" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_ubatch),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_ubatch = value.max(1));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_seq_max" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_seq_max),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_seq_max = value.max(1));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Attention
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold text-xs", "Attention" }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "flash_attn" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.flash_attn { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.flash_attn,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.flash_attn = !cfg.flash_attn),
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "offload_kqv" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.offload_kqv { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.offload_kqv,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.offload_kqv = !cfg.offload_kqv),
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "embeddings" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.embeddings { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.embeddings,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.embeddings = !cfg.embeddings),
+                                    }
+                                }
+                            }
+                        }
+                        // RoPE
+                        if supports_rope {
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "RoPE" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS_TIGHT, "rope_freq_base" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            min: "1",
+                                            step: "100",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.0}", hardware_values.rope_frequency_base),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    hardware_config.with_mut(|cfg| cfg.rope_frequency_base = value.max(1.0));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| rope_base_info_signal.set(true),
+                                            title: "RoPE base help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS_TIGHT, "rope_freq_scale" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", hardware_values.rope_frequency_scale),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    hardware_config.with_mut(|cfg| cfg.rope_frequency_scale = value.max(0.1));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| rope_scale_info_signal.set(true),
+                                            title: "RoPE scale help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // KV Cache
+                        if supports_memory {
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "KV Cache" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "f16_kv" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "checkbox",
+                                            class: "toggle toggle-sm !border !border-white",
+                                            style: format!("border: 1px solid white; background-color: {};", if hardware_values.f16_kv { "" } else { "#d1d5db" }),
+                                            checked: hardware_values.f16_kv,
+                                            onchange: move |_| hardware_config.with_mut(|cfg| cfg.f16_kv = !cfg.f16_kv),
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| f16_kv_info_signal.set(true),
+                                            title: "f16_kv help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "low_vram" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "checkbox",
+                                            class: "toggle toggle-sm !border !border-white",
+                                            style: format!("border: 1px solid white; background-color: {};", if hardware_values.low_vram { "" } else { "#d1d5db" }),
+                                            checked: hardware_values.low_vram,
+                                            onchange: move |_| hardware_config.with_mut(|cfg| cfg.low_vram = !cfg.low_vram),
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| low_vram_info_signal.set(true),
+                                            title: "low_vram help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "logits_all" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "checkbox",
+                                            class: "toggle toggle-sm !border !border-white",
+                                            style: format!("border: 1px solid white; background-color: {};", if hardware_values.logits_all { "" } else { "#d1d5db" }),
+                                            checked: hardware_values.logits_all,
+                                            onchange: move |_| hardware_config.with_mut(|cfg| cfg.logits_all = !cfg.logits_all),
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| logits_all_info_signal.set(true),
+                                            title: "logits_all help",
+                                            InfoIcon {}
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                }
+
+                // ═══════════════════════════════════════════════════════════════
+                // CATEGORY 3: CPU PARAMS (context creation)
+                // ═══════════════════════════════════════════════════════════════
+                div { class: "rounded border border-gray-600 p-4 w-fit",
+                    div { class: "flex items-center gap-2 mb-3",
+                        span { class: "text-sm text-gray-300 font-semibold", "3. CPU Params" }
+                        span { class: "text-xs text-gray-500 italic", "(new context)" }
+                    }
+                    div { class: "flex flex-wrap gap-6 justify-start",
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold text-xs", "Threading" }
+                            if supports_threads {
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "num_thread" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            min: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", hardware_values.num_thread),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<usize>() {
+                                                    hardware_config.with_mut(|cfg| cfg.num_thread = value.max(1));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| num_thread_info_signal.set(true),
+                                            title: "Thread help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS_TIGHT, "num_thread_batch" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_thread_batch),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_thread_batch = value.max(1));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // NUMA & Affinity
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold text-xs", "NUMA & Affinity" }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "numa" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.numa { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.numa,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.numa = !cfg.numa),
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| numa_info_signal.set(true),
+                                        title: "NUMA help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "cpu_strict" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "toggle toggle-sm !border !border-white",
+                                        style: format!("border: 1px solid white; background-color: {};", if hardware_values.cpu_strict { "" } else { "#d1d5db" }),
+                                        checked: hardware_values.cpu_strict,
+                                        onchange: move |_| hardware_config.with_mut(|cfg| cfg.cpu_strict = !cfg.cpu_strict),
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "poll (μs)" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "0",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.poll),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.poll = value);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "priority" }
+                                div { class: "flex items-end gap-2",
+                                    select {
+                                        class: "select select-xs select-bordered bg-gray-700 text-gray-200",
+                                        value: "{hardware_values.priority}",
+                                        onchange: move |evt| {
+                                            hardware_config.with_mut(|cfg| cfg.priority = evt.value());
+                                        },
+                                        option { value: "low", "Low" }
+                                        option { value: "normal", "Normal" }
+                                        option { value: "high", "High" }
+                                        option { value: "realtime", "Realtime" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
-                // Sampling parameters group (Ollama only)
-                if is_ollama_backend {
+                // ═══════════════════════════════════════════════════════════════
+                // CATEGORY 4: SAMPLING PARAMS (per inference)
+                // ═══════════════════════════════════════════════════════════════
+                div { class: "rounded border border-gray-600 p-4 w-fit",
+                    div { class: "flex items-center gap-2 mb-3",
+                        span { class: "text-sm text-gray-300 font-semibold", "4. Sampling Params" }
+                        span { class: "text-xs text-gray-500 italic", "(per inference)" }
+                    }
+                    if sampling_loading() {
+                        div { class: "text-xs text-gray-400", "Loading sampling config…" }
+                    } else if let Some(err) = sampling_error() {
+                        div { class: "text-xs text-red-400", "{err}" }
+                    } else {
+                        div { class: "flex flex-wrap gap-6 justify-start",
+                            // Basic sampling
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "Basic" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "temperature" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            min: "0",
+                                            max: "2",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.1}", sampling_config().temperature),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.temperature = value.clamp(0.0, 2.0));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| temperature_info_signal.set(true),
+                                            title: "Temperature help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "top_k" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "1",
+                                            min: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", sampling_config().top_k),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<usize>() {
+                                                    sampling_config.with_mut(|cfg| cfg.top_k = value.max(1));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| top_k_info_signal.set(true),
+                                            title: "Top-K help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "top_p" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.05",
+                                            min: "0",
+                                            max: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().top_p),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.top_p = value.clamp(0.0, 1.0));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| top_p_info_signal.set(true),
+                                            title: "Top-P help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "min_p" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.01",
+                                            min: "0",
+                                            max: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().min_p),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.min_p = value.clamp(0.0, 1.0));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| min_p_info_signal.set(true),
+                                            title: "Min-P help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                            }
+                            // Repetition
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "Repetition" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "repeat_penalty" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.05",
+                                            min: "1",
+                                            max: "2",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().repeat_penalty),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.repeat_penalty = value.clamp(1.0, 2.0));
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| repeat_penalty_info_signal.set(true),
+                                            title: "Repeat penalty help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "repeat_last_n" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "1",
+                                            min: "0",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", sampling_config().repeat_last_n),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<usize>() {
+                                                    sampling_config.with_mut(|cfg| cfg.repeat_last_n = value);
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| repeat_last_n_info_signal.set(true),
+                                            title: "Repeat last N help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                            }
+                            // Output
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "Output" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "num_predict" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "64",
+                                            min: "-1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", sampling_config().num_predict),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<i64>() {
+                                                    sampling_config.with_mut(|cfg| cfg.num_predict = value);
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| num_predict_info_signal.set(true),
+                                            title: "Num predict help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "seed" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", sampling_config().seed.unwrap_or(-1)),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<i64>() {
+                                                    sampling_config.with_mut(|cfg| cfg.seed = if value < 0 { None } else { Some(value) });
+                                                }
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| seed_info_signal.set(true),
+                                            title: "Seed help",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "ignore_eos" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "checkbox",
+                                            class: "toggle toggle-sm !border !border-white",
+                                            style: format!("border: 1px solid white; background-color: {};", if sampling_config().ignore_eos { "" } else { "#d1d5db" }),
+                                            checked: sampling_config().ignore_eos,
+                                            onchange: move |_| sampling_config.with_mut(|cfg| cfg.ignore_eos = !cfg.ignore_eos),
+                                        }
+                                    }
+                                }
+                            }
+                            // Advanced sampling
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "Advanced" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "typical_p" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.05",
+                                            min: "0",
+                                            max: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().typical_p),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.typical_p = value.clamp(0.0, 1.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "tfs_z" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            min: "0",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().tfs_z),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.tfs_z = value.max(0.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "freq_penalty" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            min: "0",
+                                            max: "2",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().frequency_penalty),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.frequency_penalty = value.clamp(0.0, 2.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "pres_penalty" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            min: "0",
+                                            max: "2",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().presence_penalty),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.presence_penalty = value.clamp(0.0, 2.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // DRY sampling
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "DRY" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "dry_multiplier" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            min: "0",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().dry_multiplier),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.dry_multiplier = value.max(0.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "dry_base" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.1",
+                                            min: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().dry_base),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.dry_base = value.max(1.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS_TIGHT, "dry_allowed_len" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            min: "0",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{}", sampling_config().dry_allowed_length),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<usize>() {
+                                                    sampling_config.with_mut(|cfg| cfg.dry_allowed_length = value);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // XTC sampling
+                            div { class: PARAM_COLUMN_CLASS,
+                                span { class: "text-gray-300 font-semibold text-xs", "XTC" }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "xtc_probability" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.05",
+                                            min: "0",
+                                            max: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().xtc_probability),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.xtc_probability = value.clamp(0.0, 1.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: PARAM_BLOCK_CLASS,
+                                    label { class: PARAM_LABEL_CLASS, "xtc_threshold" }
+                                    div { class: "flex items-end gap-2",
+                                        input {
+                                            r#type: "number",
+                                            step: "0.05",
+                                            min: "0",
+                                            max: "1",
+                                            class: PARAM_NUMBER_INPUT_CLASS,
+                                            value: format!("{:.2}", sampling_config().xtc_threshold),
+                                            onchange: move |evt| {
+                                                if let Ok(value) = evt.value().parse::<f32>() {
+                                                    sampling_config.with_mut(|cfg| cfg.xtc_threshold = value.clamp(0.0, 1.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                }
+            }
+            }
+
+            // Sampling parameters group (Ollama only)
+            if is_ollama_backend {
+            Panel { title: None, refresh: None,
+                div { class: "flex flex-wrap gap-4 items-stretch",
                 div { class: "rounded border border-gray-600 p-4 w-fit",
                     span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Sampling" }
                     if sampling_loading() {

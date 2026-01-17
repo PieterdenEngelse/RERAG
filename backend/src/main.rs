@@ -189,6 +189,13 @@ async fn main() -> std::io::Result<()> {
     ag::api::set_retriever_handle(Arc::clone(&retriever));
 
     // ─────────────────────────────────────────────────────────────
+    // PHASE 6.5: Initialize Optimized Search Engine (all perf optimizations)
+    // ─────────────────────────────────────────────────────────────
+    info!("🚀 Initializing optimized search engine (SIMD, HNSW, semantic cache, hybrid search)...");
+    let _search_engine = ag::perf::integration::init_search_engine();
+    info!("✅ Optimized search engine initialized");
+
+    // ─────────────────────────────────────────────────────────────
     // PHASE 7: Spawn Background Indexing (NON-BLOCKING) - v2.1.0
     // ─────────────────────────────────────────────────────────────
 
@@ -206,7 +213,7 @@ async fn main() -> std::io::Result<()> {
         actix_web::rt::spawn(async move {
             let indexing_start = Instant::now();
             debug!("Background indexing task started");
-            
+
             // Mark indexing as started for health status
             ag::monitoring::mark_indexing_started();
 
@@ -234,7 +241,7 @@ async fn main() -> std::io::Result<()> {
                     );
                 }
             }
-            
+
             // Mark indexing as finished for health status
             ag::monitoring::mark_indexing_finished();
         });
@@ -295,7 +302,7 @@ fn cleanup_stale_locks() {
     let project_dir = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
-    
+
     let lock_patterns = [
         // Tantivy index locks
         format!("{}/tantivy_index/*.lock", data_dir),
@@ -312,7 +319,7 @@ fn cleanup_stale_locks() {
         format!("{}/*.db-wal", project_dir),
         format!("{}/*.db-shm", project_dir),
     ];
-    
+
     let mut cleaned = 0;
     for pattern in &lock_patterns {
         if let Ok(entries) = glob::glob(pattern) {
@@ -331,7 +338,7 @@ fn cleanup_stale_locks() {
             }
         }
     }
-    
+
     // Also clean /tmp/ag_* files
     if let Ok(entries) = glob::glob("/tmp/ag_*") {
         for entry in entries.flatten() {
@@ -343,7 +350,7 @@ fn cleanup_stale_locks() {
             }
         }
     }
-    
+
     if cleaned > 0 {
         eprintln!("🧹 Cleaned {} stale lock/temp files", cleaned);
     }

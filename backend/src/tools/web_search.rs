@@ -28,30 +28,31 @@ impl WebSearchTool {
     fn parse_ddg_html(&self, html: &str) -> Vec<SearchResult> {
         let mut results = Vec::new();
         let mut search_pos = 0;
-        
+
         while let Some(class_pos) = html[search_pos..].find("class=\"result__a\"") {
             let abs_class = search_pos + class_pos;
-            
+
             // Look FORWARD for href=" (it comes after class in this HTML)
             let after_class = &html[abs_class..];
-            
+
             if let Some(href_rel) = after_class.find("href=\"") {
                 let href_start = abs_class + href_rel + 6;
                 if let Some(href_end) = html[href_start..].find('"') {
                     let raw_url = &html[href_start..href_start + href_end];
                     let actual_url = self.extract_url(raw_url);
-                    
+
                     // Find title (text after href closing quote and >)
                     let after_href = href_start + href_end;
                     if let Some(tag_close) = html[after_href..].find('>') {
                         let title_start = after_href + tag_close + 1;
                         if let Some(title_end) = html[title_start..].find("</a>") {
-                            let title = Self::clean_html(&html[title_start..title_start + title_end]);
-                            
+                            let title =
+                                Self::clean_html(&html[title_start..title_start + title_end]);
+
                             // Find snippet
                             let after_title = title_start + title_end;
                             let snippet = self.find_snippet(&html[after_title..]);
-                            
+
                             if !actual_url.is_empty() && !title.is_empty() {
                                 results.push(SearchResult {
                                     title,
@@ -63,39 +64,40 @@ impl WebSearchTool {
                     }
                 }
             }
-            
+
             search_pos = abs_class + 20;
             if results.len() >= 5 {
                 break;
             }
         }
-        
+
         results
     }
-    
+
     fn extract_url(&self, raw: &str) -> String {
         // URL format: //duckduckgo.com/l/?uddg=https%3A%2F%2F...&amp;rut=...
         if let Some(uddg_pos) = raw.find("uddg=") {
             let url_start = uddg_pos + 5;
             let rest = &raw[url_start..];
             // In HTML, & is encoded as &amp;
-            let url_end = rest.find("&amp;")
+            let url_end = rest
+                .find("&amp;")
                 .or_else(|| rest.find('&'))
                 .unwrap_or(rest.len());
             let encoded = &rest[..url_end];
             return Self::url_decode(encoded);
         }
-        
+
         if raw.starts_with("http") {
             return raw.to_string();
         }
         if raw.starts_with("//") {
             return format!("https:{}", raw);
         }
-        
+
         String::new()
     }
-    
+
     fn find_snippet(&self, html: &str) -> String {
         if let Some(snip_pos) = html.find("class=\"result__snippet\"") {
             if let Some(tag_end) = html[snip_pos..].find('>') {
@@ -108,11 +110,11 @@ impl WebSearchTool {
         }
         String::new()
     }
-    
+
     fn url_decode(s: &str) -> String {
         let mut result = String::new();
         let mut chars = s.chars().peekable();
-        
+
         while let Some(c) = chars.next() {
             if c == '%' {
                 let hex: String = chars.by_ref().take(2).collect();
@@ -128,14 +130,14 @@ impl WebSearchTool {
                 result.push(c);
             }
         }
-        
+
         result
     }
-    
+
     fn clean_html(s: &str) -> String {
         let mut result = String::new();
         let mut in_tag = false;
-        
+
         for c in s.chars() {
             if c == '<' {
                 in_tag = true;
@@ -145,7 +147,7 @@ impl WebSearchTool {
                 result.push(c);
             }
         }
-        
+
         result
             .replace("&amp;", "&")
             .replace("&lt;", "<")
@@ -186,16 +188,17 @@ impl Tool for WebSearchTool {
 
     async fn execute(&self, query: &str) -> Result<ToolResult, String> {
         let start = Instant::now();
-        
-        let encoded_query: String = query.chars().map(|c| {
-            match c {
+
+        let encoded_query: String = query
+            .chars()
+            .map(|c| match c {
                 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
                 ' ' => "+".to_string(),
                 _ => format!("%{:02X}", c as u8),
-            }
-        }).collect();
+            })
+            .collect();
         let url = format!("https://html.duckduckgo.com/html/?q={}", encoded_query);
-        
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -218,7 +221,10 @@ impl Tool for WebSearchTool {
                     });
                 }
 
-                let html = response.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+                let html = response
+                    .text()
+                    .await
+                    .map_err(|e| format!("Failed to read response: {}", e))?;
                 let results = self.parse_ddg_html(&html);
 
                 if results.is_empty() {
@@ -256,19 +262,17 @@ impl Tool for WebSearchTool {
                     },
                 })
             }
-            Err(e) => {
-                Ok(ToolResult {
-                    tool: ToolType::WebSearch,
-                    success: false,
-                    result: format!("Search failed: {}", e),
-                    metadata: ToolMetadata {
-                        execution_time_ms: start.elapsed().as_millis() as u64,
-                        confidence: 0.0,
-                        source: Some("DuckDuckGo".to_string()),
-                        cost: Some(0.0),
-                    },
-                })
-            }
+            Err(e) => Ok(ToolResult {
+                tool: ToolType::WebSearch,
+                success: false,
+                result: format!("Search failed: {}", e),
+                metadata: ToolMetadata {
+                    execution_time_ms: start.elapsed().as_millis() as u64,
+                    confidence: 0.0,
+                    source: Some("DuckDuckGo".to_string()),
+                    cost: Some(0.0),
+                },
+            }),
         }
     }
 
@@ -290,10 +294,13 @@ mod tests {
         let result = tool.execute("Rust programming").await;
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_url_decode() {
         assert_eq!(WebSearchTool::url_decode("hello%20world"), "hello world");
-        assert_eq!(WebSearchTool::url_decode("https%3A%2F%2Frust-lang.org%2F"), "https://rust-lang.org/");
+        assert_eq!(
+            WebSearchTool::url_decode("https%3A%2F%2Frust-lang.org%2F"),
+            "https://rust-lang.org/"
+        );
     }
 }

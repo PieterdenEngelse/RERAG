@@ -1,7 +1,7 @@
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigHardware, ConfigMemories, ConfigOther, ConfigPrompt, ConfigSampling, Home,
+    About, Config, ConfigHardware, ConfigMemories, ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home,
     MonitorAgentic, MonitorCache, MonitorIndex, MonitorLogs, MonitorObservations, MonitorOverview,
     MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound, Parameters, Train,
 };
@@ -52,6 +52,10 @@ pub enum Route {
         MonitorTools {},
         #[route("/train")]
         Train {},
+        #[route("/docu")]
+        Docu {},
+        #[route("/docu/index")]
+        DocuIndex {},
     #[end_layout]
     #[route("/:..segments")]
     PageNotFound { segments: Vec<String> },

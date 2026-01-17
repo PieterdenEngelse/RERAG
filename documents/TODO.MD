@@ -79,4 +79,126 @@ If you want to confirm that caching is engaged, Ollama’s server log prints kv 
 
 Resource considerations
 On CPU-only machines, KV caching still works (states are stored in RAM). The trade-off is memory usage; if you’re tight on RAM, keep context shorter or prompt caching turned off. On GPU, ensure the GPU has enough VRAM to hold the cached layers.
+--------------------------------
+Good question! Let me give you a direct comparison:
 
+## rkyv vs serde
+
+| Aspect | serde | rkyv |
+|--------|-------|------|
+| **Purpose** | General serialization framework | Zero-copy deserialization |
+| **Speed** | Fast | **Extremely fast** (zero-copy) |
+| **Memory** | Allocates on deserialize | **No allocation** (reads in-place) |
+| **Format support** | JSON, TOML, YAML, Bincode, etc. | **rkyv binary only** |
+| **Human readable** | ✅ Yes (JSON, TOML) | ❌ No (binary only) |
+| **Cross-language** | ✅ Yes (JSON, etc.) | ❌ Rust only |
+| **Schema evolution** | ✅ Good (with care) | ⚠️ Limited |
+| **File size** | Varies by format | Compact binary |
+| **Derive macro** | `#[derive(Serialize, Deserialize)]` | `#[derive(Archive, Serialize, Deserialize)]` |
+
+---
+
+## What rkyv **CAN'T** do that serde can:
+
+```rust
+// ❌ rkyv CANNOT do this:
+
+// 1. Human-readable formats
+let json = serde_json::to_string(&config)?;      // ❌ No JSON
+let toml = toml::to_string(&config)?;            // ❌ No TOML
+let yaml = serde_yaml::to_string(&config)?;      // ❌ No YAML
+
+// 2. Cross-language interop
+// ❌ Can't share rkyv data with Python, JS, Go, etc.
+
+// 3. Easy config files users can edit
+// ❌ Binary format - not human editable
+
+// 4. Flexible schema changes
+// ❌ Adding/removing fields breaks compatibility
+```
+
+---
+
+## What rkyv **CAN** do (and does better):
+
+```rust
+// ✅ rkyv excels at this:
+
+use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
+
+#[derive(Archive, Deserialize, Serialize)]
+struct LargeIndex {
+    embeddings: Vec<[f32; 768]>,  // Millions of vectors
+    metadata: Vec<String>,
+}
+
+// Serialize once
+let bytes = rkyv::to_bytes::<Error>(&index)?;
+std::fs::write("index.rkyv", &bytes)?;
+
+// Zero-copy access - NO DESERIALIZATION!
+let bytes = std::fs::read("index.rkyv")?;
+let archived = rkyv::access::<ArchivedLargeIndex, Error>(&bytes)?;
+
+// Direct access without copying into memory
+println!("First embedding: {:?}", archived.embeddings[0]);
+```
+
+---
+
+## When to use which:
+
+| Use Case | Best Choice |
+|----------|-------------|
+| Config files | **serde** (JSON/TOML) |
+| API responses | **serde** (JSON) |
+| User-editable settings | **serde** (TOML/YAML) |
+| Cross-language data | **serde** (JSON/MessagePack) |
+| Large vector indices | **rkyv** |
+| Memory-mapped data | **rkyv** |
+| Hot-path deserialization | **rkyv** |
+| Embedding stores | **rkyv** |
+| Cache files | **rkyv** |
+| IPC shared memory | **rkyv** |
+
+---
+
+## For Your AG Project - Recommendation:
+
+```rust
+// Use BOTH:
+
+// Config/Settings → serde (user can edit)
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct HardwareParams {
+    pub num_thread: usize,
+    pub num_ctx: usize,
+    // ...
+}
+
+// Vector Index → rkyv (performance critical)
+#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct VectorIndex {
+    pub embeddings: Vec<[f32; 384]>,
+    pub doc_ids: Vec<u64>,
+}
+```
+
+---
+
+## TL;DR
+
+**No, rkyv cannot do everything serde can:**
+
+- ❌ No human-readable formats (JSON, TOML, YAML)
+- ❌ No cross-language support
+- ❌ No easy schema evolution
+- ❌ No config files users can edit
+
+**But rkyv is 10-100x faster for:**
+- ✅ Large binary data (embeddings, indices)
+- ✅ Memory-mapped files
+- ✅ Zero-copy access
+
+**Best practice:** Use serde for config/API, rkyv for performance-critical data structures.

@@ -144,10 +144,10 @@ impl MonitoringContext {
         // Metrics registry initialized on first use by Lazy statics
         // Initialize health tracker
         let health = Arc::new(health::HealthTracker::new());
-        
+
         // Store in global for access from indexing/LLM code
         let _ = GLOBAL_HEALTH_TRACKER.set(Arc::clone(&health));
-        
+
         let startup_time = Instant::now();
         // Log effective histogram buckets at startup for visibility
         let search_buckets =

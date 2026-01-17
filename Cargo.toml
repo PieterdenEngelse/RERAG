@@ -16,6 +16,12 @@ num_cpus = "1.16.0"
 
 [profile.dev]
 opt-level = 0
+debug = 1                    # Reduced debug info (was 2)
+split-debuginfo = "packed"   # Separate debug files
+incremental = false          # Disable incremental (saves ~50% space)
+
+[profile.dev.package."*"]
+opt-level = 2                # Optimize dependencies in dev
 
 [profile.release]
 opt-level = "s"        # Good balance

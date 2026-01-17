@@ -13,3 +13,12 @@ pub use search::SearchBar;
 
 pub mod monitor;
 pub use monitor::*;
+
+pub mod backend_selector;
+pub use backend_selector::BackendSelector;
+
+pub mod performance;
+pub use performance::{LazyLoadState, LoadingSpinner, PaginationState, SkeletonLoader, VirtualScrollConfig};
+
+pub mod embedding_toggle;
+pub use embedding_toggle::EmbeddingToggle;

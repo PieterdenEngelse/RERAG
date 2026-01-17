@@ -44,7 +44,10 @@ pub fn Header() -> Element {
                 }
                 Err(e) => {
                     // Check if it's likely a timeout (request failed)
-                    if e.contains("timeout") || e.contains("Timeout") || e.contains("Request failed") {
+                    if e.contains("timeout")
+                        || e.contains("Timeout")
+                        || e.contains("Request failed")
+                    {
                         let count = timeout_count() + 1;
                         timeout_count.set(count);
                         if count >= 2 {
@@ -58,7 +61,7 @@ pub fn Header() -> Element {
                     }
                 }
             }
-            
+
             gloo_timers::future::TimeoutFuture::new(5000).await;
         }
     });
@@ -224,6 +227,23 @@ pub fn Header() -> Element {
                             }
                         }
                     }
+                    {
+                        let docu_color = if matches!(current_route, Route::Docu {}) {
+                            "#1D6B9A"
+                        } else if is_dark() {
+                            "white"
+                        } else {
+                            "#111827"
+                        };
+                        rsx! {
+                            Link {
+                                to: Route::Docu {},
+                                class: "py-2 px-3 rounded-lg transition-colors font-medium",
+                                style: format!("color: {};", docu_color),
+                                "Docu"
+                            }
+                        }
+                    }
                     NavDropdown { title: "Help".to_string(),
                         DropdownActionItem { onclick: move |_| show_help.set(ShowHelpCommands(true)), "/help commands" }
                         DropdownItem { to: Route::Home {}, "Design" }
@@ -249,6 +269,7 @@ pub fn Header() -> Element {
                     Link { to: Route::MonitorOverview {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Monitor" }
                     Link { to: Route::Config {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Config" }
                     Link { to: Route::Train {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Train" }
+                    Link { to: Route::Docu {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Docu" }
                     Link { to: Route::About {}, class: "hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors", onclick: move |_| menu_open.set(false), "About" }
                     button {
                         class: "text-left text-teal-100 hover:text-white transition-colors",
@@ -527,7 +548,7 @@ pub fn Header() -> Element {
                     p { class: "text-gray-200 leading-relaxed",
                         "The backend is healthy and responsive, but currently under heavy load. The system is processing resource-intensive tasks that may slow down response times."
                     }
-                    
+
                     // Show real-time load metrics
                     div { class: "bg-gray-900 rounded-lg p-4 space-y-2",
                         h4 { class: "text-pink-300 font-semibold mb-2", "Current Load Metrics" }
@@ -538,21 +559,21 @@ pub fn Header() -> Element {
                                     div { class: "grid grid-cols-2 gap-2 text-sm",
                                         div { class: "text-gray-400", "CPU Usage:" }
                                         div { class: "text-white font-mono", "{load.cpu_percent:.1}%" }
-                                        
+
                                         div { class: "text-gray-400", "Memory Usage:" }
                                         div { class: "text-white font-mono", "{load.memory_percent:.1}%" }
-                                        
+
                                         div { class: "text-gray-400", "Active Tasks:" }
                                         div { class: "text-white font-mono", "{load.active_tasks}" }
-                                        
+
                                         div { class: "text-gray-400", "Queue Depth:" }
                                         div { class: "text-white font-mono", "{load.queue_depth}" }
-                                        
+
                                         div { class: "text-gray-400", "Indexing:" }
                                         div { class: if load.indexing { "text-pink-400 font-semibold" } else { "text-gray-500" },
                                             if load.indexing { "Yes ⚡" } else { "No" }
                                         }
-                                        
+
                                         div { class: "text-gray-400", "LLM Active:" }
                                         div { class: if load.llm_active { "text-pink-400 font-semibold" } else { "text-gray-500" },
                                             if load.llm_active { "Yes 🤖" } else { "No" }
@@ -566,7 +587,7 @@ pub fn Header() -> Element {
                             }
                         }
                     }
-                    
+
                     // Show message if available
                     {
                         let msg_opt = last_health_response().and_then(|r| r.message);
@@ -580,7 +601,7 @@ pub fn Header() -> Element {
                             rsx! {}
                         }
                     }
-                    
+
                     p { class: "text-gray-200 leading-relaxed",
                         "Common causes: initial document indexing on startup, large LLM generation requests, bulk document uploads, or reindexing operations."
                     }

@@ -10,6 +10,18 @@ const CONFIG_TYPE: &str = "hardware";
 
 static GLOBAL_HARDWARE_CONFIG: OnceLock<RwLock<HardwareParams>> = OnceLock::new();
 
+/// Override a single model metadata entry
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct KvOverride {
+    pub key: String,
+    pub value: String,
+}
+
+pub type DeviceTarget = String;
+pub type RopeScalingType = String;
+pub type KvDataType = String;
+pub type CpuMask = Vec<bool>;
+
 fn config_lock() -> &'static RwLock<HardwareParams> {
     GLOBAL_HARDWARE_CONFIG.get_or_init(|| RwLock::new(HardwareParams::default()))
 }
@@ -117,36 +129,63 @@ pub struct HardwareParams {
     pub backend_type: BackendType,
     /// The model name/identifier to use (e.g., "phi3", "gpt-4", "claude-3-sonnet")
     pub model: String,
-    /// Number of CPU threads (llama.cpp)
-    pub num_thread: usize,
-    /// Number of GPUs to use (llama.cpp, vLLM)
-    pub num_gpu: usize,
-    /// Number of layers to offload to GPU (llama.cpp, vLLM)
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 1: MODEL PARAMS (requires restart)
+    // ═══════════════════════════════════════════════════════════════
     pub gpu_layers: usize,
-    /// Primary GPU index for multi-GPU (llama.cpp)
     pub main_gpu: usize,
-    /// Low VRAM mode (llama.cpp)
-    pub low_vram: bool,
-    /// Use FP16 for KV cache (llama.cpp)
-    pub f16_kv: bool,
-    /// RoPE frequency base for context extension (llama.cpp)
-    pub rope_frequency_base: f32,
-    /// RoPE frequency scale for context extension (llama.cpp)
-    pub rope_frequency_scale: f32,
-    /// Enable NUMA optimizations (llama.cpp)
-    pub numa: bool,
-    /// Context window size
-    pub num_ctx: usize,
-    /// Prompt batch size
-    pub num_batch: usize,
-    /// Return logits for all tokens
-    pub logits_all: bool,
-    /// Load vocabulary only (no weights)
-    pub vocab_only: bool,
-    /// Memory map the model file
+    pub split_mode: String,
+    pub tensor_split: Vec<f32>,
     pub use_mmap: bool,
-    /// Lock model in RAM
     pub use_mlock: bool,
+    pub vocab_only: bool,
+    pub devices: Vec<DeviceTarget>,
+    pub kv_overrides: Vec<KvOverride>,
+    pub swa_full: bool,
+    pub no_perf: bool,
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 2: CONTEXT PARAMS (requires new context)
+    // ═══════════════════════════════════════════════════════════════
+    pub num_ctx: usize,
+    pub num_batch: usize,
+    pub num_ubatch: usize,
+    pub num_seq_max: usize,
+    pub rope_scaling_type: RopeScalingType,
+    pub rope_frequency_base: f32,
+    pub rope_frequency_scale: f32,
+    pub yarn_ext_factor: f32,
+    pub yarn_attn_factor: f32,
+    pub yarn_beta_fast: f32,
+    pub yarn_beta_slow: f32,
+    pub yarn_orig_ctx: usize,
+    pub pooling_type: String,
+    pub attention_type: String,
+    pub flash_attn: bool,
+    pub type_k: KvDataType,
+    pub type_v: KvDataType,
+    pub embeddings: bool,
+    pub offload_kqv: bool,
+    pub defrag_thold: f32,
+    pub logits_all: bool,
+    pub f16_kv: bool,
+    pub low_vram: bool,
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 3: CPU PARAMS (requires new context)
+    // ═══════════════════════════════════════════════════════════════
+    pub num_thread: usize,
+    pub num_thread_batch: usize,
+    pub numa: bool,
+    pub cpu_strict: bool,
+    pub cpumask: CpuMask,
+    pub mask_valid: bool,
+    pub poll: usize,
+    pub priority: String,
+
+    // Legacy/custom
+    pub num_gpu: usize,
 }
 
 impl Default for HardwareParams {
@@ -154,21 +193,57 @@ impl Default for HardwareParams {
         Self {
             backend_type: BackendType::default(),
             model: String::new(),
-            num_thread: 1,
-            num_gpu: 0,
+
+            // Model params
             gpu_layers: 0,
             main_gpu: 0,
-            low_vram: false,
-            f16_kv: true,
-            rope_frequency_base: 10000.0,
-            rope_frequency_scale: 1.0,
-            numa: false,
-            num_ctx: 2048,
-            num_batch: 512,
-            logits_all: false,
-            vocab_only: false,
+            split_mode: "layer".to_string(),
+            tensor_split: Vec::new(),
             use_mmap: true,
             use_mlock: false,
+            vocab_only: false,
+            devices: Vec::new(),
+            kv_overrides: Vec::new(),
+            swa_full: false,
+            no_perf: false,
+
+            // Context params
+            num_ctx: 2048,
+            num_batch: 512,
+            num_ubatch: 512,
+            num_seq_max: 1,
+            rope_scaling_type: "unspecified".to_string(),
+            rope_frequency_base: 10000.0,
+            rope_frequency_scale: 1.0,
+            yarn_ext_factor: -1.0,
+            yarn_attn_factor: 1.0,
+            yarn_beta_fast: 32.0,
+            yarn_beta_slow: 1.0,
+            yarn_orig_ctx: 0,
+            pooling_type: "unspecified".to_string(),
+            attention_type: "unspecified".to_string(),
+            flash_attn: false,
+            type_k: "f16".to_string(),
+            type_v: "f16".to_string(),
+            embeddings: false,
+            offload_kqv: true,
+            defrag_thold: 0.1,
+            logits_all: false,
+            f16_kv: true,
+            low_vram: false,
+
+            // CPU params
+            num_thread: 1,
+            num_thread_batch: 1,
+            numa: false,
+            cpu_strict: false,
+            cpumask: Vec::new(),
+            mask_valid: false,
+            poll: 50,
+            priority: "normal".to_string(),
+
+            // Legacy
+            num_gpu: 0,
         }
     }
 }
@@ -198,6 +273,16 @@ impl HardwareParams {
         if self.num_batch == 0 {
             return Err(HardwareParamError::Validation(
                 "num_batch must be greater than 0".into(),
+            ));
+        }
+        if self.num_ubatch == 0 {
+            return Err(HardwareParamError::Validation(
+                "num_ubatch must be greater than 0".into(),
+            ));
+        }
+        if self.mask_valid && self.cpumask.is_empty() {
+            return Err(HardwareParamError::Validation(
+                "cpumask cannot be empty when mask_valid is true".into(),
             ));
         }
         Ok(())
@@ -274,6 +359,15 @@ mod tests {
         cfg.num_ctx = 2048;
         cfg.num_batch = 0;
         assert!(cfg.validate().is_err());
+        cfg.num_batch = 128;
+        cfg.num_ubatch = 0;
+        assert!(cfg.validate().is_err());
+        cfg.num_ubatch = 64;
+        cfg.mask_valid = true;
+        cfg.cpumask.clear();
+        assert!(cfg.validate().is_err());
+        cfg.cpumask = vec![true, false];
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
@@ -297,6 +391,14 @@ mod tests {
             vocab_only: false,
             use_mmap: true,
             use_mlock: true,
+            cpumask: vec![true, false, true],
+            mask_valid: true,
+            devices: vec!["gpu:0".into(), "gpu:1".into()],
+            kv_overrides: vec![KvOverride {
+                key: "llama.context_length".into(),
+                value: "4096".into(),
+            }],
+            ..HardwareParams::default()
         };
         save(&conn, &cfg).unwrap();
         let loaded = load(&conn).unwrap();

@@ -1,0 +1,34 @@
+# Cargo configuration for reduced build artifact size
+# See: https://doc.rust-lang.org/cargo/reference/config.html
+
+[build]
+# Disable incremental compilation in dev - saves ~50% disk space
+# Trade-off: slightly slower rebuilds, but much smaller target/
+incremental = false
+
+# Use fewer parallel jobs to reduce peak memory/disk usage (optional)
+# jobs = 4
+
+[profile.dev]
+# Reduce debug info size (level 1 = line tables only, level 2 = full)
+# Level 1 saves significant space while keeping basic debugging
+debug = 1
+
+# Split debug info into separate files (reduces binary size)
+split-debuginfo = "packed"
+
+[profile.dev.package."*"]
+# Optimize dependencies even in dev mode - smaller and faster deps
+opt-level = 2
+
+[target.x86_64-unknown-linux-gnu]
+# Use mold linker if available (faster linking, optional)
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[net]
+# Reduce network retries
+retry = 2
+
+[registries.crates-io]
+protocol = "sparse"

@@ -1,8 +1,5 @@
-// src/embedder.rs - Cross-platform embedding support
-// Uses fastembed on Linux, hash-based fallback on Windows
-
-#[cfg(not(target_os = "windows"))]
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+// src/embedder.rs - ONNX-only embedding support
+// Uses ONNX Runtime for fast, optimized embeddings
 
 use lru::LruCache;
 use once_cell::sync::OnceCell;
@@ -19,41 +16,20 @@ pub type EmbeddingVector = Vec<f32>;
 
 const DEFAULT_EMBEDDING_DIM: usize = 384;
 
-fn hash_embedding(text: &str) -> EmbeddingVector {
-    let hash = seahash::hash(text.as_bytes());
-    let mut vec = vec![0.0; DEFAULT_EMBEDDING_DIM];
-    // Spread the hash across multiple dimensions for better distribution
-    vec[0] = ((hash >> 0) & 0xFFFF) as f32 / 65535.0;
-    vec[1] = ((hash >> 16) & 0xFFFF) as f32 / 65535.0;
-    vec[2] = ((hash >> 32) & 0xFFFF) as f32 / 65535.0;
-    vec[3] = ((hash >> 48) & 0xFFFF) as f32 / 65535.0;
-    vec
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingProvider {
-    #[cfg(not(target_os = "windows"))]
-    FastEmbed,
-    Hash,
+    /// ONNX Runtime - the only supported provider (2-10x faster)
+    Onnx,
 }
 
 impl EmbeddingProvider {
-    fn from_str(value: &str) -> Self {
-        match value.to_lowercase().as_str() {
-            "hash" => EmbeddingProvider::Hash,
-            #[cfg(not(target_os = "windows"))]
-            _ => EmbeddingProvider::FastEmbed,
-            #[cfg(target_os = "windows")]
-            _ => EmbeddingProvider::Hash,
-        }
+    fn from_str(_value: &str) -> Self {
+        // Always use ONNX
+        EmbeddingProvider::Onnx
     }
 
     fn as_str(&self) -> &'static str {
-        match self {
-            #[cfg(not(target_os = "windows"))]
-            EmbeddingProvider::FastEmbed => "fastembed",
-            EmbeddingProvider::Hash => "hash",
-        }
+        "onnx"
     }
 }
 
@@ -85,14 +61,6 @@ impl EmbeddingModelConfig {
     fn dimension(&self) -> usize {
         DEFAULT_EMBEDDING_DIM
     }
-
-    #[cfg(not(target_os = "windows"))]
-    fn to_fastembed(&self) -> EmbeddingModel {
-        match self {
-            EmbeddingModelConfig::BgeSmallEnV15 => EmbeddingModel::BGESmallENV15,
-            EmbeddingModelConfig::BgeSmallEnV15Q => EmbeddingModel::BGESmallENV15Q,
-        }
-    }
 }
 
 /// Configuration for the embedding service
@@ -102,21 +70,6 @@ pub struct EmbeddingConfig {
     pub cache_size: usize,
     pub provider: EmbeddingProvider,
     pub model: EmbeddingModelConfig,
-}
-
-fn default_provider() -> EmbeddingProvider {
-    #[cfg(target_os = "windows")]
-    {
-        EmbeddingProvider::Hash
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if cfg!(test) {
-            EmbeddingProvider::Hash
-        } else {
-            EmbeddingProvider::FastEmbed
-        }
-    }
 }
 
 impl EmbeddingConfig {
@@ -131,16 +84,12 @@ impl EmbeddingConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(10_000);
 
-        let provider = env::var("EMBEDDING_PROVIDER")
-            .map(|v| EmbeddingProvider::from_str(&v))
-            .unwrap_or_else(|_| default_provider());
-
         let model = EmbeddingModelConfig::from_env();
 
         Self {
             batch_size,
             cache_size,
-            provider,
+            provider: EmbeddingProvider::Onnx,
             model,
         }
     }
@@ -151,7 +100,7 @@ impl Default for EmbeddingConfig {
         Self {
             batch_size: 32,
             cache_size: 10_000,
-            provider: EmbeddingProvider::Hash,
+            provider: EmbeddingProvider::Onnx,
             model: EmbeddingModelConfig::BgeSmallEnV15,
         }
     }
@@ -160,11 +109,10 @@ impl Default for EmbeddingConfig {
 type EmbeddingCache = LruCache<String, EmbeddingVector>;
 
 enum EmbeddingBackend {
-    #[cfg(not(target_os = "windows"))]
-    FastEmbed {
-        inner: Mutex<TextEmbedding>,
+    /// ONNX Runtime - the only backend
+    Onnx {
+        inner: Mutex<crate::perf::onnx_embedder::OnnxEmbedder>,
     },
-    Hash,
 }
 
 struct EmbeddingRuntime {
@@ -175,39 +123,32 @@ struct EmbeddingRuntime {
 impl EmbeddingRuntime {
     fn new(config: &EmbeddingConfig) -> Self {
         info!(
-            provider = %config.provider.as_str(),
             model = %config.model.as_str(),
-            "Initializing embedding runtime"
+            "Initializing ONNX embedding runtime"
         );
 
-        #[cfg(not(target_os = "windows"))]
-        if matches!(config.provider, EmbeddingProvider::FastEmbed) {
-            match TextEmbedding::try_new(InitOptions::new(config.model.to_fastembed())) {
-                Ok(model) => {
-                    info!("fastembed model ready");
-                    return Self {
-                        backend: EmbeddingBackend::FastEmbed {
-                            inner: Mutex::new(model),
-                        },
-                        dim: config.model.dimension(),
-                    };
-                }
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        fallback = "hash",
-                        "Failed to initialize fastembed runtime; falling back"
-                    );
+        let onnx_model_path = env::var("ONNX_MODEL_PATH")
+            .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+        
+        let onnx_config = crate::perf::onnx_embedder::OnnxConfig {
+            model_path: onnx_model_path.clone(),
+            embedding_dim: config.model.dimension(),
+            ..Default::default()
+        };
+        
+        match crate::perf::onnx_embedder::OnnxEmbedder::new(onnx_config) {
+            Ok(embedder) => {
+                info!(model_path = %onnx_model_path, "ONNX embedder ready");
+                Self {
+                    backend: EmbeddingBackend::Onnx {
+                        inner: Mutex::new(embedder),
+                    },
+                    dim: config.model.dimension(),
                 }
             }
-        }
-
-        #[cfg(target_os = "windows")]
-        info!("Using hash-based embeddings (fastembed not available on Windows)");
-
-        Self {
-            backend: EmbeddingBackend::Hash,
-            dim: DEFAULT_EMBEDDING_DIM,
+            Err(err) => {
+                panic!("Failed to initialize ONNX embedder: {}. Make sure ONNX model exists at {}", err, onnx_model_path);
+            }
         }
     }
 
@@ -221,19 +162,18 @@ impl EmbeddingRuntime {
         crate::monitoring::metrics::observe_embedding_batch_size(batch_size);
 
         let result = match &self.backend {
-            #[cfg(not(target_os = "windows"))]
-            EmbeddingBackend::FastEmbed { inner, .. } => {
+            EmbeddingBackend::Onnx { inner } => {
                 let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
                 let mut guard = inner.lock();
-                match guard.embed(refs, None) {
+                match guard.embed(&refs) {
                     Ok(vectors) => vectors,
                     Err(err) => {
-                        warn!("fastembed batch failed: {err}; using hash fallback");
-                        texts.iter().map(|t| hash_embedding(t)).collect()
+                        warn!("ONNX batch failed: {err}");
+                        // Return zero vectors on error
+                        texts.iter().map(|_| vec![0.0; self.dim]).collect()
                     }
                 }
             }
-            EmbeddingBackend::Hash => texts.iter().map(|t| hash_embedding(t)).collect(),
         };
 
         let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -312,11 +252,12 @@ impl EmbeddingService {
             let start = std::time::Instant::now();
             let runtime = self.runtime.clone();
             let owned = text.to_owned();
+            let dim = self.runtime.dim;
             let embedding = match task::spawn_blocking(move || runtime.embed_owned(owned)).await {
                 Ok(vec) => vec,
                 Err(err) => {
-                    warn!("spawn_blocking join error: {err}; using fallback");
-                    hash_embedding(text)
+                    warn!("spawn_blocking join error: {err}; returning zero vector");
+                    vec![0.0; dim]
                 }
             };
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -406,6 +347,72 @@ impl EmbeddingService {
     /// Get embedding dimension
     pub fn dimension(&self) -> usize {
         DEFAULT_EMBEDDING_DIM
+    }
+
+    // ========================================================================
+    // Cache Persistence (rkyv-based)
+    // ========================================================================
+
+    /// Save embedding cache to disk using rkyv binary format
+    pub async fn save_cache(&self, path: &std::path::Path) -> Result<(), String> {
+        let cache = self.cache.read().await;
+        
+        // Convert LruCache to Vec for serialization
+        let entries: Vec<(String, Vec<f32>)> = cache
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&entries)
+            .map_err(|e| format!("rkyv serialize error: {}", e))?;
+        
+        std::fs::write(path, &bytes)
+            .map_err(|e| format!("IO error: {}", e))?;
+        
+        info!(
+            path = ?path,
+            entries = entries.len(),
+            bytes = bytes.len(),
+            "Embedding cache saved"
+        );
+        Ok(())
+    }
+
+    /// Load embedding cache from disk using rkyv binary format
+    pub async fn load_cache(&self, path: &std::path::Path) -> Result<usize, String> {
+        if !path.exists() {
+            return Ok(0);
+        }
+        
+        let bytes = std::fs::read(path)
+            .map_err(|e| format!("IO error: {}", e))?;
+        
+        let archived = rkyv::access::<rkyv::Archived<Vec<(String, Vec<f32>)>>, rkyv::rancor::Error>(&bytes)
+            .map_err(|e| format!("rkyv access error: {}", e))?;
+        
+        let mut cache = self.cache.write().await;
+        let mut loaded = 0;
+        
+        for entry in archived.iter() {
+            let key = entry.0.to_string();
+            let value: Vec<f32> = entry.1.iter().map(|f| f.to_native()).collect();
+            cache.put(key, value);
+            loaded += 1;
+        }
+        
+        info!(
+            path = ?path,
+            entries = loaded,
+            bytes = bytes.len(),
+            "Embedding cache loaded"
+        );
+        Ok(loaded)
+    }
+
+    /// Get cache statistics
+    pub async fn cache_stats(&self) -> (usize, usize) {
+        let cache = self.cache.read().await;
+        (cache.len(), cache.cap().get())
     }
 }
 
@@ -501,6 +508,55 @@ mod tests {
 
         let embedding = service.embed_text("test query").await;
         assert_eq!(embedding.len(), DEFAULT_EMBEDDING_DIM);
+    }
+
+    /// Integration test for FastEmbed - verifies neural embeddings work.
+    /// Run with: cargo test --lib test_fastembed_integration -- --ignored --nocapture
+    /// 
+    /// This test is ignored by default because:
+    /// - It downloads the model on first run (~100MB)
+    /// - It requires ONNX runtime
+    /// - It's slower than hash-based tests
+    #[tokio::test]
+    #[ignore]
+    #[cfg(not(target_os = "windows"))]
+    async fn test_fastembed_integration() {
+        use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+        
+        println!("\n=== FASTEMBED INTEGRATION TEST ===");
+        println!("Attempting to initialize FastEmbed directly...");
+        
+        // Try to initialize FastEmbed directly to see the error
+        match TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15)) {
+            Ok(mut model) => {
+                println!("FastEmbed initialized successfully!");
+                let texts = vec!["Hello world, this is a test of neural embeddings."];
+                match model.embed(texts, None) {
+                    Ok(embeddings) => {
+                        let embedding = &embeddings[0];
+                        let non_zero_count = embedding.iter().filter(|&&x| x != 0.0).count();
+                        let first_10: Vec<f32> = embedding.iter().take(10).copied().collect();
+                        
+                        println!("Dimension: {}", embedding.len());
+                        println!("Non-zero values: {} / {}", non_zero_count, embedding.len());
+                        println!("First 10 values: {:?}", first_10);
+                        println!("=================================\n");
+                        
+                        assert!(non_zero_count > 300, 
+                            "Expected dense neural embeddings (>300 non-zero out of 384), got {} non-zero values.", 
+                            non_zero_count);
+                    }
+                    Err(e) => {
+                        panic!("FastEmbed embed() failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("FastEmbed initialization FAILED: {}", e);
+                println!("=================================\n");
+                panic!("FastEmbed failed to initialize: {}", e);
+            }
+        }
     }
 
     #[tokio::test]

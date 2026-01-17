@@ -5,6 +5,37 @@ use uuid::Uuid;
 
 use crate::api::ManualObservationOrder;
 
+// ============================================================================
+// rkyv Vector Serialization Helpers (Phase 5)
+// ============================================================================
+
+/// Serialize a vector to rkyv binary format
+#[allow(dead_code)] // Used by store_rag_rkyv
+fn vector_to_rkyv(vec: &[f32]) -> Vec<u8> {
+    rkyv::to_bytes::<rkyv::rancor::Error>(&vec.to_vec())
+        .map(|b| b.to_vec())
+        .unwrap_or_else(|_| Vec::new())
+}
+
+/// Try to parse vector from either rkyv binary or JSON string
+fn vector_from_storage(data: &[u8]) -> Vec<f32> {
+    // First try rkyv (binary)
+    if !data.is_empty() {
+        if let Ok(archived) = rkyv::access::<rkyv::Archived<Vec<f32>>, rkyv::rancor::Error>(data) {
+            return archived.iter().map(|f| f.to_native()).collect();
+        }
+    }
+    
+    // Fall back to JSON (for backward compatibility)
+    if let Ok(json_str) = std::str::from_utf8(data) {
+        if let Ok(vec) = serde_json::from_str::<Vec<f32>>(json_str) {
+            return vec;
+        }
+    }
+    
+    Vec::new()
+}
+
 pub struct AgentMemory {
     conn: Connection,
 }
@@ -154,7 +185,7 @@ impl AgentMemory {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
-    // RAG memory: store with embedding
+    // RAG memory: store with embedding (JSON format for backward compatibility)
     pub fn store_rag(
         &self,
         agent_id: &str,
@@ -171,6 +202,23 @@ impl AgentMemory {
         Ok(())
     }
 
+    /// RAG memory: store with embedding using rkyv binary format (faster, smaller)
+    pub fn store_rag_rkyv(
+        &self,
+        agent_id: &str,
+        memory_type: &str,
+        content: &str,
+        timestamp: &str,
+    ) -> Result<()> {
+        let vec = crate::embedder::embed(content);
+        let vector_bytes = vector_to_rkyv(&vec);
+        self.conn.execute(
+            "INSERT INTO rag_memory (agent_id, memory_type, content, timestamp, vector) VALUES (?1, ?2, ?3, ?4, ?5)",
+            (agent_id, memory_type, content, timestamp, &vector_bytes),
+        )?;
+        Ok(())
+    }
+
     pub fn forget_topic(&self, agent_id: &str, topic: &str) -> Result<usize> {
         let pattern = format!("%{}%", topic);
         let affected = self.conn.execute(
@@ -178,6 +226,24 @@ impl AgentMemory {
             (agent_id, &pattern),
         )?;
         Ok(affected)
+    }
+
+    pub fn delete_rag_by_ids(&mut self, agent_id: &str, ids: &[i64]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = self.conn.transaction()?;
+        let mut stmt = tx.prepare("DELETE FROM rag_memory WHERE agent_id = ?1 AND id = ?2")?;
+        let mut deleted = 0;
+
+        for id in ids {
+            deleted += stmt.execute((agent_id, id))?;
+        }
+
+        drop(stmt);
+        tx.commit()?;
+        Ok(deleted)
     }
 
     pub fn recall_rag(&self, agent_id: &str, limit: usize) -> Result<Vec<MemoryItem>> {
@@ -675,6 +741,7 @@ impl AgentMemory {
         top_k: usize,
     ) -> Result<Vec<MemorySearchResult>> {
         // Load all memory vectors for this agent (keep it simple for now)
+        // Supports both rkyv binary and JSON formats for backward compatibility
         let mut stmt = self.conn.prepare(
             "SELECT id, agent_id, memory_type, content, timestamp, vector FROM rag_memory WHERE agent_id = ?1",
         )?;
@@ -684,8 +751,15 @@ impl AgentMemory {
             let memory_type: String = row.get(2)?;
             let content: String = row.get(3)?;
             let timestamp: String = row.get(4)?;
-            let vector_json: String = row.get(5)?;
-            let vector: Vec<f32> = serde_json::from_str(&vector_json).unwrap_or_default();
+            // Try to get as blob first (rkyv), fall back to string (JSON)
+            let vector: Vec<f32> = match row.get::<_, Vec<u8>>(5) {
+                Ok(bytes) => vector_from_storage(&bytes),
+                Err(_) => {
+                    // Fall back to string (JSON format)
+                    let vector_json: String = row.get(5).unwrap_or_default();
+                    serde_json::from_str(&vector_json).unwrap_or_default()
+                }
+            };
             Ok((
                 MemoryItem {
                     id,

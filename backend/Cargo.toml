@@ -25,6 +25,7 @@ futures-util = "0.3.31"
 serde_json = "1.0.145"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = { version = "0.9", optional = true }
+rkyv = { version = "0.8", features = ["bytecheck"] }
 
 # File System & Utilities
 notify = "6"
@@ -35,6 +36,7 @@ walkdir = "2"
 fs2 = "0.4"
 thiserror = "1.0"
 glob = "0.3"
+memmap2 = "0.9"  # Memory-mapped file access for zero-copy vectors
 
 # Data Processing
 seahash = "4.1.0"
@@ -42,6 +44,26 @@ rayon = "1.10"
 regex = "1.10"
 lru = "0.12"
 infer = "0.16"  # MIME type detection from file magic bytes
+
+# Performance Optimizations (Phase 1)
+lz4_flex = "0.11"           # Fast compression for vectors
+wide = "0.7"                 # SIMD operations
+instant-distance = "0.6"     # HNSW approximate nearest neighbor
+bloomfilter = "1.0"          # Fast negative lookups
+bumpalo = "3.16"             # Arena allocator for temp allocations
+
+# Performance Optimizations (Phase 2)
+dashmap = "6.0"              # Concurrent hashmap for caching
+crossbeam = "0.8"            # Lock-free data structures
+smallvec = "1.13"            # Stack-allocated small vectors
+byteorder = "1.5"            # Efficient byte serialization
+half = "2.4"                 # FP16 support for mixed precision
+fnv = "1.0"                  # Fast non-cryptographic hashing
+
+# ONNX Runtime (Phase 26) - 2-10x faster inference
+# Requires: ORT_DYLIB_PATH=/path/to/libonnxruntime.so
+ort = { version = "2.0.0-rc.9", optional = true }
+ndarray = "0.16"             # For ONNX tensor operations
 
 # Logging & Tracing
 tracing = "0.1"
@@ -112,11 +134,22 @@ installer = [
 ]
 
 # Full feature set: all capabilities
-full = ["installer", "rl_yaml"]
+full = ["installer", "rl_yaml", "onnx"]
 rl_yaml = ["serde_yaml"]
+
+# ONNX Runtime for 2-10x faster embeddings
+onnx = ["ort"]
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+
+[[bench]]
+name = "vector_storage"
+harness = false
 
 # fastembed is only available on Linux/macOS (ONNX Runtime doesn't support Windows GNU target)
 # On Windows, the hash-based fallback embedder is used automatically

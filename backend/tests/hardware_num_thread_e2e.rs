@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 
-
 /// Hardware config structure (mirrors backend HardwareConfigRequest)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]

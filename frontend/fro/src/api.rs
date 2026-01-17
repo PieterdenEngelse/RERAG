@@ -190,6 +190,7 @@ pub struct ChunkCommitRequest {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct LlmConfig {
+    // Basic sampling
     pub temperature: f32,
     pub top_p: f32,
     pub top_k: usize,
@@ -202,18 +203,35 @@ pub struct LlmConfig {
     pub min_p: f32,
     pub typical_p: f32,
     pub tfs_z: f32,
+
+    // Mirostat (adaptive sampling)
     pub mirostat: i32,
     pub mirostat_eta: f32,
     pub mirostat_tau: f32,
+
+    // Repetition control
     pub repeat_last_n: usize,
     pub penalize_newline: bool,
+
+    // Generation limits
     pub num_predict: i64,
     pub num_keep: i64,
+    pub ignore_eos: bool,
+
+    // DRY (Don't Repeat Yourself) sampling
+    pub dry_multiplier: f32,
+    pub dry_base: f32,
+    pub dry_allowed_length: usize,
+
+    // XTC (eXtreme Token Control) sampling
+    pub xtc_probability: f32,
+    pub xtc_threshold: f32,
 }
 
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
+            // Basic sampling
             temperature: 0.7,
             top_p: 0.95,
             top_k: 40,
@@ -226,13 +244,29 @@ impl Default for LlmConfig {
             min_p: 0.0,
             typical_p: 1.0,
             tfs_z: 1.0,
+
+            // Mirostat
             mirostat: 0,
             mirostat_eta: 0.1,
             mirostat_tau: 5.0,
+
+            // Repetition control
             repeat_last_n: 64,
             penalize_newline: true,
+
+            // Generation limits
             num_predict: 1024, // Match max_tokens default, -1 means unlimited
             num_keep: 0,
+            ignore_eos: false,
+
+            // DRY sampling (disabled by default)
+            dry_multiplier: 0.0,
+            dry_base: 1.75,
+            dry_allowed_length: 2,
+
+            // XTC sampling (disabled by default)
+            xtc_probability: 0.0,
+            xtc_threshold: 0.1,
         }
     }
 }
@@ -343,26 +377,75 @@ impl std::fmt::Display for BackendType {
     }
 }
 
+/// Override a single model metadata entry (for llama.cpp kv_overrides)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct KvOverride {
+    pub key: String,
+    pub value: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct HardwareConfig {
     pub backend_type: String,
     pub model: String,
-    pub num_thread: usize,
-    pub num_gpu: usize,
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 1: MODEL PARAMS (requires restart)
+    // ═══════════════════════════════════════════════════════════════
     pub gpu_layers: usize,
     pub main_gpu: usize,
-    pub low_vram: bool,
-    pub f16_kv: bool,
-    pub rope_frequency_base: f32,
-    pub rope_frequency_scale: f32,
-    pub numa: bool,
-    pub num_ctx: usize,
-    pub num_batch: usize,
-    pub logits_all: bool,
-    pub vocab_only: bool,
+    pub split_mode: String,
+    pub tensor_split: Vec<f32>,
     pub use_mmap: bool,
     pub use_mlock: bool,
+    pub vocab_only: bool,
+    pub devices: Vec<String>,
+    pub kv_overrides: Vec<KvOverride>,
+    pub swa_full: bool,
+    pub no_perf: bool,
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 2: CONTEXT PARAMS (requires new context)
+    // ═══════════════════════════════════════════════════════════════
+    pub num_ctx: usize,
+    pub num_batch: usize,
+    pub num_ubatch: usize,
+    pub num_seq_max: usize,
+    pub rope_scaling_type: String,
+    pub rope_frequency_base: f32,
+    pub rope_frequency_scale: f32,
+    pub yarn_ext_factor: f32,
+    pub yarn_attn_factor: f32,
+    pub yarn_beta_fast: f32,
+    pub yarn_beta_slow: f32,
+    pub yarn_orig_ctx: usize,
+    pub pooling_type: String,
+    pub attention_type: String,
+    pub flash_attn: bool,
+    pub type_k: String,
+    pub type_v: String,
+    pub embeddings: bool,
+    pub offload_kqv: bool,
+    pub defrag_thold: f32,
+    pub logits_all: bool,
+    pub f16_kv: bool,
+    pub low_vram: bool,
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 3: CPU PARAMS (requires new context)
+    // ═══════════════════════════════════════════════════════════════
+    pub num_thread: usize,
+    pub num_thread_batch: usize,
+    pub numa: bool,
+    pub cpu_strict: bool,
+    pub cpumask: Vec<bool>,
+    pub mask_valid: bool,
+    pub poll: usize,
+    pub priority: String,
+
+    // Legacy/custom
+    pub num_gpu: usize,
 }
 
 impl Default for HardwareConfig {
@@ -370,21 +453,57 @@ impl Default for HardwareConfig {
         Self {
             backend_type: "ollama".to_string(),
             model: String::new(),
-            num_thread: 1,
-            num_gpu: 0,
+
+            // Model params
             gpu_layers: 0,
             main_gpu: 0,
-            low_vram: false,
-            f16_kv: true,
-            rope_frequency_base: 10_000.0,
-            rope_frequency_scale: 1.0,
-            numa: false,
-            num_ctx: 2048,
-            num_batch: 512,
-            logits_all: false,
-            vocab_only: false,
+            split_mode: "layer".to_string(),
+            tensor_split: Vec::new(),
             use_mmap: true,
             use_mlock: false,
+            vocab_only: false,
+            devices: Vec::new(),
+            kv_overrides: Vec::new(),
+            swa_full: false,
+            no_perf: false,
+
+            // Context params
+            num_ctx: 2048,
+            num_batch: 512,
+            num_ubatch: 512,
+            num_seq_max: 1,
+            rope_scaling_type: "unspecified".to_string(),
+            rope_frequency_base: 10_000.0,
+            rope_frequency_scale: 1.0,
+            yarn_ext_factor: -1.0,
+            yarn_attn_factor: 1.0,
+            yarn_beta_fast: 32.0,
+            yarn_beta_slow: 1.0,
+            yarn_orig_ctx: 0,
+            pooling_type: "unspecified".to_string(),
+            attention_type: "unspecified".to_string(),
+            flash_attn: false,
+            type_k: "f16".to_string(),
+            type_v: "f16".to_string(),
+            embeddings: false,
+            offload_kqv: true,
+            defrag_thold: 0.1,
+            logits_all: false,
+            f16_kv: true,
+            low_vram: false,
+
+            // CPU params
+            num_thread: 1,
+            num_thread_batch: 1,
+            numa: false,
+            cpu_strict: false,
+            cpumask: Vec::new(),
+            mask_valid: false,
+            poll: 50,
+            priority: "normal".to_string(),
+
+            // Legacy
+            num_gpu: 0,
         }
     }
 }
@@ -1550,6 +1669,41 @@ pub async fn store_rag_memory(req: &StoreRagRequest) -> Result<StoreRagResponse,
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteRagRequest {
+    pub agent_id: String,
+    pub ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeleteRagResponse {
+    pub status: String,
+    pub deleted: usize,
+    pub request_id: String,
+}
+
+pub async fn delete_rag_memories(req: &DeleteRagRequest) -> Result<DeleteRagResponse, String> {
+    let url = api_url("/memory/delete_rag");
+    let response = gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(req).map_err(|e| format!("Failed to serialize: {}", e))?)
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Chunking Stats API - Detection Observability
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1642,4 +1796,62 @@ pub struct ToolExecutionResponse {
 /// Fetch recent tool executions
 pub async fn fetch_tool_executions(limit: usize) -> Result<ToolExecutionResponse, String> {
     fetch_json(&format!("/monitoring/tools/executions?limit={}", limit)).await
+}
+
+// ============ Embedding Configuration (ONNX only) ============
+
+/// ONNX status info
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct OnnxStatus {
+    #[serde(default)]
+    pub model_path: String,
+    #[serde(default)]
+    pub model_exists: bool,
+    #[serde(default)]
+    pub ready: bool,
+}
+
+/// Response from embedding config endpoint
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmbeddingConfigResponse {
+    pub status: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default, alias = "model_path")]
+    pub onnx: OnnxStatus,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Fetch current embedding configuration
+pub async fn fetch_embedding_config() -> Result<EmbeddingConfigResponse, String> {
+    // Parse the flat response into our struct
+    let url = api_url("/config/embedding");
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    
+    if response.status().is_success() {
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))?;
+        
+        // Map flat response to our struct
+        Ok(EmbeddingConfigResponse {
+            status: json["status"].as_str().unwrap_or("unknown").to_string(),
+            request_id: json["request_id"].as_str().unwrap_or("").to_string(),
+            provider: json["provider"].as_str().unwrap_or("onnx").to_string(),
+            onnx: OnnxStatus {
+                model_path: json["model_path"].as_str().unwrap_or("").to_string(),
+                model_exists: json["model_exists"].as_bool().unwrap_or(false),
+                ready: json["ready"].as_bool().unwrap_or(false),
+            },
+            note: json["note"].as_str().map(|s| s.to_string()),
+        })
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
 }

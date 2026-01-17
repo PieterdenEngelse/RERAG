@@ -21,6 +21,12 @@ pub const DEFAULT_MIROSTAT_TAU: f32 = 5.0;
 pub const DEFAULT_REPEAT_LAST_N: usize = 64;
 pub const DEFAULT_NUM_KEEP: i64 = 0;
 pub const DEFAULT_PENALIZE_NEWLINE: bool = true;
+pub const DEFAULT_IGNORE_EOS: bool = false;
+pub const DEFAULT_DRY_MULTIPLIER: f32 = 0.0;
+pub const DEFAULT_DRY_BASE: f32 = 1.75;
+pub const DEFAULT_DRY_ALLOWED_LENGTH: usize = 2;
+pub const DEFAULT_XTC_PROBABILITY: f32 = 0.0;
+pub const DEFAULT_XTC_THRESHOLD: f32 = 0.1;
 
 static GLOBAL_LLM_CONFIG: OnceLock<RwLock<LlmConfig>> = OnceLock::new();
 
@@ -43,6 +49,12 @@ static CONFIG_KEYS: LlmConfigKeys = LlmConfigKeys {
     repeat_last_n: "llm_repeat_last_n",
     num_keep: "llm_num_keep",
     penalize_newline: "llm_penalize_newline",
+    ignore_eos: "llm_ignore_eos",
+    dry_multiplier: "llm_dry_multiplier",
+    dry_base: "llm_dry_base",
+    dry_allowed_length: "llm_dry_allowed_length",
+    xtc_probability: "llm_xtc_probability",
+    xtc_threshold: "llm_xtc_threshold",
 };
 
 struct LlmConfigKeys {
@@ -64,10 +76,17 @@ struct LlmConfigKeys {
     repeat_last_n: &'static str,
     num_keep: &'static str,
     penalize_newline: &'static str,
+    ignore_eos: &'static str,
+    dry_multiplier: &'static str,
+    dry_base: &'static str,
+    dry_allowed_length: &'static str,
+    xtc_probability: &'static str,
+    xtc_threshold: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
+    // Basic sampling
     pub temperature: f32,
     pub top_p: f32,
     pub top_k: usize,
@@ -80,17 +99,34 @@ pub struct LlmConfig {
     pub min_p: f32,
     pub typical_p: f32,
     pub tfs_z: f32,
+
+    // Mirostat (adaptive sampling)
     pub mirostat: i32,
     pub mirostat_eta: f32,
     pub mirostat_tau: f32,
+
+    // Repetition control
     pub repeat_last_n: usize,
-    pub num_keep: i64,
     pub penalize_newline: bool,
+
+    // Generation limits
+    pub num_keep: i64,
+    pub ignore_eos: bool,
+
+    // DRY (Don't Repeat Yourself) sampling
+    pub dry_multiplier: f32,
+    pub dry_base: f32,
+    pub dry_allowed_length: usize,
+
+    // XTC (eXtreme Token Control) sampling
+    pub xtc_probability: f32,
+    pub xtc_threshold: f32,
 }
 
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
+            // Basic sampling
             temperature: DEFAULT_TEMPERATURE,
             top_p: DEFAULT_TOP_P,
             top_k: DEFAULT_TOP_K,
@@ -103,12 +139,28 @@ impl Default for LlmConfig {
             min_p: DEFAULT_MIN_P,
             typical_p: DEFAULT_TYPICAL_P,
             tfs_z: DEFAULT_TFS_Z,
+
+            // Mirostat
             mirostat: DEFAULT_MIROSTAT,
             mirostat_eta: DEFAULT_MIROSTAT_ETA,
             mirostat_tau: DEFAULT_MIROSTAT_TAU,
+
+            // Repetition control
             repeat_last_n: DEFAULT_REPEAT_LAST_N,
-            num_keep: DEFAULT_NUM_KEEP,
             penalize_newline: DEFAULT_PENALIZE_NEWLINE,
+
+            // Generation limits
+            num_keep: DEFAULT_NUM_KEEP,
+            ignore_eos: DEFAULT_IGNORE_EOS,
+
+            // DRY sampling
+            dry_multiplier: DEFAULT_DRY_MULTIPLIER,
+            dry_base: DEFAULT_DRY_BASE,
+            dry_allowed_length: DEFAULT_DRY_ALLOWED_LENGTH,
+
+            // XTC sampling
+            xtc_probability: DEFAULT_XTC_PROBABILITY,
+            xtc_threshold: DEFAULT_XTC_THRESHOLD,
         }
     }
 }
@@ -224,11 +276,28 @@ pub fn load_llm_config(conn: &Connection) -> Result<LlmConfig> {
     let repeat_last_n = read_int(conn, CONFIG_KEYS.repeat_last_n)?
         .map(|v| v as usize)
         .unwrap_or(DEFAULT_REPEAT_LAST_N);
-    let num_keep = read_int(conn, CONFIG_KEYS.num_keep)?
-        .unwrap_or(DEFAULT_NUM_KEEP);
+    let num_keep = read_int(conn, CONFIG_KEYS.num_keep)?.unwrap_or(DEFAULT_NUM_KEEP);
     let penalize_newline = read_value(conn, CONFIG_KEYS.penalize_newline)?
         .map(|v| v == "true" || v == "1")
         .unwrap_or(DEFAULT_PENALIZE_NEWLINE);
+    let ignore_eos = read_value(conn, CONFIG_KEYS.ignore_eos)?
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(DEFAULT_IGNORE_EOS);
+    let dry_multiplier = read_float(conn, CONFIG_KEYS.dry_multiplier)?
+        .map(|v| v as f32)
+        .unwrap_or(DEFAULT_DRY_MULTIPLIER);
+    let dry_base = read_float(conn, CONFIG_KEYS.dry_base)?
+        .map(|v| v as f32)
+        .unwrap_or(DEFAULT_DRY_BASE);
+    let dry_allowed_length = read_int(conn, CONFIG_KEYS.dry_allowed_length)?
+        .map(|v| v as usize)
+        .unwrap_or(DEFAULT_DRY_ALLOWED_LENGTH);
+    let xtc_probability = read_float(conn, CONFIG_KEYS.xtc_probability)?
+        .map(|v| v as f32)
+        .unwrap_or(DEFAULT_XTC_PROBABILITY);
+    let xtc_threshold = read_float(conn, CONFIG_KEYS.xtc_threshold)?
+        .map(|v| v as f32)
+        .unwrap_or(DEFAULT_XTC_THRESHOLD);
 
     Ok(LlmConfig {
         temperature,
@@ -247,8 +316,14 @@ pub fn load_llm_config(conn: &Connection) -> Result<LlmConfig> {
         mirostat_eta,
         mirostat_tau,
         repeat_last_n,
-        num_keep,
         penalize_newline,
+        num_keep,
+        ignore_eos,
+        dry_multiplier,
+        dry_base,
+        dry_allowed_length,
+        xtc_probability,
+        xtc_threshold,
     })
 }
 
@@ -301,6 +376,32 @@ pub fn save_llm_config(conn: &Connection, cfg: &LlmConfig) -> Result<()> {
         conn,
         CONFIG_KEYS.penalize_newline,
         cfg.penalize_newline.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.ignore_eos,
+        cfg.ignore_eos.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.dry_multiplier,
+        cfg.dry_multiplier.to_string(),
+    )?;
+    write_value(conn, CONFIG_KEYS.dry_base, cfg.dry_base.to_string())?;
+    write_value(
+        conn,
+        CONFIG_KEYS.dry_allowed_length,
+        cfg.dry_allowed_length.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.xtc_probability,
+        cfg.xtc_probability.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.xtc_threshold,
+        cfg.xtc_threshold.to_string(),
     )?;
 
     conn.execute("COMMIT", []).map_err(db_err)?;
@@ -428,8 +529,14 @@ mod tests {
             mirostat_eta: 0.12,
             mirostat_tau: 6.0,
             repeat_last_n: 128,
-            num_keep: DEFAULT_NUM_KEEP,
             penalize_newline: DEFAULT_PENALIZE_NEWLINE,
+            num_keep: DEFAULT_NUM_KEEP,
+            ignore_eos: true,
+            dry_multiplier: 0.5,
+            dry_base: 2.0,
+            dry_allowed_length: 3,
+            xtc_probability: 0.1,
+            xtc_threshold: 0.2,
         };
         save_llm_config(&conn, &cfg).unwrap();
         let loaded = load_llm_config(&conn).unwrap();
@@ -446,6 +553,13 @@ mod tests {
         assert!((loaded.mirostat_eta - 0.12).abs() < f32::EPSILON);
         assert!((loaded.mirostat_tau - 6.0).abs() < f32::EPSILON);
         assert_eq!(loaded.repeat_last_n, 128);
+        // New fields
+        assert!(loaded.ignore_eos);
+        assert!((loaded.dry_multiplier - 0.5).abs() < f32::EPSILON);
+        assert!((loaded.dry_base - 2.0).abs() < f32::EPSILON);
+        assert_eq!(loaded.dry_allowed_length, 3);
+        assert!((loaded.xtc_probability - 0.1).abs() < f32::EPSILON);
+        assert!((loaded.xtc_threshold - 0.2).abs() < f32::EPSILON);
     }
 
     #[test]

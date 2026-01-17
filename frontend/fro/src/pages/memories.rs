@@ -505,7 +505,7 @@ pub fn ConfigMemories() -> Element {
                 div { class: "space-y-4",
                     // Memory Type Selection
                     div {
-                        label { class: "block text-sm text-gray-400 mb-2", "There is no code-level check (possible) to verify that the content matches the type. Selecting a type category is the subjective choice of the user." }
+                        label { class: "block text-xs text-gray-400 mb-2", "There is no code-level check (possible) to verify that the content matches the type. Selecting a type category is the subjective choice of the user and only meant to 'classify' the insight on existing memories." }
                         div { class: "flex flex-wrap gap-2",
                             for t in ALL_TYPES.iter() {
                                 MemoryTypeButton {
@@ -541,12 +541,25 @@ pub fn ConfigMemories() -> Element {
                     div { class: "flex items-center gap-4",
                         button {
                             class: "px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed",
-                            disabled: form_snapshot.submitting || form_snapshot.memory_type.is_empty() || form_snapshot.content.trim().is_empty(),
+                            disabled: form_snapshot.submitting,
                             onclick: move |_| {
                                 let memory_type = form.read().memory_type.clone();
                                 let content = form.read().content.clone();
 
-                                if memory_type.is_empty() || content.trim().is_empty() {
+                                // Validate and show helpful error messages
+                                if memory_type.is_empty() && content.trim().is_empty() {
+                                    form.write().message = Some("Please select a memory type and enter content".to_string());
+                                    form.write().is_error = true;
+                                    return;
+                                }
+                                if memory_type.is_empty() {
+                                    form.write().message = Some("Please select a memory type (click one of the type buttons above)".to_string());
+                                    form.write().is_error = true;
+                                    return;
+                                }
+                                if content.trim().is_empty() {
+                                    form.write().message = Some("Please enter some content for the memory".to_string());
+                                    form.write().is_error = true;
                                     return;
                                 }
 
@@ -567,7 +580,7 @@ pub fn ConfigMemories() -> Element {
                                             form.write().is_error = false;
                                             form.write().content = String::new();
                                             // Refresh the list by incrementing counter
-                                            refresh_counter += 1;
+                                            refresh_counter.set(refresh_counter() + 1);
                                         }
                                         Err(e) => {
                                             form.write().submitting = false;

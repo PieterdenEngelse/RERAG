@@ -26,7 +26,7 @@ pub fn resolve_db_path(db_path: &str) -> PathBuf {
     };
 
     let candidate = Path::new(target);
-    
+
     // Only use absolute paths directly
     if candidate.is_absolute() {
         return candidate.to_path_buf();

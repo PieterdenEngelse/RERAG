@@ -31,3 +31,4 @@ pub use monitoring::trace_middleware;
 pub mod file_watcher;
 pub mod security;
 pub mod training;
+pub mod perf;  // Performance optimizations (SIMD, compression, HNSW, etc.)

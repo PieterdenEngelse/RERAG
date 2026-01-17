@@ -196,8 +196,16 @@ pub fn MonitorTools() -> Element {
     }
 
     let snapshot = state.read().clone();
-    let tool_count = if snapshot.available_tools.is_empty() { 18 } else { snapshot.available_tools.len() };
-    let active_tool_count = snapshot.available_tools.iter().filter(|t| t.status == "active").count();
+    let tool_count = if snapshot.available_tools.is_empty() {
+        18
+    } else {
+        snapshot.available_tools.len()
+    };
+    let active_tool_count = snapshot
+        .available_tools
+        .iter()
+        .filter(|t| t.status == "active")
+        .count();
     let enabled_caches = snapshot.cache_stats.iter().filter(|c| c.enabled).count();
     let total_cache_entries: usize = snapshot.cache_stats.iter().map(|c| c.current_entries).sum();
     let avg_cache_hit_rate = if snapshot.cache_stats.is_empty() {

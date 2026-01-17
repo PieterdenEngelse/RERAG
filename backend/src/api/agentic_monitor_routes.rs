@@ -776,7 +776,7 @@ pub async fn get_tool_executions(query: web::Query<LimitQuery>) -> ActixResult<H
 pub struct AvailableTool {
     pub name: String,
     pub description: String,
-    pub status: String,  // "active", "placeholder", "disabled"
+    pub status: String, // "active", "placeholder", "disabled"
     pub icon: String,
     pub category: String,
 }
@@ -789,7 +789,8 @@ pub async fn get_available_tools() -> ActixResult<HttpResponse> {
         // Core retrieval tools - ACTIVE
         AvailableTool {
             name: "SemanticSearch".into(),
-            description: "Search indexed documents using semantic similarity (vector search)".into(),
+            description: "Search indexed documents using semantic similarity (vector search)"
+                .into(),
             status: "active".into(),
             icon: "📚".into(),
             category: "retrieval".into(),
@@ -922,7 +923,7 @@ pub async fn get_available_tools() -> ActixResult<HttpResponse> {
             category: "external".into(),
         },
     ];
-    
+
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "request_id": uuid::Uuid::new_v4().to_string(),
         "tools": tools,

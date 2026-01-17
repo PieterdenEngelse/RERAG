@@ -14,3 +14,5 @@ pub const PARAM_NUMBER_INPUT_CLASS: &str =
     "input input-xs input-bordered bg-gray-700 text-gray-200 !w-24";
 pub const PARAM_TEXT_INPUT_CLASS: &str =
     "input input-xs input-bordered bg-gray-700 text-gray-200 w-72";
+pub const PARAM_TEXT_INPUT_COMPACT_CLASS: &str =
+    "input input-xs input-bordered bg-gray-700 text-gray-200 w-40";

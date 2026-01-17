@@ -3,8 +3,8 @@
 // Exposes tool selection and execution as HTTP endpoints
 
 use actix_web::{web, HttpResponse, Result as ActixResult};
-use serde::{Deserialize, Serialize};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::tools::tool_selector::ToolSelector;
@@ -67,9 +67,7 @@ pub struct ToolSuggestionResponse {
 // ============ Tool Route Handlers ============
 
 /// Analyze query and suggest best tool
-pub async fn analyze_tools(
-    req: web::Json<ToolQueryRequest>,
-) -> ActixResult<HttpResponse> {
+pub async fn analyze_tools(req: web::Json<ToolQueryRequest>) -> ActixResult<HttpResponse> {
     info!(query = %req.query, "Analyzing tools for query");
 
     let selection = ToolSelector::select_tools(&req.query);
@@ -77,7 +75,11 @@ pub async fn analyze_tools(
     let response = ToolSelectionResponse {
         intent: selection.intent.to_string(),
         primary_tool: selection.primary_tool.to_string(),
-        secondary_tools: selection.secondary_tools.iter().map(|t| t.to_string()).collect(),
+        secondary_tools: selection
+            .secondary_tools
+            .iter()
+            .map(|t| t.to_string())
+            .collect(),
         confidence: selection.confidence,
         reasoning: selection.reasoning,
         timestamp: Utc::now().to_rfc3339(),
@@ -87,9 +89,7 @@ pub async fn analyze_tools(
 }
 
 /// Execute query with automatic tool selection
-pub async fn execute_with_tools(
-    req: web::Json<ToolQueryRequest>,
-) -> ActixResult<HttpResponse> {
+pub async fn execute_with_tools(req: web::Json<ToolQueryRequest>) -> ActixResult<HttpResponse> {
     info!(query = %req.query, "Executing query with tools");
 
     let selection = ToolSelector::select_tools(&req.query);
@@ -184,7 +184,8 @@ pub async fn list_available_tools() -> ActixResult<HttpResponse> {
         },
         ToolInfo {
             name: "Scheduler".to_string(),
-            description: "Create lightweight reminders like 'schedule sync in 30 minutes'".to_string(),
+            description: "Create lightweight reminders like 'schedule sync in 30 minutes'"
+                .to_string(),
             success_rate: 0.90,
         },
         ToolInfo {
@@ -203,9 +204,7 @@ pub async fn list_available_tools() -> ActixResult<HttpResponse> {
 }
 
 /// Detect query intent
-pub async fn detect_intent(
-    req: web::Json<ToolQueryRequest>,
-) -> ActixResult<HttpResponse> {
+pub async fn detect_intent(req: web::Json<ToolQueryRequest>) -> ActixResult<HttpResponse> {
     info!(query = %req.query, "Detecting query intent");
 
     let intent = ToolSelector::detect_intent(&req.query);
@@ -218,9 +217,7 @@ pub async fn detect_intent(
 }
 
 /// Suggest tools without executing them
-pub async fn suggest_tools(
-    req: web::Json<ToolQueryRequest>,
-) -> ActixResult<HttpResponse> {
+pub async fn suggest_tools(req: web::Json<ToolQueryRequest>) -> ActixResult<HttpResponse> {
     let selection = ToolSelector::select_tools(&req.query);
     let mut suggestions = vec![selection.primary_tool.to_string()];
     suggestions.extend(selection.secondary_tools.iter().map(|t| t.to_string()));
@@ -252,13 +249,11 @@ pub struct RunToolResponse {
 }
 
 /// Actually run a specific tool with input
-pub async fn run_tool(
-    req: web::Json<RunToolRequest>,
-) -> ActixResult<HttpResponse> {
-    use crate::tools::{ToolType, tool_executor::ToolExecutor};
-    
+pub async fn run_tool(req: web::Json<RunToolRequest>) -> ActixResult<HttpResponse> {
+    use crate::tools::{tool_executor::ToolExecutor, ToolType};
+
     info!(tool = %req.tool, input = %req.input, "Running tool");
-    
+
     // Parse tool type
     let tool_type = match req.tool.to_lowercase().as_str() {
         "calculator" => ToolType::Calculator,
@@ -282,41 +277,37 @@ pub async fn run_tool(
         _ => {
             return Ok(HttpResponse::BadRequest().json(serde_json::json!({
                 "error": format!("Unknown tool: {}", req.tool),
-                "available_tools": ["Calculator", "SemanticSearch", "Summarizer", "QueryRewriter", 
+                "available_tools": ["Calculator", "SemanticSearch", "Summarizer", "QueryRewriter",
                     "Classifier", "SentimentAnalyzer", "EntityExtractor", "SpellChecker",
                     "Translator", "FileAnalyzer", "Notification", "Scheduler", "Memory"]
             })));
         }
     };
-    
+
     // Execute the tool
     let start = std::time::Instant::now();
     let result = ToolExecutor::execute_tool(&tool_type, &req.input, None).await;
     let elapsed = start.elapsed().as_millis() as u64;
-    
+
     match result {
-        Ok(tool_result) => {
-            Ok(HttpResponse::Ok().json(RunToolResponse {
-                tool: req.tool.clone(),
-                input: req.input.clone(),
-                success: tool_result.success,
-                result: tool_result.result,
-                execution_time_ms: elapsed,
-                confidence: tool_result.metadata.confidence,
-                timestamp: Utc::now().to_rfc3339(),
-            }))
-        }
-        Err(e) => {
-            Ok(HttpResponse::Ok().json(RunToolResponse {
-                tool: req.tool.clone(),
-                input: req.input.clone(),
-                success: false,
-                result: e,
-                execution_time_ms: elapsed,
-                confidence: 0.0,
-                timestamp: Utc::now().to_rfc3339(),
-            }))
-        }
+        Ok(tool_result) => Ok(HttpResponse::Ok().json(RunToolResponse {
+            tool: req.tool.clone(),
+            input: req.input.clone(),
+            success: tool_result.success,
+            result: tool_result.result,
+            execution_time_ms: elapsed,
+            confidence: tool_result.metadata.confidence,
+            timestamp: Utc::now().to_rfc3339(),
+        })),
+        Err(e) => Ok(HttpResponse::Ok().json(RunToolResponse {
+            tool: req.tool.clone(),
+            input: req.input.clone(),
+            success: false,
+            result: e,
+            execution_time_ms: elapsed,
+            confidence: 0.0,
+            timestamp: Utc::now().to_rfc3339(),
+        })),
     }
 }
 
@@ -330,6 +321,6 @@ pub fn configure_tool_routes(cfg: &mut web::ServiceConfig) {
             .route("/run", web::post().to(run_tool))
             .route("/available", web::get().to(list_available_tools))
             .route("/detect-intent", web::post().to(detect_intent))
-            .route("/suggest", web::post().to(suggest_tools))
+            .route("/suggest", web::post().to(suggest_tools)),
     );
 }

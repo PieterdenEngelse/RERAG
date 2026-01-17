@@ -21,58 +21,68 @@ impl URLFetchTool {
 
     fn extract_url(&self, query: &str) -> Option<String> {
         let query = query.trim();
-        
+
         // If the query itself is a URL
         if query.starts_with("http://") || query.starts_with("https://") {
             // Find end of URL (space or end of string)
-            let end = query.find(|c: char| c.is_whitespace()).unwrap_or(query.len());
+            let end = query
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(query.len());
             return Some(query[..end].to_string());
         }
-        
+
         // Look for URL in the query
         for word in query.split_whitespace() {
             if word.starts_with("http://") || word.starts_with("https://") {
                 return Some(word.to_string());
             }
         }
-        
+
         None
     }
-    
+
     fn extract_text_from_html(&self, html: &str) -> String {
         // Simple HTML text extraction - remove tags and decode entities
         let mut result = String::new();
         let mut in_tag = false;
         let mut in_script = false;
         let mut in_style = false;
-        
+
         let mut i = 0;
         let chars: Vec<char> = html.chars().collect();
-        
+
         while i < chars.len() {
             let ch = chars[i];
-            
+
             // Check for script/style tags
             if i + 7 < chars.len() {
-                let slice: String = chars[i..i+7].iter().collect();
+                let slice: String = chars[i..i + 7].iter().collect();
                 let slice_lower = slice.to_lowercase();
                 if slice_lower == "<script" {
                     in_script = true;
                 } else if slice_lower == "</scrip" {
                     in_script = false;
-                } else if slice_lower == "<style " || (i + 6 < chars.len() && chars[i..i+6].iter().collect::<String>().to_lowercase() == "<style") {
+                } else if slice_lower == "<style "
+                    || (i + 6 < chars.len()
+                        && chars[i..i + 6].iter().collect::<String>().to_lowercase() == "<style")
+                {
                     in_style = true;
                 } else if slice_lower == "</style" {
                     in_style = false;
                 }
             }
-            
+
             if ch == '<' {
                 in_tag = true;
             } else if ch == '>' {
                 in_tag = false;
                 // Add space after block elements
-                if result.chars().last().map(|c| !c.is_whitespace()).unwrap_or(false) {
+                if result
+                    .chars()
+                    .last()
+                    .map(|c| !c.is_whitespace())
+                    .unwrap_or(false)
+                {
                     result.push(' ');
                 }
             } else if !in_tag && !in_script && !in_style {
@@ -118,13 +128,10 @@ impl URLFetchTool {
             }
             i += 1;
         }
-        
+
         // Clean up whitespace
-        let cleaned: String = result
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        
+        let cleaned: String = result.split_whitespace().collect::<Vec<_>>().join(" ");
+
         cleaned
     }
 }
@@ -199,12 +206,17 @@ impl Tool for URLFetchTool {
                     .unwrap_or("")
                     .to_lowercase();
 
-                let body = response.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
-                
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|e| format!("Failed to read response: {}", e))?;
+
                 // Extract text based on content type
                 let text = if content_type.contains("text/html") {
                     self.extract_text_from_html(&body)
-                } else if content_type.contains("text/plain") || content_type.contains("application/json") {
+                } else if content_type.contains("text/plain")
+                    || content_type.contains("application/json")
+                {
                     body.clone()
                 } else {
                     // For other types, just return first part
@@ -213,7 +225,11 @@ impl Tool for URLFetchTool {
 
                 // Truncate if too long
                 let preview = if text.len() > 3000 {
-                    format!("{}... [truncated, {} total chars]", &text[..3000], text.len())
+                    format!(
+                        "{}... [truncated, {} total chars]",
+                        &text[..3000],
+                        text.len()
+                    )
                 } else {
                     text.clone()
                 };
@@ -230,19 +246,17 @@ impl Tool for URLFetchTool {
                     },
                 })
             }
-            Err(e) => {
-                Ok(ToolResult {
-                    tool: ToolType::URLFetch,
-                    success: false,
-                    result: format!("Failed to fetch {}: {}", url, e),
-                    metadata: ToolMetadata {
-                        execution_time_ms: start.elapsed().as_millis() as u64,
-                        confidence: 0.0,
-                        source: Some(url),
-                        cost: Some(0.0),
-                    },
-                })
-            }
+            Err(e) => Ok(ToolResult {
+                tool: ToolType::URLFetch,
+                success: false,
+                result: format!("Failed to fetch {}: {}", url, e),
+                metadata: ToolMetadata {
+                    execution_time_ms: start.elapsed().as_millis() as u64,
+                    confidence: 0.0,
+                    source: Some(url),
+                    cost: Some(0.0),
+                },
+            }),
         }
     }
 
@@ -261,21 +275,18 @@ mod tests {
     #[test]
     fn test_extract_url() {
         let tool = URLFetchTool::new();
-        
+
         assert_eq!(
             tool.extract_url("https://example.com"),
             Some("https://example.com".to_string())
         );
-        
+
         assert_eq!(
             tool.extract_url("Fetch https://example.com/page"),
             Some("https://example.com/page".to_string())
         );
-        
-        assert_eq!(
-            tool.extract_url("No URL here"),
-            None
-        );
+
+        assert_eq!(tool.extract_url("No URL here"), None);
     }
 
     #[tokio::test]

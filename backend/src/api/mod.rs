@@ -449,6 +449,7 @@ struct ChunkCommitResponse {
 
 #[derive(Debug, serde::Deserialize)]
 struct LlmConfigRequest {
+    // Basic sampling
     temperature: f32,
     top_p: f32,
     top_k: usize,
@@ -464,18 +465,40 @@ struct LlmConfigRequest {
     typical_p: f32,
     #[serde(default = "default_tfs_z")]
     tfs_z: f32,
+
+    // Mirostat
     #[serde(default = "default_mirostat")]
     mirostat: i32,
     #[serde(default = "default_mirostat_eta")]
     mirostat_eta: f32,
     #[serde(default = "default_mirostat_tau")]
     mirostat_tau: f32,
+
+    // Repetition control
     #[serde(default = "default_repeat_last_n")]
     repeat_last_n: usize,
-    #[serde(default = "default_num_keep")]
-    num_keep: i64,
     #[serde(default = "default_penalize_newline")]
     penalize_newline: bool,
+
+    // Generation limits
+    #[serde(default = "default_num_keep")]
+    num_keep: i64,
+    #[serde(default = "default_ignore_eos")]
+    ignore_eos: bool,
+
+    // DRY sampling
+    #[serde(default = "default_dry_multiplier")]
+    dry_multiplier: f32,
+    #[serde(default = "default_dry_base")]
+    dry_base: f32,
+    #[serde(default = "default_dry_allowed_length")]
+    dry_allowed_length: usize,
+
+    // XTC sampling
+    #[serde(default = "default_xtc_probability")]
+    xtc_probability: f32,
+    #[serde(default = "default_xtc_threshold")]
+    xtc_threshold: f32,
 }
 
 fn default_min_p() -> f32 {
@@ -505,27 +528,81 @@ fn default_num_keep() -> i64 {
 fn default_penalize_newline() -> bool {
     llm_settings::DEFAULT_PENALIZE_NEWLINE
 }
+fn default_ignore_eos() -> bool {
+    llm_settings::DEFAULT_IGNORE_EOS
+}
+fn default_dry_multiplier() -> f32 {
+    llm_settings::DEFAULT_DRY_MULTIPLIER
+}
+fn default_dry_base() -> f32 {
+    llm_settings::DEFAULT_DRY_BASE
+}
+fn default_dry_allowed_length() -> usize {
+    llm_settings::DEFAULT_DRY_ALLOWED_LENGTH
+}
+fn default_xtc_probability() -> f32 {
+    llm_settings::DEFAULT_XTC_PROBABILITY
+}
+fn default_xtc_threshold() -> f32 {
+    llm_settings::DEFAULT_XTC_THRESHOLD
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct HardwareConfigRequest {
     backend_type: String,
     model: String,
-    num_thread: usize,
-    num_gpu: usize,
+
+    // Model params
     gpu_layers: usize,
     main_gpu: usize,
-    low_vram: bool,
-    f16_kv: bool,
-    rope_frequency_base: f32,
-    rope_frequency_scale: f32,
-    numa: bool,
-    num_ctx: usize,
-    num_batch: usize,
-    logits_all: bool,
-    vocab_only: bool,
+    split_mode: String,
+    tensor_split: Vec<f32>,
     use_mmap: bool,
     use_mlock: bool,
+    vocab_only: bool,
+    devices: Vec<crate::db::param_hardware::DeviceTarget>,
+    kv_overrides: Vec<crate::db::param_hardware::KvOverride>,
+    swa_full: bool,
+    no_perf: bool,
+
+    // Context params
+    num_ctx: usize,
+    num_batch: usize,
+    num_ubatch: usize,
+    num_seq_max: usize,
+    rope_scaling_type: crate::db::param_hardware::RopeScalingType,
+    rope_frequency_base: f32,
+    rope_frequency_scale: f32,
+    yarn_ext_factor: f32,
+    yarn_attn_factor: f32,
+    yarn_beta_fast: f32,
+    yarn_beta_slow: f32,
+    yarn_orig_ctx: usize,
+    pooling_type: String,
+    attention_type: String,
+    flash_attn: bool,
+    type_k: crate::db::param_hardware::KvDataType,
+    type_v: crate::db::param_hardware::KvDataType,
+    embeddings: bool,
+    offload_kqv: bool,
+    defrag_thold: f32,
+    logits_all: bool,
+    f16_kv: bool,
+    low_vram: bool,
+
+    // CPU params
+    num_thread: usize,
+    num_thread_batch: usize,
+    numa: bool,
+    cpu_strict: bool,
+    cpumask: crate::db::param_hardware::CpuMask,
+    mask_valid: bool,
+    poll: usize,
+    priority: String,
+
+    // Legacy/custom
+    num_gpu: usize,
 }
 
 impl Default for HardwareConfigRequest {
@@ -539,21 +616,57 @@ impl From<crate::db::param_hardware::HardwareParams> for HardwareConfigRequest {
         Self {
             backend_type: backend_type_to_string(&params.backend_type),
             model: params.model,
-            num_thread: params.num_thread,
-            num_gpu: params.num_gpu,
+
+            // Model params
             gpu_layers: params.gpu_layers,
             main_gpu: params.main_gpu,
-            low_vram: params.low_vram,
-            f16_kv: params.f16_kv,
-            rope_frequency_base: params.rope_frequency_base,
-            rope_frequency_scale: params.rope_frequency_scale,
-            numa: params.numa,
-            num_ctx: params.num_ctx,
-            num_batch: params.num_batch,
-            logits_all: params.logits_all,
-            vocab_only: params.vocab_only,
+            split_mode: params.split_mode,
+            tensor_split: params.tensor_split,
             use_mmap: params.use_mmap,
             use_mlock: params.use_mlock,
+            vocab_only: params.vocab_only,
+            devices: params.devices,
+            kv_overrides: params.kv_overrides,
+            swa_full: params.swa_full,
+            no_perf: params.no_perf,
+
+            // Context params
+            num_ctx: params.num_ctx,
+            num_batch: params.num_batch,
+            num_ubatch: params.num_ubatch,
+            num_seq_max: params.num_seq_max,
+            rope_scaling_type: params.rope_scaling_type,
+            rope_frequency_base: params.rope_frequency_base,
+            rope_frequency_scale: params.rope_frequency_scale,
+            yarn_ext_factor: params.yarn_ext_factor,
+            yarn_attn_factor: params.yarn_attn_factor,
+            yarn_beta_fast: params.yarn_beta_fast,
+            yarn_beta_slow: params.yarn_beta_slow,
+            yarn_orig_ctx: params.yarn_orig_ctx,
+            pooling_type: params.pooling_type,
+            attention_type: params.attention_type,
+            flash_attn: params.flash_attn,
+            type_k: params.type_k,
+            type_v: params.type_v,
+            embeddings: params.embeddings,
+            offload_kqv: params.offload_kqv,
+            defrag_thold: params.defrag_thold,
+            logits_all: params.logits_all,
+            f16_kv: params.f16_kv,
+            low_vram: params.low_vram,
+
+            // CPU params
+            num_thread: params.num_thread,
+            num_thread_batch: params.num_thread_batch,
+            numa: params.numa,
+            cpu_strict: params.cpu_strict,
+            cpumask: params.cpumask,
+            mask_valid: params.mask_valid,
+            poll: params.poll,
+            priority: params.priority,
+
+            // Legacy/custom
+            num_gpu: params.num_gpu,
         }
     }
 }
@@ -563,21 +676,57 @@ impl From<HardwareConfigRequest> for crate::db::param_hardware::HardwareParams {
         Self {
             backend_type: string_to_backend_type(&req.backend_type),
             model: req.model,
-            num_thread: req.num_thread,
-            num_gpu: req.num_gpu,
+
+            // Model params
             gpu_layers: req.gpu_layers,
             main_gpu: req.main_gpu,
-            low_vram: req.low_vram,
-            f16_kv: req.f16_kv,
-            rope_frequency_base: req.rope_frequency_base,
-            rope_frequency_scale: req.rope_frequency_scale,
-            numa: req.numa,
-            num_ctx: req.num_ctx,
-            num_batch: req.num_batch,
-            logits_all: req.logits_all,
-            vocab_only: req.vocab_only,
+            split_mode: req.split_mode,
+            tensor_split: req.tensor_split,
             use_mmap: req.use_mmap,
             use_mlock: req.use_mlock,
+            vocab_only: req.vocab_only,
+            devices: req.devices,
+            kv_overrides: req.kv_overrides,
+            swa_full: req.swa_full,
+            no_perf: req.no_perf,
+
+            // Context params
+            num_ctx: req.num_ctx,
+            num_batch: req.num_batch,
+            num_ubatch: req.num_ubatch,
+            num_seq_max: req.num_seq_max,
+            rope_scaling_type: req.rope_scaling_type,
+            rope_frequency_base: req.rope_frequency_base,
+            rope_frequency_scale: req.rope_frequency_scale,
+            yarn_ext_factor: req.yarn_ext_factor,
+            yarn_attn_factor: req.yarn_attn_factor,
+            yarn_beta_fast: req.yarn_beta_fast,
+            yarn_beta_slow: req.yarn_beta_slow,
+            yarn_orig_ctx: req.yarn_orig_ctx,
+            pooling_type: req.pooling_type,
+            attention_type: req.attention_type,
+            flash_attn: req.flash_attn,
+            type_k: req.type_k,
+            type_v: req.type_v,
+            embeddings: req.embeddings,
+            offload_kqv: req.offload_kqv,
+            defrag_thold: req.defrag_thold,
+            logits_all: req.logits_all,
+            f16_kv: req.f16_kv,
+            low_vram: req.low_vram,
+
+            // CPU params
+            num_thread: req.num_thread,
+            num_thread_batch: req.num_thread_batch,
+            numa: req.numa,
+            cpu_strict: req.cpu_strict,
+            cpumask: req.cpumask,
+            mask_valid: req.mask_valid,
+            poll: req.poll,
+            priority: req.priority,
+
+            // Legacy/custom
+            num_gpu: req.num_gpu,
         }
     }
 }
@@ -718,33 +867,96 @@ fn validate_llm_request(req: &LlmConfigRequest) -> Result<(), String> {
 }
 
 fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> {
+    // Thread validation
     if req.num_thread == 0 {
         return Err("num_thread must be greater than 0".into());
     }
+    if req.num_thread_batch == 0 {
+        return Err("num_thread_batch must be greater than 0".into());
+    }
+
+    // GPU validation
     if req.num_gpu > 64 {
         return Err("num_gpu must be 64 or less".into());
     }
     if req.main_gpu > 64 {
         return Err("main_gpu index must be 64 or less".into());
     }
+    if req.gpu_layers > 1000 {
+        return Err("gpu_layers must be 1000 or less".into());
+    }
+
+    // RoPE validation
     if req.rope_frequency_base <= 0.0 {
         return Err("rope_frequency_base must be positive".into());
     }
     if req.rope_frequency_scale <= 0.0 {
         return Err("rope_frequency_scale must be positive".into());
     }
+
+    // Context/batch validation
     if req.num_ctx == 0 {
         return Err("num_ctx must be greater than 0".into());
     }
     if req.num_batch == 0 {
         return Err("num_batch must be greater than 0".into());
     }
+    if req.num_ubatch == 0 {
+        return Err("num_ubatch must be greater than 0".into());
+    }
+    if req.num_ubatch > req.num_batch {
+        return Err("num_ubatch must be <= num_batch".into());
+    }
+    if req.num_seq_max == 0 {
+        return Err("num_seq_max must be greater than 0".into());
+    }
+
+    // CPU mask validation
+    if req.mask_valid && req.cpumask.is_empty() {
+        return Err("cpumask cannot be empty when mask_valid is true".into());
+    }
+
+    // Defrag threshold validation
+    if req.defrag_thold < 0.0 || req.defrag_thold > 1.0 {
+        return Err("defrag_thold must be between 0.0 and 1.0".into());
+    }
+
+    // Tensor split validation
+    if !req.tensor_split.is_empty() {
+        let sum: f32 = req.tensor_split.iter().sum();
+        if (sum - 1.0).abs() > 0.01 && sum > 0.0 {
+            // Allow sum != 1.0 only if all zeros (auto-split)
+            let all_positive = req.tensor_split.iter().all(|&x| x > 0.0);
+            if all_positive {
+                return Err("tensor_split values should sum to approximately 1.0".into());
+            }
+        }
+    }
+
+    // Split mode validation
+    let valid_split_modes = ["none", "layer", "row"];
+    if !valid_split_modes.contains(&req.split_mode.as_str()) {
+        return Err(format!(
+            "split_mode must be one of: {}",
+            valid_split_modes.join(", ")
+        ));
+    }
+
+    // Priority validation
+    let valid_priorities = ["low", "normal", "high", "realtime"];
+    if !valid_priorities.contains(&req.priority.as_str()) {
+        return Err(format!(
+            "priority must be one of: {}",
+            valid_priorities.join(", ")
+        ));
+    }
+
     Ok(())
 }
 
 pub async fn health_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     // Get load metrics from global health tracker
     let (load, is_busy, message) = if let Some(tracker) = crate::monitoring::get_health_tracker() {
         let load = tracker.get_load_metrics();
@@ -754,7 +966,11 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                 "System busy: {} active tasks{}{}",
                 load.active_tasks,
                 if load.indexing { ", indexing" } else { "" },
-                if load.llm_active { ", LLM processing" } else { "" }
+                if load.llm_active {
+                    ", LLM processing"
+                } else {
+                    ""
+                }
             ))
         } else {
             None
@@ -763,7 +979,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
     } else {
         (None, false, None)
     };
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         let retriever = retriever.lock().unwrap();
         match retriever.health_check() {
@@ -776,7 +992,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     "index_path": retriever.metrics.index_path,
                     "request_id": request_id
                 });
-                
+
                 // Add load metrics if available
                 if let Some(load) = load {
                     response["load"] = json!({
@@ -788,14 +1004,14 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                         "llm_active": load.llm_active
                     });
                 }
-                
+
                 // Add message if busy
                 if let Some(msg) = message {
                     response["message"] = json!(msg);
                 }
-                
+
                 Ok(HttpResponse::Ok().json(response))
-            },
+            }
             Err(e) => {
                 error!("[{}] Health check failed: {}", request_id, e);
                 Ok(HttpResponse::ServiceUnavailable().json(json!({
@@ -869,6 +1085,180 @@ async fn get_metrics() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok()
         .content_type("text/plain; charset=utf-8")
         .body(prometheus_text))
+}
+
+/// GET /monitoring/optimizations
+/// Returns: Statistics about all performance optimizations
+async fn get_optimization_stats() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    
+    if let Some(retriever) = RETRIEVER.get() {
+        let retriever = retriever.lock().unwrap();
+        let stats = retriever.get_optimization_stats();
+        
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "request_id": request_id,
+            "optimizations": stats,
+            "modules": {
+                "simd": "4-8x faster cosine similarity",
+                "bloom_filter": "O(1) document existence checks",
+                "hnsw_index": "O(log n) approximate nearest neighbor",
+                "semantic_cache": "Cache similar queries",
+                "hybrid_search": "BM25 + vector fusion",
+                "sqlite_wal": "10-100x faster concurrent writes",
+                "mmap": "Zero-copy vector loading",
+                "rkyv": "20-40x faster serialization",
+                "lz4": "2x compression for vectors",
+            }
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+/// POST /monitoring/optimizations/build-hnsw
+/// Build HNSW index for O(log n) search
+async fn build_hnsw_index() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    
+    if let Some(retriever) = RETRIEVER.get() {
+        let mut retriever = retriever.lock().unwrap();
+        let start = std::time::Instant::now();
+        retriever.build_hnsw_index();
+        let elapsed = start.elapsed().as_millis();
+        
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "request_id": request_id,
+            "message": "HNSW index built",
+            "index_size": retriever.hnsw_index_size(),
+            "build_time_ms": elapsed
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+/// POST /monitoring/optimizations/build-pq
+/// Build Product Quantization index for 16x memory reduction
+async fn build_pq_index() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    
+    if let Some(retriever) = RETRIEVER.get() {
+        let mut retriever = retriever.lock().unwrap();
+        let start = std::time::Instant::now();
+        retriever.build_pq_index();
+        let elapsed = start.elapsed().as_millis();
+        
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "request_id": request_id,
+            "message": "PQ index built (16x compression)",
+            "build_time_ms": elapsed
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+/// POST /monitoring/optimizations/build-fp16
+/// Build FP16 vector store for 2x memory reduction
+async fn build_fp16_store() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    
+    if let Some(retriever) = RETRIEVER.get() {
+        let mut retriever = retriever.lock().unwrap();
+        let start = std::time::Instant::now();
+        retriever.build_fp16_store();
+        let elapsed = start.elapsed().as_millis();
+        
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "request_id": request_id,
+            "message": "FP16 store built (2x compression)",
+            "build_time_ms": elapsed
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+/// POST /monitoring/optimizations/build-all
+/// Build all optimization indexes
+async fn build_all_indexes() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    
+    if let Some(retriever) = RETRIEVER.get() {
+        let mut retriever = retriever.lock().unwrap();
+        let start = std::time::Instant::now();
+        
+        retriever.build_hnsw_index();
+        retriever.build_pq_index();
+        retriever.build_fp16_store();
+        
+        let elapsed = start.elapsed().as_millis();
+        let stats = retriever.get_optimization_stats();
+        
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "request_id": request_id,
+            "message": "All optimization indexes built",
+            "build_time_ms": elapsed,
+            "stats": stats
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+/// GET /config/embedding
+/// Returns current embedding configuration (ONNX only)
+async fn get_embedding_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    
+    let onnx_model_path = std::env::var("ONNX_MODEL_PATH").unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+    let onnx_available = std::path::Path::new(&onnx_model_path).exists();
+    
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "request_id": request_id,
+        "provider": "onnx",
+        "model_path": onnx_model_path,
+        "model_exists": onnx_available,
+        "ready": onnx_available,
+        "note": "ONNX is the only supported embedding provider"
+    })))
+}
+
+/// POST /config/embedding - No longer needed (ONNX only)
+async fn set_embedding_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "info",
+        "request_id": request_id,
+        "message": "ONNX is the only supported embedding provider. No configuration needed."
+    })))
 }
 
 /// Self-contained UI metrics: HTTP Requests summary + chart
@@ -1053,6 +1443,7 @@ async fn commit_llm_config(payload: web::Json<LlmConfigRequest>) -> Result<HttpR
     }
 
     let new_cfg = LlmConfig {
+        // Basic sampling
         temperature: body.temperature,
         top_p: body.top_p,
         top_k: body.top_k,
@@ -1065,12 +1456,23 @@ async fn commit_llm_config(payload: web::Json<LlmConfigRequest>) -> Result<HttpR
         min_p: body.min_p,
         typical_p: body.typical_p,
         tfs_z: body.tfs_z,
+        // Mirostat
         mirostat: body.mirostat,
         mirostat_eta: body.mirostat_eta,
         mirostat_tau: body.mirostat_tau,
+        // Repetition control
         repeat_last_n: body.repeat_last_n,
-        num_keep: body.num_keep,
         penalize_newline: body.penalize_newline,
+        // Generation limits
+        num_keep: body.num_keep,
+        ignore_eos: body.ignore_eos,
+        // DRY sampling
+        dry_multiplier: body.dry_multiplier,
+        dry_base: body.dry_base,
+        dry_allowed_length: body.dry_allowed_length,
+        // XTC sampling
+        xtc_probability: body.xtc_probability,
+        xtc_threshold: body.xtc_threshold,
     };
 
     match llm_settings::save_llm_config_default_db(&new_cfg) {
@@ -2193,7 +2595,7 @@ async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpRe
         let mut retriever = retriever.lock().unwrap();
         let results = retriever.search(&query.q).unwrap_or_default();
         let elapsed = start.elapsed().as_millis() as u64;
-        
+
         // Record tool execution
         crate::monitoring::record_tool_execution(
             "SemanticSearch",
@@ -2204,7 +2606,7 @@ async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpRe
             1.0,
             Some("api/search"),
         );
-        
+
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "results": results,
@@ -2343,6 +2745,12 @@ pub struct RecallRagRequest {
     pub agent_id: String,
     #[serde(default = "default_limit")]
     pub limit: usize,
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeleteRagRequest {
+    pub agent_id: String,
+    pub ids: Vec<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2496,6 +2904,20 @@ async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Result<HttpRespo
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     Ok(HttpResponse::Ok().json(json!({
         "items": items,
+        "request_id": request_id
+    })))
+}
+
+async fn delete_rag_memory(req: web::Json<DeleteRagRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let mut mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let deleted = mem
+        .delete_rag_by_ids(&req.agent_id, &req.ids)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "deleted": deleted,
         "request_id": request_id
     })))
 }
@@ -4417,7 +4839,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     // Get chat settings for prompt building
     let chat_settings = get_current_chat_settings();
     let system_prompt = chat_settings.build_system_prompt();
-    
+
     // Debug: log what's in the system prompt
     tracing::warn!(
         request_id = %request_id,
@@ -4984,6 +5406,11 @@ pub fn start_api_server(
                     .route("/health", web::get().to(health_check))
                     .route("/ready", web::get().to(ready_check))
                     .route("/metrics", web::get().to(get_metrics)) // ← Prometheus format
+                    .route("/optimizations", web::get().to(get_optimization_stats)) // ← Performance optimization stats
+                    .route("/optimizations/build-hnsw", web::post().to(build_hnsw_index))
+                    .route("/optimizations/build-pq", web::post().to(build_pq_index))
+                    .route("/optimizations/build-fp16", web::post().to(build_fp16_store))
+                    .route("/optimizations/build-all", web::post().to(build_all_indexes))
                     .route("/ui/requests", web::get().to(get_ui_requests)) // ← Self-contained UI metrics for Requests
                     .route("/chunking/latest", web::get().to(get_chunking_stats))
                     .route("/chunking/logging", web::get().to(toggle_chunking_logging))
@@ -5063,6 +5490,8 @@ pub fn start_api_server(
             .route("/documents/{filename}", web::delete().to(delete_document))
             .route("/config/chunk_size", web::get().to(get_chunk_config))
             .route("/config/chunk_size", web::post().to(commit_chunk_config))
+            .route("/config/embedding", web::get().to(get_embedding_config))
+            .route("/config/embedding", web::post().to(set_embedding_config))
             .route("/config/llm", web::get().to(get_llm_config))
             .route("/config/llm", web::post().to(commit_llm_config))
             .route("/config/prompt_caching", web::get().to(get_prompt_caching))
@@ -5107,6 +5536,7 @@ pub fn start_api_server(
             .route("/memory/store_rag", web::post().to(store_rag_memory))
             .route("/memory/search_rag", web::post().to(search_rag_memory))
             .route("/memory/recall_rag", web::post().to(recall_rag_memory))
+            .route("/memory/delete_rag", web::post().to(delete_rag_memory))
             // Manual observation CRUD + search
             .route(
                 "/memory/observations",

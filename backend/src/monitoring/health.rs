@@ -198,7 +198,7 @@ impl HealthTracker {
 
     /// Check if system is busy
     pub fn is_busy(&self) -> bool {
-        self.indexing.load(Ordering::SeqCst) 
+        self.indexing.load(Ordering::SeqCst)
             || self.llm_active.load(Ordering::SeqCst)
             || self.active_tasks.load(Ordering::SeqCst) > 2
     }
@@ -206,7 +206,7 @@ impl HealthTracker {
     /// Get current load metrics
     pub fn get_load_metrics(&self) -> LoadMetrics {
         LoadMetrics {
-            cpu_percent: 0.0, // Would need sysinfo crate for real CPU usage
+            cpu_percent: 0.0,    // Would need sysinfo crate for real CPU usage
             memory_percent: 0.0, // Would need sysinfo crate for real memory usage
             active_tasks: self.active_tasks.load(Ordering::SeqCst),
             queue_depth: 0, // Would need request queue tracking
@@ -240,13 +240,17 @@ impl HealthTracker {
         };
 
         let uptime = self.startup_time.elapsed().as_secs_f64();
-        
+
         let message = if is_busy {
             Some(format!(
                 "System busy: {} active tasks{}{}",
                 load.active_tasks,
                 if load.indexing { ", indexing" } else { "" },
-                if load.llm_active { ", LLM processing" } else { "" }
+                if load.llm_active {
+                    ", LLM processing"
+                } else {
+                    ""
+                }
             ))
         } else {
             None

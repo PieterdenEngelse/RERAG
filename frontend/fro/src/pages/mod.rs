@@ -1,6 +1,8 @@
 // src/pages/mod.rs
 pub mod about;
 pub mod config;
+pub mod docu;
+pub mod docu_index;
 pub mod hardware;
 pub mod home;
 pub mod memories;
@@ -15,6 +17,8 @@ pub mod train;
 // Re-export so they can be used as `pages::Home`
 pub use about::About;
 pub use config::Config;
+pub use docu::Docu;
+pub use docu_index::DocuIndex;
 pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use memories::ConfigMemories;
