@@ -23,6 +23,15 @@ async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok();
 
     // ─────────────────────────────────────────────────────────────
+    // PHASE 0.1: Set up Ctrl+C handler for clean shutdown
+    // ─────────────────────────────────────────────────────────────
+    ctrlc::set_handler(move || {
+        eprintln!("\n🛑 Received Ctrl+C, shutting down...");
+        std::process::exit(0);
+    })
+    .expect("Failed to set Ctrl+C handler");
+
+    // ─────────────────────────────────────────────────────────────
     // PHASE 0.5: Clean up stale locks from previous crashes
     // ─────────────────────────────────────────────────────────────
     cleanup_stale_locks();

@@ -231,6 +231,7 @@ pub struct DbStats {
 }
 
 /// Batch insert helper for better performance
+#[allow(dead_code)]
 pub struct BatchInserter<'a> {
     conn: &'a Connection,
     sql: String,

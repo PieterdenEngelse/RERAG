@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
+use crate::perf::CacheAligned;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ComponentStatus {
@@ -96,30 +97,34 @@ impl Default for ComponentHealth {
 }
 
 use std::sync::atomic::AtomicU32;
+// CacheAligned already imported above
 
 /// Tracks application health
+/// 
+/// Atomics are cache-line aligned to prevent false sharing when
+/// different threads update active_tasks vs check is_ready.
 pub struct HealthTracker {
-    is_ready: AtomicBool,
-    is_live: AtomicBool,
+    is_ready: CacheAligned<AtomicBool>,
+    is_live: CacheAligned<AtomicBool>,
     components: parking_lot::RwLock<ComponentHealth>,
     startup_time: std::time::Instant,
-    // Load tracking
-    active_tasks: AtomicU32,
-    indexing: AtomicBool,
-    llm_active: AtomicBool,
+    // Load tracking - cache-line aligned
+    active_tasks: CacheAligned<AtomicU32>,
+    indexing: CacheAligned<AtomicBool>,
+    llm_active: CacheAligned<AtomicBool>,
 }
 
 impl HealthTracker {
     /// Create new health tracker
     pub fn new() -> Self {
         Self {
-            is_ready: AtomicBool::new(false),
-            is_live: AtomicBool::new(true), // Always live until told otherwise
+            is_ready: CacheAligned::new(AtomicBool::new(false)),
+            is_live: CacheAligned::new(AtomicBool::new(true)), // Always live until told otherwise
             components: parking_lot::RwLock::new(ComponentHealth::default()),
             startup_time: std::time::Instant::now(),
-            active_tasks: AtomicU32::new(0),
-            indexing: AtomicBool::new(false),
-            llm_active: AtomicBool::new(false),
+            active_tasks: CacheAligned::new(AtomicU32::new(0)),
+            indexing: CacheAligned::new(AtomicBool::new(false)),
+            llm_active: CacheAligned::new(AtomicBool::new(false)),
         }
     }
 

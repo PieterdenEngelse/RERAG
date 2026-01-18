@@ -16,7 +16,7 @@
 //! ```
 
 use std::path::Path;
-use std::io;
+
 
 /// HTTP/2 configuration
 #[derive(Debug, Clone)]
@@ -104,45 +104,6 @@ impl Http2Config {
         }
 
         Ok(())
-    }
-
-    /// Load TLS configuration for rustls
-    #[cfg(feature = "rustls")]
-    pub fn load_rustls_config(&self) -> io::Result<rustls::ServerConfig> {
-        use rustls::{Certificate, PrivateKey, ServerConfig};
-        use rustls_pemfile::{certs, pkcs8_private_keys};
-        use std::fs::File;
-        use std::io::BufReader;
-
-        let cert_path = self.cert_path.as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No cert path"))?;
-        let key_path = self.key_path.as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No key path"))?;
-
-        let cert_file = File::open(cert_path)?;
-        let key_file = File::open(key_path)?;
-
-        let cert_chain: Vec<Certificate> = certs(&mut BufReader::new(cert_file))?
-            .into_iter()
-            .map(Certificate)
-            .collect();
-
-        let mut keys: Vec<PrivateKey> = pkcs8_private_keys(&mut BufReader::new(key_file))?
-            .into_iter()
-            .map(PrivateKey)
-            .collect();
-
-        if keys.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "No private key found"));
-        }
-
-        let config = ServerConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, keys.remove(0))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        Ok(config)
     }
 }
 

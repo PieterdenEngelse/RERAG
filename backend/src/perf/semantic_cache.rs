@@ -17,6 +17,7 @@
 
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use super::cache_aligned::CacheAligned;
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +69,9 @@ impl Default for SemanticCacheConfig {
 }
 
 /// Semantic query cache
+/// 
+/// Stats counters are cache-line aligned to prevent false sharing
+/// when concurrent lookups update hits/misses counters.
 pub struct SemanticCache {
     /// Cached queries indexed by hash
     cache: DashMap<u64, CachedQuery>,
@@ -75,10 +79,10 @@ pub struct SemanticCache {
     embeddings: DashMap<u64, Vec<f32>>,
     /// Configuration
     config: SemanticCacheConfig,
-    /// Statistics
-    hits: AtomicU64,
-    misses: AtomicU64,
-    semantic_hits: AtomicU64,
+    /// Statistics - cache-line aligned
+    hits: CacheAligned<AtomicU64>,
+    misses: CacheAligned<AtomicU64>,
+    semantic_hits: CacheAligned<AtomicU64>,
 }
 
 impl SemanticCache {
@@ -87,9 +91,9 @@ impl SemanticCache {
             cache: DashMap::new(),
             embeddings: DashMap::new(),
             config,
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-            semantic_hits: AtomicU64::new(0),
+            hits: CacheAligned::new(AtomicU64::new(0)),
+            misses: CacheAligned::new(AtomicU64::new(0)),
+            semantic_hits: CacheAligned::new(AtomicU64::new(0)),
         }
     }
 

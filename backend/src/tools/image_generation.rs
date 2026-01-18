@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(size, "1024x1024");
         assert!(style.is_none());
 
-        let (prompt, size, style) = tool.parse_prompt("A photorealistic sunset over mountains");
+        let (prompt, _size, style) = tool.parse_prompt("A photorealistic sunset over mountains");
         assert!(prompt.contains("sunset"));
         assert_eq!(style, Some("photorealistic".to_string()));
     }

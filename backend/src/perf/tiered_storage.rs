@@ -10,12 +10,13 @@
 //! - Automatic data migration based on access patterns
 //! - Transparent access across tiers
 
-use std::collections::HashMap;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use super::cache_aligned::CacheAligned;
 
 /// Storage tier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -128,16 +129,34 @@ pub struct TieredStorage<T> {
 }
 
 /// Tier statistics
-#[derive(Debug, Default)]
+/// 
+/// Each counter is cache-line aligned to prevent false sharing
+/// when multiple threads update different counters concurrently.
+#[derive(Debug)]
 pub struct TierStats {
-    pub hot_items: AtomicU64,
-    pub warm_items: AtomicU64,
-    pub cold_items: AtomicU64,
-    pub hot_bytes: AtomicU64,
-    pub warm_bytes: AtomicU64,
-    pub cold_bytes: AtomicU64,
-    pub promotions: AtomicU64,
-    pub demotions: AtomicU64,
+    pub hot_items: CacheAligned<AtomicU64>,
+    pub warm_items: CacheAligned<AtomicU64>,
+    pub cold_items: CacheAligned<AtomicU64>,
+    pub hot_bytes: CacheAligned<AtomicU64>,
+    pub warm_bytes: CacheAligned<AtomicU64>,
+    pub cold_bytes: CacheAligned<AtomicU64>,
+    pub promotions: CacheAligned<AtomicU64>,
+    pub demotions: CacheAligned<AtomicU64>,
+}
+
+impl Default for TierStats {
+    fn default() -> Self {
+        Self {
+            hot_items: CacheAligned::new(AtomicU64::new(0)),
+            warm_items: CacheAligned::new(AtomicU64::new(0)),
+            cold_items: CacheAligned::new(AtomicU64::new(0)),
+            hot_bytes: CacheAligned::new(AtomicU64::new(0)),
+            warm_bytes: CacheAligned::new(AtomicU64::new(0)),
+            cold_bytes: CacheAligned::new(AtomicU64::new(0)),
+            promotions: CacheAligned::new(AtomicU64::new(0)),
+            demotions: CacheAligned::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> TieredStorage<T> {

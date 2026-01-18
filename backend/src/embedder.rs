@@ -22,17 +22,6 @@ pub enum EmbeddingProvider {
     Onnx,
 }
 
-impl EmbeddingProvider {
-    fn from_str(_value: &str) -> Self {
-        // Always use ONNX
-        EmbeddingProvider::Onnx
-    }
-
-    fn as_str(&self) -> &'static str {
-        "onnx"
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum EmbeddingModelConfig {
     BgeSmallEnV15,
@@ -122,6 +111,7 @@ struct EmbeddingRuntime {
 
 impl EmbeddingRuntime {
     fn new(config: &EmbeddingConfig) -> Self {
+        eprintln!("[EMBEDDER] Starting ONNX embedding runtime initialization...");
         info!(
             model = %config.model.as_str(),
             "Initializing ONNX embedding runtime"
@@ -130,12 +120,16 @@ impl EmbeddingRuntime {
         let onnx_model_path = env::var("ONNX_MODEL_PATH")
             .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
         
+        eprintln!("[EMBEDDER] ONNX model path: {}", onnx_model_path);
+        eprintln!("[EMBEDDER] Model exists: {}", std::path::Path::new(&onnx_model_path).exists());
+        
         let onnx_config = crate::perf::onnx_embedder::OnnxConfig {
             model_path: onnx_model_path.clone(),
             embedding_dim: config.model.dimension(),
             ..Default::default()
         };
         
+        eprintln!("[EMBEDDER] Creating OnnxEmbedder...");
         match crate::perf::onnx_embedder::OnnxEmbedder::new(onnx_config) {
             Ok(embedder) => {
                 info!(model_path = %onnx_model_path, "ONNX embedder ready");

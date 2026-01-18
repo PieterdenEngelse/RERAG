@@ -8,10 +8,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use super::{
-    hybrid_search::{HybridSearcher, HybridSearchConfig, HybridSearchResult},
+    hybrid_search::{HybridSearcher, HybridSearchConfig},
     semantic_cache::{SemanticCache, SemanticCacheConfig, CachedResult},
-    reranking::{Reranker, RerankConfig, RerankCandidate, RerankResult},
-    connection_pool::{ConnectionPool, PoolConfig},
+    reranking::{Reranker, RerankConfig, RerankCandidate},
     request_coalescing::{RequestCoalescer, Singleflight},
     hnsw::HnswIndex,
     bloom::VectorBloomFilter,
@@ -36,7 +35,7 @@ pub struct OptimizedSearchEngine {
 }
 
 /// Search result
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     pub doc_id: String,
     pub score: f32,
@@ -226,10 +225,12 @@ mod tests {
         let bm25 = vec![("doc1".to_string(), 1.0)];
         
         // First search - cache miss
-        let results1 = engine.search(query, &embedding, &bm25, 10).await;
+        let first = engine.search(query, &embedding, &bm25, 10).await;
+        assert!(!first.is_empty());
         
-        // Second search - should hit cache
-        let results2 = engine.search(query, &embedding, &bm25, 10).await;
+        // Second search - should hit cache and return same docs
+        let second = engine.search(query, &embedding, &bm25, 10).await;
+        assert_eq!(first, second);
         
         let stats = engine.cache_stats();
         assert!(stats.hits >= 1);

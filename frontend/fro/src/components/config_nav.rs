@@ -9,6 +9,7 @@ pub enum ConfigTab {
     Sampling,
     Prompt,
     Hardware,
+    Onnx,
     Other,
 }
 
@@ -29,6 +30,7 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
             Route::ConfigHardware {},
             ConfigTab::Hardware,
         ),
+        ("ONNX", Route::ConfigOnnx {}, ConfigTab::Onnx),
         ("Other", Route::ConfigOther {}, ConfigTab::Other),
     ];
 

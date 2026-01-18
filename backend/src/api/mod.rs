@@ -772,6 +772,143 @@ struct HardwareConfigResponse {
     config: HardwareConfigRequest,
 }
 
+/// ONNX Runtime configuration request/response
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct OnnxConfigRequest {
+    /// Path to the ONNX model file
+    #[serde(default)]
+    pub model_path: Option<String>,
+    /// Maximum sequence length for tokenization
+    #[serde(default)]
+    pub max_length: Option<usize>,
+    /// Embedding dimension
+    #[serde(default)]
+    pub embedding_dim: Option<usize>,
+    /// Number of threads for intra-op parallelism (within operators)
+    #[serde(default)]
+    pub num_threads: Option<usize>,
+    /// Number of threads for inter-op parallelism (across operators)
+    #[serde(default)]
+    pub inter_op_num_threads: Option<usize>,
+    /// Graph optimization level: "disable", "basic", "extended", "all"
+    #[serde(default)]
+    pub optimization_level: Option<String>,
+    /// Execution mode: "sequential" or "parallel"
+    #[serde(default)]
+    pub execution_mode: Option<String>,
+    /// Enable memory pattern optimization
+    #[serde(default)]
+    pub enable_mem_pattern: Option<bool>,
+    /// Enable CPU memory arena
+    #[serde(default)]
+    pub enable_cpu_mem_arena: Option<bool>,
+    /// Enable deterministic compute
+    #[serde(default)]
+    pub deterministic_compute: Option<bool>,
+    /// Optional path to serialize optimized models
+    #[serde(default)]
+    pub optimized_model_path: Option<Option<String>>,
+    /// Enable profiling output
+    #[serde(default)]
+    pub enable_profiling: Option<bool>,
+    /// Optional profiling output path
+    #[serde(default)]
+    pub profiling_output_path: Option<Option<String>>,
+    /// Custom log id
+    #[serde(default)]
+    pub log_id: Option<Option<String>>,
+    /// Log level string
+    #[serde(default)]
+    pub log_level: Option<String>,
+    /// Verbosity for verbose logging
+    #[serde(default)]
+    pub log_verbosity: Option<i32>,
+    /// Use environment allocators
+    #[serde(default)]
+    pub use_env_allocators: Option<bool>,
+    /// Flush-to-zero / denormal-as-zero
+    #[serde(default)]
+    pub denormal_as_zero: Option<bool>,
+    /// Enable Quantize/Dequantize fusion
+    #[serde(default)]
+    pub enable_quant_qdq: Option<bool>,
+    /// Enable double QDQ remover
+    #[serde(default)]
+    pub enable_double_qdq_remover: Option<bool>,
+    /// Enable QDQ cleanup
+    #[serde(default)]
+    pub enable_qdq_cleanup: Option<bool>,
+    /// Enable GELU approximation
+    #[serde(default)]
+    pub approximate_gelu: Option<bool>,
+    /// Enable ahead-of-time inlining
+    #[serde(default)]
+    pub enable_aot_inlining: Option<bool>,
+    /// Optimizer passes to disable
+    #[serde(default)]
+    pub disabled_optimizers: Option<Vec<String>>,
+    /// Allocate initializers using device allocator
+    #[serde(default)]
+    pub use_device_allocator_for_initializers: Option<bool>,
+    /// Allow inter-op spinning
+    #[serde(default)]
+    pub allow_inter_op_spinning: Option<bool>,
+    /// Allow intra-op spinning
+    #[serde(default)]
+    pub allow_intra_op_spinning: Option<bool>,
+    /// Use prepacking optimizations
+    #[serde(default)]
+    pub use_prepacking: Option<bool>,
+    /// Use independent thread pool per session
+    #[serde(default)]
+    pub independent_thread_pool: Option<bool>,
+    /// Do not inherit execution providers from the environment
+    #[serde(default)]
+    pub no_env_execution_providers: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct OnnxConfigResponse {
+    status: String,
+    message: String,
+    request_id: String,
+    config: OnnxConfigInfo,
+}
+
+#[derive(Debug, Serialize)]
+struct OnnxConfigInfo {
+    model_path: String,
+    max_length: usize,
+    embedding_dim: usize,
+    num_threads: usize,
+    inter_op_num_threads: usize,
+    optimization_level: String,
+    execution_mode: String,
+    enable_mem_pattern: bool,
+    enable_cpu_mem_arena: bool,
+    deterministic_compute: bool,
+    optimized_model_path: Option<String>,
+    enable_profiling: bool,
+    profiling_output_path: Option<String>,
+    log_id: Option<String>,
+    log_level: String,
+    log_verbosity: i32,
+    use_env_allocators: bool,
+    denormal_as_zero: bool,
+    enable_quant_qdq: bool,
+    enable_double_qdq_remover: bool,
+    enable_qdq_cleanup: bool,
+    approximate_gelu: bool,
+    enable_aot_inlining: bool,
+    disabled_optimizers: Vec<String>,
+    use_device_allocator_for_initializers: bool,
+    allow_inter_op_spinning: bool,
+    allow_intra_op_spinning: bool,
+    use_prepacking: bool,
+    independent_thread_pool: bool,
+    no_env_execution_providers: bool,
+}
+
 #[derive(Serialize)]
 struct LogEntry {
     timestamp: Option<String>,
@@ -954,8 +1091,149 @@ fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> 
     Ok(())
 }
 
+// Track previous health status for change detection
+static LAST_HEALTH_STATUS: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+
+/// Write to status-specific log file
+fn write_status_log(status: &str, reason: &str, is_change: bool) {
+    use std::io::Write;
+    
+    // Get log directory
+    let log_dir = std::env::var("LOG_DIR")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{}/.agentic-rag/logs", home)
+        });
+    
+    // Create log directory if needed
+    let _ = std::fs::create_dir_all(&log_dir);
+    
+    // Status to filename mapping
+    let filename = match status {
+        "healthy" => "status_healthy.log",
+        "busy" => "status_busy.log",
+        "degraded" => "status_degraded.log",
+        "unhealthy" => "status_unhealthy.log",
+        "offline" => "status_offline.log",
+        "checking" => "status_checking.log",
+        _ => "status_unknown.log",
+    };
+    
+    let log_path = format!("{}/{}", log_dir, filename);
+    
+    // Format log entry
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let change_type = if is_change { "CHANGED" } else { "INIT" };
+    let entry = format!("[{}] [{}] {} | {}\n", timestamp, change_type, status, reason);
+    
+    // Append to status-specific log file
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = file.write_all(entry.as_bytes());
+    }
+}
+
+fn log_status_change(new_status: &str, reason: &str) {
+    let status_lock = LAST_HEALTH_STATUS.get_or_init(|| std::sync::Mutex::new(String::new()));
+    let mut last_status = status_lock.lock().unwrap();
+    
+    if *last_status != new_status {
+        let is_change = !last_status.is_empty();
+        
+        // Write to status-specific log file
+        write_status_log(new_status, reason, is_change);
+        
+        // Also log to main log
+        if is_change {
+            warn!(
+                "Health status changed: {} -> {} | Reason: {}",
+                last_status, new_status, reason
+            );
+        } else {
+            info!("Health status initialized: {} | Reason: {}", new_status, reason);
+        }
+        *last_status = new_status.to_string();
+    }
+}
+
+/// Get status log file content
+pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Error> {
+    let status = path.into_inner();
+    
+    // Validate status name to prevent path traversal
+    let valid_statuses = ["healthy", "busy", "degraded", "unhealthy", "offline", "checking", "unknown", "initial"];
+    if !valid_statuses.contains(&status.as_str()) {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "error": "Invalid status name",
+            "valid_statuses": valid_statuses
+        })));
+    }
+    
+    // Get log directory
+    let log_dir = std::env::var("LOG_DIR")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{}/.agentic-rag/logs", home)
+        });
+    
+    let filename = format!("status_{}.log", status);
+    let log_path = format!("{}/{}", log_dir, filename);
+    
+    // Read log file
+    match std::fs::read_to_string(&log_path) {
+        Ok(content) => {
+            // Return last 100 lines (most recent entries)
+            let lines: Vec<&str> = content.lines().collect();
+            let start = if lines.len() > 100 { lines.len() - 100 } else { 0 };
+            let recent_lines = lines[start..].join("\n");
+            
+            Ok(HttpResponse::Ok().json(json!({
+                "status": status,
+                "log_path": log_path,
+                "total_lines": lines.len(),
+                "showing_lines": lines.len() - start,
+                "content": recent_lines
+            })))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(HttpResponse::Ok().json(json!({
+                "status": status,
+                "log_path": log_path,
+                "total_lines": 0,
+                "showing_lines": 0,
+                "content": "",
+                "message": "No log entries yet for this status"
+            })))
+        }
+        Err(e) => {
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "error": format!("Failed to read log file: {}", e),
+                "log_path": log_path
+            })))
+        }
+    }
+}
+
 pub async fn health_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
+    
+    // Check ONNX model exists
+    let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
+        .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+    let onnx_ready = std::path::Path::new(&onnx_model_path).exists();
+    
+    if !onnx_ready {
+        let reason = format!("ONNX model not found at: {}", onnx_model_path);
+        log_status_change("unhealthy", &reason);
+        return Ok(HttpResponse::ServiceUnavailable().json(json!({
+            "status": "unhealthy",
+            "error": reason,
+            "request_id": request_id
+        })));
+    }
 
     // Get load metrics from global health tracker
     let (load, is_busy, message) = if let Some(tracker) = crate::monitoring::get_health_tracker() {
@@ -985,6 +1263,15 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
         match retriever.health_check() {
             Ok(()) => {
                 let status = if is_busy { "busy" } else { "healthy" };
+                let reason = if is_busy {
+                    message.clone().unwrap_or_else(|| "System busy".to_string())
+                } else {
+                    format!("All systems operational ({} docs, {} vectors)", 
+                        retriever.metrics.total_documents_indexed,
+                        retriever.metrics.total_vectors)
+                };
+                log_status_change(status, &reason);
+                
                 let mut response = json!({
                     "status": status,
                     "documents": retriever.metrics.total_documents_indexed,
@@ -1013,7 +1300,9 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                 Ok(HttpResponse::Ok().json(response))
             }
             Err(e) => {
-                error!("[{}] Health check failed: {}", request_id, e);
+                let reason = format!("Retriever health check failed: {}", e);
+                log_status_change("unhealthy", &reason);
+                error!("[{}] {}", request_id, reason);
                 Ok(HttpResponse::ServiceUnavailable().json(json!({
                     "status": "unhealthy",
                     "error": e.to_string(),
@@ -1022,13 +1311,12 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
             }
         }
     } else {
-        error!(
-            "[{}] Health check failed: Retriever not initialized",
-            request_id
-        );
+        let reason = "Retriever not initialized";
+        log_status_change("unhealthy", reason);
+        error!("[{}] Health check failed: {}", request_id, reason);
         Ok(HttpResponse::ServiceUnavailable().json(json!({
             "status": "unhealthy",
-            "error": "Retriever not initialized",
+            "error": reason,
             "request_id": request_id
         })))
     }
@@ -1831,6 +2119,329 @@ async fn commit_hardware_config(
             })))
         }
     }
+}
+
+// ============================================================================
+// ONNX CONFIG
+// ============================================================================
+
+use crate::perf::onnx_embedder::{OnnxConfig, OnnxExecutionMode, OnnxLogLevel, OnnxOptimizationLevel};
+
+fn onnx_opt_level_to_str(level: OnnxOptimizationLevel) -> &'static str {
+    match level {
+        OnnxOptimizationLevel::Disable => "disable",
+        OnnxOptimizationLevel::Basic => "basic",
+        OnnxOptimizationLevel::Extended => "extended",
+        OnnxOptimizationLevel::All => "all",
+    }
+}
+
+fn onnx_exec_mode_to_str(mode: OnnxExecutionMode) -> &'static str {
+    match mode {
+        OnnxExecutionMode::Sequential => "sequential",
+        OnnxExecutionMode::Parallel => "parallel",
+    }
+}
+
+fn onnx_log_level_to_str(level: OnnxLogLevel) -> &'static str {
+    match level {
+        OnnxLogLevel::Verbose => "verbose",
+        OnnxLogLevel::Info => "info",
+        OnnxLogLevel::Warning => "warning",
+        OnnxLogLevel::Error => "error",
+        OnnxLogLevel::Fatal => "fatal",
+    }
+}
+
+fn parse_log_level(input: &str) -> Option<OnnxLogLevel> {
+    match input.to_lowercase().as_str() {
+        "verbose" | "trace" => Some(OnnxLogLevel::Verbose),
+        "info" => Some(OnnxLogLevel::Info),
+        "warn" | "warning" => Some(OnnxLogLevel::Warning),
+        "error" => Some(OnnxLogLevel::Error),
+        "fatal" | "critical" => Some(OnnxLogLevel::Fatal),
+        _ => None,
+    }
+}
+
+fn apply_option_field<T>(target: &mut Option<T>, value: Option<Option<T>>) {
+    if let Some(inner) = value {
+        *target = inner;
+    }
+}
+
+/// Global ONNX config storage (read at startup, can be modified via API)
+static ONNX_CONFIG: OnceLock<std::sync::RwLock<OnnxConfig>> = OnceLock::new();
+
+fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig> {
+    ONNX_CONFIG.get_or_init(|| {
+        // Initialize from environment or defaults
+        let model_path = std::env::var("ONNX_MODEL_PATH")
+            .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+        let num_threads = std::env::var("ONNX_NUM_THREADS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+        let inter_threads = std::env::var("ONNX_INTER_OP_THREADS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        
+        std::sync::RwLock::new(OnnxConfig {
+            model_path,
+            num_threads,
+            inter_op_num_threads: inter_threads,
+            ..Default::default()
+        })
+    })
+}
+
+/// Get current ONNX configuration
+async fn get_onnx_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = get_onnx_config_storage().read().unwrap();
+    
+    let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
+    let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
+    let log_level_str = onnx_log_level_to_str(config.log_level);
+    
+    Ok(HttpResponse::Ok().json(OnnxConfigResponse {
+        status: "ok".into(),
+        message: "".into(),
+        request_id,
+        config: OnnxConfigInfo {
+            model_path: config.model_path.clone(),
+            max_length: config.max_length,
+            embedding_dim: config.embedding_dim,
+            num_threads: config.num_threads,
+            inter_op_num_threads: config.inter_op_num_threads,
+            optimization_level: opt_level_str.to_string(),
+            execution_mode: exec_mode_str.to_string(),
+            enable_mem_pattern: config.enable_mem_pattern,
+            enable_cpu_mem_arena: config.enable_cpu_mem_arena,
+            deterministic_compute: config.deterministic_compute,
+            optimized_model_path: config.optimized_model_path.clone(),
+            enable_profiling: config.enable_profiling,
+            profiling_output_path: config.profiling_output_path.clone(),
+            log_id: config.log_id.clone(),
+            log_level: log_level_str.to_string(),
+            log_verbosity: config.log_verbosity,
+            use_env_allocators: config.use_env_allocators,
+            denormal_as_zero: config.denormal_as_zero,
+            enable_quant_qdq: config.enable_quant_qdq,
+            enable_double_qdq_remover: config.enable_double_qdq_remover,
+            enable_qdq_cleanup: config.enable_qdq_cleanup,
+            approximate_gelu: config.approximate_gelu,
+            enable_aot_inlining: config.enable_aot_inlining,
+            disabled_optimizers: config.disabled_optimizers.clone(),
+            use_device_allocator_for_initializers: config.use_device_allocator_for_initializers,
+            allow_inter_op_spinning: config.allow_inter_op_spinning,
+            allow_intra_op_spinning: config.allow_intra_op_spinning,
+            use_prepacking: config.use_prepacking,
+            independent_thread_pool: config.independent_thread_pool,
+            no_env_execution_providers: config.no_env_execution_providers,
+        },
+    }))
+}
+
+/// Update ONNX configuration (requires restart to take effect for embedder)
+async fn set_onnx_config(
+    payload: web::Json<OnnxConfigRequest>,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let body = payload.into_inner();
+    
+    let mut config = get_onnx_config_storage().write().unwrap();
+    
+    // Update only provided fields
+    if let Some(path) = body.model_path {
+        config.model_path = path;
+    }
+    if let Some(len) = body.max_length {
+        config.max_length = len;
+    }
+    if let Some(dim) = body.embedding_dim {
+        config.embedding_dim = dim;
+    }
+    if let Some(threads) = body.num_threads {
+        if threads == 0 {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "message": "num_threads must be greater than 0",
+                "request_id": request_id
+            })));
+        }
+        config.num_threads = threads;
+    }
+    if let Some(threads) = body.inter_op_num_threads {
+        config.inter_op_num_threads = threads;
+    }
+    if let Some(level) = body.optimization_level {
+        config.optimization_level = match level.to_lowercase().as_str() {
+            "disable" | "0" => OnnxOptimizationLevel::Disable,
+            "basic" | "1" => OnnxOptimizationLevel::Basic,
+            "extended" | "2" => OnnxOptimizationLevel::Extended,
+            "all" | "3" => OnnxOptimizationLevel::All,
+            _ => {
+                return Ok(HttpResponse::BadRequest().json(json!({
+                    "status": "error",
+                    "message": "Invalid optimization_level. Use: disable, basic, extended, all",
+                    "request_id": request_id
+                })));
+            }
+        };
+    }
+    if let Some(mode) = body.execution_mode {
+        config.execution_mode = match mode.to_lowercase().as_str() {
+            "sequential" => OnnxExecutionMode::Sequential,
+            "parallel" => OnnxExecutionMode::Parallel,
+            _ => {
+                return Ok(HttpResponse::BadRequest().json(json!({
+                    "status": "error",
+                    "message": "Invalid execution_mode. Use: sequential, parallel",
+                    "request_id": request_id
+                })));
+            }
+        };
+    }
+    if let Some(enabled) = body.enable_mem_pattern {
+        config.enable_mem_pattern = enabled;
+    }
+    if let Some(enabled) = body.enable_cpu_mem_arena {
+        config.enable_cpu_mem_arena = enabled;
+    }
+    if let Some(flag) = body.deterministic_compute {
+        config.deterministic_compute = flag;
+    }
+    apply_option_field(&mut config.optimized_model_path, body.optimized_model_path);
+    if let Some(flag) = body.enable_profiling {
+        config.enable_profiling = flag;
+    }
+    apply_option_field(&mut config.profiling_output_path, body.profiling_output_path);
+    apply_option_field(&mut config.log_id, body.log_id);
+    if let Some(level) = body.log_level {
+        match parse_log_level(&level) {
+            Some(parsed) => config.log_level = parsed,
+            None => {
+                return Ok(HttpResponse::BadRequest().json(json!({
+                    "status": "error",
+                    "message": format!("Invalid log_level '{}'. Use verbose, info, warning, error, fatal", level),
+                    "request_id": request_id
+                })));
+            }
+        }
+    }
+    if let Some(verbosity) = body.log_verbosity {
+        if verbosity < 0 {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "message": "log_verbosity must be >= 0",
+                "request_id": request_id
+            })));
+        }
+        config.log_verbosity = verbosity;
+    }
+    if let Some(flag) = body.use_env_allocators {
+        config.use_env_allocators = flag;
+    }
+    if let Some(flag) = body.denormal_as_zero {
+        config.denormal_as_zero = flag;
+    }
+    if let Some(flag) = body.enable_quant_qdq {
+        config.enable_quant_qdq = flag;
+    }
+    if let Some(flag) = body.enable_double_qdq_remover {
+        config.enable_double_qdq_remover = flag;
+    }
+    if let Some(flag) = body.enable_qdq_cleanup {
+        config.enable_qdq_cleanup = flag;
+    }
+    if let Some(flag) = body.approximate_gelu {
+        config.approximate_gelu = flag;
+    }
+    if let Some(flag) = body.enable_aot_inlining {
+        config.enable_aot_inlining = flag;
+    }
+    if let Some(list) = body.disabled_optimizers {
+        config.disabled_optimizers = list;
+    }
+    if let Some(flag) = body.use_device_allocator_for_initializers {
+        config.use_device_allocator_for_initializers = flag;
+    }
+    if let Some(flag) = body.allow_inter_op_spinning {
+        config.allow_inter_op_spinning = flag;
+    }
+    if let Some(flag) = body.allow_intra_op_spinning {
+        config.allow_intra_op_spinning = flag;
+    }
+    if let Some(flag) = body.use_prepacking {
+        config.use_prepacking = flag;
+    }
+    if let Some(flag) = body.independent_thread_pool {
+        config.independent_thread_pool = flag;
+    }
+    if let Some(flag) = body.no_env_execution_providers {
+        config.no_env_execution_providers = flag;
+    }
+    
+    let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
+    let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
+    let log_level_str = onnx_log_level_to_str(config.log_level);
+    
+    tracing::info!(
+        request_id = %request_id,
+        num_threads = config.num_threads,
+        inter_op_threads = config.inter_op_num_threads,
+        optimization_level = opt_level_str,
+        execution_mode = exec_mode_str,
+        deterministic_compute = config.deterministic_compute,
+        enable_profiling = config.enable_profiling,
+        log_level = log_level_str,
+        "ONNX config updated (restart required to apply)"
+    );
+    
+    Ok(HttpResponse::Ok().json(OnnxConfigResponse {
+        status: "ok".into(),
+        message: "ONNX config updated. Restart backend to apply changes to embedder.".into(),
+        request_id,
+        config: OnnxConfigInfo {
+            model_path: config.model_path.clone(),
+            max_length: config.max_length,
+            embedding_dim: config.embedding_dim,
+            num_threads: config.num_threads,
+            inter_op_num_threads: config.inter_op_num_threads,
+            optimization_level: opt_level_str.to_string(),
+            execution_mode: exec_mode_str.to_string(),
+            enable_mem_pattern: config.enable_mem_pattern,
+            enable_cpu_mem_arena: config.enable_cpu_mem_arena,
+            deterministic_compute: config.deterministic_compute,
+            optimized_model_path: config.optimized_model_path.clone(),
+            enable_profiling: config.enable_profiling,
+            profiling_output_path: config.profiling_output_path.clone(),
+            log_id: config.log_id.clone(),
+            log_level: log_level_str.to_string(),
+            log_verbosity: config.log_verbosity,
+            use_env_allocators: config.use_env_allocators,
+            denormal_as_zero: config.denormal_as_zero,
+            enable_quant_qdq: config.enable_quant_qdq,
+            enable_double_qdq_remover: config.enable_double_qdq_remover,
+            enable_qdq_cleanup: config.enable_qdq_cleanup,
+            approximate_gelu: config.approximate_gelu,
+            enable_aot_inlining: config.enable_aot_inlining,
+            disabled_optimizers: config.disabled_optimizers.clone(),
+            use_device_allocator_for_initializers: config.use_device_allocator_for_initializers,
+            allow_inter_op_spinning: config.allow_inter_op_spinning,
+            allow_intra_op_spinning: config.allow_intra_op_spinning,
+            use_prepacking: config.use_prepacking,
+            independent_thread_pool: config.independent_thread_pool,
+            no_env_execution_providers: config.no_env_execution_providers,
+        },
+    }))
+}
+
+/// Get the current ONNX config for use by embedder initialization
+pub fn get_current_onnx_config() -> OnnxConfig {
+    get_onnx_config_storage().read().unwrap().clone()
 }
 
 // ============================================================================
@@ -4864,12 +5475,17 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     let prompt = {
         let mut parts = Vec::new();
 
-        // Add context if present
+        // Add context if present, or fallback instruction for hybrid mode
         if !context.is_empty() {
             parts.push(format!(
-                "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}",
+                "Context (ignore if not relevant to the question):\n{}\n\nAnswer the question directly. If the context above is not relevant, use your own knowledge.",
                 context
             ));
+        } else if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
+            // Hybrid mode with no context: tell LLM to answer from its knowledge
+            parts.push(
+                "Answer the question based on your knowledge.".to_string()
+            );
         }
 
         // Add question
@@ -4916,7 +5532,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                     "top_k": config.top_k,
                     "num_predict": config.max_tokens,
                     "repeat_penalty": config.repeat_penalty,
-                    "num_thread": thread_count
+                    "num_thread": thread_count,
+                    "num_ctx": hardware_config.num_ctx
                 });
                 let body =
                     cache_prompt.build_ollama_chat_request(&final_model, true, Some(options));
@@ -4933,7 +5550,8 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                         "top_k": config.top_k,
                         "num_predict": config.max_tokens,
                         "repeat_penalty": config.repeat_penalty,
-                        "num_thread": thread_count
+                        "num_thread": thread_count,
+                        "num_ctx": hardware_config.num_ctx
                     },
                     "system": if system_prompt.is_empty() { serde_json::Value::Null } else { serde_json::json!(system_prompt) }
                 });
@@ -5405,6 +6023,7 @@ pub fn start_api_server(
                 web::scope("/monitoring")
                     .route("/health", web::get().to(health_check))
                     .route("/ready", web::get().to(ready_check))
+                    .route("/status-log/{status}", web::get().to(get_status_log))
                     .route("/metrics", web::get().to(get_metrics)) // ← Prometheus format
                     .route("/optimizations", web::get().to(get_optimization_stats)) // ← Performance optimization stats
                     .route("/optimizations/build-hnsw", web::post().to(build_hnsw_index))
@@ -5498,6 +6117,8 @@ pub fn start_api_server(
             .route("/config/prompt_caching", web::post().to(set_prompt_caching))
             .route("/config/hardware", web::get().to(get_hardware_config))
             .route("/config/hardware", web::post().to(commit_hardware_config))
+            .route("/config/onnx", web::get().to(get_onnx_config))
+            .route("/config/onnx", web::post().to(set_onnx_config))
             .route("/config/api_keys", web::get().to(get_api_keys))
             .route("/config/api_keys", web::post().to(save_api_keys))
             .route(

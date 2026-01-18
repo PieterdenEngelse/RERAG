@@ -20,9 +20,10 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot, Mutex};
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Request coalescer for deduplicating concurrent requests
+#[allow(dead_code)]
 pub struct RequestCoalescer<K, V> {
     /// Pending requests
     pending: DashMap<K, Arc<PendingRequest<V>>>,
@@ -33,6 +34,7 @@ pub struct RequestCoalescer<K, V> {
 }
 
 /// Pending request state
+#[allow(dead_code)]
 struct PendingRequest<V> {
     /// Sender for broadcasting result
     sender: broadcast::Sender<Arc<V>>,
@@ -58,12 +60,28 @@ impl Default for CoalescerConfig {
     }
 }
 
+use super::cache_aligned::CacheAligned;
+use std::sync::atomic::AtomicU64;
+
 /// Coalescer statistics
-#[derive(Debug, Default)]
+/// 
+/// Counters are cache-line aligned to prevent false sharing
+/// when concurrent requests update different counters.
+#[derive(Debug)]
 pub struct CoalescerStats {
-    pub total_requests: std::sync::atomic::AtomicU64,
-    pub coalesced_requests: std::sync::atomic::AtomicU64,
-    pub executed_requests: std::sync::atomic::AtomicU64,
+    pub total_requests: CacheAligned<AtomicU64>,
+    pub coalesced_requests: CacheAligned<AtomicU64>,
+    pub executed_requests: CacheAligned<AtomicU64>,
+}
+
+impl Default for CoalescerStats {
+    fn default() -> Self {
+        Self {
+            total_requests: CacheAligned::new(AtomicU64::new(0)),
+            coalesced_requests: CacheAligned::new(AtomicU64::new(0)),
+            executed_requests: CacheAligned::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 impl<K, V> RequestCoalescer<K, V>
@@ -182,6 +200,7 @@ impl std::error::Error for CoalesceError {}
 /// Batch request coalescer
 /// 
 /// Collects multiple requests and executes them as a batch
+#[allow(dead_code)]
 pub struct BatchCoalescer<K, V> {
     /// Pending items
     pending: Arc<Mutex<Vec<(K, oneshot::Sender<V>)>>>,
@@ -286,14 +305,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_coalescing() {
-        let coalescer: RequestCoalescer<String, i32> = RequestCoalescer::with_defaults();
+        let coalescer: Arc<RequestCoalescer<String, i32>> = Arc::new(RequestCoalescer::with_defaults());
         let counter = Arc::new(AtomicUsize::new(0));
 
         // Spawn multiple requests for the same key
         let mut handles = vec![];
         for _ in 0..10 {
-            let coalescer = &coalescer;
-            let counter = counter.clone();
+            let coalescer = Arc::clone(&coalescer);
+            let counter = Arc::clone(&counter);
             handles.push(tokio::spawn(async move {
                 coalescer.execute("key".to_string(), || async {
                     counter.fetch_add(1, Ordering::Relaxed);

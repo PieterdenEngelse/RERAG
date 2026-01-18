@@ -11,6 +11,7 @@
 //! - Connection reuse
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use super::cache_aligned::CacheAligned;
 use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, SemaphorePermit};
 use tracing::{debug, warn};
@@ -85,14 +86,18 @@ pub struct PoolStats {
 }
 
 /// Generic connection pool using semaphore for limiting
+/// 
+/// Stats counters are cache-line aligned to prevent false sharing
+/// when multiple threads acquire/release connections concurrently.
 pub struct ConnectionPool {
     config: PoolConfig,
     semaphore: Semaphore,
-    active: AtomicUsize,
-    acquired: AtomicUsize,
-    released: AtomicUsize,
-    timeouts: AtomicUsize,
-    errors: AtomicUsize,
+    // Stats - cache-line aligned to prevent false sharing
+    active: CacheAligned<AtomicUsize>,
+    acquired: CacheAligned<AtomicUsize>,
+    released: CacheAligned<AtomicUsize>,
+    timeouts: CacheAligned<AtomicUsize>,
+    errors: CacheAligned<AtomicUsize>,
 }
 
 impl ConnectionPool {
@@ -101,11 +106,11 @@ impl ConnectionPool {
         Self {
             config,
             semaphore,
-            active: AtomicUsize::new(0),
-            acquired: AtomicUsize::new(0),
-            released: AtomicUsize::new(0),
-            timeouts: AtomicUsize::new(0),
-            errors: AtomicUsize::new(0),
+            active: CacheAligned::new(AtomicUsize::new(0)),
+            acquired: CacheAligned::new(AtomicUsize::new(0)),
+            released: CacheAligned::new(AtomicUsize::new(0)),
+            timeouts: CacheAligned::new(AtomicUsize::new(0)),
+            errors: CacheAligned::new(AtomicUsize::new(0)),
         }
     }
 

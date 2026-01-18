@@ -1,4 +1,4 @@
-mod components;
+pub mod components;
 mod constants;
 mod help_content;
 mod helpers;
@@ -725,120 +725,6 @@ pub fn ConfigHardware() -> Element {
                         }
                     }
                 }
-            }
-
-            // For Ollama: show simple Model Loading board
-            if is_ollama_backend {
-            Panel { title: None, refresh: None,
-                div { class: "flex flex-wrap gap-4 items-stretch",
-                div { class: "rounded border border-gray-600 p-4 w-fit",
-                    span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Model Loading" }
-                    div { class: "flex flex-wrap gap-10 justify-start",
-                        // Threading
-                        div { class: PARAM_COLUMN_CLASS,
-                            span { class: "text-gray-300 font-semibold", "Threading" }
-                            div { class: PARAM_BLOCK_CLASS,
-                                label { class: PARAM_LABEL_CLASS, "num_thread" }
-                                div { class: "flex items-end gap-2",
-                                    input {
-                                        r#type: "number",
-                                        min: "1",
-                                        class: PARAM_NUMBER_INPUT_CLASS,
-                                        value: format!("{}", hardware_values.num_thread),
-                                        onchange: move |evt| {
-                                            if let Ok(value) = evt.value().parse::<usize>() {
-                                                hardware_config.with_mut(|cfg| cfg.num_thread = value.max(1));
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                        style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| num_thread_info_signal.set(true),
-                                        title: "Thread help",
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                            div { class: PARAM_BLOCK_CLASS,
-                                label { class: PARAM_LABEL_CLASS, "num_ctx" }
-                                div { class: "flex items-end gap-2",
-                                    input {
-                                        r#type: "number",
-                                        min: "256",
-                                        step: "128",
-                                        class: PARAM_NUMBER_INPUT_CLASS,
-                                        value: format!("{}", hardware_values.num_ctx),
-                                        onchange: move |evt| {
-                                            if let Ok(value) = evt.value().parse::<usize>() {
-                                                hardware_config.with_mut(|cfg| cfg.num_ctx = value.max(256));
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                        style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| num_ctx_info_signal.set(true),
-                                        title: "Context size help",
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                            div { class: PARAM_BLOCK_CLASS,
-                                label { class: PARAM_LABEL_CLASS, "num_batch" }
-                                div { class: "flex items-end gap-2",
-                                    input {
-                                        r#type: "number",
-                                        min: "1",
-                                        class: PARAM_NUMBER_INPUT_CLASS,
-                                        value: format!("{}", hardware_values.num_batch),
-                                        onchange: move |evt| {
-                                            if let Ok(value) = evt.value().parse::<usize>() {
-                                                hardware_config.with_mut(|cfg| cfg.num_batch = value.max(1));
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                        style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| num_batch_info_signal.set(true),
-                                        title: "Batch size help",
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                        }
-                        // GPU
-                        div { class: PARAM_COLUMN_CLASS,
-                            span { class: "text-gray-300 font-semibold", "GPU" }
-                            div { class: PARAM_BLOCK_CLASS,
-                                label { class: PARAM_LABEL_CLASS, "num_gpu" }
-                                div { class: "flex items-end gap-2",
-                                    input {
-                                        r#type: "number",
-                                        min: "0",
-                                        class: PARAM_NUMBER_INPUT_CLASS,
-                                        value: format!("{}", hardware_values.num_gpu),
-                                        onchange: move |evt| {
-                                            if let Ok(value) = evt.value().parse::<usize>() {
-                                                hardware_config.with_mut(|cfg| cfg.num_gpu = value);
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                        style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| num_gpu_info_signal.set(true),
-                                        title: "num_gpu help",
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                }
-            }
             }
 
             // For llama.cpp and other local backends: show 4 category boards
@@ -1779,6 +1665,116 @@ pub fn ConfigHardware() -> Element {
             if is_ollama_backend {
             Panel { title: None, refresh: None,
                 div { class: "flex flex-wrap gap-4 items-stretch",
+
+                // Model Loading board
+                div { class: "rounded border border-gray-600 p-4 w-fit",
+                    span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Model Loading" }
+                    div { class: "flex flex-wrap gap-5 justify-start",
+                        // Threading
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold", "Threading" }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_thread" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_thread),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_thread = value.max(1));
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_thread_info_signal.set(true),
+                                        title: "Thread help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_ctx" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "256",
+                                        step: "128",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_ctx),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_ctx = value.max(256));
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_ctx_info_signal.set(true),
+                                        title: "Context size help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_batch" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_batch),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_batch = value.max(1));
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_batch_info_signal.set(true),
+                                        title: "Batch size help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                        }
+                        // GPU
+                        div { class: PARAM_COLUMN_CLASS,
+                            span { class: "text-gray-300 font-semibold", "GPU" }
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "num_gpu" }
+                                div { class: "flex items-end gap-2",
+                                    input {
+                                        r#type: "number",
+                                        min: "0",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: format!("{}", hardware_values.num_gpu),
+                                        onchange: move |evt| {
+                                            if let Ok(value) = evt.value().parse::<usize>() {
+                                                hardware_config.with_mut(|cfg| cfg.num_gpu = value);
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| num_gpu_info_signal.set(true),
+                                        title: "num_gpu help",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Sampling board
                 div { class: "rounded border border-gray-600 p-4 w-fit",
                     span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Sampling" }
                     if sampling_loading() {
@@ -1786,7 +1782,7 @@ pub fn ConfigHardware() -> Element {
                     } else if let Some(err) = sampling_error() {
                         div { class: "text-xs text-red-400", "{err}" }
                     } else {
-                        div { class: "flex flex-wrap gap-10 justify-start",
+                        div { class: "flex flex-wrap gap-5 justify-start",
                             // Column 1: Basic sampling
                             div { class: PARAM_COLUMN_CLASS,
                                 span { class: "text-gray-300 font-semibold", "Basic" }
@@ -1981,7 +1977,7 @@ pub fn ConfigHardware() -> Element {
                 // Mirostat (adaptive sampling) group (Ollama only)
                 div { class: "rounded border border-gray-600 p-4 w-fit",
                     span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Mirostat" }
-                    div { class: "flex flex-wrap gap-10 justify-start",
+                    div { class: "flex flex-wrap gap-5 justify-start",
                         div { class: PARAM_COLUMN_CLASS,
                             span { class: "text-gray-300 font-semibold", "Adaptive Sampling" }
                             div { class: PARAM_BLOCK_CLASS,
@@ -2068,7 +2064,7 @@ pub fn ConfigHardware() -> Element {
                 // Repetition Control group (Ollama only)
                 div { class: "rounded border border-gray-600 p-4 w-fit",
                     span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Repetition Control" }
-                    div { class: "flex flex-wrap gap-10 justify-start",
+                    div { class: "flex flex-wrap gap-5 justify-start",
                         // Column 1: Lookback & Penalty
                         div { class: PARAM_COLUMN_CLASS,
                             span { class: "text-gray-300 font-semibold", "Penalties" }
@@ -2211,7 +2207,7 @@ pub fn ConfigHardware() -> Element {
                 // Output Control group (Ollama only)
                 div { class: "rounded border border-gray-600 p-4 w-fit",
                     span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Output Control" }
-                    div { class: "flex flex-wrap gap-10 justify-start",
+                    div { class: "flex flex-wrap gap-5 justify-start",
                         div { class: PARAM_COLUMN_CLASS,
                             span { class: "text-gray-300 font-semibold", "Generation" }
                             div { class: PARAM_BLOCK_CLASS,

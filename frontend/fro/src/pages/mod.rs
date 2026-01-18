@@ -8,6 +8,7 @@ pub mod home;
 pub mod memories;
 pub mod monitor;
 pub mod not_found;
+pub mod onnx;
 pub mod other;
 pub mod parameters;
 pub mod prompt;
@@ -27,6 +28,7 @@ pub use monitor::{
     MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools,
 };
 pub use not_found::PageNotFound;
+pub use onnx::ConfigOnnx;
 pub use other::ConfigOther;
 pub use parameters::Parameters;
 pub use prompt::ConfigPrompt;

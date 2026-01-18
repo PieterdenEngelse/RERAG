@@ -202,4 +202,26 @@ pub struct VectorIndex {
 - ✅ Memory-mapped files
 - ✅ Zero-copy access
 
-**Best practice:** Use serde for config/API, rkyv for performance-critical data structures.
+*ABest practice:** Use serde for config/API, rkyv for performance-critical data structures.
+
+=====================================================
+
+You're right, that conclusion feels a bit abrupt. The article builds up this nice explanatory arc about cache lines, MESI, store buffers, and why `Relaxed` ordering doesn't save you from false sharing with RMW operations — but then it just ends with "fetch_add forces an interaction."
+
+A stronger conclusion might tie the insights back to practical takeaways, something like:
+
+**What the conclusion *could* say:**
+
+The real lesson isn't "don't use `fetch_add`" — it's that **data layout matters more than memory ordering** when it comes to false sharing. No amount of relaxed ordering will save you if two hot variables share a cache line, because RMW operations have an unavoidable data dependency on the true global state.
+
+So when designing concurrent data structures:
+
+1. **Pad or align** frequently-written fields to separate cache lines
+2. **Profile first** — false sharing is invisible without measurement (tools like `perf c2c` on Linux can help)
+3. **Understand the operation type** — pure stores can benefit from buffering; RMW operations cannot
+
+The 6x speedup from adding padding isn't magic — it's just giving each core uncontested ownership of its own cache line, eliminating the ping-pong entirely.
+
+---
+
+Did you find the technical explanation in the article useful for your work on `ag`? I could see cache-aware design being relevant for any concurrent indexing or vector operations you're doing.

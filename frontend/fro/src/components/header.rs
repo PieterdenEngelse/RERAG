@@ -20,6 +20,13 @@ pub fn Header() -> Element {
     let mut show_busy_details = use_signal(|| false);
     let mut show_checking_details = use_signal(|| false);
     let mut show_indices_details = use_signal(|| false);
+    // Log modal state
+    let mut show_log_modal = use_signal(|| false);
+    let mut log_status_type = use_signal(|| String::new());
+    let mut log_content = use_signal(|| String::new());
+    let mut log_loading = use_signal(|| false);
+    let mut log_error = use_signal(|| Option::<String>::None);
+    let mut log_total_lines = use_signal(|| 0usize);
     let current_route = use_route::<Route>();
 
     let is_dark = use_context::<Signal<bool>>();
@@ -292,7 +299,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-white", "Initial status details" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-white", "Initial status details" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("initial".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("initial").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "An async loop immediately calls api::health_check() before awaiting any delay—only after the response (or error) does it sleep for 5 seconds and repeat. The “unknown (initial state before first check)” label only applies right after the component ‘mounts’ (in Dioxus this means the Rust Header component that, through the rsx! macro, renders the header HTML where the status indicator lives). The very first health check happens immediately on mount, before the first 5-second timer runs."
                     }
@@ -322,7 +356,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-green-400", "Healthy (Green)" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-green-400", "Healthy (Green)" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("healthy".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("healthy").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "Green means the backend's /monitoring/health endpoint returned status: \"healthy\" (or \"ok\"). This indicates that retriever.health_check() passed all its internal validations."
                     }
@@ -369,7 +430,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-yellow-400", "Degraded (Yellow)" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-yellow-400", "Degraded (Yellow)" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("degraded".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("degraded").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "Yellow means the backend returned status: \"degraded\". This is a middle ground—the system is operational but some non-critical component isn't performing optimally."
                     }
@@ -396,7 +484,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-red-400", "Offline / Unhealthy (Red)" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-red-400", "Offline / Unhealthy (Red)" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("unhealthy".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("unhealthy").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "Red appears when either: (1) The frontend's health_check() request failed entirely (network error, timeout, backend not running), setting status to \"offline\". (2) The backend responded with status: \"unhealthy\" because retriever.health_check() failed."
                     }
@@ -423,7 +538,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-orange-400", "Unexpected Status (Orange)" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-orange-400", "Unexpected Status (Orange)" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("unknown".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("unknown").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "Orange is the fallback color when the backend returns a status string that doesn't match any known value (\"healthy\", \"ok\", \"degraded\", \"offline\", \"unhealthy\", or \"unknown\")."
                     }
@@ -544,7 +686,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-pink-400", "Healthy but Busy (Pink)" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-pink-400", "Healthy but Busy (Pink)" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("busy".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("busy").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "The backend is healthy and responsive, but currently under heavy load. The system is processing resource-intensive tasks that may slow down response times."
                     }
@@ -622,7 +791,34 @@ pub fn Header() -> Element {
                 div {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
-                    h3 { class: "text-lg font-semibold text-purple-400", "Checking / Slow Response (Purple Pulsing)" }
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-purple-400", "Checking / Slow Response (Purple Pulsing)" }
+                        a {
+                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
+                            href: "#log",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                log_status_type.set("checking".to_string());
+                                log_loading.set(true);
+                                log_error.set(None);
+                                show_log_modal.set(true);
+                                spawn(async move {
+                                    match api::get_status_log("checking").await {
+                                        Ok(resp) => {
+                                            log_content.set(resp.content);
+                                            log_total_lines.set(resp.total_lines);
+                                            log_loading.set(false);
+                                        }
+                                        Err(e) => {
+                                            log_error.set(Some(e));
+                                            log_loading.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            "Log"
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
                         "Purple pulsing means the frontend's health check request is taking longer than expected (over 8 seconds). This is a transitional state indicating the backend might be very busy or experiencing issues."
                     }
@@ -802,6 +998,57 @@ pub fn Header() -> Element {
                         class: "btn btn-primary btn-sm mt-4 w-full",
                         onclick: move |_| show_status_info.set(false),
                         "Got it!"
+                    }
+                }
+            }
+        }
+
+        // Status Log Modal
+        if show_log_modal() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1200;",
+                onclick: move |_| show_log_modal.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[95vw] max-w-4xl p-6 shadow-2xl text-sm max-h-[85vh] flex flex-col",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h3 { class: "text-lg font-semibold text-blue-400",
+                            "Status Log: {log_status_type()}"
+                        }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_log_modal.set(false),
+                            "×"
+                        }
+                    }
+                    div { class: "text-xs text-gray-500 mb-2",
+                        "Total entries: {log_total_lines()} (showing last 100)"
+                    }
+                    if log_loading() {
+                        div { class: "flex items-center justify-center py-8",
+                            div { class: "animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400" }
+                            span { class: "ml-3 text-gray-400", "Loading log..." }
+                        }
+                    } else if let Some(err) = log_error() {
+                        div { class: "bg-red-900/30 border border-red-700 rounded p-4 text-red-300",
+                            "Error loading log: {err}"
+                        }
+                    } else if log_content().is_empty() {
+                        div { class: "text-gray-500 italic py-8 text-center",
+                            "No log entries yet for this status."
+                        }
+                    } else {
+                        div { class: "flex-1 overflow-auto bg-gray-900 rounded p-3 font-mono text-xs",
+                            pre { class: "whitespace-pre-wrap text-gray-300",
+                                "{log_content()}"
+                            }
+                        }
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm mt-4 w-full",
+                        onclick: move |_| show_log_modal.set(false),
+                        "Close"
                     }
                 }
             }

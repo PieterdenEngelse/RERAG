@@ -113,7 +113,7 @@ impl Reranker {
         }
 
         // Calculate relevance scores
-        let mut scored: Vec<(RerankCandidate, RerankFactors)> = candidates
+        let scored: Vec<(RerankCandidate, RerankFactors)> = candidates
             .into_iter()
             .map(|c| {
                 let factors = self.calculate_factors(query, query_embedding, &c);
@@ -131,7 +131,7 @@ impl Reranker {
     fn calculate_factors(
         &self,
         query: &str,
-        query_embedding: Option<&[f32]>,
+        _query_embedding: Option<&[f32]>,
         candidate: &RerankCandidate,
     ) -> RerankFactors {
         let mut factors = RerankFactors::default();

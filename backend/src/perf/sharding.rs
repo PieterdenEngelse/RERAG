@@ -11,8 +11,7 @@
 //! - Directory-based: Lookup table for flexibility
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 /// Shard identifier
@@ -58,6 +57,7 @@ impl ShardConfig {
 }
 
 /// Consistent hash ring for shard selection
+#[allow(dead_code)]
 pub struct HashRing {
     ring: Vec<(u64, ShardId)>,
     virtual_nodes: u32,
@@ -187,6 +187,7 @@ impl ShardRouter {
 }
 
 /// Sharded search coordinator
+#[allow(dead_code)]
 pub struct ShardedSearch {
     router: ShardRouter,
     timeout_ms: u64,

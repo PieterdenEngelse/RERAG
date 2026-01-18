@@ -473,8 +473,13 @@ mod tests {
 
     #[test]
     fn test_cache_stats() {
+        // Populate cache to record stats
+        let result = make_result();
+        cache_result("Calculator", "cache stats", &result);
+        let _ = get_cached("Calculator", "cache stats");
+
         let stats = get_cache_stats();
-        // Stats should be available even if empty
-        assert!(stats.len() >= 0);
+        assert!(!stats.is_empty());
+        assert!(stats.iter().any(|s| s.tool_type == "Calculator"));
     }
 }

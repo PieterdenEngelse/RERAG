@@ -1,7 +1,7 @@
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigHardware, ConfigMemories, ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home,
+    About, Config, ConfigHardware, ConfigMemories, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home,
     MonitorAgentic, MonitorCache, MonitorIndex, MonitorLogs, MonitorObservations, MonitorOverview,
     MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound, Parameters, Train,
 };
@@ -34,6 +34,8 @@ pub enum Route {
         ConfigOther {},
         #[route("/config/memories")]
         ConfigMemories {},
+        #[route("/config/onnx")]
+        ConfigOnnx {},
         #[route("/monitor/requests")]
         MonitorRequests {},
         #[route("/monitor/cache")]

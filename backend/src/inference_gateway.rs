@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, warn};
+use crate::perf::CacheAligned;
 
 /// Configuration for the inference gateway
 #[derive(Debug, Clone)]
@@ -74,17 +75,20 @@ pub struct GatewayStats {
 }
 
 /// Inference gateway for controlling concurrent inference operations
+/// 
+/// Metrics are cache-line aligned to prevent false sharing when
+/// embedding and LLM operations update their counters concurrently.
 pub struct InferenceGateway {
     config: InferenceGatewayConfig,
     embedding_semaphore: Arc<Semaphore>,
     llm_semaphore: Arc<Semaphore>,
-    // Metrics
-    embedding_acquired: AtomicU64,
-    embedding_rejected: AtomicU64,
-    embedding_wait_ms: AtomicU64,
-    llm_acquired: AtomicU64,
-    llm_rejected: AtomicU64,
-    llm_wait_ms: AtomicU64,
+    // Metrics - cache-line aligned to prevent false sharing
+    embedding_acquired: CacheAligned<AtomicU64>,
+    embedding_rejected: CacheAligned<AtomicU64>,
+    embedding_wait_ms: CacheAligned<AtomicU64>,
+    llm_acquired: CacheAligned<AtomicU64>,
+    llm_rejected: CacheAligned<AtomicU64>,
+    llm_wait_ms: CacheAligned<AtomicU64>,
 }
 
 impl InferenceGateway {
@@ -101,12 +105,12 @@ impl InferenceGateway {
             embedding_semaphore: Arc::new(Semaphore::new(config.max_concurrent_embeddings)),
             llm_semaphore: Arc::new(Semaphore::new(config.max_concurrent_llm)),
             config,
-            embedding_acquired: AtomicU64::new(0),
-            embedding_rejected: AtomicU64::new(0),
-            embedding_wait_ms: AtomicU64::new(0),
-            llm_acquired: AtomicU64::new(0),
-            llm_rejected: AtomicU64::new(0),
-            llm_wait_ms: AtomicU64::new(0),
+            embedding_acquired: CacheAligned::new(AtomicU64::new(0)),
+            embedding_rejected: CacheAligned::new(AtomicU64::new(0)),
+            embedding_wait_ms: CacheAligned::new(AtomicU64::new(0)),
+            llm_acquired: CacheAligned::new(AtomicU64::new(0)),
+            llm_rejected: CacheAligned::new(AtomicU64::new(0)),
+            llm_wait_ms: CacheAligned::new(AtomicU64::new(0)),
         }
     }
 

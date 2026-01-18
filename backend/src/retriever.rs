@@ -181,6 +181,7 @@ impl RetrieverMetrics {
     }
 }
 
+#[allow(dead_code)]
 pub struct Retriever {
     pub vectors: Vec<Vec<f32>>,
     pub index: Index,

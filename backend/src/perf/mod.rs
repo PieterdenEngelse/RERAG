@@ -38,6 +38,9 @@
 //! 31. Edge caching - requires CDN
 //! 32. Tiered storage - in progress
 
+// Core utilities
+pub mod cache_aligned;
+
 // Phase 1 modules
 pub mod simd;
 pub mod compression;
@@ -86,3 +89,4 @@ pub use http2::Http2Config;
 pub use grpc::GrpcConfig;
 pub use tiered_storage::{TieredStorage, TieringPolicy, StorageTier};
 pub use sharding::{ShardRouter, ShardConfig, ShardingStrategy};
+pub use cache_aligned::CacheAligned;

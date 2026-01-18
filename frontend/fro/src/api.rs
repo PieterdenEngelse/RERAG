@@ -881,6 +881,29 @@ pub async fn health_check() -> Result<HealthResponse, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StatusLogResponse {
+    pub status: String,
+    pub log_path: String,
+    pub total_lines: usize,
+    pub showing_lines: usize,
+    pub content: String,
+    pub message: Option<String>,
+}
+
+/// Get status log content
+pub async fn get_status_log(status: &str) -> Result<StatusLogResponse, String> {
+    let url = api_url(&format!("/monitoring/status-log/{}", status));
+
+    gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 /// Search documents
 pub async fn search(query: &str) -> Result<SearchResponse, String> {
     let url = format!(
@@ -1823,6 +1846,176 @@ pub struct EmbeddingConfigResponse {
     pub onnx: OnnxStatus,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+// ============ ONNX Runtime Configuration ============
+
+/// ONNX Runtime configuration
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct OnnxConfigInfo {
+    #[serde(default)]
+    pub model_path: String,
+    #[serde(default)]
+    pub max_length: usize,
+    #[serde(default)]
+    pub embedding_dim: usize,
+    #[serde(default)]
+    pub num_threads: usize,
+    #[serde(default)]
+    pub inter_op_num_threads: usize,
+    #[serde(default)]
+    pub optimization_level: String,
+    #[serde(default)]
+    pub execution_mode: String,
+    #[serde(default)]
+    pub enable_mem_pattern: bool,
+    #[serde(default)]
+    pub enable_cpu_mem_arena: bool,
+    #[serde(default)]
+    pub deterministic_compute: bool,
+    #[serde(default)]
+    pub optimized_model_path: Option<String>,
+    #[serde(default)]
+    pub enable_profiling: bool,
+    #[serde(default)]
+    pub profiling_output_path: Option<String>,
+    #[serde(default)]
+    pub log_id: Option<String>,
+    #[serde(default)]
+    pub log_level: String,
+    #[serde(default)]
+    pub log_verbosity: i32,
+    #[serde(default)]
+    pub use_env_allocators: bool,
+    #[serde(default)]
+    pub denormal_as_zero: bool,
+    #[serde(default)]
+    pub enable_quant_qdq: bool,
+    #[serde(default)]
+    pub enable_double_qdq_remover: bool,
+    #[serde(default)]
+    pub enable_qdq_cleanup: bool,
+    #[serde(default)]
+    pub approximate_gelu: bool,
+    #[serde(default)]
+    pub enable_aot_inlining: bool,
+    #[serde(default)]
+    pub disabled_optimizers: Vec<String>,
+    #[serde(default)]
+    pub use_device_allocator_for_initializers: bool,
+    #[serde(default)]
+    pub allow_inter_op_spinning: bool,
+    #[serde(default)]
+    pub allow_intra_op_spinning: bool,
+    #[serde(default)]
+    pub use_prepacking: bool,
+    #[serde(default)]
+    pub independent_thread_pool: bool,
+    #[serde(default)]
+    pub no_env_execution_providers: bool,
+}
+
+/// Response from ONNX config endpoint
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OnnxConfigResponse {
+    pub status: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub config: OnnxConfigInfo,
+}
+
+/// Request to update ONNX config
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct OnnxConfigRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_dim: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_threads: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inter_op_num_threads: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optimization_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_mem_pattern: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_cpu_mem_arena: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deterministic_compute: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optimized_model_path: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_profiling: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profiling_output_path: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_id: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_verbosity: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_env_allocators: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub denormal_as_zero: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_quant_qdq: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_double_qdq_remover: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_qdq_cleanup: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approximate_gelu: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_aot_inlining: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_optimizers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_device_allocator_for_initializers: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_inter_op_spinning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_intra_op_spinning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_prepacking: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub independent_thread_pool: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_env_execution_providers: Option<bool>,
+}
+
+/// Fetch current ONNX Runtime configuration
+pub async fn fetch_onnx_config() -> Result<OnnxConfigResponse, String> {
+    fetch_json("/config/onnx").await
+}
+
+/// Update ONNX Runtime configuration
+pub async fn update_onnx_config(config: OnnxConfigRequest) -> Result<OnnxConfigResponse, String> {
+    let url = api_url("/config/onnx");
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .json(&config)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    
+    if response.status().is_success() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
 }
 
 /// Fetch current embedding configuration

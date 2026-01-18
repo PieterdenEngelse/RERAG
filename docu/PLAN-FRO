@@ -233,6 +233,51 @@ Here’s a deeper dive—broken down by component—covering how each optional s
 
 ---
 
+## ONNX Runtime Configuration Reference (Jan 18, 2026)
+
+All 50 ONNX SessionOptions surfaced in the UI now map 1:1 to `backend/src/perf/onnx_embedder.rs::OnnxConfig`. Use this cheat sheet when tuning:
+
+| Group | Parameter | Default | Notes |
+| --- | --- | --- | --- |
+| Paths | `model_path` | `models/embedding_model.onnx` | Must exist on disk; restart backend after editing. |
+| Tokenizer | `max_length` | 512 | Truncates long prompts before embedding. |
+| Embedding | `embedding_dim` | 384 | Must match exported model dimension. |
+| Threads | `num_threads` | 4 | Intra-op threads (per operator). |
+| Threads | `inter_op_num_threads` | 1 | Only used when `execution_mode = Parallel`. |
+| Execution | `execution_mode` | Sequential | Parallel benefits >8 cores; keep Sequential for determinism.
+| Optimization | `optimization_level` | All (Level3) | Level3 applies all graph fusions; set Disable when debugging. |
+| Memory | `enable_mem_pattern` | true | Arena reuse for tensor shapes. |
+| Memory | `enable_cpu_mem_arena` | true | Disabling lowers RAM at cost of perf. |
+| Determinism | `deterministic_compute` | false | Enables deterministic kernels when available. |
+| Profiling | `enable_profiling` | false | Writes Chrome trace JSON. |
+| Profiling | `profiling_output_path` | empty | Absolute path for trace file. |
+| Logging | `log_id` | empty | Custom session logger name. |
+| Logging | `log_level` | Info | Verbose/Warning/Error/Fatal. |
+| Logging | `log_verbosity` | 0 | Only used when `log_level = Verbose`. |
+| Optimization | `optimized_model_path` | empty | Writes fused graph to disk. |
+| Optimization | `disabled_optimizers[]` | empty | List of optimizer pass names to skip. |
+| Quantization | `enable_quant_qdq` | true | Q/DQ fusion for quantized graphs. |
+| Quantization | `enable_double_qdq_remover` | true | Removes redundant QDQ pairs. |
+| Quantization | `enable_qdq_cleanup` | false | Cleans up leftover QDQ nodes. |
+| Math | `approximate_gelu` | false | Faster GELU approximation; slight accuracy hit. |
+| Compilation | `enable_aot_inlining` | true | Ahead-of-time inlining for functions. |
+| Allocators | `use_env_allocators` | false | Share allocators across sessions. |
+| Allocators | `use_device_allocator_for_initializers` | false | Keeps initial tensors on device. |
+| Thread Pools | `independent_thread_pool` | false | Dedicated pool per session. |
+| Thread Pools | `allow_inter_op_spinning` | true | Lower latency, higher idle CPU. |
+| Thread Pools | `allow_intra_op_spinning` | true | Same for intra-op workers. |
+| Thread Pools | `use_prepacking` | true | Precomputes kernels for constant weights. |
+| Execution Providers | `no_env_execution_providers` | false | If true, don’t inherit providers from the global Environment. |
+
+**Operational Guidance**
+- Changes persist via `OnceLock<RwLock<OnnxConfig>>`; restart backend to apply.
+- Frontend uses grouped cards/tooltips under `/config/onnx` to explain trade-offs.
+- Deterministic CI runs: Sequential execution, deterministic_compute=true, disable spinning.
+- Throughput tuning: Parallel execution, raise both thread counts, keep spinning enabled.
+- Profiling output path must be writable by the backend process.
+
+---
+
 ## 2. Rate Limiting Middleware (Security & Hardening)
 
 ### Files

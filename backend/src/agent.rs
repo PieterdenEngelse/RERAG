@@ -827,12 +827,17 @@ impl<'a> Agent<'a> {
             }
         }
 
-        // Add context if present
+        // Add context if present, or fallback instruction when no context
         if let Some(ctx) = context {
             prompt_parts.push(format!(
-                "Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your knowledge.\n\nContext:\n{}",
+                "Context (ignore if not relevant to the question):\n{}\n\nAnswer the question directly. If the context above is not relevant, use your own knowledge.",
                 ctx
             ));
+        } else {
+            // No context available - tell LLM to answer from its knowledge
+            prompt_parts.push(
+                "Answer the question based on your knowledge.".to_string()
+            );
         }
 
         // Add the question
