@@ -1,11 +1,11 @@
 //! SQLite Optimizations
-//! 
+//!
 //! Provides optimized SQLite configuration for better performance:
 //! - WAL mode for concurrent reads/writes
 //! - Memory-mapped I/O
 //! - Prepared statement caching
 //! - Connection pooling helpers
-//! 
+//!
 //! # Performance Gains
 //! - WAL mode: 10-100x faster concurrent writes
 //! - mmap: 2-3x faster reads for large databases
@@ -41,11 +41,11 @@ impl Default for SqliteConfig {
         Self {
             wal_mode: true,
             mmap_size: 256 * 1024 * 1024, // 256 MB
-            cache_size: -64000,            // 64 MB
-            synchronous: 1,                // NORMAL
-            temp_store: 2,                 // MEMORY
+            cache_size: -64000,           // 64 MB
+            synchronous: 1,               // NORMAL
+            temp_store: 2,                // MEMORY
             foreign_keys: true,
-            busy_timeout: 5000,            // 5 seconds
+            busy_timeout: 5000, // 5 seconds
             page_size: 4096,
         }
     }
@@ -57,9 +57,9 @@ impl SqliteConfig {
         Self {
             wal_mode: true,
             mmap_size: 1024 * 1024 * 1024, // 1 GB
-            cache_size: -256000,            // 256 MB
-            synchronous: 0,                 // OFF (faster but less safe)
-            temp_store: 2,                  // MEMORY
+            cache_size: -256000,           // 256 MB
+            synchronous: 0,                // OFF (faster but less safe)
+            temp_store: 2,                 // MEMORY
             foreign_keys: false,
             busy_timeout: 10000,
             page_size: 8192,
@@ -71,9 +71,9 @@ impl SqliteConfig {
         Self {
             wal_mode: true,
             mmap_size: 64 * 1024 * 1024, // 64 MB
-            cache_size: -16000,           // 16 MB
-            synchronous: 2,               // FULL
-            temp_store: 1,                // FILE
+            cache_size: -16000,          // 16 MB
+            synchronous: 2,              // FULL
+            temp_store: 1,               // FILE
             foreign_keys: true,
             busy_timeout: 30000,
             page_size: 4096,
@@ -185,29 +185,13 @@ pub fn checkpoint(conn: &Connection) -> Result<()> {
 
 /// Get database statistics
 pub fn get_stats(conn: &Connection) -> Result<DbStats> {
-    let page_count: i64 = conn.query_row(
-        "PRAGMA page_count;",
-        [],
-        |row| row.get(0),
-    )?;
+    let page_count: i64 = conn.query_row("PRAGMA page_count;", [], |row| row.get(0))?;
 
-    let page_size: i64 = conn.query_row(
-        "PRAGMA page_size;",
-        [],
-        |row| row.get(0),
-    )?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size;", [], |row| row.get(0))?;
 
-    let freelist_count: i64 = conn.query_row(
-        "PRAGMA freelist_count;",
-        [],
-        |row| row.get(0),
-    )?;
+    let freelist_count: i64 = conn.query_row("PRAGMA freelist_count;", [], |row| row.get(0))?;
 
-    let journal_mode: String = conn.query_row(
-        "PRAGMA journal_mode;",
-        [],
-        |row| row.get(0),
-    )?;
+    let journal_mode: String = conn.query_row("PRAGMA journal_mode;", [], |row| row.get(0))?;
 
     Ok(DbStats {
         page_count,
@@ -276,14 +260,12 @@ mod tests {
     fn test_open_optimized() {
         let config = SqliteConfig::default();
         let conn = open_in_memory(&config).unwrap();
-        
+
         // Verify WAL mode
-        let mode: String = conn.query_row(
-            "PRAGMA journal_mode;",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .unwrap();
+
         // In-memory databases use "memory" mode, not WAL
         // But the pragma should still work
         assert!(!mode.is_empty());
@@ -293,10 +275,11 @@ mod tests {
     fn test_get_stats() {
         let config = SqliteConfig::default();
         let conn = open_in_memory(&config).unwrap();
-        
+
         // Create a table
-        conn.execute_batch("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT);").unwrap();
-        
+        conn.execute_batch("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT);")
+            .unwrap();
+
         let stats = get_stats(&conn).unwrap();
         assert!(stats.page_count > 0);
         assert!(stats.page_size > 0);
@@ -305,11 +288,14 @@ mod tests {
     #[test]
     fn test_prepared_statement_cache() {
         let mut cache = PreparedStatementCache::new();
-        
+
         cache.register("get_user", "SELECT * FROM users WHERE id = ?");
         cache.register("insert_user", "INSERT INTO users (name) VALUES (?)");
-        
-        assert_eq!(cache.get("get_user"), Some("SELECT * FROM users WHERE id = ?"));
+
+        assert_eq!(
+            cache.get("get_user"),
+            Some("SELECT * FROM users WHERE id = ?")
+        );
         assert_eq!(cache.get("nonexistent"), None);
     }
 }

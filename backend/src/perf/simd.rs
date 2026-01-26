@@ -1,15 +1,15 @@
 //! SIMD-Accelerated Vector Operations
-//! 
+//!
 //! Provides 4-8x faster vector math using SIMD instructions.
 //! Falls back to scalar operations on unsupported platforms.
 
 use wide::f32x8;
 
 /// SIMD-accelerated cosine similarity
-/// 
+///
 /// Processes 8 floats at a time using AVX2/SSE instructions.
 /// Falls back to scalar for remaining elements.
-/// 
+///
 /// # Performance
 /// - ~4-8x faster than scalar for vectors >= 32 dimensions
 /// - Optimal for 384-dim embeddings (BGE-small)
@@ -203,7 +203,7 @@ mod tests {
         // Test with realistic embedding dimensions
         let a: Vec<f32> = (0..384).map(|i| (i as f32) * 0.01).collect();
         let b: Vec<f32> = (0..384).map(|i| (i as f32) * 0.01 + 0.001).collect();
-        
+
         let sim = cosine_similarity_simd(&a, &b);
         assert!(sim > 0.99); // Should be very similar
     }

@@ -1,14 +1,14 @@
 //! HTTP/2 Configuration
-//! 
+//!
 //! Provides HTTP/2 support for Actix Web with:
 //! - Multiplexing (multiple requests over single connection)
 //! - Header compression (HPACK)
 //! - Server push (optional)
 //! - Stream prioritization
-//! 
+//!
 //! # Requirements
 //! HTTP/2 requires TLS in most browsers. Configure with rustls or openssl.
-//! 
+//!
 //! # Usage
 //! ```rust
 //! let config = Http2Config::default();
@@ -16,7 +16,6 @@
 //! ```
 
 use std::path::Path;
-
 
 /// HTTP/2 configuration
 #[derive(Debug, Clone)]
@@ -138,7 +137,11 @@ pub struct Http2ConnectionInfo {
 impl Http2ConnectionInfo {
     pub fn from_request_head(is_h2: bool) -> Self {
         Self {
-            protocol: if is_h2 { "h2".to_string() } else { "http/1.1".to_string() },
+            protocol: if is_h2 {
+                "h2".to_string()
+            } else {
+                "http/1.1".to_string()
+            },
             is_h2,
             stream_id: None,
         }

@@ -2,6 +2,7 @@
 // Training Data Collection & Custom Model Management Page
 
 use crate::api::{self, TrainingFeedbackRequest, TrainingStats};
+use crate::app::PageErrors;
 use dioxus::prelude::*;
 
 #[component]
@@ -22,18 +23,26 @@ pub fn Train() -> Element {
     let mut feedback_score = use_signal(|| 4u8);
     let mut submitting_feedback = use_signal(|| false);
 
+    // Get global page errors context
+    let mut page_errors = use_context::<Signal<PageErrors>>();
+
     // Load stats on mount
     use_effect(move || {
         spawn(async move {
+            page_errors.with_mut(|e| e.clear_error("train"));
             match api::get_training_stats().await {
                 Ok(resp) => {
                     stats.set(resp.stats);
                     collection_enabled.set(resp.collection_enabled);
                     loading.set(false);
+                    page_errors.with_mut(|e| e.clear_error("train"));
                 }
                 Err(e) => {
-                    error_msg.set(Some(format!("Failed to load stats: {}", e)));
+                    let err = format!("Failed to load stats: {}", e);
+                    error_msg.set(Some(err.clone()));
                     loading.set(false);
+                    page_errors.with_mut(|errs| errs.set_error("train", &err));
+                    let _ = api::log_frontend_error("train", &err).await;
                 }
             }
         });

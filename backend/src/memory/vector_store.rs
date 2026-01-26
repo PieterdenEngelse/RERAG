@@ -162,8 +162,16 @@ impl VectorStoreSnapshotRkyv {
     pub fn from_store(store: &VectorStore) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
-            records: store.records.iter().map(VectorRecordRkyv::from_record).collect(),
-            index_map: store.index_map.iter().map(|(k, v)| (k.clone(), *v as u32)).collect(),
+            records: store
+                .records
+                .iter()
+                .map(VectorRecordRkyv::from_record)
+                .collect(),
+            index_map: store
+                .index_map
+                .iter()
+                .map(|(k, v)| (k.clone(), *v as u32))
+                .collect(),
             insertion_counter: store.insertion_counter,
             total_insertions: store.metrics.total_insertions,
             total_evictions: store.metrics.total_evictions,
@@ -589,13 +597,13 @@ impl VectorStore {
         info!(path = ?path, records = self.records.len(), "Saving VectorStore to rkyv");
 
         let snapshot = VectorStoreSnapshotRkyv::from_store(self);
-        
+
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)
             .map_err(|e| VectorStoreError::StorageError(format!("rkyv serialize error: {}", e)))?;
-        
+
         std::fs::write(path, &bytes)
             .map_err(|e| VectorStoreError::StorageError(format!("IO error: {}", e)))?;
-        
+
         info!(
             path = ?path,
             records = self.records.len(),
@@ -612,10 +620,10 @@ impl VectorStore {
 
         let bytes = std::fs::read(path)
             .map_err(|e| VectorStoreError::StorageError(format!("IO error: {}", e)))?;
-        
+
         let archived = rkyv::access::<ArchivedVectorStoreSnapshotRkyv, rkyv::rancor::Error>(&bytes)
             .map_err(|e| VectorStoreError::StorageError(format!("rkyv access error: {}", e)))?;
-        
+
         // Check version
         if archived.version.to_native() != VectorStoreSnapshotRkyv::CURRENT_VERSION {
             info!(
@@ -624,9 +632,10 @@ impl VectorStore {
                 VectorStoreSnapshotRkyv::CURRENT_VERSION
             );
         }
-        
+
         // Restore records
-        self.records = archived.records
+        self.records = archived
+            .records
             .iter()
             .map(|r| VectorRecord {
                 chunk_id: r.chunk_id.to_string(),
@@ -642,13 +651,14 @@ impl VectorStore {
                 insertion_order: 0,
             })
             .collect();
-        
+
         // Restore index map
-        self.index_map = archived.index_map
+        self.index_map = archived
+            .index_map
             .iter()
             .map(|pair| (pair.0.to_string(), pair.1.to_native() as usize))
             .collect();
-        
+
         // Restore counters and metrics
         self.insertion_counter = archived.insertion_counter.to_native();
         self.metrics.total_insertions = archived.total_insertions.to_native();
@@ -656,7 +666,7 @@ impl VectorStore {
         self.metrics.lookup_hits = archived.lookup_hits.to_native();
         self.metrics.lookup_misses = archived.lookup_misses.to_native();
         self.metrics.peak_vectors = archived.peak_vectors.to_native() as usize;
-        
+
         info!(
             path = ?path,
             records = self.records.len(),
@@ -701,12 +711,12 @@ impl VectorStore {
     pub fn save_dual<P: AsRef<Path>>(&self, base_path: P) -> Result<(), VectorStoreError> {
         let base = base_path.as_ref();
         let rkyv_path = base.with_extension("rkyv");
-        
+
         // Save rkyv (primary - fast)
         self.save_rkyv(&rkyv_path)?;
-        
+
         // JSON save would go here if needed
-        
+
         Ok(())
     }
 }
@@ -909,36 +919,36 @@ mod tests {
     #[tokio::test]
     async fn test_rkyv_save_load() {
         use tempfile::tempdir;
-        
+
         let temp_dir = tempdir().unwrap();
         let rkyv_path = temp_dir.path().join("vector_store.rkyv");
-        
+
         // Create store with test data
         let config = VectorStoreConfig::default();
         let mut store = VectorStore::new(config).unwrap();
-        
+
         // Add some records with realistic embeddings
         for i in 0..10 {
             let mut record = create_test_record(&format!("chunk{}", i), &format!("doc{}", i % 3));
             record.embedding = (0..384).map(|j| (i * 384 + j) as f32 * 0.001).collect();
             store.add_record(record).await.unwrap();
         }
-        
+
         // Save to rkyv
         store.save_rkyv(&rkyv_path).unwrap();
         assert!(rkyv_path.exists());
-        
+
         // Create new store and load
         let config2 = VectorStoreConfig::default();
         let mut store2 = VectorStore::new(config2).unwrap();
         store2.load_rkyv(&rkyv_path).unwrap();
-        
+
         // Verify data matches
         let stats1 = store.stats().await;
         let stats2 = store2.stats().await;
         assert_eq!(stats1.total_records, stats2.total_records);
         assert_eq!(stats1.total_documents, stats2.total_documents);
-        
+
         // Verify a specific record
         let record1 = store.get_record("chunk5").await.unwrap();
         let record2 = store2.get_record("chunk5").await.unwrap();
@@ -950,31 +960,38 @@ mod tests {
     #[tokio::test]
     async fn test_rkyv_size_comparison() {
         use std::time::Instant as StdInstant;
-        
+
         // Create store with realistic data
         let config = VectorStoreConfig::default();
         let mut store = VectorStore::new(config).unwrap();
-        
+
         // Add 100 records with 384-dim embeddings
         for i in 0..100 {
             let mut record = create_test_record(&format!("chunk{}", i), &format!("doc{}", i % 10));
             record.embedding = (0..384).map(|j| (i * 384 + j) as f32 * 0.0001).collect();
-            record.content = format!("This is test content for chunk {} with some meaningful text.", i);
+            record.content = format!(
+                "This is test content for chunk {} with some meaningful text.",
+                i
+            );
             store.add_record(record).await.unwrap();
         }
-        
+
         // Serialize with rkyv
         let snapshot = VectorStoreSnapshotRkyv::from_store(&store);
         let start = StdInstant::now();
         let rkyv_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot).unwrap();
         let rkyv_time = start.elapsed();
-        
+
         println!("\n=== VectorStore rkyv SIZE ===");
         println!("Records: {}", store.records.len());
-        println!("rkyv size: {} bytes ({:.2} KB)", rkyv_bytes.len(), rkyv_bytes.len() as f64 / 1024.0);
+        println!(
+            "rkyv size: {} bytes ({:.2} KB)",
+            rkyv_bytes.len(),
+            rkyv_bytes.len() as f64 / 1024.0
+        );
         println!("Serialize time: {:?}", rkyv_time);
         println!("==============================\n");
-        
+
         // rkyv should be reasonably sized
         assert!(rkyv_bytes.len() > 0);
     }

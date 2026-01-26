@@ -1,8 +1,8 @@
 //! Re-ranking Module
-//! 
+//!
 //! Provides re-ranking of search results using more sophisticated
 //! scoring methods after initial retrieval.
-//! 
+//!
 //! # Strategies
 //! 1. Cross-encoder simulation (query-document interaction)
 //! 2. BM25 re-scoring
@@ -160,14 +160,10 @@ impl Reranker {
     /// Calculate relevance based on term overlap
     fn calculate_relevance(&self, query: &str, content: &str) -> f32 {
         let query_lower = query.to_lowercase();
-        let query_terms: HashSet<&str> = query_lower
-            .split_whitespace()
-            .collect();
-        
+        let query_terms: HashSet<&str> = query_lower.split_whitespace().collect();
+
         let content_lower = content.to_lowercase();
-        let content_terms: HashSet<&str> = content_lower
-            .split_whitespace()
-            .collect();
+        let content_terms: HashSet<&str> = content_lower.split_whitespace().collect();
 
         if query_terms.is_empty() {
             return 0.0;
@@ -181,7 +177,7 @@ impl Reranker {
     fn calculate_recency_boost(&self, created_at: i64) -> f32 {
         let now = chrono::Utc::now().timestamp();
         let age_days = (now - created_at) as f32 / 86400.0;
-        
+
         if age_days <= 0.0 {
             self.config.recency_boost
         } else if age_days >= self.config.recency_decay_days {
@@ -244,10 +240,11 @@ impl Reranker {
             }
 
             let (candidate, mut factors) = candidates.remove(best_idx);
-            
+
             // Store embedding for diversity calculation
             if let Some(ref emb) = candidate.embedding {
-                factors.diversity_penalty = self.max_similarity_to_selected(emb, &selected_embeddings);
+                factors.diversity_penalty =
+                    self.max_similarity_to_selected(emb, &selected_embeddings);
                 selected_embeddings.push(emb.clone());
             }
 
@@ -302,7 +299,7 @@ mod tests {
     #[test]
     fn test_reranker_basic() {
         let reranker = Reranker::with_defaults();
-        
+
         let candidates = vec![
             RerankCandidate {
                 doc_id: "doc1".to_string(),
@@ -321,7 +318,7 @@ mod tests {
         ];
 
         let results = reranker.rerank("rust programming", None, candidates, 10);
-        
+
         assert_eq!(results.len(), 2);
         // doc1 should rank higher (better term overlap)
         assert_eq!(results[0].doc_id, "doc1");
@@ -330,27 +327,25 @@ mod tests {
     #[test]
     fn test_relevance_calculation() {
         let reranker = Reranker::with_defaults();
-        
-        let relevance = reranker.calculate_relevance(
-            "rust programming",
-            "rust is a systems programming language"
-        );
-        
+
+        let relevance = reranker
+            .calculate_relevance("rust programming", "rust is a systems programming language");
+
         assert!(relevance > 0.5); // Both terms present
     }
 
     #[test]
     fn test_recency_boost() {
         let reranker = Reranker::with_defaults();
-        
+
         let now = chrono::Utc::now().timestamp();
-        
+
         // Recent document
         let recent_boost = reranker.calculate_recency_boost(now - 86400); // 1 day ago
-        
+
         // Old document
         let old_boost = reranker.calculate_recency_boost(now - 86400 * 60); // 60 days ago
-        
+
         assert!(recent_boost > old_boost);
     }
 }

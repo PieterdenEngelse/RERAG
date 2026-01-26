@@ -119,16 +119,19 @@ impl EmbeddingRuntime {
 
         let onnx_model_path = env::var("ONNX_MODEL_PATH")
             .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
-        
+
         eprintln!("[EMBEDDER] ONNX model path: {}", onnx_model_path);
-        eprintln!("[EMBEDDER] Model exists: {}", std::path::Path::new(&onnx_model_path).exists());
-        
+        eprintln!(
+            "[EMBEDDER] Model exists: {}",
+            std::path::Path::new(&onnx_model_path).exists()
+        );
+
         let onnx_config = crate::perf::onnx_embedder::OnnxConfig {
             model_path: onnx_model_path.clone(),
             embedding_dim: config.model.dimension(),
             ..Default::default()
         };
-        
+
         eprintln!("[EMBEDDER] Creating OnnxEmbedder...");
         match crate::perf::onnx_embedder::OnnxEmbedder::new(onnx_config) {
             Ok(embedder) => {
@@ -141,7 +144,10 @@ impl EmbeddingRuntime {
                 }
             }
             Err(err) => {
-                panic!("Failed to initialize ONNX embedder: {}. Make sure ONNX model exists at {}", err, onnx_model_path);
+                panic!(
+                    "Failed to initialize ONNX embedder: {}. Make sure ONNX model exists at {}",
+                    err, onnx_model_path
+                );
             }
         }
     }
@@ -350,19 +356,16 @@ impl EmbeddingService {
     /// Save embedding cache to disk using rkyv binary format
     pub async fn save_cache(&self, path: &std::path::Path) -> Result<(), String> {
         let cache = self.cache.read().await;
-        
+
         // Convert LruCache to Vec for serialization
-        let entries: Vec<(String, Vec<f32>)> = cache
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        
+        let entries: Vec<(String, Vec<f32>)> =
+            cache.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&entries)
             .map_err(|e| format!("rkyv serialize error: {}", e))?;
-        
-        std::fs::write(path, &bytes)
-            .map_err(|e| format!("IO error: {}", e))?;
-        
+
+        std::fs::write(path, &bytes).map_err(|e| format!("IO error: {}", e))?;
+
         info!(
             path = ?path,
             entries = entries.len(),
@@ -377,23 +380,23 @@ impl EmbeddingService {
         if !path.exists() {
             return Ok(0);
         }
-        
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("IO error: {}", e))?;
-        
-        let archived = rkyv::access::<rkyv::Archived<Vec<(String, Vec<f32>)>>, rkyv::rancor::Error>(&bytes)
-            .map_err(|e| format!("rkyv access error: {}", e))?;
-        
+
+        let bytes = std::fs::read(path).map_err(|e| format!("IO error: {}", e))?;
+
+        let archived =
+            rkyv::access::<rkyv::Archived<Vec<(String, Vec<f32>)>>, rkyv::rancor::Error>(&bytes)
+                .map_err(|e| format!("rkyv access error: {}", e))?;
+
         let mut cache = self.cache.write().await;
         let mut loaded = 0;
-        
+
         for entry in archived.iter() {
             let key = entry.0.to_string();
             let value: Vec<f32> = entry.1.iter().map(|f| f.to_native()).collect();
             cache.put(key, value);
             loaded += 1;
         }
-        
+
         info!(
             path = ?path,
             entries = loaded,
@@ -506,7 +509,7 @@ mod tests {
 
     /// Integration test for FastEmbed - verifies neural embeddings work.
     /// Run with: cargo test --lib test_fastembed_integration -- --ignored --nocapture
-    /// 
+    ///
     /// This test is ignored by default because:
     /// - It downloads the model on first run (~100MB)
     /// - It requires ONNX runtime
@@ -516,10 +519,10 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     async fn test_fastembed_integration() {
         use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-        
+
         println!("\n=== FASTEMBED INTEGRATION TEST ===");
         println!("Attempting to initialize FastEmbed directly...");
-        
+
         // Try to initialize FastEmbed directly to see the error
         match TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15)) {
             Ok(mut model) => {
@@ -530,13 +533,13 @@ mod tests {
                         let embedding = &embeddings[0];
                         let non_zero_count = embedding.iter().filter(|&&x| x != 0.0).count();
                         let first_10: Vec<f32> = embedding.iter().take(10).copied().collect();
-                        
+
                         println!("Dimension: {}", embedding.len());
                         println!("Non-zero values: {} / {}", non_zero_count, embedding.len());
                         println!("First 10 values: {:?}", first_10);
                         println!("=================================\n");
-                        
-                        assert!(non_zero_count > 300, 
+
+                        assert!(non_zero_count > 300,
                             "Expected dense neural embeddings (>300 non-zero out of 384), got {} non-zero values.", 
                             non_zero_count);
                     }

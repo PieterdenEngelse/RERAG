@@ -46,6 +46,13 @@ pub struct HealthResponse {
     pub index_path: Option<String>,
     pub message: Option<String>,
     pub load: Option<LoadMetrics>,
+    pub neo4j: Option<Neo4jHealthStatus>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Neo4jHealthStatus {
+    pub enabled: bool,
+    pub connected: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -56,6 +63,82 @@ pub struct LoadMetrics {
     pub queue_depth: u32,
     pub indexing: bool,
     pub llm_active: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IoUringResponse {
+    pub status: String,
+    pub io_uring: IoUringInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IoUringInfo {
+    pub available: bool,
+    pub feature_enabled: bool,
+    pub backend: String,
+    pub config: IoUringConfig,
+    pub stats: IoUringIoStats,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IoUringConfig {
+    // Category 1: Queue & Buffers
+    pub ring_size: u32,
+    #[serde(default)]
+    pub cq_size: u32,
+    pub buffer_size: usize,
+    pub buffer_pool_size: usize,
+    #[serde(default)]
+    pub clamp: bool,
+
+    // Category 2: Polling
+    pub sqpoll: bool,
+    pub sqpoll_idle_ms: u32,
+    #[serde(default = "default_sqpoll_cpu")]
+    pub sqpoll_cpu: i32,
+    #[serde(default)]
+    pub iopoll: bool,
+
+    // Category 3: Optimization
+    pub single_issuer: bool,
+    #[serde(default)]
+    pub coop_taskrun: bool,
+    #[serde(default)]
+    pub defer_taskrun: bool,
+    #[serde(default)]
+    pub submit_all: bool,
+    #[serde(default)]
+    pub taskrun_flag: bool,
+
+    // Category 4: Advanced
+    #[serde(default)]
+    pub r_disabled: bool,
+    #[serde(default = "default_attach_wq_fd")]
+    pub attach_wq_fd: i32,
+    #[serde(default)]
+    pub dontfork: bool,
+}
+
+fn default_sqpoll_cpu() -> i32 {
+    -1
+}
+
+fn default_attach_wq_fd() -> i32 {
+    -1
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IoUringIoStats {
+    pub reads: u64,
+    pub writes: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
+    #[serde(default)]
+    pub read_errors: u64,
+    #[serde(default)]
+    pub write_errors: u64,
+    #[serde(default)]
+    pub total_errors: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -881,6 +964,35 @@ pub async fn health_check() -> Result<HealthResponse, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+/// Get io_uring async I/O stats
+pub async fn fetch_io_uring_stats() -> Result<IoUringResponse, String> {
+    let url = api_url("/monitoring/io-uring");
+
+    gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Save io_uring configuration
+pub async fn save_io_uring_config(config: &IoUringConfig) -> Result<serde_json::Value, String> {
+    let url = api_url("/monitoring/io-uring");
+
+    gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(config).map_err(|e| format!("Serialize error: {}", e))?)
+        .map_err(|e| format!("Request build error: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusLogResponse {
     pub status: String,
@@ -945,6 +1057,26 @@ pub async fn delete_document(filename: &str) -> Result<serde_json::Value, String
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Clear the result cache
+pub async fn clear_cache() -> Result<serde_json::Value, String> {
+    let url = api_url("/cache/clear");
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status().is_success() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
 }
 
 /// Trigger reindexing
@@ -2007,7 +2139,7 @@ pub async fn update_onnx_config(config: OnnxConfigRequest) -> Result<OnnxConfigR
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-    
+
     if response.status().is_success() {
         response
             .json()
@@ -2025,13 +2157,13 @@ pub async fn fetch_embedding_config() -> Result<EmbeddingConfigResponse, String>
     let response = reqwest::get(&url)
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-    
+
     if response.status().is_success() {
         let json: serde_json::Value = response
             .json()
             .await
             .map_err(|e| format!("Parse error: {}", e))?;
-        
+
         // Map flat response to our struct
         Ok(EmbeddingConfigResponse {
             status: json["status"].as_str().unwrap_or("unknown").to_string(),
@@ -2047,4 +2179,187 @@ pub async fn fetch_embedding_config() -> Result<EmbeddingConfigResponse, String>
     } else {
         Err(format!("Server error: {}", response.status()))
     }
+}
+
+/// Log a frontend error to the backend for visibility in logs
+/// This allows page errors to appear in the log viewer when filtering by color
+pub async fn log_frontend_error(page: &str, error: &str) -> Result<(), String> {
+    let url = api_url("/monitoring/log-frontend-error");
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "page": page,
+        "error": error,
+        "level": "error"
+    });
+
+    let _ = client.post(&url).json(&payload).send().await;
+
+    // Don't fail if logging fails - it's best effort
+    Ok(())
+}
+
+// ============================================================================
+// NEO4J KNOWLEDGE GRAPH API (Phase 27)
+// ============================================================================
+
+/// Neo4j configuration response
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Neo4jConfigResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub feature_compiled: bool,
+    pub enabled: bool,
+    pub connected: bool,
+    pub uri: String,
+    pub user: String,
+    pub database: String,
+    pub max_connections: usize,
+    pub connection_timeout_ms: u64,
+    // Graph expansion settings
+    pub expansion_enabled: bool,
+    pub max_hops: usize,
+    pub max_chunks: usize,
+    pub entity_weight: f32,
+    pub concept_weight: f32,
+    pub min_relationship_strength: f32,
+    // Entity extraction settings
+    pub extraction_enabled: bool,
+    pub confidence_threshold: f32,
+    pub fuzzy_threshold: f32,
+    // Stats (if connected)
+    pub stats: Option<Neo4jStats>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Neo4jStats {
+    pub total_nodes: usize,
+    pub total_relationships: usize,
+    pub documents: usize,
+    pub chunks: usize,
+    pub entities: usize,
+}
+
+/// Neo4j connection test response
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Neo4jTestResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub connected: bool,
+}
+
+/// Fetch Neo4j configuration and status
+pub async fn fetch_neo4j_config() -> Result<Neo4jConfigResponse, String> {
+    fetch_json("/config/neo4j").await
+}
+
+/// Test Neo4j connection
+pub async fn test_neo4j_connection() -> Result<Neo4jTestResponse, String> {
+    let url = api_url("/config/neo4j/test");
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status().is_success() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+// ============================================================================
+// DOCKER MONITORING API
+// ============================================================================
+
+/// Docker container info
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DockerContainer {
+    pub name: String,
+    pub image: String,
+    pub status: String,
+    pub state: String,
+    pub ports: Vec<String>,
+    pub created: String,
+    pub health: Option<String>,
+}
+
+/// Docker stats for a container
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DockerStats {
+    pub name: String,
+    pub cpu_percent: f64,
+    pub memory_usage: String,
+    pub memory_limit: String,
+    pub memory_percent: f64,
+    pub network_rx: String,
+    pub network_tx: String,
+}
+
+/// Docker status response
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct DockerStatusResponse {
+    pub status: String,
+    pub docker_available: bool,
+    pub containers: Vec<DockerContainer>,
+    pub stats: Vec<DockerStats>,
+}
+
+/// Fetch Docker container status
+pub async fn fetch_docker_status() -> Result<DockerStatusResponse, String> {
+    fetch_json("/monitoring/docker").await
+}
+
+// ============================================================================
+// KNOWLEDGE GRAPH API
+// ============================================================================
+
+use crate::pages::monitor::knowledge_graph::{GraphData, GraphNode, GraphStats};
+
+/// Fetch knowledge graph statistics
+pub async fn fetch_graph_stats() -> Result<GraphStats, String> {
+    fetch_json("/graph/stats").await
+}
+
+/// Fetch a sample of graph data for visualization
+pub async fn fetch_graph_sample(limit: usize) -> Result<GraphData, String> {
+    fetch_json(&format!("/graph/sample?limit={}", limit)).await
+}
+
+/// Search for entities in the graph
+pub async fn search_graph_entities(query: &str) -> Result<Vec<GraphNode>, String> {
+    fetch_json(&format!("/graph/search?q={}", urlencoding::encode(query))).await
+}
+
+/// Graph-enhanced search - combines vector similarity with graph relationships
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GraphSearchResult {
+    pub chunk_id: String,
+    pub content: String,
+    pub score: f32,
+    pub entities: Vec<String>,
+    pub related_chunks: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GraphSearchResponse {
+    pub results: Vec<GraphSearchResult>,
+    pub total_results: usize,
+    pub graph_enhanced: bool,
+}
+
+/// Perform graph-enhanced search
+pub async fn graph_search(query: &str, limit: usize) -> Result<GraphSearchResponse, String> {
+    fetch_json(&format!(
+        "/graph/search/enhanced?q={}&limit={}",
+        urlencoding::encode(query),
+        limit
+    ))
+    .await
 }

@@ -6,6 +6,8 @@ use ag::api::start_api_server;
 use ag::cache::redis_cache::RedisCache;
 use ag::config::ApiConfig;
 use ag::db::schema_init::SchemaInitializer;
+#[cfg(feature = "neo4j")]
+use ag::graph::{config::GraphConfig, Neo4jClient};
 use ag::index;
 use ag::monitoring::metrics;
 use ag::monitoring::tracing_config::init_tracing;
@@ -188,6 +190,57 @@ async fn main() -> std::io::Result<()> {
         }
     } else {
         debug!("Redis L3 cache disabled (set REDIS_ENABLED=true to enable)");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PHASE 5.5: Initialize Neo4j Knowledge Graph (if enabled)
+    // ─────────────────────────────────────────────────────────────
+
+    #[cfg(feature = "neo4j")]
+    {
+        let graph_config = GraphConfig::from_env();
+        if graph_config.enabled {
+            let neo4j_start = Instant::now();
+            info!("🔗 Initializing Neo4j Knowledge Graph...");
+
+            match Neo4jClient::new(graph_config).await {
+                Ok(client) => {
+                    let duration_ms = neo4j_start.elapsed().as_millis() as u64;
+                    info!(
+                        duration_ms = duration_ms,
+                        "✅ Neo4j Knowledge Graph initialized"
+                    );
+
+                    // Initialize schema
+                    if let Err(e) = client.init_schema().await {
+                        warn!(error = %e, "Failed to initialize Neo4j schema");
+                    } else {
+                        info!("✅ Neo4j schema initialized");
+                    }
+
+                    // Initialize KnowledgeBuilder for graph integration during indexing
+                    let kb_config = GraphConfig::from_env();
+                    let knowledge_builder =
+                        ag::graph::KnowledgeBuilder::new(client.graph(), kb_config);
+                    ag::api::set_knowledge_builder(std::sync::Arc::new(knowledge_builder));
+                    info!("✅ KnowledgeBuilder initialized for entity extraction");
+
+                    // Store client globally for API access
+                    ag::api::set_neo4j_client(client);
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to initialize Neo4j Knowledge Graph");
+                    warn!("Continuing without Neo4j...");
+                }
+            }
+        } else {
+            debug!("Neo4j Knowledge Graph disabled (set NEO4J_ENABLED=true to enable)");
+        }
+    }
+
+    #[cfg(not(feature = "neo4j"))]
+    {
+        debug!("Neo4j feature not compiled (build with --features neo4j)");
     }
 
     // ─────────────────────────────────────────────────────────────

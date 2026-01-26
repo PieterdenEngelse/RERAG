@@ -1,5 +1,5 @@
 //! Performance utilities for the frontend
-//! 
+//!
 //! This module provides:
 //! - Lazy loading helpers
 //! - Virtual scrolling components
@@ -34,27 +34,24 @@ impl Default for VirtualScrollConfig {
 }
 
 /// Calculate which items should be rendered for virtual scrolling
-pub fn calculate_visible_range(
-    scroll_top: f64,
-    config: &VirtualScrollConfig,
-) -> (usize, usize) {
+pub fn calculate_visible_range(scroll_top: f64, config: &VirtualScrollConfig) -> (usize, usize) {
     let start_index = (scroll_top / config.item_height).floor() as usize;
     let visible_count = (config.container_height / config.item_height).ceil() as usize;
-    
+
     let start = start_index.saturating_sub(config.overscan);
     let end = (start_index + visible_count + config.overscan).min(config.total_items);
-    
+
     (start, end)
 }
 
 /// Virtual scroll helper - calculates visible items for a scrollable list
-/// 
+///
 /// Usage in your component:
 /// ```rust
 /// let scroll_top = use_signal(|| 0.0f64);
 /// let config = VirtualScrollConfig { total_items: items.len(), ..Default::default() };
 /// let (start, end) = calculate_visible_range(*scroll_top.read(), &config);
-/// 
+///
 /// rsx! {
 ///     div {
 ///         class: "overflow-y-auto",
@@ -65,7 +62,7 @@ pub fn calculate_visible_range(
 ///     }
 /// }
 /// ```
-/// 
+///
 /// Note: For full virtual scrolling, you'd need to:
 /// 1. Track scroll position via JS interop
 /// 2. Apply transform to offset visible items
@@ -88,11 +85,11 @@ impl<T> LazyLoadState<T> {
     pub fn is_loading(&self) -> bool {
         matches!(self, LazyLoadState::Loading)
     }
-    
+
     pub fn is_loaded(&self) -> bool {
         matches!(self, LazyLoadState::Loaded(_))
     }
-    
+
     pub fn data(&self) -> Option<&T> {
         match self {
             LazyLoadState::Loaded(data) => Some(data),
@@ -123,19 +120,20 @@ impl PaginationState {
             has_more: true,
         }
     }
-    
+
     pub fn offset(&self) -> usize {
         self.page * self.page_size
     }
-    
+
     pub fn next_page(&mut self) {
         if self.has_more {
             self.page += 1;
         }
     }
-    
+
     pub fn total_pages(&self) -> Option<usize> {
-        self.total_items.map(|total| (total + self.page_size - 1) / self.page_size)
+        self.total_items
+            .map(|total| (total + self.page_size - 1) / self.page_size)
     }
 }
 
@@ -156,7 +154,7 @@ pub fn use_debounce<T: Clone + 'static>(
 #[component]
 pub fn LoadingSpinner(size: Option<&'static str>) -> Element {
     let size_class = size.unwrap_or("w-8 h-8");
-    
+
     rsx! {
         div {
             class: "flex items-center justify-center",
@@ -185,13 +183,10 @@ pub fn LoadingSpinner(size: Option<&'static str>) -> Element {
 
 /// Skeleton loader for content placeholders
 #[component]
-pub fn SkeletonLoader(
-    lines: Option<usize>,
-    class: Option<&'static str>,
-) -> Element {
+pub fn SkeletonLoader(lines: Option<usize>, class: Option<&'static str>) -> Element {
     let line_count = lines.unwrap_or(3);
     let extra_class = class.unwrap_or("");
-    
+
     rsx! {
         div {
             class: "animate-pulse space-y-2 {extra_class}",
@@ -208,9 +203,7 @@ pub fn SkeletonLoader(
 /// Intersection observer placeholder for lazy loading
 /// In a real implementation, this would use the Intersection Observer API
 #[component]
-pub fn LazyLoadTrigger(
-    on_visible: EventHandler<()>,
-) -> Element {
+pub fn LazyLoadTrigger(on_visible: EventHandler<()>) -> Element {
     // This is a placeholder - in production, you'd use JS interop
     // to implement actual intersection observer
     rsx! {

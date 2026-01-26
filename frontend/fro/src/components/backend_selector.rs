@@ -1,4 +1,5 @@
 use crate::api::{self, BackendType};
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 
 /// A reusable backend selector dropdown component.
@@ -49,7 +50,7 @@ pub fn BackendSelector(
                     onclick: move |_| show_backend_info.set(true),
                     title: "Info about backend selection",
                     svg {
-                        class: "w-4 h-4 text-white",
+                        class: INFO_ICON_SVG_CLASS,
                         view_box: "0 0 20 20",
                         fill: "none",
                         stroke: "currentColor",

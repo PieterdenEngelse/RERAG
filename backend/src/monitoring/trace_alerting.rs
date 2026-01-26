@@ -257,6 +257,7 @@ pub fn start_trace_alerting(config: TraceAlertingConfig) -> tokio::task::JoinHan
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs));
+        let mut tempo_available = true;
 
         loop {
             interval.tick().await;
@@ -264,6 +265,23 @@ pub fn start_trace_alerting(config: TraceAlertingConfig) -> tokio::task::JoinHan
             if !config.is_enabled() {
                 debug!("Trace alerting disabled, skipping check");
                 continue;
+            }
+
+            if let Err(e) = ensure_tempo_reachable(&config).await {
+                if tempo_available {
+                    warn!(
+                        error = ?e,
+                        tempo_url = %config.tempo_url,
+                        "Tempo endpoint unreachable, suspending trace alerting until it comes back"
+                    );
+                    tempo_available = false;
+                } else {
+                    debug!("Tempo endpoint still unreachable, skipping trace alerting check");
+                }
+                continue;
+            } else if !tempo_available {
+                info!(tempo_url = %config.tempo_url, "Tempo reachable again, resuming trace alerting checks");
+                tempo_available = true;
             }
 
             debug!("Running trace anomaly check...");
@@ -312,14 +330,7 @@ async fn check_for_anomalies(
     let start_time = now - config.lookback_window_secs;
 
     // Query Tempo for recent traces
-    let client = if config.tempo_url.starts_with("https://") && config.insecure_tls {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
-    } else {
-        reqwest::Client::new()
-    };
+    let client = build_tempo_client(config)?;
     let search_url = format!("{}/api/search", config.tempo_url);
 
     debug!(
@@ -432,14 +443,7 @@ async fn query_error_traces(
     start_time: u64,
     end_time: u64,
 ) -> Result<Vec<TempoTrace>, Box<dyn std::error::Error + Send + Sync>> {
-    let client = if config.tempo_url.starts_with("https://") && config.insecure_tls {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
-    } else {
-        reqwest::Client::new()
-    };
+    let client = build_tempo_client(config)?;
     let search_url = format!("{}/api/search", config.tempo_url);
 
     // Try to query for error traces
@@ -512,6 +516,39 @@ async fn send_anomaly_alert(config: &TraceAlertingConfig, anomaly: TraceAnomalyE
             }
         }
     });
+}
+
+async fn ensure_tempo_reachable(
+    config: &TraceAlertingConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = build_tempo_client(config)?;
+    let health_url = format!("{}/ready", config.tempo_url.trim_end_matches('/'));
+
+    let response = client
+        .get(&health_url)
+        .timeout(Duration::from_millis(250))
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Tempo health check failed: {}", response.status()).into())
+    }
+}
+
+fn build_tempo_client(
+    config: &TraceAlertingConfig,
+) -> Result<reqwest::Client, Box<dyn std::error::Error + Send + Sync>> {
+    let mut builder = reqwest::Client::builder();
+
+    if config.tempo_url.starts_with("https://") && config.insecure_tls {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    builder
+        .build()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
 }
 
 /// Send webhook request

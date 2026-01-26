@@ -1,12 +1,12 @@
 //! gRPC API Support
-//! 
+//!
 //! Provides gRPC service definitions for high-performance RPC.
 //! gRPC offers:
 //! - Binary protocol (protobuf) - smaller payloads
 //! - HTTP/2 - multiplexing, streaming
 //! - Bidirectional streaming
 //! - Strong typing with code generation
-//! 
+//!
 //! # Usage
 //! This module provides service trait definitions. To use:
 //! 1. Add tonic to Cargo.toml
@@ -14,8 +14,8 @@
 //! 3. Implement the service traits
 //! 4. Run with tonic server
 
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 
 /// Search request for gRPC
 #[derive(Debug, Clone)]
@@ -107,7 +107,7 @@ pub enum HealthStatus {
 }
 
 /// RAG service trait
-/// 
+///
 /// Implement this trait to provide gRPC RAG functionality.
 /// Use with tonic to generate the actual gRPC server.
 pub trait RagService: Send + Sync + 'static {
@@ -215,7 +215,7 @@ impl GrpcConfig {
 }
 
 /// Proto file content for code generation
-/// 
+///
 /// Save this to `proto/rag.proto` and use with tonic-build
 pub const PROTO_DEFINITION: &str = r#"
 syntax = "proto3";

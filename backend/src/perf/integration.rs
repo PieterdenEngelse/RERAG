@@ -1,5 +1,5 @@
 //! Performance Integration Module
-//! 
+//!
 //! Wires all performance optimizations into the main application.
 //! This module provides high-level APIs that combine multiple optimizations.
 
@@ -8,12 +8,12 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use super::{
-    hybrid_search::{HybridSearcher, HybridSearchConfig},
-    semantic_cache::{SemanticCache, SemanticCacheConfig, CachedResult},
-    reranking::{Reranker, RerankConfig, RerankCandidate},
-    request_coalescing::{RequestCoalescer, Singleflight},
-    hnsw::HnswIndex,
     bloom::VectorBloomFilter,
+    hnsw::HnswIndex,
+    hybrid_search::{HybridSearchConfig, HybridSearcher},
+    request_coalescing::{RequestCoalescer, Singleflight},
+    reranking::{RerankCandidate, RerankConfig, Reranker},
+    semantic_cache::{CachedResult, SemanticCache, SemanticCacheConfig},
 };
 
 /// Integrated search engine with all optimizations
@@ -102,11 +102,14 @@ impl OptimizedSearchEngine {
         // 1. Check semantic cache first
         if let Some(cached) = self.semantic_cache.get(query, query_embedding) {
             debug!("Semantic cache hit for query");
-            return cached.into_iter().map(|c| SearchResult {
-                doc_id: c.doc_id,
-                score: c.score,
-                content: c.content.unwrap_or_default(),
-            }).collect();
+            return cached
+                .into_iter()
+                .map(|c| SearchResult {
+                    doc_id: c.doc_id,
+                    score: c.score,
+                    content: c.content.unwrap_or_default(),
+                })
+                .collect();
         }
 
         // 2. Get vector results (use HNSW if available)
@@ -117,36 +120,50 @@ impl OptimizedSearchEngine {
         };
 
         // 3. Hybrid search (combine BM25 + vector)
-        let hybrid_results = self.hybrid_searcher.search(bm25_results, &vector_results, top_k * 2);
+        let hybrid_results = self
+            .hybrid_searcher
+            .search(bm25_results, &vector_results, top_k * 2);
 
         // 4. Convert to rerank candidates
-        let candidates: Vec<RerankCandidate> = hybrid_results.iter().map(|r| {
-            RerankCandidate {
-                doc_id: r.doc_id.clone(),
-                content: String::new(), // Would be filled from retriever
-                initial_score: r.hybrid_score,
-                embedding: None,
-                metadata: Default::default(),
-            }
-        }).collect();
+        let candidates: Vec<RerankCandidate> = hybrid_results
+            .iter()
+            .map(|r| {
+                RerankCandidate {
+                    doc_id: r.doc_id.clone(),
+                    content: String::new(), // Would be filled from retriever
+                    initial_score: r.hybrid_score,
+                    embedding: None,
+                    metadata: Default::default(),
+                }
+            })
+            .collect();
 
         // 5. Re-rank for diversity
-        let reranked = self.reranker.rerank(query, Some(query_embedding), candidates, top_k);
+        let reranked = self
+            .reranker
+            .rerank(query, Some(query_embedding), candidates, top_k);
 
         // 6. Convert to search results
-        let results: Vec<SearchResult> = reranked.into_iter().map(|r| SearchResult {
-            doc_id: r.doc_id,
-            score: r.final_score,
-            content: String::new(),
-        }).collect();
+        let results: Vec<SearchResult> = reranked
+            .into_iter()
+            .map(|r| SearchResult {
+                doc_id: r.doc_id,
+                score: r.final_score,
+                content: String::new(),
+            })
+            .collect();
 
         // 7. Cache results
-        let cached_results: Vec<CachedResult> = results.iter().map(|r| CachedResult {
-            doc_id: r.doc_id.clone(),
-            score: r.score,
-            content: Some(r.content.clone()),
-        }).collect();
-        self.semantic_cache.put(query, query_embedding.to_vec(), cached_results);
+        let cached_results: Vec<CachedResult> = results
+            .iter()
+            .map(|r| CachedResult {
+                doc_id: r.doc_id.clone(),
+                score: r.score,
+                content: Some(r.content.clone()),
+            })
+            .collect();
+        self.semantic_cache
+            .put(query, query_embedding.to_vec(), cached_results);
 
         results
     }
@@ -182,14 +199,17 @@ impl Default for OptimizedSearchEngine {
 }
 
 /// Global optimized search engine instance
-static SEARCH_ENGINE: std::sync::OnceLock<Arc<RwLock<OptimizedSearchEngine>>> = std::sync::OnceLock::new();
+static SEARCH_ENGINE: std::sync::OnceLock<Arc<RwLock<OptimizedSearchEngine>>> =
+    std::sync::OnceLock::new();
 
 /// Initialize the global search engine
 pub fn init_search_engine() -> Arc<RwLock<OptimizedSearchEngine>> {
-    SEARCH_ENGINE.get_or_init(|| {
-        info!("Initializing optimized search engine");
-        Arc::new(RwLock::new(OptimizedSearchEngine::new()))
-    }).clone()
+    SEARCH_ENGINE
+        .get_or_init(|| {
+            info!("Initializing optimized search engine");
+            Arc::new(RwLock::new(OptimizedSearchEngine::new()))
+        })
+        .clone()
 }
 
 /// Get the global search engine
@@ -204,14 +224,14 @@ mod tests {
     #[test]
     fn test_optimized_search_engine() {
         let mut engine = OptimizedSearchEngine::new();
-        
+
         // Add some documents
         let vectors = vec![
             ("doc1".to_string(), vec![1.0; 384]),
             ("doc2".to_string(), vec![0.5; 384]),
         ];
         engine.init_hnsw(&vectors);
-        
+
         assert!(engine.might_contain("doc1"));
         assert!(engine.might_contain("doc2"));
     }
@@ -219,19 +239,19 @@ mod tests {
     #[tokio::test]
     async fn test_search_with_cache() {
         let mut engine = OptimizedSearchEngine::new();
-        
+
         let query = "test query";
         let embedding = vec![0.5; 384];
         let bm25 = vec![("doc1".to_string(), 1.0)];
-        
+
         // First search - cache miss
         let first = engine.search(query, &embedding, &bm25, 10).await;
         assert!(!first.is_empty());
-        
+
         // Second search - should hit cache and return same docs
         let second = engine.search(query, &embedding, &bm25, 10).await;
         assert_eq!(first, second);
-        
+
         let stats = engine.cache_stats();
         assert!(stats.hits >= 1);
     }

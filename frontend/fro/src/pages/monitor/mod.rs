@@ -1,6 +1,8 @@
 pub mod agentic;
 pub mod cache;
+pub mod docker;
 pub mod index_page;
+pub mod knowledge_graph;
 pub mod logs;
 pub mod observations;
 pub mod overview;
@@ -11,7 +13,9 @@ pub mod tools;
 
 pub use agentic::MonitorAgentic;
 pub use cache::MonitorCache;
+pub use docker::MonitorDocker;
 pub use index_page::MonitorIndex;
+pub use knowledge_graph::MonitorKnowledgeGraph;
 pub use logs::MonitorLogs;
 pub use observations::MonitorObservations;
 pub use overview::MonitorOverview;

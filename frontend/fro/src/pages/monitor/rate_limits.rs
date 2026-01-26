@@ -1,4 +1,8 @@
-use crate::{api, app::Route, components::monitor::*};
+use crate::{
+    api,
+    app::{PageErrors, Route},
+    components::monitor::*,
+};
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
 
@@ -20,23 +24,29 @@ pub fn MonitorRateLimits() -> Element {
 
     {
         let mut state = state.clone();
+        let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
                 match api::fetch_rate_limit_info().await {
-                    Ok(resp) => state.set(RateLimitState {
-                        loading: false,
-                        error: None,
-                        data: Some(resp),
-                        toggling: false,
-                    }),
+                    Ok(resp) => {
+                        state.set(RateLimitState {
+                            loading: false,
+                            error: None,
+                            data: Some(resp),
+                            toggling: false,
+                        });
+                        page_errors.with_mut(|e| e.clear_error("rate_limits"));
+                    }
                     Err(err) => {
                         let previous = state.read().data.clone();
                         state.set(RateLimitState {
                             loading: false,
-                            error: Some(err),
+                            error: Some(err.clone()),
                             data: previous,
                             toggling: false,
                         });
+                        page_errors.with_mut(|errs| errs.set_error("rate_limits", &err));
+                        let _ = api::log_frontend_error("rate_limits", &err).await;
                     }
                 }
                 TimeoutFuture::new(5_000).await;

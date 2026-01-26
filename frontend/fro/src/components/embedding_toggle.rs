@@ -1,8 +1,9 @@
 //! Speed (ONNX Embedding) Status Component
 //! Shows ONNX embedding status - no toggle needed since ONNX is the only provider
 
-use dioxus::prelude::*;
 use crate::api;
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
+use dioxus::prelude::*;
 
 #[component]
 pub fn EmbeddingToggle() -> Element {
@@ -37,14 +38,14 @@ pub fn EmbeddingToggle() -> Element {
             style: "color: white; font-size: 1.1rem;",
             "⚡ Speed"
         }
-        
+
         // Content
         div {
             class: "flex flex-col items-center gap-2",
-            
+
             // Loading state
             if loading() {
-                span { 
+                span {
                     class: "loading loading-spinner loading-xs",
                     style: "color: white;"
                 }
@@ -59,7 +60,7 @@ pub fn EmbeddingToggle() -> Element {
                 // ONNX status
                 div {
                     class: "flex items-center gap-2",
-                    
+
                     // Status badge
                     div {
                         class: "flex items-center gap-1",
@@ -68,12 +69,12 @@ pub fn EmbeddingToggle() -> Element {
                         } else {
                             "background: transparent; color: #ef4444; padding: 0.25rem 0.75rem; border-radius: 0.5rem; border: 1px solid #ef4444;"
                         },
-                        span { 
+                        span {
                             class: "text-sm font-medium",
                             if ready() { "ONNX ⚡" } else { "ONNX ⚠" }
                         }
                     }
-                    
+
                     // Info button
                     button {
                         class: "shrink-0 rounded flex items-center justify-center cursor-pointer pointer-events-auto",
@@ -81,7 +82,7 @@ pub fn EmbeddingToggle() -> Element {
                         onclick: move |_| show_info.set(true),
                         title: "Info about ONNX embeddings",
                         svg {
-                            class: "w-4 h-4 text-white",
+                            class: INFO_ICON_SVG_CLASS,
                             view_box: "0 0 20 20",
                             fill: "none",
                             stroke: "currentColor",
@@ -91,7 +92,7 @@ pub fn EmbeddingToggle() -> Element {
                         }
                     }
                 }
-                
+
                 // Status text
                 p {
                     class: "text-xs text-center",
@@ -108,17 +109,17 @@ pub fn EmbeddingToggle() -> Element {
                 }
             }
         }
-        
+
         // Info Modal
         if show_info() {
             div {
                 class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
                 onclick: move |_| show_info.set(false),
-                
+
                 div {
                     class: "bg-base-100 rounded-lg p-5 max-w-sm mx-4 shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
-                    
+
                     div {
                         class: "flex justify-between items-center mb-3",
                         h3 { class: "text-base font-bold", "⚡ ONNX Embeddings" }
@@ -128,7 +129,7 @@ pub fn EmbeddingToggle() -> Element {
                             "✕"
                         }
                     }
-                    
+
                     div {
                         class: "space-y-3 text-sm",
                         p {
@@ -157,7 +158,7 @@ pub fn EmbeddingToggle() -> Element {
                             "Model: {model_path}"
                         }
                     }
-                    
+
                     button {
                         class: "btn btn-primary btn-sm mt-4 w-full",
                         onclick: move |_| show_info.set(false),

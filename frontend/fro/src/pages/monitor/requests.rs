@@ -1,4 +1,8 @@
-use crate::{api, app::Route, components::monitor::*};
+use crate::{
+    api,
+    app::{PageErrors, Route},
+    components::monitor::*,
+};
 use chrono::TimeZone;
 use dioxus::prelude::*;
 use gloo_net::http::Request;
@@ -47,6 +51,7 @@ pub fn MonitorRequests() -> Element {
 
     {
         let mut state = state.clone();
+        let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
                 match api::fetch_requests_snapshot().await {
@@ -63,14 +68,17 @@ pub fn MonitorRequests() -> Element {
                             points: snapshot.points,
                             busy,
                         });
+                        page_errors.with_mut(|e| e.clear_error("requests"));
                     }
                     Err(e) => {
                         let previous = state.read().clone();
                         state.set(RequestsState {
                             loading: false,
-                            error: Some(e),
+                            error: Some(e.clone()),
                             ..previous
                         });
+                        page_errors.with_mut(|errs| errs.set_error("requests", &e));
+                        let _ = api::log_frontend_error("requests", &e).await;
                     }
                 }
 

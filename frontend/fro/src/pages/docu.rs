@@ -9,55 +9,55 @@ pub fn Docu() -> Element {
     rsx! {
         div {
             class: "min-h-screen bg-base-200 p-6",
-            
+
             div {
                 class: "max-w-4xl mx-auto",
-                
+
                 h1 {
                     class: "text-3xl font-bold mb-6",
                     "📚 Documentation"
                 }
-                
+
                 // Quick links
                 div {
                     class: "grid grid-cols-1 md:grid-cols-2 gap-4 mb-8",
-                    
+
                     DocCard {
                         title: "Getting Started",
                         description: "Learn the basics of using the RAG system",
                         icon: "🚀"
                     }
-                    
+
                     DocCard {
                         title: "Uploading Documents",
                         description: "How to add documents for AI to search",
                         icon: "📄"
                     }
-                    
+
                     DocCard {
                         title: "Search & RAG",
                         description: "Understanding retrieval-augmented generation",
                         icon: "🔍"
                     }
-                    
+
                     DocCard {
                         title: "Configuration",
                         description: "Customize settings and parameters",
                         icon: "⚙️"
                     }
-                    
+
                     DocCard {
                         title: "ONNX Speed",
                         description: "Fast embeddings with ONNX Runtime",
                         icon: "⚡"
                     }
-                    
+
                     DocCard {
                         title: "Monitoring",
                         description: "Track performance and usage",
                         icon: "📊"
                     }
-                    
+
                     Link {
                         to: Route::DocuIndex {},
                         DocCard {
@@ -67,11 +67,11 @@ pub fn Docu() -> Element {
                         }
                     }
                 }
-                
+
                 // Main content
                 div {
                     class: "prose prose-invert max-w-none",
-                    
+
                     h2 { "Overview" }
                     p {
                         "This is a Retrieval-Augmented Generation (RAG) system that allows you to:"
@@ -82,7 +82,7 @@ pub fn Docu() -> Element {
                         li { "Get AI-powered answers grounded in your documents" }
                         li { "Train custom models on your data" }
                     }
-                    
+
                     h2 { "How It Works" }
                     p {
                         "When you ask a question:"
@@ -93,7 +93,7 @@ pub fn Docu() -> Element {
                         li { "The relevant context is sent to the LLM along with your question" }
                         li { "The LLM generates an answer based on your documents" }
                     }
-                    
+
                     h2 { "Supported File Types" }
                     div {
                         class: "grid grid-cols-2 md:grid-cols-4 gap-2 not-prose",

@@ -835,9 +835,7 @@ impl<'a> Agent<'a> {
             ));
         } else {
             // No context available - tell LLM to answer from its knowledge
-            prompt_parts.push(
-                "Answer the question based on your knowledge.".to_string()
-            );
+            prompt_parts.push("Answer the question based on your knowledge.".to_string());
         }
 
         // Add the question

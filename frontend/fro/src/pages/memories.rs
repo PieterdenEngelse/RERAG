@@ -1,8 +1,9 @@
 use crate::api;
 use crate::api::{ManualObservationSummary, RagMemoryItem, StoreRagRequest};
-use crate::app::Route;
+use crate::app::{PageErrors, Route};
 use crate::components::config_nav::{ConfigNav, ConfigTab};
 use crate::components::monitor::*;
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 
 // Memory type descriptions
@@ -229,7 +230,7 @@ struct FormState {
 fn InfoIcon() -> Element {
     rsx! {
         svg {
-            class: "w-5 h-5 text-white",
+            class: INFO_ICON_SVG_CLASS,
             view_box: "0 0 20 20",
             fill: "none",
             stroke: "currentColor",
@@ -408,6 +409,7 @@ pub fn ConfigMemories() -> Element {
 
     // Load data - runs on mount and when refresh_counter changes
     let counter_val = refresh_counter();
+    let mut page_errors = use_context::<Signal<PageErrors>>();
     use_future(move || {
         let mut state = state.clone();
         let _counter = counter_val; // Capture to create dependency
@@ -418,6 +420,7 @@ pub fn ConfigMemories() -> Element {
                 rag_memories: vec![],
                 observations: vec![],
             });
+            page_errors.with_mut(|e| e.clear_error("memories"));
 
             let rag_result = api::fetch_rag_memories(100).await;
             let obs_result = api::fetch_recent_observations(50).await;
@@ -430,14 +433,17 @@ pub fn ConfigMemories() -> Element {
                         rag_memories: r.memories,
                         observations: o.observations,
                     });
+                    page_errors.with_mut(|e| e.clear_error("memories"));
                 }
                 (Err(e), _) | (_, Err(e)) => {
                     state.set(MemoriesState {
                         loading: false,
-                        error: Some(e),
+                        error: Some(e.clone()),
                         rag_memories: vec![],
                         observations: vec![],
                     });
+                    page_errors.with_mut(|errs| errs.set_error("memories", &e));
+                    let _ = api::log_frontend_error("memories", &e).await;
                 }
             }
         }

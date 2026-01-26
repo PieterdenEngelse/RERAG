@@ -1,9 +1,8 @@
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+};
 use dioxus::prelude::*;
 use std::borrow::Cow;
-
-/// Same styling as hardware config page info buttons
-const INFO_BUTTON_CLASS: &str =
-    "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded border border-blue-500/40 bg-blue-500/10 flex items-center justify-center cursor-pointer hover:bg-blue-500/20";
 
 #[derive(Props, Clone, PartialEq)]
 pub struct StatCardProps {
@@ -78,17 +77,17 @@ pub fn StatCard(props: StatCardProps) -> Element {
                             }
                             if has_tooltip {
                                 button {
-                                    class: INFO_BUTTON_CLASS,
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| show_tooltip.set(!show_tooltip()),
                                     title: "Show info",
                                     svg {
-                                        class: "w-3 h-3 text-blue-400",
+                                        class: INFO_ICON_SVG_CLASS,
                                         view_box: "0 0 20 20",
                                         fill: "none",
                                         stroke: "currentColor",
-                                        stroke_width: "2",
-                                        circle { cx: "10", cy: "10", r: "9" }
-                                        line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
                                         circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
                                     }
                                 }
@@ -112,17 +111,17 @@ pub fn StatCard(props: StatCardProps) -> Element {
                     }
                     if has_tooltip {
                         button {
-                            class: INFO_BUTTON_CLASS,
+                            class: PARAM_ICON_BUTTON_CLASS,
+                            style: PARAM_ICON_BUTTON_STYLE,
                             onclick: move |_| show_tooltip.set(!show_tooltip()),
                             title: "Show info",
                             svg {
-                                class: "w-3 h-3 text-blue-400",
+                                class: INFO_ICON_SVG_CLASS,
                                 view_box: "0 0 20 20",
                                 fill: "none",
                                 stroke: "currentColor",
-                                stroke_width: "2",
-                                circle { cx: "10", cy: "10", r: "9" }
-                                line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
                                 circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
                             }
                         }
@@ -137,17 +136,17 @@ pub fn StatCard(props: StatCardProps) -> Element {
                     }
                     if has_tooltip {
                         button {
-                            class: INFO_BUTTON_CLASS,
+                            class: PARAM_ICON_BUTTON_CLASS,
+                            style: PARAM_ICON_BUTTON_STYLE,
                             onclick: move |_| show_tooltip.set(!show_tooltip()),
                             title: "Show info",
                             svg {
-                                class: "w-3 h-3 text-blue-400",
+                                class: INFO_ICON_SVG_CLASS,
                                 view_box: "0 0 20 20",
                                 fill: "none",
                                 stroke: "currentColor",
-                                stroke_width: "2",
-                                circle { cx: "10", cy: "10", r: "9" }
-                                line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
                                 circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
                             }
                         }

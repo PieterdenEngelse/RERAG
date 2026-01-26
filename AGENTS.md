@@ -1,41 +1,59 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Command Usage in Qodo
 
-The Actix Web backend lives in `backend/src/` with feature-focused modules (`api/`, `retriever.rs`, `monitoring/`, `memory/`, `tools/`, etc.) driven by `backend/Cargo.toml`. Shared integration and regression tests sit in `backend/tests/` (e.g., `retriever_tests.rs`, `rate_limit.rs`, `trace_propagation.rs`). The Dioxus web client occupies `frontend/fro/` with its own Cargo package plus `package.json`, `tailwind.config.js`, and component tree under `src/`. Operational playbooks, installer notes, and observability references are collected in `docs/`, `docu/`, and `ops/`. Runtime artifacts such as `documents/`, `db/`, `tantivy_index/`, `cache/`, and `logs/` are created on demand; keep them out of version control.
+**Treat AGENTS.md as your own operating manual—read and follow it, don't just write it.**
+
+Info buttons across the app share the same styling constants: `QUICK_ACTION_INFO_BUTTON_CLASS` (wrapper) + `INFO_ICON_SVG_CLASS` (5×5 white SVG).
+
+- After editing AGENTS.md or reorganizing the repo, run:
+
+```bash
+qodo --init
+```
+
+This refreshes metadata for Qodo Command.
+
+- When documenting or replying with shell steps, always include the full commands explicitly (no hidden copy buttons).
+
+## Project Structure & Module Organization
+The workspace is defined in `Cargo.toml` and contains `backend/` (Actix Web API, retrieval core, monitoring), `frontend/fro/` (Dioxus Web UI plus Tailwind assets), and `tools/memory_cli/` for operational helpers. Backend modules live under `backend/src/` (`api/`, `memory/`, `monitoring/`, `middleware/`, `retriever.rs`, etc.), while long‑running assets such as Tantivy segments, LanceDB pages, and SQLite files are created under repo‑level folders like `documents/`, `tantivy_index/`, and `db/`. Integration and reliability suites mirror runtime modules inside `backend/tests/`. The frontend keeps UI primitives in `src/components/`, views/pages under `src/pages/monitor/*`, and shared fetch logic in `src/api.rs`.
 
 ## Build, Test, and Development Commands
 
 ```bash
-# Backend development server with structured logs
-cd backend && env RUST_LOG=info cargo run
+# Backend dev server with structured logs
+cd backend && RUST_LOG=info cargo run
 
-# Backend release build and test suite
-cd backend && cargo build --release && cargo test
+# Backend quality gate
+cd backend && cargo fmt && cargo clippy --all-targets -- -D warnings
 
-# Frontend toolchain (Tailwind + Dioxus)
-cd frontend/fro && npm install && npm run css:build && dx serve --platform web
+# Full backend test matrix
+cd backend && cargo test --all
+
+# Frontend CSS toolchain
+cd frontend/fro && npm install && npm run css:build
+
+# Dioxus live preview
+cd frontend/fro && dx serve --platform web
 ```
 
 ## Coding Style & Naming Conventions
-
-- **Indentation**: Rust, TOML, and JS/TS use 4 spaces (no tabs); Tailwind config follows Prettier defaults.
-- **File naming**: Rust modules are `snake_case` (`retriever.rs`, `agent_memory.rs`); components and structs use `UpperCamelCase`; constants are `SCREAMING_SNAKE_CASE`.
-- **Function/variable naming**: Prefer `snake_case` in Rust, camelCase inside frontend TypeScript/JS glue, and kebab-case for config filenames.
-- **Linting**: Run `cargo fmt` plus `cargo clippy --all-targets -- -D warnings` before committing; the frontend relies on `rustfmt` (via `dx fmt`) and Tailwind’s generated CSS.
+- **Indentation**: 4 spaces across Rust, TOML, and Dioxus components (see `backend/src/main.rs`). Tabs are reserved for Makefiles.
+- **File naming**: Rust modules use `snake_case` (`monitoring_config.rs`), Dioxus components prefer `UpperCamelCase` files sitting in `src/components/`, and scripts/configs lean on kebab-case (`docker-compose.full.yml`).
+- **Function/variable naming**: Follow Rust defaults (`snake_case` for functions and locals, `SCREAMING_SNAKE_CASE` constants). Frontend hooks and helpers use `camelCase` inside `api.rs` and component logic.
+- **Linting**: Always run `cargo fmt` and `cargo clippy --all-targets -- -D warnings`. Frontend code respects `dx fmt` (bundled with the Dioxus CLI) and the Tailwind CLI handles deterministic CSS builds.
 
 ## Testing Guidelines
-
-- **Framework**: Native Rust test harness with async support; integration targets live in `backend/tests/`.
-- **Test files**: Mirrors runtime modules (`retriever_tests.rs`, `rate_limit_middleware_integration_test.rs`). Use `cargo test retriever_tests::search` to scope.
-- **Running tests**: `cd backend && cargo test` exercises unit + integration suites; add `-- --ignored` when exercising long-running observability specs.
-- **Coverage**: No enforced threshold, but CI docs in `docu/PLAN.md` expect smoke tests before release tagging.
+- **Framework**: Native Rust unit/integration tests, many of them Tokio-enabled, under `backend/tests/` (`retriever_tests.rs`, `rate_limit.rs`, `trace_propagation.rs`, etc.).
+- **Test files**: Mirror runtime modules; scenario suites live directly under `backend/tests/` with optional subfolders such as `backend/tests/integrations/`.
+- **Running tests**: `cd backend && cargo test` for the default set. Append `-- --ignored` when you need the longer observability tests.
+- **Coverage**: No enforced threshold, but `docu/TODO.MD` and release notes expect retriever, rate limit, and monitoring smoke tests before tagging.
 
 ## Commit & Pull Request Guidelines
-
-- **Commit format**: Keep short imperative subjects (see `git log` entries such as `phase 17 completed` or `29-12-25`). Reference affected subsystems when helpful (e.g., `monitoring: tighten OTLP retry`).
-- **PR process**: Reference the relevant design note (`docu/PLAN.md`, tracing guides, etc.), attach `cargo test` output, and describe any feature flags touched (`OTEL_*`, `RATE_LIMIT_*`).
-- **Branch naming**: Follow the existing `feature/<scope>` pattern noted in `docu/AGENTS.md`; reserve `main` for release-ready code.
+- **Commit format**: Favor short, imperative subjects with optional subsystem prefixes. `git log` shows examples like `18-1-6`, `fix header unknown status color`, or `feat: implement 12 agent tools with monitoring dashboard`.
+- **PR process**: Reference any configs you touched (`.env.example`, `docu/PLAN-FRO`, dashboards) and include `cargo test` output or frontend screenshots when relevant.
+- **Branch naming**: Keep `main` deployable and branch as `feature/<scope>` or `fix/<ticket>` to align with automation and reviewer expectations.
 
 ---
 
@@ -43,12 +61,12 @@ cd frontend/fro && npm install && npm run css:build && dx serve --platform web
 
 ## 🎯 What This Repository Does
 
-**ag** is a Rust-based agentic Retrieval-Augmented Generation platform exposing Actix Web APIs for document ingestion, search, and agent memory, plus a Dioxus/Tailwind frontend and an observability toolchain (Prometheus, Grafana, Tempo, Loki).
+**ag** is a Rust-first Retrieval-Augmented Generation stack that combines an Actix Web backend, Tantivy/LanceDB persistence, and a Dioxus dashboard to ingest documents, build semantic indexes, and monitor agentic workflows.
 
 **Key responsibilities:**
-- Accept, chunk, and index documents into Tantivy and vector stores.
-- Serve low-latency semantic search, rerank, summarize, and agent-memory endpoints.
-- Emit metrics/traces/logs for the included monitoring stack and scripts under `prometheus/`, `grafana-*.json`, and `tools/`.
+- Ingest and chunk files, persist embeddings to Tantivy plus SQLite/LanceDB metadata stores, and optionally Neo4j.
+- Serve search, memory, monitoring, and management APIs consumed by the web UI, CLI tools, or external automations.
+- Export traces, metrics, and logs to Prometheus, Tempo, Loki, and Redis-backed caches for observability and rate enforcement.
 
 ---
 
@@ -56,191 +74,178 @@ cd frontend/fro && npm install && npm run css:build && dx serve --platform web
 
 ### System Context
 ```
-[Dioxus Web UI / CLI clients]
-          │ HTTP (CORS + rate limits)
-          ▼
-[Actix Web API (backend/src)] ──► [Tantivy index + rusqlite DB]
-          │                               │
-          ├─► [Redis L3 cache (optional)] │
-          └─► [OTel exporter] ─► [OTel Collector] ─► [Tempo / Grafana]
+[Operators / CLI / UI]
+        │ HTTP + WebSocket
+        ▼
+[Actix backend (backend/src)] ──► [Tantivy index + SQLite + LanceDB]
+        │                              │
+        ├─► [Redis L3 cache]*          │
+        └─► [OTel exporters] ──► [Tempo, Prometheus, Grafana, Loki]
+(* optional features enabled via env + Cargo features)
 ```
 
 ### Key Components
-- **Actix server (`backend/src/main.rs`)** – Boots config, tracing, database schema, retriever, Redis cache, and spawns non-blocking indexing.
-- **API layer (`backend/src/api/`)** – Upload/search routes, async reindex jobs, chunk/LLM/hardware config endpoints, agent memory handlers, monitoring surfaces (`/monitoring/*`).
-- **Retriever & indexing (`backend/src/retriever.rs`, `index.rs`, `chunker.rs`)** – Manage Tantivy writers, chunkers, cache tiers, background indexing, and metrics gauges.
-- **Monitoring (`backend/src/monitoring/`)** – Prometheus histograms, OTLP configuration, trace alerting, rate-limit middleware, dashboards, and scripts.
-- **Frontend (`frontend/fro/src/`)** – Dioxus 0.6 components, monitoring widgets, and Tailwind-generated styles that call the API through `src/api.rs` helpers.
+- **API & routing (`backend/src/api/`)** – Actix scopes for upload, search, memory, rate limits, logs, docker, and monitoring endpoints.
+- **Retriever & chunking (`retriever.rs`, `chunker.rs`, `index/`)** – Builds chunkers based on `CHUNKER_MODE`, manages Tantivy writers, LanceDB vectors, semantic caches, and background reindexing.
+- **Monitoring stack (`backend/src/monitoring/`)** – Tracing/metrics initializers, histogram tunables, rate-limit middleware, chunking telemetry, and Docker health collectors.
+- **Memory & agent tools (`backend/src/memory/`, `tools/*`)** – SQLite-backed agent memories, GraphRAG hooks (Neo4j feature), and CLI tooling for maintenance.
+- **Frontend (`frontend/fro/src/`)** – Dioxus router (`app.rs`), monitoring pages (requests, cache, rate-limits, index dashboards), and Tailwind-driven styling with DaisyUI.
 
 ### Data Flow
-1. Client uploads or queries over HTTP; TraceMiddleware tags request IDs and captures spans.
-2. Rate-limit middleware classifies routes using env/JSON rules before hitting handlers.
-3. Handlers delegate to Retriever/Chunker or to the SQLite-backed agent memory layer; Tantivy writes commit once per batch.
-4. Metrics are exported from `/monitoring/metrics`, traces stream via OTLP to Collector/Tempo, and optional webhooks fire on reindex completion.
+1. Documents arrive via `/upload` or the file watcher and are chunked according to `CHUNKER_MODE` + semantic threshold.
+2. `Retriever` persists chunks to Tantivy/LanceDB, records statistics, and warms caches (in-process L1/L2 plus optional Redis L3).
+3. Search/memory requests hit Actix handlers; rate-limit middleware enforces token buckets before calls reach retrieval or agent layers.
+4. Responses include references and metrics. Tracing spans, Prometheus samples, and logs are emitted through OpenTelemetry exporters toward Tempo/Grafana/Loki.
 
 ---
 
 ## 📁 Project Structure [Partial Directory Tree]
 
 ```
-.
+ag/
+├── Cargo.toml                 # Workspace (backend, frontend/fro, tools)
 ├── backend/
-│   ├── Cargo.toml              # Actix/LLM crate definition
+│   ├── Cargo.toml             # Actix + retrieval crate
 │   ├── src/
-│   │   ├── api/
-│   │   ├── monitoring/
-│   │   ├── memory/
-│   │   └── retriever.rs
-│   └── tests/                  # Integration + reliability suites
+│   │   ├── api/               # HTTP handlers, reindex logic, monitoring routes
+│   │   ├── monitoring/        # Metrics, tracing, rate-limit middleware, chunking stats
+│   │   ├── memory/            # Agent memory + GraphRAG support
+│   │   ├── middleware/        # Request guards, auth/rate limiting
+│   │   └── retriever.rs       # Tantivy/LanceDB orchestration & caches
+│   └── tests/                 # Integration/observability suites
 ├── frontend/
 │   └── fro/
-│       ├── Cargo.toml          # Dioxus web app
-│       ├── package.json        # Tailwind CLI scripts
+│       ├── package.json       # Tailwind + DaisyUI scripts
 │       └── src/
-├── docs/                       # Targeted how-to guides
-├── docu/                       # Living design/plan documents
-├── prometheus/                 # Scrape configs & TLS helpers
-├── tools/                      # Auxiliary apps (e.g., qodo_web)
-├── scripts/                    # Installer/diagnostic shell scripts
-├── docker-compose.observability.yml
-└── AGENTS.md
+│           ├── app.rs         # Dioxus router & layouts
+│           ├── api.rs         # Fetch helpers (upload, monitoring, config)
+│           ├── components/    # Shared UI elements (header, panels, toasts)
+│           └── pages/monitor/ # Requests, cache, index, rate-limit dashboards
+├── tools/memory_cli/          # CLI helpers for agent memory maintenance
+├── docs/ & docu/              # Operational plans (`docu/PLAN-FRO`, TODOs)
+├── scripts/                   # TLS, tracing, observability bootstrap scripts
+├── docker-compose.*.yml       # Full-stack & observability compositions
+└── prometheus/, grafana-*.json # Metrics & dashboard manifests
 ```
 
 ### Key Files to Know
 
 | File | Purpose | When You'd Touch It |
 |------|---------|---------------------|
-| `backend/src/main.rs` | Orchestrates startup (config, tracing, retriever, background indexing). | Changing boot order, logging, or global toggles. |
-| `backend/src/api/mod.rs` | Defines every HTTP route, async reindex, monitoring endpoints, rate-limit wiring. | Adding new endpoints or tweaking middleware. |
-| `backend/src/retriever.rs` | Tantivy writer settings, cache tiers, search/rerank logic. | Optimizing indexing/search performance. |
-| `backend/src/monitoring/otel_config.rs` | OTLP exporter initialization + env parsing. | Pointing traces to new collectors/backends. |
-| `backend/tests/retriever_tests.rs` | Regression tests for indexing/search consistency. | Safeguarding search changes. |
-| `frontend/fro/src/main.rs` | Dioxus router/bootstrap. | Adding views/routes on the web UI. |
-| `frontend/fro/package.json` | Tailwind build/watch scripts. | Adjusting CSS pipeline or dependencies. |
-| `.env.example` | Documented runtime knobs (chunking, tracing, rate limits). | Creating new env templates or onboarding. |
-| `docker-compose.observability.yml` | Spins up Prometheus + Grafana quick-start stack. | Local observability testing. |
-| `scripts/setup-prometheus-tls.sh` | Automates Prometheus TLS hardening. | Rotating certs or rebuilding secure scrape endpoints. |
-| `docu/PLAN.md` | Phase-by-phase implementation log. | Understanding historical trade-offs before refactors. |
+| `backend/src/main.rs` | Bootstraps env parsing, tracing, Redis/Neo4j features, background indexing, and Actix server startup. | Adjust startup order, add env wiring, or new background workers. |
+| `backend/src/api/mod.rs` | Central registry for upload/search/memory routes, trace/rate-limit endpoints, and monitoring helpers. | Adding HTTP APIs, toggling rate limits, wiring new telemetry endpoints. |
+| `backend/src/retriever.rs` | Search and indexing engine (Tantivy writers, caches, HNSW/PQ builds). | Tuning retrieval performance, adding chunker modes, exposing metrics. |
+| `backend/src/chunker.rs` | Configurable chunkers with semantic thresholds and stats logging. | Experimenting with chunk sizes/modes or surfacing telemetry. |
+| `backend/src/monitoring/mod.rs` | Metrics registry, histogram buckets, OpenTelemetry exporters, health trackers. | Adding Prometheus series or OTLP exporters. |
+| `backend/tests/rate_limit.rs` | Integration coverage for middleware, proxy trust, and bucket refill logic. | Validating rate-limit changes. |
+| `frontend/fro/src/app.rs` | Dioxus router and layout; wires monitoring pages and global signals. | Adding new routes, overlays, or global state providers. |
+| `frontend/fro/src/pages/monitor/index_page.rs` | Index dashboard wiring (reindex controls, storage cards). | Surfacing new backend stats or UX tweaks for indexing. |
+| `frontend/fro/src/api.rs` | Fetch helpers covering upload, monitoring, configuration, and file picker logic. | Extending API bindings or adjusting error handling. |
+| `.env.example` | Canonical runtime configuration (ports, Redis/Neo4j toggles, OTEL endpoints, chunker mode, histogram buckets). | Onboarding, documenting new env vars, or rotating defaults. |
 
 ---
 
 ## 🔧 Technology Stack
 
 ### Core Technologies
-- **Language:** Rust 2021 edition (workspace root + backend/frontend crates) for backend correctness and shared types.
-- **Backend Framework:** Actix Web 4.11 (async extractors, middleware) paired with Tokio 1.47 runtime.
-- **Retrieval Layer:** Tantivy 0.24.2 for inverted index search plus custom chunkers; Rusqlite 0.37 for metadata and agent memory.
-- **Frontend:** Dioxus 0.6.3 compiled to web/WASM, styled with Tailwind CLI 4.1.14 and DaisyUI.
-- **Observability:** Tracing + OpenTelemetry SDK (0.21), Prometheus client 0.13, Grafana dashboards, Tempo for traces, Loki/Vector assets for logs.
-- **Caching:** Optional Redis (`redis` crate 0.32) as L3 cache behind in-process L1/L2 caches.
+- **Language:** Rust 1.75+ (Edition 2021) for backend correctness, async (Tokio 1.47.1), and shared types.
+- **Web Framework:** Actix Web 4.11.0 with actix-cors/multipart/service for HTTP, upload, and middleware ergonomics.
+- **Retrieval & Storage:** Tantivy 0.24.2 for vector search, LanceDB/SQLite via `rusqlite` for metadata, optional Neo4j (via `neo4rs`) for GraphRAG, Redis 0.32 as L3 cache.
+- **Frontend:** Dioxus 0.6 rendered to web via `dx serve`, styled by Tailwind CLI 4.1.14 + DaisyUI 5.5.5.
+- **Observability:** `tracing` + OpenTelemetry 0.21, Prometheus 0.13 exporters, Grafana/Tempo/Loki stacks orchestrated by `docker-compose.full*.yml`.
 
 ### Key Libraries
-- `llm 1.3.4` for embedding generation and local model hooks.
-- `serde`/`serde_json` for all API payloads and config serialization.
-- `reqwest 0.12` (backend) and `gloo-net`/`reqwest 0.11` (frontend) for outbound HTTP.
-- `tracing-subscriber`, `tracing-opentelemetry`, and `prometheus` crates for instrumentation.
+- `llm 1.3.4` for model execution hooks (Ollama/ONNX bridging).
+- `fastembed 5.8.1` (non-Windows) and `instant-distance 0.6` for ANN acceleration.
+- `dashmap`, `lz4_flex`, `wide`, `bloomfilter`, and `tokio-uring` for high-throughput chunking, caching, and file IO.
 
 ### Development Tools
-- Cargo workspace with `cargo run|build|test`, `cargo fmt`, and `cargo clippy`.
-- Dioxus CLI (`dx serve`) plus Tailwind CLI for frontend hot reload.
-- Shell automation under `scripts/` for TLS setup, tracing verification, and collector restarts.
+- Cargo workspaces, `cargo fmt`, and `cargo clippy` for Rust QA.
+- Dioxus CLI (`dx serve`, `dx fmt`) for frontend hot reload.
+- Tailwind CLI for CSS builds; shell scripts like `complete-tracing-setup.sh` automate observability bring-up.
 
 ---
 
 ## 🌐 External Dependencies
 
 ### Required Services
-- **Prometheus** (`prometheus/`, `update-prometheus-scrape-configs.sh`) – Scrapes `/monitoring/metrics`; TLS-ready configs provided.
-- **Grafana** (`grafana-*.json`) – Imports dashboards for latency, rate limits, and trace-alerting.
-- **Tempo** (`tempo.service.fixed`, `setup-tempo-tls.sh`) – Receives OTLP spans from the backend or collector.
-- **Redis** (optional) – Configurable via `REDIS_ENABLED` and `REDIS_URL` for L3 cache.
-
-### Optional Integrations
-- **Loki + Vector** (`vector_*.toml`, `setup-loki-tls.sh`) – Structured log shipping; toggled via provided scripts.
-- **Webhook Targets** (`REINDEX_WEBHOOK_URL`) – Notify external systems when indexing jobs finish.
-
----
+- **Ollama / LLM backend** – Provides embedding and chat models referenced by backend LLM settings.
+- **Prometheus + Grafana + Tempo** – Defined in `docker-compose.full.yml` and `prometheus/` with dashboards under `grafana-*.json`; scrape `/monitoring/metrics` and ingest OTLP traces.
+- **Redis (optional)** – Toggled via `REDIS_ENABLED` env vars to host the L3 cache for retrieval workloads.
+- **Neo4j (optional)** – Enabled via Cargo `neo4j` feature and envs to store graph relationships for GraphRAG.
 
 ### Environment Variables
 
 ```bash
-# Core runtime
+# Core server
 BACKEND_HOST=127.0.0.1
 BACKEND_PORT=3010
+RUST_LOG=info
 SKIP_INITIAL_INDEXING=false
-INDEX_IN_RAM=false
 
-# Chunking & search tuning
+# Chunking & retrieval
 CHUNKER_MODE=fixed|lightweight|semantic
-CHUNK_TARGET_SIZE=384
-CHUNKING_SNAPSHOT_LOGGING=true
+SEMANTIC_SIMILARITY_THRESHOLD=0.82
+SEARCH_HISTO_BUCKETS=1,2,5,10,20,50,100,250,500,1000
+REINDEX_HISTO_BUCKETS=50,100,250,500,1000,2000,5000
 
-# Rate limiting
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_QPS=1.0
-RATE_LIMIT_SEARCH_QPS=10
-RATE_LIMIT_UPLOAD_QPS=2
-RATE_LIMIT_LRU_CAPACITY=1024
-TRUST_PROXY=false
-
-# Tracing & observability
-OTEL_TRACES_ENABLED=true
-OTEL_OTLP_EXPORT=true
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-TEMPO_ENABLED=false
-RESOURCE_ATTRIBUTION_ENABLED=true
-
-# Caching
+# Caching / storage
 REDIS_ENABLED=true
 REDIS_URL=redis://127.0.0.1:6379/
-REDIS_TTL=3600
+NEO4J_ENABLED=true
+
+# Observability
+OTEL_TRACES_ENABLED=true
+OTEL_OTLP_EXPORT=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+TEMPO_ENABLED=true
+
+# LLM routing
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=phi:latest
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 ```
 
 ---
 
 ## 🔄 Common Workflows
 
-### Document upload and ingestion
-1. `curl -F "file=@docs/sample.txt" http://127.0.0.1:3010/upload`
-2. Monitor background indexing via `/monitoring/metrics` (histograms + gauges) or `/monitoring/chunking/latest`.
-3. If SKIP_INITIAL_INDEXING was set, kick off `curl -X POST http://127.0.0.1:3010/reindex/async` and poll `/reindex/status/{job}`.
+### Document ingestion & indexing
+1. Upload via `curl -F "file=@docs/sample.txt" http://127.0.0.1:3010/upload` or drop files into `documents/` for the watcher.
+2. Watch `/monitoring/chunking/latest` or `/monitoring/metrics` for chunk stats and progress; disable auto-indexing with `SKIP_INITIAL_INDEXING=true` when needed.
+3. Trigger manual indexing with `curl -X POST http://127.0.0.1:3010/reindex` (sync) or `/reindex/async` (background) and monitor job IDs via `/reindex/status/{job}`.
 
-**Code path:** `api/mod.rs::upload_document_inner` → `index::index_file` → `retriever::commit`.
-
-### Search & agent workflows
-1. Query search: `curl "http://127.0.0.1:3010/search?q=rust"` (rate limited as “search”).
-2. Store agent memory: POST to `/memory/store_rag`; retrieve with `/memory/search_rag` (SQLite via `agent_memory.rs`).
-3. The frontend reuses `frontend/fro/src/api.rs` helpers to call these endpoints with Dioxus hooks.
+### Semantic search & agent memory
+1. Query `GET /search?q=<term>` for vector/BM25 fusion results.
+2. Store or retrieve episodic memory through `/memory/store_rag` and `/memory/search_rag` endpoints exposed in `api.rs`.
+3. Frontend monitoring pages (`/monitor/requests`, `/monitor/memories`) call the same APIs via `frontend/fro/src/api.rs` helpers.
 
 ### Observability bootstrap
-1. `docker-compose -f docker-compose.observability.yml up -d` to start Prometheus + Grafana (uses provided provisioning files).
-2. Run `./complete-tracing-setup.sh` or `./update-tempo-config.sh` to align Collector ↔ Tempo TLS expectations.
-3. Import `grafana-*.json` dashboards for latency, trace alerting, and multi-source logging views.
+1. Start infra: `docker compose -f docker-compose.full.yml up -d`.
+2. Run `./complete-tracing-setup.sh` or `./setup-tempo-tls.sh` to align certificates and OTLP endpoints.
+3. Import dashboards from `grafana-*.json` and ensure Prometheus scrapes `http://<host>:3010/monitoring/metrics` successfully.
 
 ---
 
 ## 📈 Performance & Scale
-
-- **Rate limiting**: Middleware-driven per-route token buckets (configurable via JSON/env) protect heavy endpoints (`/upload`, `/reindex`) and report drops through Prometheus counters.
-- **Background indexing**: Startup spawns indexing on a dedicated task; `SKIP_INITIAL_INDEXING=true` keeps boot times low while manual reindex remains available.
-- **Histogram tuning**: `SEARCH_HISTO_BUCKETS` and `REINDEX_HISTO_BUCKETS` accept comma-separated millisecond thresholds; invalid tokens fall back to defaults with warnings.
-- **Caching tiers**: L1/L2 in-memory caches plus optional Redis L3 reduce Tantivy lookups; monitoring endpoints expose cache hit ratios.
+- **Chunker flexibility**: `CHUNKER_MODE` selects fixed, lightweight, or semantic chunkers; stats are captured via `/monitoring/chunking/latest` for tuning thresholds.
+- **Caching tiers**: In-process caches plus optional Redis keep Tantivy hits down; instrumentation lives in `monitoring/rate_limit_middleware.rs` and cache snapshots are returned from `/monitor/cache/info`.
+- **Background workers**: Startup spawns indexing, file watchers, trace alerting, and resource attribution tasks to keep request threads lean.
+- **Histograms**: `SEARCH_HISTO_BUCKETS` and `REINDEX_HISTO_BUCKETS` env vars feed `monitoring/histogram_config.rs`, enabling custom latency buckets without rebuilds.
 
 ### Monitoring
-- Prometheus scrape target: `http://<host>:3010/monitoring/metrics`.
-- Grafana dashboards in `grafana-*.json` visualize latency, error budgets, and rate-limit activity; alert rules live alongside under `docs/TRACE_ALERTING*.md`.
-- The Dioxus **Monitor → Tools** page now consumes `/monitoring/tools/{stats,executions,cache,rate-limits,costs,dependencies}` to show cache health, per-tool rate limiter utilization, cost totals, and the observed tool-chain graph. Any missing endpoint surfaces an inline hint so operators know which API to fix.
+- Prometheus scrapes `/monitoring/metrics`; Grafana dashboards (trace alerting, multi-source logs, request health) live alongside JSON manifests in repo root.
+- Tempo receives OTLP traces from the backend when `OTEL_TRACES_ENABLED=true`; Loki + Vector configs live under `vector_*.toml` for log shipping.
+- Docker observability endpoints (`/monitoring/docker`) run shell commands to inspect containers and stats, with warnings captured in tracing logs.
 
 ---
 
 ## 🚨 Things to Be Careful About
 
-> **Repository hygiene**: Never assume files are backed up in git—treat the working tree as the only source of truth and copy anything critical before experimenting.
-
 ### 🔒 Security Considerations
-- **Proxy awareness**: Leave `TRUST_PROXY=false` unless you terminate TLS behind a trusted reverse proxy; otherwise rate limiting and IP logging may be spoofed.
-- **API keys storage**: `/config/api_keys` endpoints persist in SQLite; `.env` and `agent.db` backups exist in repo root—treat them as secrets.
-- **Tracing TLS**: Scripts such as `setup-tempo-tls.sh` and `setup-prometheus-tls.sh` modify system configs; run them with care and capture backups (`*.bak` files already exist).
-- **Observability credentials**: Dashboard JSONs assume local Grafana without auth; harden when exposing externally.
+- **Rate limiting**: `monitoring/rate_limit_middleware.rs` enforces per-IP token buckets; always update env defaults and integration tests when changing search/upload budgets.
+- **Proxy trust**: `TRUST_PROXY` controls whether `X-Forwarded-For` headers are honored—leave false unless you sit behind a trusted reverse proxy.
+- **Secrets & data**: `.env`, `agent.db`, and `.env.backup-*` files contain credentials; never commit them. TLS scripts such as `setup-prometheus-tls.sh` modify system stores—review before running.
+- **Observability endpoints**: Grafana/Tempo instances launched via docker-compose ship with default credentials; secure them before exposing beyond localhost.
 
-*Update to last commit: d549cdb6f6eb667c1783a36be6b35a7a91af16a2*
+*Last updated: 2026-01-18*

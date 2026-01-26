@@ -25,14 +25,14 @@ fn vector_from_storage(data: &[u8]) -> Vec<f32> {
             return archived.iter().map(|f| f.to_native()).collect();
         }
     }
-    
+
     // Fall back to JSON (for backward compatibility)
     if let Ok(json_str) = std::str::from_utf8(data) {
         if let Ok(vec) = serde_json::from_str::<Vec<f32>>(json_str) {
             return vec;
         }
     }
-    
+
     Vec::new()
 }
 

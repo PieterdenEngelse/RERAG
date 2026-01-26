@@ -87,3 +87,26 @@ input[type="number"]:disabled {
   font-weight: 600;
   color: rgb(209 213 219); /* gray-300 */
 }
+
+/* Light gray border for ONNX radio buttons */
+input.onnx-radio,
+input[type="radio"].onnx-radio {
+  border: 1px solid rgb(156 163 175); /* gray-400 */
+}
+
+/* ONNX checkbox styling - fill with brand color when checked */
+.onnx-checkbox {
+  border: 2px solid rgb(156 163 175) !important; /* gray-400 */
+  --input-color: #1D6B9A; /* brand color for checked state */
+}
+
+.onnx-checkbox:checked {
+  background-color: #1D6B9A !important;
+  border-color: #1D6B9A !important;
+  color: white !important; /* checkmark color */
+}
+
+.onnx-checkbox:checked::before {
+  background-color: white !important; /* white checkmark */
+  opacity: 100% !important;
+}

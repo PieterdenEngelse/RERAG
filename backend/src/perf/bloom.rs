@@ -1,13 +1,13 @@
 //! Bloom Filter for Fast Negative Lookups
-//! 
+//!
 //! Bloom filters provide O(1) probabilistic membership testing.
 //! They can definitively say "not in set" but may have false positives.
-//! 
+//!
 //! # Use Cases
 //! - Skip expensive vector search if document definitely doesn't exist
 //! - Fast cache miss detection
 //! - Duplicate detection during indexing
-//! 
+//!
 //! # Performance
 //! - Check: O(1)
 //! - Insert: O(1)
@@ -25,7 +25,7 @@ pub struct VectorBloomFilter {
 
 impl VectorBloomFilter {
     /// Create a new bloom filter
-    /// 
+    ///
     /// # Arguments
     /// * `capacity` - Expected number of elements
     /// * `false_positive_rate` - Acceptable false positive rate (e.g., 0.01 for 1%)
@@ -51,7 +51,7 @@ impl VectorBloomFilter {
     }
 
     /// Check if a document ID might exist
-    /// 
+    ///
     /// Returns:
     /// - `false`: Definitely not in the set
     /// - `true`: Might be in the set (could be false positive)
@@ -150,7 +150,7 @@ impl CountingBloomFilter {
         // Calculate optimal size and number of hashes
         let size = Self::optimal_size(capacity, false_positive_rate);
         let num_hashes = Self::optimal_hashes(size, capacity);
-        
+
         Self {
             counts: vec![0; size],
             num_hashes,
@@ -171,12 +171,12 @@ impl CountingBloomFilter {
         let mut indices = Vec::with_capacity(self.num_hashes);
         let hash1 = seahash::hash(item.as_bytes());
         let hash2 = seahash::hash(&hash1.to_le_bytes());
-        
+
         for i in 0..self.num_hashes {
             let combined = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
             indices.push((combined as usize) % self.size);
         }
-        
+
         indices
     }
 
@@ -193,7 +193,9 @@ impl CountingBloomFilter {
     }
 
     pub fn might_contain(&self, item: &str) -> bool {
-        self.hash_indices(item).iter().all(|&idx| self.counts[idx] > 0)
+        self.hash_indices(item)
+            .iter()
+            .all(|&idx| self.counts[idx] > 0)
     }
 }
 
@@ -204,15 +206,15 @@ mod tests {
     #[test]
     fn test_bloom_filter_basic() {
         let mut filter = VectorBloomFilter::new(1000, 0.01);
-        
+
         filter.insert("doc_1");
         filter.insert("doc_2");
         filter.insert("doc_3");
-        
+
         assert!(filter.might_contain("doc_1"));
         assert!(filter.might_contain("doc_2"));
         assert!(filter.might_contain("doc_3"));
-        
+
         // This should definitely not be in the filter
         // (with very high probability)
         let mut false_positives = 0;
@@ -221,18 +223,22 @@ mod tests {
                 false_positives += 1;
             }
         }
-        
+
         // Should have very few false positives
-        assert!(false_positives < 5, "Too many false positives: {}", false_positives);
+        assert!(
+            false_positives < 5,
+            "Too many false positives: {}",
+            false_positives
+        );
     }
 
     #[test]
     fn test_counting_bloom_filter() {
         let mut filter = CountingBloomFilter::new(1000, 0.01);
-        
+
         filter.insert("item_1");
         assert!(filter.might_contain("item_1"));
-        
+
         filter.remove("item_1");
         assert!(!filter.might_contain("item_1"));
     }
@@ -240,9 +246,9 @@ mod tests {
     #[test]
     fn test_multi_bloom_filter() {
         let mut filter = MultiBloomFilter::new(1000);
-        
+
         filter.insert("doc_1", "hash_abc123");
-        
+
         assert!(filter.might_contain_id("doc_1"));
         assert!(filter.might_contain_content("hash_abc123"));
         assert!(!filter.might_contain_id("doc_2"));

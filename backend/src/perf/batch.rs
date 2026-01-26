@@ -1,5 +1,5 @@
 //! Batch Processing Utilities
-//! 
+//!
 //! Provides efficient batch processing for embeddings and vector operations.
 //! Optimizes throughput by processing multiple items together.
 
@@ -10,16 +10,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub mod batch_sizes {
     /// Optimal batch size for CPU embedding generation
     pub const EMBEDDING_CPU: usize = 32;
-    
+
     /// Optimal batch size for GPU embedding generation
     pub const EMBEDDING_GPU: usize = 128;
-    
+
     /// Optimal batch size for vector similarity calculations
     pub const SIMILARITY: usize = 1000;
-    
+
     /// Optimal batch size for indexing operations
     pub const INDEXING: usize = 100;
-    
+
     /// Optimal batch size for database operations
     pub const DATABASE: usize = 500;
 }
@@ -228,9 +228,9 @@ mod tests {
     fn test_batch_processor() {
         let processor = BatchProcessor::new(10);
         let items: Vec<i32> = (0..100).collect();
-        
+
         let results: Vec<i32> = processor.process(&items, |x| x * 2);
-        
+
         assert_eq!(results.len(), 100);
         assert_eq!(results[0], 0);
         assert_eq!(results[50], 100);
@@ -241,7 +241,7 @@ mod tests {
     fn test_chunked_iterator() {
         let items: Vec<i32> = (0..25).collect();
         let chunks: Vec<Vec<i32>> = items.into_iter().chunked(10).collect();
-        
+
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].len(), 10);
         assert_eq!(chunks[1].len(), 10);
@@ -251,11 +251,11 @@ mod tests {
     #[test]
     fn test_batch_progress() {
         let progress = BatchProgress::new(100);
-        
+
         progress.increment(25);
         assert_eq!(progress.completed(), 25);
         assert!((progress.progress() - 0.25).abs() < 0.001);
-        
+
         progress.increment(75);
         assert!(progress.is_complete());
     }
@@ -264,7 +264,7 @@ mod tests {
     fn test_batch_embedding_request() {
         let texts: Vec<String> = (0..100).map(|i| format!("text {}", i)).collect();
         let request = BatchEmbeddingRequest::new(texts).with_batch_size(32);
-        
+
         assert_eq!(request.num_batches(), 4); // 100 / 32 = 3.125, rounded up = 4
     }
 }

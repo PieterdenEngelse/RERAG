@@ -1,10 +1,10 @@
 //! Sharding for Horizontal Scaling
-//! 
+//!
 //! Distributes vectors across multiple shards for:
 //! - Horizontal scaling beyond single machine
 //! - Parallel search across shards
 //! - Fault tolerance with replication
-//! 
+//!
 //! # Sharding Strategies
 //! - Hash-based: Consistent hashing for even distribution
 //! - Range-based: For ordered data
@@ -77,7 +77,10 @@ impl HashRing {
 
         ring.sort_by_key(|(hash, _)| *hash);
 
-        Self { ring, virtual_nodes }
+        Self {
+            ring,
+            virtual_nodes,
+        }
     }
 
     /// Get shard for a key
@@ -87,7 +90,7 @@ impl HashRing {
         }
 
         let hash = seahash::hash(key.as_bytes());
-        
+
         // Binary search for the first node with hash >= key hash
         let idx = match self.ring.binary_search_by_key(&hash, |(h, _)| *h) {
             Ok(i) => i,
@@ -135,10 +138,8 @@ pub struct ShardRouter {
 impl ShardRouter {
     pub fn new(shards: Vec<ShardConfig>, strategy: ShardingStrategy) -> Self {
         let ring = HashRing::new(&shards, 150); // 150 virtual nodes per shard
-        let shard_map: HashMap<ShardId, ShardConfig> = shards
-            .into_iter()
-            .map(|s| (s.id, s))
-            .collect();
+        let shard_map: HashMap<ShardId, ShardConfig> =
+            shards.into_iter().map(|s| (s.id, s)).collect();
 
         Self {
             shards: shard_map,
@@ -150,21 +151,18 @@ impl ShardRouter {
     /// Route a key to its shard
     pub fn route(&self, key: &str) -> Option<&ShardConfig> {
         match self.strategy {
-            ShardingStrategy::Hash => {
-                self.ring.get_shard(key)
-                    .and_then(|id| self.shards.get(&id))
-            }
+            ShardingStrategy::Hash => self.ring.get_shard(key).and_then(|id| self.shards.get(&id)),
             ShardingStrategy::Range | ShardingStrategy::Directory => {
                 // For simplicity, fall back to hash
-                self.ring.get_shard(key)
-                    .and_then(|id| self.shards.get(&id))
+                self.ring.get_shard(key).and_then(|id| self.shards.get(&id))
             }
         }
     }
 
     /// Route with replication
     pub fn route_with_replicas(&self, key: &str, replica_count: usize) -> Vec<&ShardConfig> {
-        self.ring.get_shards(key, replica_count)
+        self.ring
+            .get_shards(key, replica_count)
             .into_iter()
             .filter_map(|id| self.shards.get(&id))
             .collect()
@@ -204,10 +202,7 @@ impl ShardedSearch {
     /// Plan a search query across shards
     pub fn plan_search(&self, query: &str) -> SearchPlan {
         // For vector search, we need to query all shards (scatter-gather)
-        let shards: Vec<ShardId> = self.router.all_shards()
-            .iter()
-            .map(|s| s.id)
-            .collect();
+        let shards: Vec<ShardId> = self.router.all_shards().iter().map(|s| s.id).collect();
 
         SearchPlan {
             query: query.to_string(),
@@ -218,8 +213,7 @@ impl ShardedSearch {
 
     /// Plan a document lookup
     pub fn plan_lookup(&self, doc_id: &str) -> LookupPlan {
-        let shard = self.router.route(doc_id)
-            .map(|s| s.id);
+        let shard = self.router.route(doc_id).map(|s| s.id);
 
         LookupPlan {
             doc_id: doc_id.to_string(),
@@ -351,22 +345,29 @@ mod tests {
             ShardResult {
                 shard_id: 0,
                 results: vec![
-                    DocResult { doc_id: "a".to_string(), score: 0.9 },
-                    DocResult { doc_id: "b".to_string(), score: 0.7 },
+                    DocResult {
+                        doc_id: "a".to_string(),
+                        score: 0.9,
+                    },
+                    DocResult {
+                        doc_id: "b".to_string(),
+                        score: 0.7,
+                    },
                 ],
                 took_ms: 10,
             },
             ShardResult {
                 shard_id: 1,
-                results: vec![
-                    DocResult { doc_id: "c".to_string(), score: 0.8 },
-                ],
+                results: vec![DocResult {
+                    doc_id: "c".to_string(),
+                    score: 0.8,
+                }],
                 took_ms: 15,
             },
         ];
 
         let merged = search.merge_results(results, 2);
-        
+
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].doc_id, "a"); // Highest score
         assert_eq!(merged[1].doc_id, "c"); // Second highest

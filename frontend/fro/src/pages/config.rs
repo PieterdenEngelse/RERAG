@@ -1,6 +1,9 @@
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+};
 use crate::{
     api,
-    app::Route,
+    app::{PageErrors, Route},
     components::config_nav::{ConfigNav, ConfigTab},
     components::monitor::*,
 };
@@ -10,16 +13,13 @@ use dioxus::prelude::*;
 const PARAM_LABEL_CLASS: &str = "text-gray-300 font-medium";
 const PARAM_NUMBER_INPUT_CLASS: &str =
     "input input-xs input-bordered bg-gray-700 text-gray-200 w-24";
-const PARAM_ICON_BUTTON_CLASS: &str =
-    "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80";
-const PARAM_ICON_BUTTON_STYLE: &str = "background-color: #1D6B9A; border: 1px solid #1D6B9A;";
 
 /// A small info icon (circled "i") used as a help button.
 #[component]
 fn InfoIcon() -> Element {
     rsx! {
         svg {
-            class: "w-5 h-5 text-white",
+            class: INFO_ICON_SVG_CLASS,
             view_box: "0 0 20 20",
             fill: "none",
             stroke: "currentColor",
@@ -87,18 +87,24 @@ pub fn Config() -> Element {
         let mut chunk_overlap = chunk_overlap.clone();
         let mut chunk_loading = chunk_loading.clone();
         let mut chunk_error = chunk_error.clone();
+        let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             chunk_loading.set(true);
             chunk_error.set(None);
+            page_errors.with_mut(|e| e.clear_error("config"));
             match api::fetch_chunk_config().await {
                 Ok(resp) => {
                     chunk_target_size.set(resp.chunker_config.target_size);
                     chunk_min_size.set(resp.chunker_config.min_size);
                     chunk_max_size.set(resp.chunker_config.max_size);
                     chunk_overlap.set(resp.chunker_config.overlap);
+                    page_errors.with_mut(|e| e.clear_error("config"));
                 }
                 Err(err) => {
-                    chunk_error.set(Some(format!("Failed to load chunk config: {}", err)));
+                    let e = format!("Failed to load chunk config: {}", err);
+                    chunk_error.set(Some(e.clone()));
+                    page_errors.with_mut(|errs| errs.set_error("config", &e));
+                    let _ = api::log_frontend_error("config", &e).await;
                 }
             }
             chunk_loading.set(false);

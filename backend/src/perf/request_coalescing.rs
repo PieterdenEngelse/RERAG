@@ -1,14 +1,14 @@
 //! Request Coalescing
-//! 
+//!
 //! Batches similar requests together to reduce overhead.
 //! Multiple requests for the same or similar data are combined
 //! into a single backend request.
-//! 
+//!
 //! # Use Cases
 //! - Multiple users searching for the same query
 //! - Batch embedding requests
 //! - Deduplicating concurrent requests
-//! 
+//!
 //! # Benefits
 //! - Reduced backend load
 //! - Lower latency for duplicate requests
@@ -64,7 +64,7 @@ use super::cache_aligned::CacheAligned;
 use std::sync::atomic::AtomicU64;
 
 /// Coalescer statistics
-/// 
+///
 /// Counters are cache-line aligned to prevent false sharing
 /// when concurrent requests update different counters.
 #[derive(Debug)]
@@ -102,7 +102,7 @@ where
     }
 
     /// Execute a request with coalescing
-    /// 
+    ///
     /// If another request with the same key is in progress,
     /// wait for its result instead of executing again.
     pub async fn execute<F, Fut>(&self, key: K, f: F) -> Result<Arc<V>, CoalesceError>
@@ -111,17 +111,19 @@ where
         Fut: Future<Output = V>,
     {
         use std::sync::atomic::Ordering;
-        
+
         self.stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
         // Check if request is already pending
         if let Some(pending) = self.pending.get(&key) {
             let mut receiver = pending.sender.subscribe();
             drop(pending); // Release lock
-            
-            self.stats.coalesced_requests.fetch_add(1, Ordering::Relaxed);
+
+            self.stats
+                .coalesced_requests
+                .fetch_add(1, Ordering::Relaxed);
             debug!("Request coalesced");
-            
+
             match receiver.recv().await {
                 Ok(result) => return Ok(result),
                 Err(_) => return Err(CoalesceError::ChannelClosed),
@@ -134,7 +136,7 @@ where
             sender: sender.clone(),
             started_at: Instant::now(),
         });
-        
+
         self.pending.insert(key.clone(), pending);
         self.stats.executed_requests.fetch_add(1, Ordering::Relaxed);
 
@@ -198,7 +200,7 @@ impl std::fmt::Display for CoalesceError {
 impl std::error::Error for CoalesceError {}
 
 /// Batch request coalescer
-/// 
+///
 /// Collects multiple requests and executes them as a batch
 #[allow(dead_code)]
 pub struct BatchCoalescer<K, V> {
@@ -259,12 +261,13 @@ where
         }
 
         // Create entry
-        let entry = self.calls
+        let entry = self
+            .calls
             .entry(key.clone())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)));
-        
+
         let mut guard = entry.lock().await;
-        
+
         // Double-check after acquiring lock
         if let Some(ref value) = *guard {
             return value.clone();
@@ -273,7 +276,7 @@ where
         // Execute
         let result = f().await;
         *guard = Some(result.clone());
-        
+
         result
     }
 
@@ -305,7 +308,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_coalescing() {
-        let coalescer: Arc<RequestCoalescer<String, i32>> = Arc::new(RequestCoalescer::with_defaults());
+        let coalescer: Arc<RequestCoalescer<String, i32>> =
+            Arc::new(RequestCoalescer::with_defaults());
         let counter = Arc::new(AtomicUsize::new(0));
 
         // Spawn multiple requests for the same key
@@ -314,11 +318,13 @@ mod tests {
             let coalescer = Arc::clone(&coalescer);
             let counter = Arc::clone(&counter);
             handles.push(tokio::spawn(async move {
-                coalescer.execute("key".to_string(), || async {
-                    counter.fetch_add(1, Ordering::Relaxed);
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    42
-                }).await
+                coalescer
+                    .execute("key".to_string(), || async {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        42
+                    })
+                    .await
             }));
         }
 
@@ -340,16 +346,20 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter1 = counter.clone();
-        let result1 = sf.do_once("key".to_string(), || async move {
-            counter1.fetch_add(1, Ordering::Relaxed);
-            42
-        }).await;
+        let result1 = sf
+            .do_once("key".to_string(), || async move {
+                counter1.fetch_add(1, Ordering::Relaxed);
+                42
+            })
+            .await;
 
         let counter2 = counter.clone();
-        let result2 = sf.do_once("key".to_string(), || async move {
-            counter2.fetch_add(1, Ordering::Relaxed);
-            99
-        }).await;
+        let result2 = sf
+            .do_once("key".to_string(), || async move {
+                counter2.fetch_add(1, Ordering::Relaxed);
+                99
+            })
+            .await;
 
         assert_eq!(result1, 42);
         assert_eq!(result2, 42); // Should return cached value

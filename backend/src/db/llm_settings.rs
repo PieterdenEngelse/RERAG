@@ -377,11 +377,7 @@ pub fn save_llm_config(conn: &Connection, cfg: &LlmConfig) -> Result<()> {
         CONFIG_KEYS.penalize_newline,
         cfg.penalize_newline.to_string(),
     )?;
-    write_value(
-        conn,
-        CONFIG_KEYS.ignore_eos,
-        cfg.ignore_eos.to_string(),
-    )?;
+    write_value(conn, CONFIG_KEYS.ignore_eos, cfg.ignore_eos.to_string())?;
     write_value(
         conn,
         CONFIG_KEYS.dry_multiplier,

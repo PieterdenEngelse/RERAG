@@ -104,8 +104,15 @@ impl HelpTopic {
                 "To try it: run installer/custom_model.sh, ensure it appends CUSTOM_MODEL_* env vars to ~/.config/ag/env, then reload the model list to see the detected custom model badge.",
             ],
             Self::NumThread => vec![
-                "Controls how many worker threads the local backend uses.",
+                "Sets the number of threads used for inference computation by the underlying llama.cpp backend—specifically for the CPU-bound matrix operations during token generation.",
+                "Main thread        → coordinates, spawns others",
+                "Worker threads     → general task execution",
+                "Blocking threads   → isolated sync work",
+                "I/O threads        → poll for I/O completion",
+                "Timer thread       → fires scheduled callbacks",
+                "\"Worker\" is just the role of \"executes tasks from a queue.\" It's the generic grunt work, which is why thread pools are often called \"worker pools.\"",
                 "Match physical cores for best throughput; higher values may hurt latency.",
+                "If you're running other CPU-intensive work alongside (like embedding generation, reranking, or heavy document processing), setting num_thread to something like physical_cores - 2 can improve overall system responsiveness without dramatically hurting inference speed.",
             ],
             Self::NumGpu => vec![
                 "Number of GPU devices to employ.",

@@ -1,6 +1,7 @@
 use crate::api::{self, RagMemoryItem};
 use crate::app::{ClearChat, ShowRagInfo};
 use crate::components::BackendSelector;
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -902,7 +903,7 @@ pub fn Home() -> Element {
                                         },
                                         title: "Info about backend selection",
                                         svg {
-                                            class: "w-4 h-4 text-white",
+                                            class: INFO_ICON_SVG_CLASS,
                                             view_box: "0 0 20 20",
                                             fill: "none",
                                             stroke: "currentColor",
@@ -955,7 +956,7 @@ pub fn Home() -> Element {
                                             onclick: move |_| show_rag_info.set(true),
                                             title: "Info about RAG mode",
                                             svg {
-                                                class: "w-5 h-5 text-white",
+                                                class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
                                                 stroke: "currentColor",
@@ -986,7 +987,7 @@ pub fn Home() -> Element {
                                             onclick: move |_| show_llm_info.set(true),
                                             title: "Info about LLM mode",
                                             svg {
-                                                class: "w-5 h-5 text-white",
+                                                class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
                                                 stroke: "currentColor",
@@ -1017,7 +1018,7 @@ pub fn Home() -> Element {
                                             onclick: move |_| show_hybrid_info.set(true),
                                             title: "Info about Hybrid mode",
                                             svg {
-                                                class: "w-5 h-5 text-white",
+                                                class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
                                                 stroke: "currentColor",
@@ -1132,7 +1133,7 @@ pub fn Home() -> Element {
                         div {
                             class: "flex justify-center gap-4 w-full pointer-events-auto",
                             style: "margin-top: 1cm;",
-                            
+
                             // KV board
                             div {
                                 class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-2",
@@ -1179,7 +1180,7 @@ pub fn Home() -> Element {
                                             onclick: move |_| show_cache_info.set(true),
                                             title: "Info about KV caching",
                                             svg {
-                                                class: "w-4 h-4 text-white",
+                                                class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
                                                 stroke: "currentColor",
@@ -1250,13 +1251,6 @@ pub fn Home() -> Element {
                                 }
                                 } // end inner flex
                             } // end KV board
-                            
-                            // Embedding Provider board
-                            div {
-                                class: "bg-white/5 border border-white/10 rounded-2xl px-6 py-4 flex flex-col items-center gap-2",
-                                style: "min-width: 14rem;",
-                                crate::components::EmbeddingToggle {}
-                            }
                         } // end horizontal container
                     }
                 }
@@ -1291,7 +1285,7 @@ pub fn Home() -> Element {
                                     show_file_types_info.set(true);
                                 },
                                 svg {
-                                    class: "w-4 h-4 text-white",
+                                    class: INFO_ICON_SVG_CLASS,
                                     view_box: "0 0 20 20",
                                     fill: "none",
                                     stroke: "currentColor",

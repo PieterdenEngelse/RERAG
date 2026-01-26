@@ -1,5 +1,5 @@
 pub mod components;
-mod constants;
+pub mod constants;
 mod help_content;
 mod helpers;
 pub mod state;
@@ -11,7 +11,7 @@ use helpers::{format_gpu_label, format_model_label};
 
 use crate::{
     api::{self, BackendType},
-    app::Route,
+    app::{PageErrors, Route},
     components::config_nav::{ConfigNav, ConfigTab},
     components::monitor::*,
 };
@@ -152,9 +152,11 @@ pub fn ConfigHardware() -> Element {
         let mut models_loading = models_loading.clone();
         let mut model_error = model_error.clone();
         let mut last_model_backend = last_model_backend.clone();
+        let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loading.set(true);
             error.set(None);
+            page_errors.with_mut(|e| e.clear_error("hardware"));
             match api::fetch_hardware_config().await {
                 Ok(resp) => {
                     last_model_backend.set(resp.config.backend_type.clone());
@@ -176,9 +178,13 @@ pub fn ConfigHardware() -> Element {
                     models_loading.set(false);
                     status.set(Some(resp.message));
                     hardware_config.set(resp.config);
+                    page_errors.with_mut(|e| e.clear_error("hardware"));
                 }
                 Err(err_msg) => {
-                    error.set(Some(format!("Failed to load hardware config: {}", err_msg)));
+                    let err = format!("Failed to load hardware config: {}", err_msg);
+                    error.set(Some(err.clone()));
+                    page_errors.with_mut(|e| e.set_error("hardware", &err));
+                    let _ = api::log_frontend_error("hardware", &err).await;
                 }
             }
             loading.set(false);
@@ -417,6 +423,17 @@ pub fn ConfigHardware() -> Element {
     let is_cloud_backend = backend_enum.is_cloud_backend();
     let is_ollama_backend = matches!(backend_enum, api::BackendType::Ollama);
 
+    // Some backends arrive with vendor-specific casing (e.g., "Ollama 0.12"), so
+    // normalize the raw string before comparing for the llama logo wrapper.
+    let backend_normalized = backend_type_raw.to_ascii_lowercase();
+    let show_llama_logo = matches!(
+        backend_enum,
+        api::BackendType::Ollama | api::BackendType::LlamaCpp
+    ) || matches!(
+        backend_normalized.as_str(),
+        "ollama" | "ollama 0.12" | "llama_cpp" | "llama.cpp"
+    );
+
     let physical_cores_text = physical_cores()
         .map(|cores| format!("Physical cores: {}", cores))
         .unwrap_or_else(|| "Physical cores: --".into());
@@ -574,6 +591,15 @@ pub fn ConfigHardware() -> Element {
                                         selected: backend_type_raw == option.to_api_string(),
                                         "{option.label()}"
                                     }
+                                }
+                            }
+                        }
+                        if show_llama_logo {
+                            div { class: "flex justify-start mt-1",
+                                img {
+                                    src: asset!("/assets/llama_redo.png"),
+                                    alt: "Llama",
+                                    class: "h-12 w-auto max-h-12 object-contain"
                                 }
                             }
                         }

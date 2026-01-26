@@ -1,7 +1,11 @@
 use crate::api;
-use crate::app::{ClearChat, Route, ShowHelpCommands, ShowRagInfo};
+use crate::app::{ClearChat, PageErrors, Route, ShowHelpCommands, ShowRagInfo};
 use crate::components::dark_mode_toggle::DarkModeToggle;
 use crate::components::nav_dropdown::{DropdownActionItem, DropdownItem, NavDropdown};
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+    QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
+};
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
 
@@ -16,6 +20,7 @@ pub fn Header() -> Element {
     let mut show_red_details = use_signal(|| false);
     let mut show_orange_details = use_signal(|| false);
     let mut show_tantivy_details = use_signal(|| false);
+    let mut status_hover_refcount = use_signal(|| 0i32);
     let mut show_inverted_index_details = use_signal(|| false);
     let mut show_busy_details = use_signal(|| false);
     let mut show_checking_details = use_signal(|| false);
@@ -33,6 +38,7 @@ pub fn Header() -> Element {
     let mut show_help = use_context::<Signal<ShowHelpCommands>>();
     let mut show_rag_info = use_context::<Signal<ShowRagInfo>>();
     let mut clear_chat = use_context::<Signal<ClearChat>>();
+    let mut page_errors = use_context::<Signal<PageErrors>>();
 
     let header_bg = "bg-gray-900";
 
@@ -41,11 +47,81 @@ pub fn Header() -> Element {
     // Track consecutive timeouts to show "checking" state
     let mut timeout_count: Signal<u32> = use_signal(|| 0);
 
+    // Main health check loop (includes Neo4j status)
     use_future(move || async move {
         loop {
             match api::health_check().await {
                 Ok(resp) => {
                     health_status.set(resp.status.clone());
+
+                    // Check Neo4j status from health response
+                    if let Some(ref neo4j) = resp.neo4j {
+                        if neo4j.enabled && !neo4j.connected {
+                            page_errors.with_mut(|e| e.set_error("neo4j", "Neo4j not connected"));
+                        } else {
+                            page_errors.with_mut(|e| e.clear_error("neo4j"));
+                        }
+                    } else {
+                        page_errors.with_mut(|e| e.clear_error("neo4j"));
+                    }
+
+                    // Check Redis status from cache endpoint
+                    match api::fetch_cache_info().await {
+                        Ok(cache_info) => {
+                            if cache_info.redis.enabled && !cache_info.redis.connected {
+                                page_errors
+                                    .with_mut(|e| e.set_error("redis", "Redis not connected"));
+                            } else {
+                                page_errors.with_mut(|e| e.clear_error("redis"));
+                            }
+                        }
+                        Err(_) => {
+                            // Cache endpoint failed - can't determine Redis status, clear any stale error
+                            page_errors.with_mut(|e| e.clear_error("redis"));
+                        }
+                    }
+
+                    // Check Docker status
+                    match api::fetch_docker_status().await {
+                        Ok(docker_info) => {
+                            if docker_info.docker_available {
+                                let running = docker_info
+                                    .containers
+                                    .iter()
+                                    .filter(|c| c.state == "running")
+                                    .count();
+                                let total = docker_info.containers.len();
+                                if total > 0 && running < total {
+                                    page_errors.with_mut(|e| {
+                                        e.set_error(
+                                            "docker",
+                                            &format!(
+                                                "Docker degraded: {}/{} containers",
+                                                running, total
+                                            ),
+                                        )
+                                    });
+                                } else if total > 0 && running == 0 {
+                                    page_errors.with_mut(|e| {
+                                        e.set_error(
+                                            "docker",
+                                            "Docker unhealthy: no containers running",
+                                        )
+                                    });
+                                } else {
+                                    page_errors.with_mut(|e| e.clear_error("docker"));
+                                }
+                            } else {
+                                page_errors
+                                    .with_mut(|e| e.set_error("docker", "Docker not available"));
+                            }
+                        }
+                        Err(_) => {
+                            // Docker endpoint failed - clear any stale error
+                            page_errors.with_mut(|e| e.clear_error("docker"));
+                        }
+                    }
+
                     last_health_response.set(Some(resp));
                     timeout_count.set(0); // Reset timeout counter on success
                 }
@@ -73,13 +149,64 @@ pub fn Header() -> Element {
         }
     });
 
+    let status = health_status();
+    let errors = page_errors();
+    let has_page_errors = errors.has_errors();
+
+    let (bg_color, style_override, extra_class) = if has_page_errors {
+        ("bg-red-500", Some("background-color: #ef4444;"), "")
+    } else {
+        match status.as_str() {
+            "healthy" | "ok" => ("bg-green-500", Some("background-color: #22c55e;"), ""),
+            "busy" => ("bg-pink-500", Some("background-color: #ec4899;"), ""),
+            "degraded" => ("bg-yellow-500", Some("background-color: #eab308;"), ""),
+            "checking" => (
+                "bg-purple-400",
+                Some("background-color: #c084fc;"),
+                "animate-pulse",
+            ),
+            "offline" | "unhealthy" => ("bg-red-500", Some("background-color: #ef4444;"), ""),
+            "unknown" => ("bg-blue-400", Some("background-color: #60a5fa;"), ""),
+            _ => ("bg-orange-500", Some("background-color: #f97316;"), ""),
+        }
+    };
+
+    let tooltip_text = if has_page_errors {
+        let all_errors = errors.get_all_errors();
+        let error_lines: Vec<String> = all_errors
+            .iter()
+            .map(|(page, err)| format!("[{}] {}", page, err))
+            .collect();
+        format!("Page errors:\n{}", error_lines.join("\n"))
+    } else if let Some(resp) = last_health_response() {
+        let mut text = format!("Backend status: {}", resp.status);
+        if let Some(message) = resp.message {
+            text = format!("{}\nMessage: {}", text, message);
+        }
+        if let Some(doc_count) = resp.documents {
+            text = format!("{}\nDocuments: {}", text, doc_count);
+        }
+        if let Some(vec_count) = resp.vectors {
+            text = format!("{}\nVectors: {}", text, vec_count);
+        }
+        if let Some(path) = resp.index_path {
+            text = format!("{}\nIndex path: {}", text, path);
+        }
+        text
+    } else {
+        status.clone()
+    };
+
+    let status_for_click = status.clone();
+    let show_status_tooltip = status_hover_refcount() > 0;
+
     rsx! {
         header { class: "sticky top-0 shadow-md py-0 px-0.5 transition-colors {header_bg} flex items-center relative",
             style: "z-index: 60;",
 
-            // Rust icon
+            // Rust icon - ml-4 aligns with Panel p-4 padding where llama image sits
             div {
-                class: "ml-2",
+                class: "ml-4",
                 img {
                     src: asset!("/assets/rusticon_1.png"),
                     alt: "Rust Icon",
@@ -87,26 +214,22 @@ pub fn Header() -> Element {
                 }
             }
 
-            // Status light - 0.5cm to the right, centered vertically
-            {
-                let status = health_status();
-                let (bg_color, style_override, extra_class) = match status.as_str() {
-                    "healthy" | "ok" => ("bg-green-500", Some("background-color: #22c55e;"), ""), // Green
-                    "busy" => ("bg-pink-500", Some("background-color: #ec4899;"), ""), // Pink for busy
-                    "degraded" => ("bg-yellow-500", Some("background-color: #eab308;"), ""), // Yellow
-                    "checking" => ("bg-purple-400", Some("background-color: #c084fc;"), "animate-pulse"), // Purple pulsing
-                    "offline" | "unhealthy" => ("bg-red-500", Some("background-color: #ef4444;"), ""), // Red
-                    "unknown" => ("bg-blue-400", Some("background-color: #60a5fa;"), ""), // Blue
-                    _ => ("bg-orange-500", Some("background-color: #f97316;"), ""), // Orange fallback
-                };
-                // Determine which modal to open based on status
-                let status_for_click = status.clone();
-                rsx! {
+            // Title and status centered together
+            div {
+                class: "absolute inset-x-0 flex justify-center pointer-events-none",
+                div { class: "flex items-center gap-2 pointer-events-auto",
+                    h1 {
+                        class: "font-medium text-center text-white",
+                        style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem;",
+                        "Rust Agentic Retrieval Augumented Generation"
+                    }
                     div { class: "flex items-center gap-1",
                         div {
-                            class: "ml-2 w-4 h-4 rounded-full border-2 border-gray-900 {bg_color} {extra_class} cursor-pointer hover:ring-2 hover:ring-white hover:ring-opacity-50 transition-all",
+                            class: "w-4 h-4 rounded-full border-2 border-gray-900 {bg_color} {extra_class} cursor-pointer hover:ring-2 hover:ring-white hover:ring-opacity-50 transition-all",
                             style: style_override.unwrap_or(""),
-                            title: format!("Status: {} (click for details)", status),
+                            title: format!("Status: {} (click for details)", tooltip_text),
+                            onmouseenter: move |_| status_hover_refcount.with_mut(|count| *count += 1),
+                            onmouseleave: move |_| status_hover_refcount.with_mut(|count| if *count > 0 { *count -= 1; }),
                             onclick: move |_| {
                                 match status_for_click.as_str() {
                                     "healthy" | "ok" => show_green_details.set(true),
@@ -114,18 +237,17 @@ pub fn Header() -> Element {
                                     "offline" | "unhealthy" => show_red_details.set(true),
                                     "busy" => show_busy_details.set(true),
                                     "checking" => show_checking_details.set(true),
-                                    _ => show_orange_details.set(true), // Orange fallback for unknown statuses
+                                    _ => show_orange_details.set(true),
                                 }
                             },
                         }
-                        // Info button for status explanation
                         button {
                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
                             style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
                             onclick: move |_| show_status_info.set(true),
                             title: "Status info",
                             svg {
-                                class: "w-4 h-4 text-white",
+                                class: INFO_ICON_SVG_CLASS,
                                 view_box: "0 0 20 20",
                                 fill: "none",
                                 stroke: "currentColor",
@@ -138,15 +260,16 @@ pub fn Header() -> Element {
                 }
             }
 
-            // Title - absolutely positioned to center on full viewport width
-            {
-                rsx! {
+            if show_status_tooltip {
+                div {
+                    class: "absolute top-12 left-1/2 -translate-x-1/2 z-[65]",
+                    onmouseenter: move |_| status_hover_refcount.with_mut(|count| *count += 1),
+                    onmouseleave: move |_| status_hover_refcount.with_mut(|count| if *count > 0 { *count -= 1; }),
                     div {
-                        class: "absolute inset-x-0 flex justify-center pointer-events-none",
-                        h1 {
-                            class: "font-medium text-center text-white pointer-events-auto",
-                            style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem;",
-                            "Rust Agentic Retrieval Augumented Generation"
+                        class: "bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3 max-w-md select-text",
+                        pre {
+                            class: "whitespace-pre-wrap text-xs text-gray-100",
+                            "{tooltip_text}"
                         }
                     }
                 }
@@ -157,7 +280,7 @@ pub fn Header() -> Element {
             div { class: "flex justify-end items-center",
 
                 nav {
-                    class: "hidden md:flex items-center gap-3 text-sm",
+                    class: "hidden md:flex items-center gap-[0.1875rem] text-sm",
                     style: "font-family: ui-sans-serif, system-ui, sans-serif;",
                     {
                         let home_color = if matches!(current_route, Route::Home {}) {
@@ -184,7 +307,7 @@ pub fn Header() -> Element {
                         }
                     }
                     {
-                        let monitor_color = if matches!(current_route, Route::MonitorOverview {} | Route::MonitorAgentic {} | Route::MonitorRequests {} | Route::MonitorCache {} | Route::MonitorIndex {} | Route::MonitorRateLimits {} | Route::MonitorLogs {}) {
+                        let monitor_color = if matches!(current_route, Route::MonitorOverview {} | Route::MonitorAgentic {} | Route::MonitorRequests {} | Route::MonitorCache {} | Route::MonitorIndex {} | Route::MonitorRateLimits {} | Route::MonitorLogs {} | Route::MonitorDocker {} | Route::MonitorKnowledgeGraph {}) {
                             "#1D6B9A"
                         } else if is_dark() {
                             "white"

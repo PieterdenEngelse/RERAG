@@ -1,3 +1,4 @@
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 
 /// A small info icon (circled "i") used as a help button.
@@ -6,7 +7,7 @@ use dioxus::prelude::*;
 pub fn InfoIcon() -> Element {
     rsx! {
         svg {
-            class: "w-4 h-4 text-white",
+            class: INFO_ICON_SVG_CLASS,
             view_box: "0 0 20 20",
             fill: "none",
             stroke: "currentColor",

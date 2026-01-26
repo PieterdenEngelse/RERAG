@@ -16,3 +16,8 @@ pub const PARAM_TEXT_INPUT_CLASS: &str =
     "input input-xs input-bordered bg-gray-700 text-gray-200 w-72";
 pub const PARAM_TEXT_INPUT_COMPACT_CLASS: &str =
     "input input-xs input-bordered bg-gray-700 text-gray-200 w-40";
+
+// Shared info button/icon styling
+pub const INFO_ICON_SVG_CLASS: &str = "w-5 h-5 text-white";
+pub const QUICK_ACTION_INFO_BUTTON_CLASS: &str = PARAM_ICON_BUTTON_CLASS;
+pub const QUICK_ACTION_INFO_ICON_CLASS: &str = INFO_ICON_SVG_CLASS;

@@ -9,9 +9,9 @@
 //! - Installer must call /health endpoint to verify startup
 //! - Should check "status" field == "healthy"
 
+use crate::perf::CacheAligned;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::perf::CacheAligned;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ComponentStatus {
@@ -100,7 +100,7 @@ use std::sync::atomic::AtomicU32;
 // CacheAligned already imported above
 
 /// Tracks application health
-/// 
+///
 /// Atomics are cache-line aligned to prevent false sharing when
 /// different threads update active_tasks vs check is_ready.
 pub struct HealthTracker {

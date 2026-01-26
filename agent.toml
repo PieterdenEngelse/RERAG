@@ -1,0 +1,18 @@
+name        = "ag"
+description = "Actix + Dioxus RAG platform with full observability stack"
+
+[metadata]
+default_branch = "main"
+workspace_root = "/home/pde/ag"
+frontend_path  = "frontend/fro"
+backend_path   = "backend"
+
+[commands]
+init    = "qodo --init"
+status  = "qodo --status"
+backend = "cd backend && RUST_LOG=info cargo run"
+frontend= "cd frontend/fro && npm run css:watch"
+stack   = "docker compose -f docker-compose.full.yml up -d"
+
+[env]
+RUST_LOG = "info"

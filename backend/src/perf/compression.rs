@@ -1,9 +1,9 @@
 //! LZ4 Compression for Vector Storage
-//! 
+//!
 //! Provides fast compression/decompression for vector data.
 //! LZ4 is optimized for speed over compression ratio, making it
 //! ideal for frequently accessed vector data.
-//! 
+//!
 //! # Performance
 //! - Compression: ~500 MB/s
 //! - Decompression: ~2 GB/s
@@ -13,14 +13,14 @@ use std::io::{Read, Write};
 use tracing::debug;
 
 /// Compress data using LZ4
-/// 
+///
 /// Returns compressed bytes with size prepended for decompression.
 pub fn compress(data: &[u8]) -> Vec<u8> {
     lz4_flex::compress_prepend_size(data)
 }
 
 /// Decompress LZ4 data
-/// 
+///
 /// Expects size-prepended format from `compress()`.
 pub fn decompress(compressed: &[u8]) -> Result<Vec<u8>, CompressionError> {
     lz4_flex::decompress_size_prepended(compressed)
@@ -62,11 +62,9 @@ pub fn save_compressed<P: AsRef<std::path::Path>>(
 }
 
 /// Load and decompress data from file
-pub fn load_compressed<P: AsRef<std::path::Path>>(
-    path: P,
-) -> Result<Vec<u8>, CompressionError> {
-    let compressed = std::fs::read(path.as_ref())
-        .map_err(|e| CompressionError::IoError(e.to_string()))?;
+pub fn load_compressed<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<u8>, CompressionError> {
+    let compressed =
+        std::fs::read(path.as_ref()).map_err(|e| CompressionError::IoError(e.to_string()))?;
     decompress(&compressed)
 }
 
@@ -92,23 +90,25 @@ impl<W: Write> CompressedWriter<W> {
 
     pub fn write_chunk(&mut self, data: &[u8]) -> std::io::Result<()> {
         self.buffer.extend_from_slice(data);
-        
+
         while self.buffer.len() >= self.chunk_size {
             let chunk: Vec<u8> = self.buffer.drain(..self.chunk_size).collect();
             let compressed = compress(&chunk);
-            
+
             // Write chunk size then compressed data
-            self.inner.write_all(&(compressed.len() as u32).to_le_bytes())?;
+            self.inner
+                .write_all(&(compressed.len() as u32).to_le_bytes())?;
             self.inner.write_all(&compressed)?;
         }
-        
+
         Ok(())
     }
 
     pub fn finish(mut self) -> std::io::Result<W> {
         if !self.buffer.is_empty() {
             let compressed = compress(&self.buffer);
-            self.inner.write_all(&(compressed.len() as u32).to_le_bytes())?;
+            self.inner
+                .write_all(&(compressed.len() as u32).to_le_bytes())?;
             self.inner.write_all(&compressed)?;
         }
         // Write end marker
@@ -138,19 +138,19 @@ impl<R: Read> CompressedReader<R> {
         if self.inner.read_exact(&mut size_buf).is_err() {
             return Ok(false);
         }
-        
+
         let chunk_size = u32::from_le_bytes(size_buf) as usize;
         if chunk_size == 0 {
             return Ok(false); // End marker
         }
-        
+
         let mut compressed = vec![0u8; chunk_size];
         self.inner.read_exact(&mut compressed)?;
-        
+
         self.buffer = decompress(&compressed)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         self.position = 0;
-        
+
         Ok(true)
     }
 }
@@ -162,12 +162,12 @@ impl<R: Read> Read for CompressedReader<R> {
                 return Ok(0);
             }
         }
-        
+
         let available = self.buffer.len() - self.position;
         let to_read = buf.len().min(available);
         buf[..to_read].copy_from_slice(&self.buffer[self.position..self.position + to_read]);
         self.position += to_read;
-        
+
         Ok(to_read)
     }
 }
@@ -205,15 +205,17 @@ mod tests {
     fn test_vector_compression() {
         // Simulate vector data (floats as bytes)
         let vectors: Vec<f32> = (0..1000).map(|i| i as f32 * 0.001).collect();
-        let bytes: Vec<u8> = vectors.iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
-        
+        let bytes: Vec<u8> = vectors.iter().flat_map(|f| f.to_le_bytes()).collect();
+
         let compressed = compress_vectors(&bytes);
         let decompressed = decompress_vectors(&compressed).unwrap();
-        
+
         assert_eq!(bytes, decompressed);
-        println!("Original: {} bytes, Compressed: {} bytes, Ratio: {:.2}x",
-            bytes.len(), compressed.len(), bytes.len() as f64 / compressed.len() as f64);
+        println!(
+            "Original: {} bytes, Compressed: {} bytes, Ratio: {:.2}x",
+            bytes.len(),
+            compressed.len(),
+            bytes.len() as f64 / compressed.len() as f64
+        );
     }
 }

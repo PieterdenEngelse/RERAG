@@ -1,8 +1,8 @@
 //! Arena Allocator for Temporary Allocations
-//! 
+//!
 //! Reduces allocator pressure during search operations by using
 //! bump allocation for temporary data structures.
-//! 
+//!
 //! # Benefits
 //! - Faster allocation (just bump a pointer)
 //! - Faster deallocation (free entire arena at once)
@@ -18,7 +18,7 @@ thread_local! {
 }
 
 /// Arena for search operations
-/// 
+///
 /// Use this for temporary allocations during search that will be
 /// discarded after the search completes.
 pub struct SearchArena {
@@ -91,7 +91,7 @@ impl Default for SearchArena {
 }
 
 /// Execute a function with a thread-local arena
-/// 
+///
 /// The arena is reset after the function completes.
 pub fn with_arena<F, R>(f: F) -> R
 where
@@ -144,7 +144,8 @@ impl<'a> ArenaSearchResults<'a> {
     }
 
     pub fn push(&mut self, doc_id: &str, score: f32, content: &str) {
-        self.results.push(ArenaSearchResult::new(self.arena, doc_id, score, content));
+        self.results
+            .push(ArenaSearchResult::new(self.arena, doc_id, score, content));
     }
 
     pub fn results(&self) -> &[ArenaSearchResult<'a>] {
@@ -162,7 +163,9 @@ impl<'a> ArenaSearchResults<'a> {
     /// Sort by score descending
     pub fn sort_by_score(&mut self) {
         self.results.sort_by(|a, b| {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
 
@@ -215,10 +218,10 @@ mod tests {
     #[test]
     fn test_search_arena() {
         let arena = SearchArena::new();
-        
+
         let slice = arena.alloc_slice(&[1.0f32, 2.0, 3.0]);
         assert_eq!(slice, &[1.0, 2.0, 3.0]);
-        
+
         let s = arena.alloc_str("hello");
         assert_eq!(s, "hello");
     }
@@ -227,13 +230,13 @@ mod tests {
     fn test_arena_search_results() {
         let arena = SearchArena::new();
         let mut results = ArenaSearchResults::new(&arena);
-        
+
         results.push("doc_1", 0.9, "content 1");
         results.push("doc_2", 0.8, "content 2");
         results.push("doc_3", 0.95, "content 3");
-        
+
         results.sort_by_score();
-        
+
         assert_eq!(results.results()[0].doc_id, "doc_3");
         assert_eq!(results.results()[1].doc_id, "doc_1");
         assert_eq!(results.results()[2].doc_id, "doc_2");
@@ -243,10 +246,10 @@ mod tests {
     fn test_arena_vectors() {
         let arena = SearchArena::new();
         let mut vectors = ArenaVectors::new(&arena);
-        
+
         vectors.push(&[1.0, 2.0, 3.0]);
         vectors.push(&[4.0, 5.0, 6.0]);
-        
+
         assert_eq!(vectors.len(), 2);
         assert_eq!(vectors.get(0), Some(&[1.0f32, 2.0, 3.0][..]));
     }
@@ -257,7 +260,7 @@ mod tests {
             let s = arena.alloc_str("test");
             s.len()
         });
-        
+
         assert_eq!(result, 4);
     }
 }

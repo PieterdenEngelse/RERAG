@@ -1,9 +1,12 @@
+use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigHardware, ConfigMemories, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home,
-    MonitorAgentic, MonitorCache, MonitorIndex, MonitorLogs, MonitorObservations, MonitorOverview,
-    MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound, Parameters, Train,
+    About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx,
+    ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgentic, MonitorCache,
+    MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
+    MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound,
+    Parameters, Train,
 };
 use dioxus::prelude::*;
 use dioxus_router::{Outlet, Routable, Router};
@@ -34,8 +37,12 @@ pub enum Route {
         ConfigOther {},
         #[route("/config/memories")]
         ConfigMemories {},
+        #[route("/config/io-uring")]
+        ConfigIoUring {},
         #[route("/config/onnx")]
         ConfigOnnx {},
+        #[route("/config/neo4j")]
+        ConfigNeo4j {},
         #[route("/monitor/requests")]
         MonitorRequests {},
         #[route("/monitor/cache")]
@@ -52,6 +59,10 @@ pub enum Route {
         MonitorLogs {},
         #[route("/monitor/tools")]
         MonitorTools {},
+        #[route("/monitor/docker")]
+        MonitorDocker {},
+        #[route("/monitor/knowledge-graph")]
+        MonitorKnowledgeGraph {},
         #[route("/train")]
         Train {},
         #[route("/docu")]
@@ -74,6 +85,35 @@ pub struct ShowRagInfo(pub bool);
 /// Signal for clearing chat messages (triggered by Home link)
 #[derive(Clone, Copy, Default)]
 pub struct ClearChat(pub bool);
+
+/// Global page error state - pages report their API errors here
+/// The header status light uses this to show red when any page has errors
+/// Stores errors by page name so multiple pages can report errors
+#[derive(Clone, Default)]
+pub struct PageErrors {
+    pub errors: std::collections::HashMap<String, String>,
+}
+
+impl PageErrors {
+    pub fn set_error(&mut self, page: &str, error: &str) {
+        self.errors.insert(page.to_string(), error.to_string());
+    }
+
+    pub fn clear_error(&mut self, page: &str) {
+        self.errors.remove(page);
+    }
+
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    pub fn get_all_errors(&self) -> Vec<(String, String)> {
+        self.errors
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
 
 struct HelpCommandInfo {
     name: &'static str,
@@ -159,6 +199,7 @@ pub fn App() -> Element {
     use_context_provider(|| Signal::new(ShowRagInfo(false))); // RAG info panel
     use_context_provider(|| Signal::new(ActiveDropdown(None))); // Active dropdown tracker
     use_context_provider(|| Signal::new(ClearChat(false))); // Clear chat trigger
+    use_context_provider(|| Signal::new(PageErrors::default())); // Global page errors state
 
     rsx! {
         document::Link { rel: "icon", href: asset!("/assets/favicon.ico") }
@@ -212,6 +253,9 @@ fn Layout() -> Element {
     rsx! {
         div {
             class: "min-h-screen transition-colors bg-white dark:bg-gray-900 text-gray-900 dark:text-white",
+
+            // Global error bar - shows API failures on any page
+            GlobalErrorBar {}
 
             Header {},
 

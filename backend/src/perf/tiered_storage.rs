@@ -1,22 +1,21 @@
 //! Tiered Storage
-//! 
+//!
 //! Manages data across multiple storage tiers:
 //! - Hot: In-memory, fastest access
 //! - Warm: SSD/fast disk, good performance
 //! - Cold: HDD/archive, cost-effective
-//! 
+//!
 //! # Benefits
 //! - Optimizes cost vs performance
 //! - Automatic data migration based on access patterns
 //! - Transparent access across tiers
 
-
+use super::cache_aligned::CacheAligned;
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
-use super::cache_aligned::CacheAligned;
 
 /// Storage tier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,9 +39,9 @@ impl StorageTier {
 
     pub fn cost_per_gb(&self) -> f64 {
         match self {
-            Self::Hot => 10.0,   // RAM is expensive
-            Self::Warm => 0.5,   // SSD
-            Self::Cold => 0.02,  // HDD/S3
+            Self::Hot => 10.0,  // RAM is expensive
+            Self::Warm => 0.5,  // SSD
+            Self::Cold => 0.02, // HDD/S3
         }
     }
 }
@@ -103,11 +102,11 @@ pub struct TieringPolicy {
 impl Default for TieringPolicy {
     fn default() -> Self {
         Self {
-            hot_to_warm_idle: Duration::from_secs(300),      // 5 minutes
-            warm_to_cold_idle: Duration::from_secs(3600),    // 1 hour
+            hot_to_warm_idle: Duration::from_secs(300),   // 5 minutes
+            warm_to_cold_idle: Duration::from_secs(3600), // 1 hour
             promote_access_threshold: 10,
-            hot_tier_max_bytes: 1024 * 1024 * 1024,          // 1 GB
-            warm_tier_max_bytes: 10 * 1024 * 1024 * 1024,    // 10 GB
+            hot_tier_max_bytes: 1024 * 1024 * 1024, // 1 GB
+            warm_tier_max_bytes: 10 * 1024 * 1024 * 1024, // 10 GB
         }
     }
 }
@@ -129,7 +128,7 @@ pub struct TieredStorage<T> {
 }
 
 /// Tier statistics
-/// 
+///
 /// Each counter is cache-line aligned to prevent false sharing
 /// when multiple threads update different counters concurrently.
 #[derive(Debug)]
@@ -210,7 +209,9 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
         self.metadata.insert(key.clone(), meta);
         self.hot.insert(key, item);
         self.stats.hot_items.fetch_add(1, Ordering::Relaxed);
-        self.stats.hot_bytes.fetch_add(size_bytes as u64, Ordering::Relaxed);
+        self.stats
+            .hot_bytes
+            .fetch_add(size_bytes as u64, Ordering::Relaxed);
     }
 
     /// Remove an item from all tiers
@@ -218,7 +219,7 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
         let removed = self.hot.remove(key).is_some()
             || self.remove_from_warm(key)
             || self.remove_from_cold(key);
-        
+
         self.metadata.remove(key);
         removed
     }
@@ -259,22 +260,22 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
     fn promote_to_hot(&self, key: &str, item: T) {
         self.hot.insert(key.to_string(), item);
         self.remove_from_warm(key);
-        
+
         if let Some(mut meta) = self.metadata.get_mut(key) {
             meta.current_tier = StorageTier::Hot;
         }
-        
+
         self.stats.promotions.fetch_add(1, Ordering::Relaxed);
     }
 
     fn demote_to_warm(&self, key: &str) {
         if let Some((_, item)) = self.hot.remove(key) {
             self.save_to_warm(key, &item);
-            
+
             if let Some(mut meta) = self.metadata.get_mut(key) {
                 meta.current_tier = StorageTier::Warm;
             }
-            
+
             self.stats.demotions.fetch_add(1, Ordering::Relaxed);
             self.stats.hot_items.fetch_sub(1, Ordering::Relaxed);
             self.stats.warm_items.fetch_add(1, Ordering::Relaxed);
@@ -285,11 +286,11 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
         if let Some(item) = self.load_from_warm(key) {
             self.remove_from_warm(key);
             self.save_to_cold(key, &item);
-            
+
             if let Some(mut meta) = self.metadata.get_mut(key) {
                 meta.current_tier = StorageTier::Cold;
             }
-            
+
             self.stats.demotions.fetch_add(1, Ordering::Relaxed);
             self.stats.warm_items.fetch_sub(1, Ordering::Relaxed);
             self.stats.cold_items.fetch_add(1, Ordering::Relaxed);
@@ -297,11 +298,13 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
     }
 
     fn warm_path_for(&self, key: &str) -> PathBuf {
-        self.warm_path.join(format!("{}.bin", seahash::hash(key.as_bytes())))
+        self.warm_path
+            .join(format!("{}.bin", seahash::hash(key.as_bytes())))
     }
 
     fn cold_path_for(&self, key: &str) -> PathBuf {
-        self.cold_path.join(format!("{}.bin", seahash::hash(key.as_bytes())))
+        self.cold_path
+            .join(format!("{}.bin", seahash::hash(key.as_bytes())))
     }
 
     fn save_to_warm(&self, key: &str, item: &T) {
@@ -313,9 +316,9 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
 
     fn load_from_warm(&self, key: &str) -> Option<T> {
         let path = self.warm_path_for(key);
-        std::fs::read(path).ok().and_then(|bytes| {
-            serde_json::from_slice(&bytes).ok()
-        })
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     }
 
     fn remove_from_warm(&self, key: &str) -> bool {
@@ -334,11 +337,10 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> T
 
     fn load_from_cold(&self, key: &str) -> Option<T> {
         let path = self.cold_path_for(key);
-        std::fs::read(path).ok().and_then(|compressed| {
-            lz4_flex::decompress_size_prepended(&compressed).ok()
-        }).and_then(|bytes| {
-            serde_json::from_slice(&bytes).ok()
-        })
+        std::fs::read(path)
+            .ok()
+            .and_then(|compressed| lz4_flex::decompress_size_prepended(&compressed).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     }
 
     fn remove_from_cold(&self, key: &str) -> bool {
@@ -398,7 +400,7 @@ mod tests {
     fn test_item_metadata() {
         let mut meta = ItemMetadata::new("test".to_string(), 100);
         assert_eq!(meta.access_count, 0);
-        
+
         meta.record_access();
         assert_eq!(meta.access_count, 1);
     }

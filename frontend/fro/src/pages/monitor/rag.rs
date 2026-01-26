@@ -2,6 +2,7 @@ use crate::api;
 use crate::api::{ChunkingStatsSnapshot, RagMemoryItem};
 use crate::app::Route;
 use crate::components::monitor::*;
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 
 #[derive(Clone, Default)]
@@ -186,7 +187,7 @@ pub fn MonitorRag() -> Element {
                                 onclick: move |_| show_issues_info.set(true),
                                 title: "Issue detection criteria",
                                 svg {
-                                    class: "w-4 h-4 text-white",
+                                    class: INFO_ICON_SVG_CLASS,
                                     view_box: "0 0 20 20",
                                     fill: "none",
                                     stroke: "currentColor",

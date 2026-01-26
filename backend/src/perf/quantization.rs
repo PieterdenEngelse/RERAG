@@ -1,12 +1,12 @@
 //! Vector Quantization
-//! 
+//!
 //! Reduces memory usage by storing vectors as int8 instead of f32.
 //! This provides 4x memory reduction with minimal accuracy loss.
-//! 
+//!
 //! # Quantization Methods
 //! - Scalar quantization: Simple min-max scaling to int8
 //! - Product quantization: Coming soon
-//! 
+//!
 //! # Accuracy
 //! - Cosine similarity error: typically < 1%
 //! - Suitable for approximate nearest neighbor search
@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Quantized vector representation
-/// 
+///
 /// Stores 384-dim vector in ~400 bytes instead of ~1.5KB
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantizedVector {
@@ -30,7 +30,11 @@ impl QuantizedVector {
     /// Create a new quantized vector from f32 values
     pub fn from_f32(values: &[f32]) -> Self {
         let (data, scale, zero_point) = quantize(values);
-        Self { data, scale, zero_point }
+        Self {
+            data,
+            scale,
+            zero_point,
+        }
     }
 
     /// Convert back to f32 values
@@ -81,7 +85,7 @@ impl QuantizedVector {
 }
 
 /// Quantize f32 values to int8
-/// 
+///
 /// Uses symmetric quantization around zero for better accuracy
 /// with normalized vectors.
 pub fn quantize(values: &[f32]) -> (Vec<i8>, f32, f32) {
@@ -124,7 +128,10 @@ pub fn dequantize(quantized: &[i8], scale: f32, zero_point: f32) -> Vec<f32> {
 
 /// Batch quantize multiple vectors
 pub fn quantize_batch(vectors: &[Vec<f32>]) -> Vec<QuantizedVector> {
-    vectors.iter().map(|v| QuantizedVector::from_f32(v)).collect()
+    vectors
+        .iter()
+        .map(|v| QuantizedVector::from_f32(v))
+        .collect()
 }
 
 /// Quantized vector storage for efficient memory usage
@@ -165,13 +172,14 @@ impl QuantizedVectorStore {
     /// Search for top-k most similar vectors
     pub fn search(&self, query: &[f32], k: usize) -> Vec<(usize, f32)> {
         let query_quantized = QuantizedVector::from_f32(query);
-        
-        let mut scores: Vec<(usize, f32)> = self.vectors
+
+        let mut scores: Vec<(usize, f32)> = self
+            .vectors
             .iter()
             .enumerate()
             .map(|(i, v)| (i, v.cosine_similarity(&query_quantized)))
             .collect();
-        
+
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scores.truncate(k);
         scores
@@ -222,7 +230,7 @@ mod tests {
         let qb = QuantizedVector::from_f32(&b);
 
         let quantized_sim = qa.cosine_similarity(&qb);
-        
+
         // Calculate exact similarity for comparison
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -230,8 +238,12 @@ mod tests {
         let exact_sim = dot / (norm_a * norm_b);
 
         // Quantized similarity should be close to exact
-        assert!((quantized_sim - exact_sim).abs() < 0.05,
-            "Quantized: {}, Exact: {}", quantized_sim, exact_sim);
+        assert!(
+            (quantized_sim - exact_sim).abs() < 0.05,
+            "Quantized: {}, Exact: {}",
+            quantized_sim,
+            exact_sim
+        );
     }
 
     #[test]
@@ -241,7 +253,7 @@ mod tests {
             .collect();
 
         let store = QuantizedVectorStore::from_f32_vectors(&vectors);
-        
+
         println!("Quantized memory: {} bytes", store.memory_bytes());
         println!("Equivalent f32: {} bytes", store.equivalent_f32_bytes());
         println!("Compression ratio: {:.2}x", store.compression_ratio());

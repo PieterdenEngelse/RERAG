@@ -232,7 +232,7 @@ use ort::session::builder::GraphOptimizationLevel;
 impl OnnxEmbedder {
     pub fn new(config: OnnxConfig) -> Result<Self, OnnxError> {
         eprintln!("[ONNX] OnnxEmbedder::new called");
-        
+
         if !Path::new(&config.model_path).exists() {
             eprintln!("[ONNX] Model not found: {}", config.model_path);
             return Err(OnnxError::ModelNotFound(config.model_path.clone()));
@@ -258,99 +258,127 @@ impl OnnxEmbedder {
             config.num_threads, config.inter_op_num_threads, config.optimization_level,
             config.enable_mem_pattern, config.enable_cpu_mem_arena);
 
-        let mut builder = Session::builder()
-            .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        
+        let mut builder =
+            Session::builder().map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
+
         // Configure threading + execution basics
-        builder = builder.with_intra_threads(config.num_threads)
+        builder = builder
+            .with_intra_threads(config.num_threads)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_inter_threads(config.inter_op_num_threads)
+        builder = builder
+            .with_inter_threads(config.inter_op_num_threads)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_parallel_execution(matches!(config.execution_mode, OnnxExecutionMode::Parallel))
+        builder = builder
+            .with_parallel_execution(matches!(config.execution_mode, OnnxExecutionMode::Parallel))
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        
+
         // Optimization & layout
-        builder = builder.with_optimization_level(opt_level)
+        builder = builder
+            .with_optimization_level(opt_level)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         if let Some(path) = &config.optimized_model_path {
-            builder = builder.with_optimized_model_path(path)
+            builder = builder
+                .with_optimized_model_path(path)
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
-        builder = builder.with_memory_pattern(config.enable_mem_pattern)
+        builder = builder
+            .with_memory_pattern(config.enable_mem_pattern)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_deterministic_compute(config.deterministic_compute)
+        builder = builder
+            .with_deterministic_compute(config.deterministic_compute)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         if config.denormal_as_zero {
-            builder = builder.with_denormal_as_zero()
+            builder = builder
+                .with_denormal_as_zero()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
-        builder = builder.with_quant_qdq(config.enable_quant_qdq)
+        builder = builder
+            .with_quant_qdq(config.enable_quant_qdq)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_double_qdq_remover(config.enable_double_qdq_remover)
+        builder = builder
+            .with_double_qdq_remover(config.enable_double_qdq_remover)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         if config.enable_qdq_cleanup {
-            builder = builder.with_qdq_cleanup()
+            builder = builder
+                .with_qdq_cleanup()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
         if config.approximate_gelu {
-            builder = builder.with_approximate_gelu()
+            builder = builder
+                .with_approximate_gelu()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
-        builder = builder.with_aot_inlining(config.enable_aot_inlining)
+        builder = builder
+            .with_aot_inlining(config.enable_aot_inlining)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         if !config.disabled_optimizers.is_empty() {
             let disabled = config.disabled_optimizers.join(",");
-            builder = builder.with_disabled_optimizers(disabled.as_str())
+            builder = builder
+                .with_disabled_optimizers(disabled.as_str())
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
         if config.use_device_allocator_for_initializers {
-            builder = builder.with_device_allocator_for_initializers()
+            builder = builder
+                .with_device_allocator_for_initializers()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
-        builder = builder.with_inter_op_spinning(config.allow_inter_op_spinning)
+        builder = builder
+            .with_inter_op_spinning(config.allow_inter_op_spinning)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_intra_op_spinning(config.allow_intra_op_spinning)
+        builder = builder
+            .with_intra_op_spinning(config.allow_intra_op_spinning)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_prepacking(config.use_prepacking)
+        builder = builder
+            .with_prepacking(config.use_prepacking)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         if config.independent_thread_pool {
-            builder = builder.with_independent_thread_pool()
+            builder = builder
+                .with_independent_thread_pool()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
         if config.no_env_execution_providers {
-            builder = builder.with_no_environment_execution_providers()
+            builder = builder
+                .with_no_environment_execution_providers()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
         if config.use_env_allocators {
-            builder = builder.with_env_allocators()
+            builder = builder
+                .with_env_allocators()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
-        
+
         // Profiling
         if config.enable_profiling {
             let path = config
                 .profiling_output_path
                 .clone()
                 .unwrap_or_else(|| "onnx_profile.json".to_string());
-            builder = builder.with_profiling(path)
+            builder = builder
+                .with_profiling(path)
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
         if let Some(log_id) = &config.log_id {
-            builder = builder.with_log_id(log_id)
+            builder = builder
+                .with_log_id(log_id)
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
-        builder = builder.with_log_level(config.log_level.into())
+        builder = builder
+            .with_log_level(config.log_level.into())
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        builder = builder.with_log_verbosity(config.log_verbosity)
+        builder = builder
+            .with_log_verbosity(config.log_verbosity)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        
+
         // Commit the session from file
-        let session = builder.commit_from_file(&config.model_path)
+        let session = builder
+            .commit_from_file(&config.model_path)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
 
         eprintln!("[ONNX] Session created successfully with all options");
-        info!("ONNX session created with optimization_level={:?}, intra_threads={}, inter_threads={}",
-            config.optimization_level, config.num_threads, config.inter_op_num_threads);
+        info!(
+            "ONNX session created with optimization_level={:?}, intra_threads={}, inter_threads={}",
+            config.optimization_level, config.num_threads, config.inter_op_num_threads
+        );
 
         Ok(Self {
             tokenizer: SimpleTokenizer::new(config.max_length),
@@ -378,25 +406,27 @@ impl OnnxEmbedder {
         }
 
         // Create tensors using Tensor::from_array
-        let input_ids_tensor = Tensor::from_array((
-            vec![batch_size as i64, seq_len as i64],
-            all_input_ids
-        )).map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+        let input_ids_tensor =
+            Tensor::from_array((vec![batch_size as i64, seq_len as i64], all_input_ids))
+                .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
-        let attention_mask_tensor = Tensor::from_array((
-            vec![batch_size as i64, seq_len as i64],
-            all_attention_mask
-        )).map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+        let attention_mask_tensor =
+            Tensor::from_array((vec![batch_size as i64, seq_len as i64], all_attention_mask))
+                .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
         // Run inference
-        let outputs = self.session.run(ort::inputs![
-            "input_ids" => input_ids_tensor,
-            "attention_mask" => attention_mask_tensor
-        ]).map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+        let outputs = self
+            .session
+            .run(ort::inputs![
+                "input_ids" => input_ids_tensor,
+                "attention_mask" => attention_mask_tensor
+            ])
+            .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
         // Get first output
         let output = &outputs[0];
-        let (shape, data) = output.try_extract_tensor::<f32>()
+        let (shape, data) = output
+            .try_extract_tensor::<f32>()
             .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
         let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
@@ -405,19 +435,23 @@ impl OnnxEmbedder {
         let embeddings = match dims.as_slice() {
             [b, _s, h] => {
                 // [batch, seq, hidden] - take CLS token
-                (0..*b).map(|i| {
-                    let start = i * dims[1] * dims[2];
-                    data[start..start + *h].to_vec()
-                }).collect()
+                (0..*b)
+                    .map(|i| {
+                        let start = i * dims[1] * dims[2];
+                        data[start..start + *h].to_vec()
+                    })
+                    .collect()
             }
             [b, h] => {
                 // [batch, hidden]
-                (0..*b).map(|i| {
-                    let start = i * *h;
-                    data[start..start + *h].to_vec()
-                }).collect()
+                (0..*b)
+                    .map(|i| {
+                        let start = i * *h;
+                        data[start..start + *h].to_vec()
+                    })
+                    .collect()
             }
-            _ => return Err(OnnxError::InferenceFailed(format!("Bad shape: {:?}", dims)))
+            _ => return Err(OnnxError::InferenceFailed(format!("Bad shape: {:?}", dims))),
         };
 
         Ok(embeddings)
@@ -427,8 +461,12 @@ impl OnnxEmbedder {
         self.embed(&[text]).map(|mut v| v.pop().unwrap_or_default())
     }
 
-    pub fn dimension(&self) -> usize { self.config.embedding_dim }
-    pub fn model_path(&self) -> &str { &self.config.model_path }
+    pub fn dimension(&self) -> usize {
+        self.config.embedding_dim
+    }
+    pub fn model_path(&self) -> &str {
+        &self.config.model_path
+    }
 }
 
 #[cfg(not(feature = "onnx"))]
@@ -445,24 +483,39 @@ impl OnnxEmbedder {
     }
 
     pub fn embed(&self, texts: &[&str]) -> Result<Vec<EmbeddingVector>, OnnxError> {
-        Ok(texts.iter().map(|t| {
-            let h = seahash::hash(t.as_bytes());
-            let mut v = vec![0f32; self.config.embedding_dim];
-            for i in 0..v.len() {
-                v[i] = ((seahash::hash(&[h.to_le_bytes(), (i as u64).to_le_bytes()].concat()) as f32) / u64::MAX as f32) * 2.0 - 1.0;
-            }
-            let n: f32 = v.iter().map(|x| x*x).sum::<f32>().sqrt();
-            if n > 0.0 { v.iter_mut().for_each(|x| *x /= n); }
-            v
-        }).collect())
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let h = seahash::hash(t.as_bytes());
+                let mut v = vec![0f32; self.config.embedding_dim];
+                for i in 0..v.len() {
+                    v[i] = ((seahash::hash(&[h.to_le_bytes(), (i as u64).to_le_bytes()].concat())
+                        as f32)
+                        / u64::MAX as f32)
+                        * 2.0
+                        - 1.0;
+                }
+                let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if n > 0.0 {
+                    v.iter_mut().for_each(|x| *x /= n);
+                }
+                v
+            })
+            .collect())
     }
 
     pub fn embed_one(&self, text: &str) -> Result<EmbeddingVector, OnnxError> {
         self.embed(&[text]).map(|mut v| v.pop().unwrap_or_default())
     }
 
-    pub fn dimension(&self) -> usize { self.config.embedding_dim }
-    pub fn model_path(&self) -> &str { &self.config.model_path }
+    pub fn dimension(&self) -> usize {
+        self.config.embedding_dim
+    }
+    pub fn model_path(&self) -> &str {
+        &self.config.model_path
+    }
 }
 
-pub fn is_onnx_enabled() -> bool { cfg!(feature = "onnx") }
+pub fn is_onnx_enabled() -> bool {
+    cfg!(feature = "onnx")
+}

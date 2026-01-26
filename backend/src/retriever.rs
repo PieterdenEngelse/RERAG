@@ -1,4 +1,5 @@
 use crate::cache::redis_cache::RedisCache;
+use crate::perf::io_uring as async_io;
 use fs2;
 use lru::LruCache;
 use memmap2::Mmap;
@@ -286,31 +287,28 @@ pub async fn reindex_atomic(
 
     // Build temp index using batch commit to ensure files are written to disk
     let _ = tmp_ret.begin_batch();
-    info!("Reindex: start indexing upload_dir={}", upload_dir);
-    if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let chunker = crate::index::default_chunker(crate::config::ChunkerMode::Fixed);
-        crate::index::index_all_documents(
-            &mut tmp_ret,
-            upload_dir,
-            crate::config::ChunkerMode::Fixed,
-            chunker.as_ref(),
-        )
-    })) {
-        return Err(RetrieverError::IndexError(format!(
-            "index_all_documents panicked: {:?}",
-            e
-        )));
-    }
-    // If not panicked, call again to get Result and handle error
+    info!(
+        "Reindex: start indexing upload_dir={} backend={}",
+        upload_dir,
+        crate::perf::io_uring::backend_name()
+    );
+
+    // Use async io_uring-backed indexing for 2-3x faster file reads
     let chunker = crate::index::default_chunker(crate::config::ChunkerMode::Fixed);
-    crate::index::index_all_documents(
+    let indexed_chunks = crate::index::index_all_documents_async(
         &mut tmp_ret,
         upload_dir,
         crate::config::ChunkerMode::Fixed,
         chunker.as_ref(),
     )
+    .await
     .map_err(|e| RetrieverError::IndexError(e))?;
-    info!("Reindex: indexing completed");
+
+    info!(
+        "Reindex: indexing completed, {} chunks indexed via {}",
+        indexed_chunks,
+        crate::perf::io_uring::backend_name()
+    );
     let _ = tmp_ret.end_batch();
 
     // Save vectors to the temp mapping file
@@ -520,7 +518,7 @@ impl Retriever {
             fp16_store: None,
             // Phase 21: Connection pool
             connection_pool: crate::perf::connection_pool::ConnectionPool::new(
-                crate::perf::connection_pool::PoolConfig::default()
+                crate::perf::connection_pool::PoolConfig::default(),
             ),
             // Phase 22: io_uring availability
             use_io_uring: crate::perf::io_uring::is_available(),
@@ -633,16 +631,18 @@ impl Retriever {
     /// Save search cache to disk using rkyv binary format
     pub fn save_search_cache(&self, path: &str) -> Result<(), RetrieverError> {
         // Convert LruCache to Vec for serialization
-        let entries: Vec<(String, Vec<String>)> = self.search_cache
+        let entries: Vec<(String, Vec<String>)> = self
+            .search_cache
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&entries)
-            .map_err(|e| RetrieverError::SerializationError(format!("rkyv serialize error: {}", e)))?;
-        
+
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&entries).map_err(|e| {
+            RetrieverError::SerializationError(format!("rkyv serialize error: {}", e))
+        })?;
+
         std::fs::write(path, &bytes)?;
-        
+
         info!(
             "Saved {} search cache entries to {} ({} bytes)",
             entries.len(),
@@ -657,12 +657,15 @@ impl Retriever {
         if !Path::new(path).exists() {
             return Ok(0);
         }
-        
+
         let bytes = std::fs::read(path)?;
-        
-        let archived = rkyv::access::<rkyv::Archived<Vec<(String, Vec<String>)>>, rkyv::rancor::Error>(&bytes)
-            .map_err(|e| RetrieverError::SerializationError(format!("rkyv access error: {}", e)))?;
-        
+
+        let archived = rkyv::access::<
+            rkyv::Archived<Vec<(String, Vec<String>)>>,
+            rkyv::rancor::Error,
+        >(&bytes)
+        .map_err(|e| RetrieverError::SerializationError(format!("rkyv access error: {}", e)))?;
+
         let mut loaded = 0;
         for entry in archived.iter() {
             let key = entry.0.to_string();
@@ -670,7 +673,7 @@ impl Retriever {
             self.search_cache.put(key, value);
             loaded += 1;
         }
-        
+
         info!(
             "Loaded {} search cache entries from {} ({} bytes)",
             loaded,
@@ -893,14 +896,17 @@ impl Retriever {
             if hnsw.len() > 100 {
                 // HNSW returns (doc_id, similarity), convert to (idx, similarity)
                 let hnsw_results = hnsw.search(query_vector, top_k);
-                return hnsw_results.into_iter()
+                return hnsw_results
+                    .into_iter()
                     .filter_map(|(doc_id, score)| {
-                        self.doc_id_to_vector_idx.get(&doc_id).map(|&idx| (idx, score))
+                        self.doc_id_to_vector_idx
+                            .get(&doc_id)
+                            .map(|&idx| (idx, score))
                     })
                     .collect();
             }
         }
-        
+
         // Fallback to linear scan with SIMD-accelerated cosine similarity
         let use_parallel = self.vectors.len() > 1000;
         let mut similarities: Vec<(usize, f32)> = if use_parallel {
@@ -928,14 +934,14 @@ impl Retriever {
         info!("Building HNSW index for {} vectors...", self.vectors.len());
         let dim = self.vectors.first().map(|v| v.len()).unwrap_or(384);
         let mut hnsw = crate::perf::hnsw::HnswIndex::new(dim);
-        
+
         // Add all vectors with their doc_ids
         for (doc_id, &idx) in &self.doc_id_to_vector_idx {
             if idx < self.vectors.len() {
                 hnsw.add(doc_id.clone(), self.vectors[idx].clone());
             }
         }
-        
+
         hnsw.build();
         self.hnsw_index = Some(hnsw);
         info!("HNSW index built successfully");
@@ -1147,13 +1153,14 @@ impl Retriever {
         }
 
         let storage = VectorStorageRkyv::from_retriever(&self.vectors, &self.doc_id_to_vector_idx);
-        
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&storage)
-            .map_err(|e| RetrieverError::SerializationError(format!("rkyv serialize error: {}", e)))?;
-        
+
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&storage).map_err(|e| {
+            RetrieverError::SerializationError(format!("rkyv serialize error: {}", e))
+        })?;
+
         let mut file = File::create(filename)?;
         file.write_all(&bytes)?;
-        
+
         info!(
             "Saved {} vectors to rkyv format ({} bytes)",
             self.vectors.len(),
@@ -1166,9 +1173,12 @@ impl Retriever {
     pub fn load_vectors_rkyv(&mut self, filename: &str) -> Result<(), RetrieverError> {
         match std::fs::read(filename) {
             Ok(bytes) => {
-                let archived = rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&bytes)
-                    .map_err(|e| RetrieverError::SerializationError(format!("rkyv access error: {}", e)))?;
-                
+                let archived =
+                    rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&bytes)
+                        .map_err(|e| {
+                            RetrieverError::SerializationError(format!("rkyv access error: {}", e))
+                        })?;
+
                 // Check version for future migrations
                 if archived.version != VectorStorageRkyv::CURRENT_VERSION {
                     info!(
@@ -1177,23 +1187,25 @@ impl Retriever {
                         VectorStorageRkyv::CURRENT_VERSION
                     );
                 }
-                
+
                 // Deserialize vectors (this does allocate, but is still faster than JSON parsing)
                 // rkyv uses f32_le (little-endian f32), we need to convert to native f32
-                self.vectors = archived.vectors
+                self.vectors = archived
+                    .vectors
                     .iter()
                     .map(|v| v.iter().map(|f| f.to_native()).collect())
                     .collect();
-                
+
                 // Rebuild HashMap from flat pairs
                 // rkyv uses u32_le, convert to native usize
-                self.doc_id_to_vector_idx = archived.doc_id_to_idx
+                self.doc_id_to_vector_idx = archived
+                    .doc_id_to_idx
                     .iter()
                     .map(|pair| (pair.0.to_string(), pair.1.to_native() as usize))
                     .collect();
-                
+
                 self.metrics.total_vectors = self.vectors.len();
-                
+
                 info!(
                     "Loaded {} vectors from rkyv format ({} bytes)",
                     self.vectors.len(),
@@ -1203,7 +1215,10 @@ impl Retriever {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // File not found - caller should try JSON fallback
-                Err(RetrieverError::IoError(format!("rkyv file not found: {}", filename)))
+                Err(RetrieverError::IoError(format!(
+                    "rkyv file not found: {}",
+                    filename
+                )))
             }
             Err(e) => Err(RetrieverError::IoError(e.to_string())),
         }
@@ -1212,26 +1227,26 @@ impl Retriever {
     /// Load vectors using memory-mapped file (zero-copy, fastest possible)
     /// This maps the file directly into memory without copying, providing
     /// near-instant startup and reduced memory pressure.
-    /// 
+    ///
     /// # Safety
     /// The mmap is safe as long as the file isn't modified while mapped.
     /// We copy the data out immediately to avoid holding the mmap.
     pub fn load_vectors_mmap(&mut self, filename: &str) -> Result<(), RetrieverError> {
         let file = File::open(filename)
             .map_err(|e| RetrieverError::IoError(format!("Failed to open file: {}", e)))?;
-        
+
         // Memory-map the file (zero-copy access)
         let mmap = unsafe { Mmap::map(&file) }
             .map_err(|e| RetrieverError::IoError(format!("Failed to mmap file: {}", e)))?;
-        
+
         let start = Instant::now();
-        
+
         // Access the archived data directly from the mmap
         let archived = rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&mmap)
             .map_err(|e| RetrieverError::SerializationError(format!("rkyv access error: {}", e)))?;
-        
+
         let access_time = start.elapsed();
-        
+
         // Check version
         if archived.version != VectorStorageRkyv::CURRENT_VERSION {
             info!(
@@ -1240,24 +1255,26 @@ impl Retriever {
                 VectorStorageRkyv::CURRENT_VERSION
             );
         }
-        
+
         let copy_start = Instant::now();
-        
+
         // Copy vectors out of mmap (we need owned data for mutations)
-        self.vectors = archived.vectors
+        self.vectors = archived
+            .vectors
             .iter()
             .map(|v| v.iter().map(|f| f.to_native()).collect())
             .collect();
-        
-        self.doc_id_to_vector_idx = archived.doc_id_to_idx
+
+        self.doc_id_to_vector_idx = archived
+            .doc_id_to_idx
             .iter()
             .map(|pair| (pair.0.to_string(), pair.1.to_native() as usize))
             .collect();
-        
+
         let copy_time = copy_start.elapsed();
-        
+
         self.metrics.total_vectors = self.vectors.len();
-        
+
         info!(
             "Loaded {} vectors via mmap ({} bytes, access: {:?}, copy: {:?})",
             self.vectors.len(),
@@ -1265,8 +1282,100 @@ impl Retriever {
             access_time,
             copy_time
         );
-        
+
         Ok(())
+    }
+
+    // ========================================================================
+    // Async I/O with io_uring (2-3x faster file reads on Linux)
+    // ========================================================================
+
+    /// Load vectors from rkyv format using io_uring async I/O
+    /// This is 2-3x faster than synchronous reads on Linux with kernel 5.1+
+    pub async fn load_vectors_rkyv_async(&mut self, filename: &str) -> Result<(), RetrieverError> {
+        let start = Instant::now();
+
+        // Use io_uring for async file read (falls back to tokio::fs if unavailable)
+        let bytes = async_io::read_file(filename).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                RetrieverError::IoError(format!("rkyv file not found: {}", filename))
+            } else {
+                RetrieverError::IoError(e.to_string())
+            }
+        })?;
+
+        let read_time = start.elapsed();
+        let parse_start = Instant::now();
+
+        let archived = rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&bytes)
+            .map_err(|e| RetrieverError::SerializationError(format!("rkyv access error: {}", e)))?;
+
+        // Check version
+        if archived.version != VectorStorageRkyv::CURRENT_VERSION {
+            info!(
+                "rkyv version mismatch: file={}, current={}",
+                archived.version,
+                VectorStorageRkyv::CURRENT_VERSION
+            );
+        }
+
+        // Deserialize vectors
+        self.vectors = archived
+            .vectors
+            .iter()
+            .map(|v| v.iter().map(|f| f.to_native()).collect())
+            .collect();
+
+        self.doc_id_to_vector_idx = archived
+            .doc_id_to_idx
+            .iter()
+            .map(|pair| (pair.0.to_string(), pair.1.to_native() as usize))
+            .collect();
+
+        self.metrics.total_vectors = self.vectors.len();
+        let parse_time = parse_start.elapsed();
+
+        info!(
+            "Loaded {} vectors via {} ({} bytes, read: {:?}, parse: {:?})",
+            self.vectors.len(),
+            async_io::backend_name(),
+            bytes.len(),
+            read_time,
+            parse_time
+        );
+
+        Ok(())
+    }
+
+    /// Load search cache from disk using io_uring async I/O
+    pub async fn load_search_cache_async(&mut self, path: &str) -> Result<usize, RetrieverError> {
+        if !Path::new(path).exists() {
+            return Ok(0);
+        }
+
+        let bytes = async_io::read_file(path).await?;
+
+        let archived = rkyv::access::<
+            rkyv::Archived<Vec<(String, Vec<String>)>>,
+            rkyv::rancor::Error,
+        >(&bytes)
+        .map_err(|e| RetrieverError::SerializationError(format!("rkyv access error: {}", e)))?;
+
+        let mut loaded = 0;
+        for entry in archived.iter() {
+            let key = entry.0.to_string();
+            let value: Vec<String> = entry.1.iter().map(|s| s.to_string()).collect();
+            self.search_cache.put(key, value);
+            loaded += 1;
+        }
+
+        info!(
+            "Loaded {} search cache entries via {} ({} bytes)",
+            loaded,
+            async_io::backend_name(),
+            bytes.len()
+        );
+        Ok(loaded)
     }
 
     // ========================================================================
@@ -1275,16 +1384,21 @@ impl Retriever {
 
     /// Append a single vector to the append-only log file
     /// This is much faster than rewriting the entire vector file
-    pub fn append_vector_to_log(&self, doc_id: &str, vector: &[f32], log_path: &str) -> Result<(), RetrieverError> {
+    pub fn append_vector_to_log(
+        &self,
+        doc_id: &str,
+        vector: &[f32],
+        log_path: &str,
+    ) -> Result<(), RetrieverError> {
         use std::io::BufWriter;
-        
+
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(log_path)?;
-        
+
         let mut writer = BufWriter::new(file);
-        
+
         // Write entry: doc_id length (u32) + doc_id bytes + vector length (u32) + vector floats
         let doc_id_bytes = doc_id.as_bytes();
         writer.write_all(&(doc_id_bytes.len() as u32).to_le_bytes())?;
@@ -1293,7 +1407,7 @@ impl Retriever {
         for &f in vector {
             writer.write_all(&f.to_le_bytes())?;
         }
-        
+
         debug!("Appended vector for {} to log", doc_id);
         Ok(())
     }
@@ -1301,15 +1415,15 @@ impl Retriever {
     /// Load vectors from append-only log and merge with existing vectors
     pub fn load_vector_log(&mut self, log_path: &str) -> Result<usize, RetrieverError> {
         use std::io::{BufReader, Read as _};
-        
+
         if !Path::new(log_path).exists() {
             return Ok(0);
         }
-        
+
         let file = File::open(log_path)?;
         let mut reader = BufReader::new(file);
         let mut loaded = 0;
-        
+
         loop {
             // Read doc_id length
             let mut len_buf = [0u8; 4];
@@ -1317,17 +1431,17 @@ impl Retriever {
                 break; // EOF
             }
             let doc_id_len = u32::from_le_bytes(len_buf) as usize;
-            
+
             // Read doc_id
             let mut doc_id_buf = vec![0u8; doc_id_len];
             reader.read_exact(&mut doc_id_buf)?;
             let doc_id = String::from_utf8(doc_id_buf)
                 .map_err(|e| RetrieverError::SerializationError(e.to_string()))?;
-            
+
             // Read vector length
             reader.read_exact(&mut len_buf)?;
             let vec_len = u32::from_le_bytes(len_buf) as usize;
-            
+
             // Read vector
             let mut vector = Vec::with_capacity(vec_len);
             for _ in 0..vec_len {
@@ -1335,12 +1449,12 @@ impl Retriever {
                 reader.read_exact(&mut f_buf)?;
                 vector.push(f32::from_le_bytes(f_buf));
             }
-            
+
             // Add or update vector
             self.add_vector_with_id(doc_id, vector);
             loaded += 1;
         }
-        
+
         info!("Loaded {} vectors from append log: {}", loaded, log_path);
         Ok(loaded)
     }
@@ -1350,18 +1464,18 @@ impl Retriever {
     pub fn compact_vector_log(&mut self, log_path: &str) -> Result<(), RetrieverError> {
         // Load any pending entries from the log
         let loaded = self.load_vector_log(log_path)?;
-        
+
         if loaded > 0 {
             // Save the merged vectors
             let rkyv_path = self.vector_file_path.replace(".json", ".rkyv");
             self.save_vectors_rkyv(&rkyv_path)?;
-            
+
             // Clear the log file
             std::fs::write(log_path, b"")?;
-            
+
             info!("Compacted {} log entries into main vector file", loaded);
         }
-        
+
         Ok(())
     }
 
@@ -1402,7 +1516,67 @@ impl Retriever {
         if Path::new(&json_path).exists() {
             self.load_vectors(&json_path)?;
             info!("Loaded vectors from JSON: {}", json_path);
-            
+
+            // Migrate to rkyv for next time
+            if !self.vectors.is_empty() {
+                match self.save_vectors_rkyv(&rkyv_path) {
+                    Ok(()) => info!("Migrated vectors to rkyv format: {}", rkyv_path),
+                    Err(e) => info!("Failed to migrate to rkyv (non-fatal): {}", e),
+                }
+            }
+            return Ok(());
+        }
+
+        // Fresh start
+        info!("No existing vectors found, starting fresh");
+        self.vectors = Vec::new();
+        self.doc_id_to_vector_idx = HashMap::new();
+        self.metrics.total_vectors = 0;
+        Ok(())
+    }
+
+    /// Async version of load_vectors_auto using io_uring for 2-3x faster file reads
+    /// Prefers mmap (fastest), falls back to io_uring async read, then sync read
+    pub async fn load_vectors_auto_async(&mut self, base_path: &str) -> Result<(), RetrieverError> {
+        let rkyv_path = base_path.replace(".json", ".rkyv");
+        let json_path = if base_path.ends_with(".json") {
+            base_path.to_string()
+        } else {
+            format!("{}.json", base_path.trim_end_matches(".rkyv"))
+        };
+
+        // Try mmap first (fastest - zero-copy access)
+        if Path::new(&rkyv_path).exists() {
+            match self.load_vectors_mmap(&rkyv_path) {
+                Ok(()) => {
+                    info!("Loaded vectors via mmap: {}", rkyv_path);
+                    return Ok(());
+                }
+                Err(e) => {
+                    info!("mmap load failed, trying io_uring async read: {}", e);
+                    // Fall back to io_uring async read (2-3x faster than sync on Linux)
+                    match self.load_vectors_rkyv_async(&rkyv_path).await {
+                        Ok(()) => {
+                            info!(
+                                "Loaded vectors via {}: {}",
+                                async_io::backend_name(),
+                                rkyv_path
+                            );
+                            return Ok(());
+                        }
+                        Err(e2) => {
+                            info!("io_uring load also failed, trying JSON: {}", e2);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Try JSON (slower but more compatible)
+        if Path::new(&json_path).exists() {
+            self.load_vectors(&json_path)?;
+            info!("Loaded vectors from JSON: {}", json_path);
+
             // Migrate to rkyv for next time
             if !self.vectors.is_empty() {
                 match self.save_vectors_rkyv(&rkyv_path) {
@@ -1432,10 +1606,10 @@ impl Retriever {
 
         // Save rkyv (primary - fast)
         self.save_vectors_rkyv(&rkyv_path)?;
-        
+
         // Save JSON (backup - human readable, slower)
         self.save_vectors(&json_path)?;
-        
+
         Ok(())
     }
 
@@ -1710,7 +1884,9 @@ impl Drop for Retriever {
             }
         }
         // Skip saving when this is the temporary retriever used during atomic reindex
-        if self.vector_file_path.ends_with("vectors.new.json") || self.vector_file_path.ends_with("vectors.new.rkyv") {
+        if self.vector_file_path.ends_with("vectors.new.json")
+            || self.vector_file_path.ends_with("vectors.new.rkyv")
+        {
             debug!("Temp retriever shutdown detected; skipping save on drop");
         } else {
             debug!("Retriever shutting down, saving vectors in rkyv format...");
@@ -1756,9 +1932,13 @@ mod tests {
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&storage).unwrap();
 
         // Deserialize and verify
-        let archived = rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&bytes).unwrap();
-        
-        assert_eq!(archived.version.to_native(), VectorStorageRkyv::CURRENT_VERSION);
+        let archived =
+            rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&bytes).unwrap();
+
+        assert_eq!(
+            archived.version.to_native(),
+            VectorStorageRkyv::CURRENT_VERSION
+        );
         assert_eq!(archived.vectors.len(), 3);
         assert_eq!(archived.doc_id_to_idx.len(), 3);
 
@@ -1791,13 +1971,27 @@ mod tests {
         let rkyv_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rkyv_storage).unwrap();
 
         println!("\n=== SIZE COMPARISON ===");
-        println!("JSON size: {} bytes ({:.2} KB)", json_bytes.len(), json_bytes.len() as f64 / 1024.0);
-        println!("rkyv size: {} bytes ({:.2} KB)", rkyv_bytes.len(), rkyv_bytes.len() as f64 / 1024.0);
-        println!("Ratio: {:.2}x smaller", json_bytes.len() as f64 / rkyv_bytes.len() as f64);
+        println!(
+            "JSON size: {} bytes ({:.2} KB)",
+            json_bytes.len(),
+            json_bytes.len() as f64 / 1024.0
+        );
+        println!(
+            "rkyv size: {} bytes ({:.2} KB)",
+            rkyv_bytes.len(),
+            rkyv_bytes.len() as f64 / 1024.0
+        );
+        println!(
+            "Ratio: {:.2}x smaller",
+            json_bytes.len() as f64 / rkyv_bytes.len() as f64
+        );
         println!("========================\n");
 
         // rkyv should be significantly smaller
-        assert!(rkyv_bytes.len() < json_bytes.len(), "rkyv should be smaller than JSON");
+        assert!(
+            rkyv_bytes.len() < json_bytes.len(),
+            "rkyv should be smaller than JSON"
+        );
     }
 
     /// Benchmark rkyv vs JSON serialization/deserialization
@@ -1834,15 +2028,18 @@ mod tests {
 
         // Benchmark rkyv access (zero-copy)
         let rkyv_start = Instant::now();
-        let archived = rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&rkyv_bytes).unwrap();
+        let archived =
+            rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&rkyv_bytes).unwrap();
         // Force access to data to make it fair
         let _ = archived.vectors.len();
         let rkyv_access_time = rkyv_start.elapsed();
 
         // Benchmark rkyv full deserialization (for comparison)
         let rkyv_start = Instant::now();
-        let archived = rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&rkyv_bytes).unwrap();
-        let _vectors: Vec<Vec<f32>> = archived.vectors
+        let archived =
+            rkyv::access::<ArchivedVectorStorageRkyv, rkyv::rancor::Error>(&rkyv_bytes).unwrap();
+        let _vectors: Vec<Vec<f32>> = archived
+            .vectors
             .iter()
             .map(|v| v.iter().map(|f| f.to_native()).collect())
             .collect();
@@ -1853,18 +2050,39 @@ mod tests {
         println!("JSON deserialize:    {:?}", json_deserialize_time);
         println!("rkyv serialize:      {:?}", rkyv_serialize_time);
         println!("rkyv access:         {:?} (zero-copy)", rkyv_access_time);
-        println!("rkyv deserialize:    {:?} (full copy)", rkyv_deserialize_time);
-        println!("\nSpeedup (serialize): {:.1}x", json_serialize_time.as_nanos() as f64 / rkyv_serialize_time.as_nanos() as f64);
-        println!("Speedup (access):    {:.1}x", json_deserialize_time.as_nanos() as f64 / rkyv_access_time.as_nanos() as f64);
-        println!("Speedup (deser):     {:.1}x", json_deserialize_time.as_nanos() as f64 / rkyv_deserialize_time.as_nanos() as f64);
+        println!(
+            "rkyv deserialize:    {:?} (full copy)",
+            rkyv_deserialize_time
+        );
+        println!(
+            "\nSpeedup (serialize): {:.1}x",
+            json_serialize_time.as_nanos() as f64 / rkyv_serialize_time.as_nanos() as f64
+        );
+        println!(
+            "Speedup (access):    {:.1}x",
+            json_deserialize_time.as_nanos() as f64 / rkyv_access_time.as_nanos() as f64
+        );
+        println!(
+            "Speedup (deser):     {:.1}x",
+            json_deserialize_time.as_nanos() as f64 / rkyv_deserialize_time.as_nanos() as f64
+        );
         println!("\nJSON size: {} bytes", json_bytes.len());
         println!("rkyv size: {} bytes", rkyv_bytes.len());
-        println!("Size ratio: {:.2}x smaller", json_bytes.len() as f64 / rkyv_bytes.len() as f64);
+        println!(
+            "Size ratio: {:.2}x smaller",
+            json_bytes.len() as f64 / rkyv_bytes.len() as f64
+        );
         println!("=======================================================\n");
 
         // rkyv should be faster
-        assert!(rkyv_serialize_time < json_serialize_time, "rkyv serialize should be faster");
-        assert!(rkyv_access_time < json_deserialize_time, "rkyv access should be faster");
+        assert!(
+            rkyv_serialize_time < json_serialize_time,
+            "rkyv serialize should be faster"
+        );
+        assert!(
+            rkyv_access_time < json_deserialize_time,
+            "rkyv access should be faster"
+        );
     }
 
     /// Test file-based save/load with rkyv
@@ -1880,18 +2098,18 @@ mod tests {
         let mut retriever = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Add some test vectors
-        retriever.vectors = vec![
-            vec![0.1, 0.2, 0.3],
-            vec![0.4, 0.5, 0.6],
-        ];
+        retriever.vectors = vec![vec![0.1, 0.2, 0.3], vec![0.4, 0.5, 0.6]];
         retriever.doc_id_to_vector_idx.insert("doc1".to_string(), 0);
         retriever.doc_id_to_vector_idx.insert("doc2".to_string(), 1);
 
         // Save with rkyv
-        retriever.save_vectors_rkyv(rkyv_path.to_str().unwrap()).unwrap();
+        retriever
+            .save_vectors_rkyv(rkyv_path.to_str().unwrap())
+            .unwrap();
 
         // Verify file exists
         assert!(rkyv_path.exists(), "rkyv file should exist");
@@ -1900,8 +2118,11 @@ mod tests {
         let mut retriever2 = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
-        ).unwrap();
-        retriever2.load_vectors_rkyv(rkyv_path.to_str().unwrap()).unwrap();
+        )
+        .unwrap();
+        retriever2
+            .load_vectors_rkyv(rkyv_path.to_str().unwrap())
+            .unwrap();
 
         // Verify data matches
         assert_eq!(retriever2.vectors.len(), 2);
@@ -1969,13 +2190,12 @@ impl Retriever {
         };
 
         // 4. Use hybrid searcher to combine results
-        let hybrid_results = self.hybrid_searcher.search(&bm25_scored, &vector_scored, top_k);
+        let hybrid_results = self
+            .hybrid_searcher
+            .search(&bm25_scored, &vector_scored, top_k);
 
         // 5. Convert to result format
-        let results: Vec<String> = hybrid_results
-            .into_iter()
-            .map(|r| r.doc_id)
-            .collect();
+        let results: Vec<String> = hybrid_results.into_iter().map(|r| r.doc_id).collect();
 
         // 6. Cache results for similar future queries
         if let Some(emb) = query_embedding {
@@ -2018,10 +2238,14 @@ impl Retriever {
         if self.vectors.is_empty() {
             return;
         }
-        info!("Building PQ index for {} vectors (16x compression)...", self.vectors.len());
-        
+        info!(
+            "Building PQ index for {} vectors (16x compression)...",
+            self.vectors.len()
+        );
+
         // Collect vectors with their doc_ids
-        let vectors_with_ids: Vec<(String, Vec<f32>)> = self.doc_id_to_vector_idx
+        let vectors_with_ids: Vec<(String, Vec<f32>)> = self
+            .doc_id_to_vector_idx
             .iter()
             .filter_map(|(doc_id, &idx)| {
                 if idx < self.vectors.len() {
@@ -2031,10 +2255,10 @@ impl Retriever {
                 }
             })
             .collect();
-        
+
         // Build PQ index with 48 subvectors for 384-dim vectors
         let pq = crate::perf::product_quantization::PQIndex::build(&vectors_with_ids, 48);
-        
+
         self.pq_index = Some(pq);
         info!("PQ index built successfully");
     }
@@ -2045,16 +2269,19 @@ impl Retriever {
         if self.vectors.is_empty() {
             return;
         }
-        info!("Building FP16 store for {} vectors (2x compression)...", self.vectors.len());
+        info!(
+            "Building FP16 store for {} vectors (2x compression)...",
+            self.vectors.len()
+        );
         let dim = self.vectors.first().map(|v| v.len()).unwrap_or(384);
         let mut store = crate::perf::mixed_precision::F16VectorStore::new(dim);
-        
+
         for (doc_id, &idx) in &self.doc_id_to_vector_idx {
             if idx < self.vectors.len() {
                 store.add(doc_id.clone(), &self.vectors[idx]);
             }
         }
-        
+
         self.fp16_store = Some(store);
         info!("FP16 store built successfully");
     }
@@ -2078,7 +2305,10 @@ impl Retriever {
     }
 
     /// Get a connection from the pool
-    pub async fn acquire_connection(&self) -> Result<crate::perf::connection_pool::PoolGuard<'_>, crate::perf::connection_pool::PoolError> {
+    pub async fn acquire_connection(
+        &self,
+    ) -> Result<crate::perf::connection_pool::PoolGuard<'_>, crate::perf::connection_pool::PoolError>
+    {
         self.connection_pool.acquire().await
     }
 
@@ -2104,38 +2334,47 @@ impl Retriever {
         if let Some(ref mut hnsw) = self.hnsw_index {
             if hnsw.len() > 100 {
                 let results = hnsw.search(query, top_k);
-                return results.into_iter()
+                return results
+                    .into_iter()
                     .filter_map(|(doc_id, score)| {
-                        self.doc_id_to_vector_idx.get(&doc_id).map(|&idx| (idx, score))
+                        self.doc_id_to_vector_idx
+                            .get(&doc_id)
+                            .map(|&idx| (idx, score))
                     })
                     .collect();
             }
         }
-        
+
         // Try PQ (16x memory reduction)
         if let Some(ref pq) = self.pq_index {
             if pq.len() > 0 {
                 let results = pq.search(query, top_k);
-                return results.into_iter()
+                return results
+                    .into_iter()
                     .filter_map(|(doc_id, score)| {
-                        self.doc_id_to_vector_idx.get(&doc_id).map(|&idx| (idx, score))
+                        self.doc_id_to_vector_idx
+                            .get(&doc_id)
+                            .map(|&idx| (idx, score))
                     })
                     .collect();
             }
         }
-        
+
         // Try FP16 (2x memory reduction)
         if let Some(ref store) = self.fp16_store {
             if store.len() > 0 {
                 let results = store.search(query, top_k);
-                return results.into_iter()
+                return results
+                    .into_iter()
                     .filter_map(|(doc_id, score)| {
-                        self.doc_id_to_vector_idx.get(&doc_id).map(|&idx| (idx, score))
+                        self.doc_id_to_vector_idx
+                            .get(&doc_id)
+                            .map(|&idx| (idx, score))
                     })
                     .collect();
             }
         }
-        
+
         // Fallback to linear scan with SIMD
         self.vector_search(query, top_k)
     }

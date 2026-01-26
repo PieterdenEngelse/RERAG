@@ -1,6 +1,9 @@
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+};
 use crate::{
     api,
-    app::Route,
+    app::{PageErrors, Route},
     components::config_nav::{ConfigNav, ConfigTab},
     components::monitor::*,
 };
@@ -14,8 +17,8 @@ const STOP_BLOCK_CLASS: &str = "flex flex-col gap-1 text-xs text-gray-200";
 const PARAM_COLUMN_CLASS: &str = "space-y-5 md:w-[18rem]";
 const PARAM_INPUT_ROW_CLASS: &str = "flex items-end gap-2";
 const PARAM_LABEL_CLASS: &str = "text-gray-400 whitespace-nowrap";
-const PARAM_ICON_BUTTON_CLASS: &str =
-    "w-5 h-5 rounded border border-blue-500/40 bg-blue-500/10 flex items-center justify-center cursor-pointer hover:bg-blue-500/20";
+// removed local constant
+// const PARAM_ICON_BUTTON_CLASS removed (using shared constant)
 const PARAM_NUMBER_INPUT_CLASS: &str =
     "input input-xs input-bordered bg-gray-700 text-gray-200 !w-24";
 // Wider input for comma-separated text values (e.g., stop_sequences: "\n, </s>, [END]")
@@ -25,7 +28,7 @@ const PARAM_TEXT_INPUT_CLASS: &str = "input input-xs input-bordered bg-gray-700 
 fn InfoIcon() -> Element {
     rsx! {
         svg {
-            class: "w-3 h-3 text-blue-400",
+            class: INFO_ICON_SVG_CLASS,
             view_box: "0 0 20 20",
             fill: "none",
             stroke: "currentColor",
@@ -125,16 +128,22 @@ pub fn ConfigSampling() -> Element {
         let mut llm_loading = llm_loading.clone();
         let mut llm_error = llm_error.clone();
         let mut llm_status = llm_status.clone();
+        let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             llm_loading.set(true);
             llm_error.set(None);
+            page_errors.with_mut(|e| e.clear_error("sampling"));
             match api::fetch_llm_config().await {
                 Ok(resp) => {
                     llm_config.set(sanitize_llm_config(resp.config));
                     llm_status.set(Some(resp.message));
+                    page_errors.with_mut(|e| e.clear_error("sampling"));
                 }
                 Err(err) => {
-                    llm_error.set(Some(format!("Failed to load LLM config: {}", err)));
+                    let e = format!("Failed to load LLM config: {}", err);
+                    llm_error.set(Some(e.clone()));
+                    page_errors.with_mut(|errs| errs.set_error("sampling", &e));
+                    let _ = api::log_frontend_error("sampling", &e).await;
                 }
             }
             llm_loading.set(false);

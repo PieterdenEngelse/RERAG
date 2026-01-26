@@ -1,17 +1,17 @@
 //! Connection Pooling Utilities
-//! 
+//!
 //! Provides connection pool management for:
 //! - Redis connections
 //! - Database connections
 //! - HTTP client connections
-//! 
+//!
 //! # Benefits
 //! - Reduced connection overhead
 //! - Better resource utilization
 //! - Connection reuse
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use super::cache_aligned::CacheAligned;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, SemaphorePermit};
 use tracing::{debug, warn};
@@ -86,7 +86,7 @@ pub struct PoolStats {
 }
 
 /// Generic connection pool using semaphore for limiting
-/// 
+///
 /// Stats counters are cache-line aligned to prevent false sharing
 /// when multiple threads acquire/release connections concurrently.
 pub struct ConnectionPool {
@@ -117,11 +117,8 @@ impl ConnectionPool {
     /// Acquire a connection permit
     pub async fn acquire(&self) -> Result<PoolGuard<'_>, PoolError> {
         let start = Instant::now();
-        
-        match tokio::time::timeout(
-            self.config.connection_timeout,
-            self.semaphore.acquire(),
-        ).await {
+
+        match tokio::time::timeout(self.config.connection_timeout, self.semaphore.acquire()).await {
             Ok(Ok(permit)) => {
                 self.active.fetch_add(1, Ordering::Relaxed);
                 self.acquired.fetch_add(1, Ordering::Relaxed);
@@ -247,7 +244,7 @@ impl PoolRateLimiter {
     /// Wait if necessary to respect rate limit
     pub async fn wait(&self) {
         let min_interval = Duration::from_secs_f64(1.0 / self.requests_per_second);
-        
+
         let elapsed = {
             let last = self.last_request.lock().unwrap();
             last.elapsed()
@@ -347,13 +344,13 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limiter() {
         let limiter = PoolRateLimiter::new(10.0); // 10 requests per second
-        
+
         let start = Instant::now();
         for _ in 0..3 {
             limiter.wait().await;
         }
         let elapsed = start.elapsed();
-        
+
         // Should take at least 200ms for 3 requests at 10/s
         assert!(elapsed >= Duration::from_millis(180));
     }

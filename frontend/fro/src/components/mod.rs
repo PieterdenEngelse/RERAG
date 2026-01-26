@@ -18,7 +18,12 @@ pub mod backend_selector;
 pub use backend_selector::BackendSelector;
 
 pub mod performance;
-pub use performance::{LazyLoadState, LoadingSpinner, PaginationState, SkeletonLoader, VirtualScrollConfig};
+pub use performance::{
+    LazyLoadState, LoadingSpinner, PaginationState, SkeletonLoader, VirtualScrollConfig,
+};
 
 pub mod embedding_toggle;
 pub use embedding_toggle::EmbeddingToggle;
+
+pub mod global_error_bar;
+pub use global_error_bar::GlobalErrorBar;

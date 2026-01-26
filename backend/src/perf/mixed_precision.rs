@@ -1,10 +1,10 @@
 //! Mixed Precision Support
-//! 
+//!
 //! Provides FP16 (half precision) support for:
 //! - 2x memory reduction for vectors
 //! - Faster SIMD operations on supported hardware
 //! - Reduced memory bandwidth
-//! 
+//!
 //! # Accuracy
 //! - FP16 range: ±65504 with ~3 decimal digits precision
 //! - Suitable for normalized embeddings (-1 to 1)
@@ -22,15 +22,14 @@ pub struct F16Vector {
 impl F16Vector {
     /// Create from f32 vector
     pub fn from_f32(values: &[f32]) -> Self {
-        let data = values.iter()
-            .map(|&v| f16::from_f32(v).to_bits())
-            .collect();
+        let data = values.iter().map(|&v| f16::from_f32(v).to_bits()).collect();
         Self { data }
     }
 
     /// Convert to f32 vector
     pub fn to_f32(&self) -> Vec<f32> {
-        self.data.iter()
+        self.data
+            .iter()
             .map(|&bits| f16::from_bits(bits).to_f32())
             .collect()
     }
@@ -61,7 +60,8 @@ impl F16Vector {
             return 0.0;
         }
 
-        self.data.iter()
+        self.data
+            .iter()
             .zip(other.data.iter())
             .map(|(&a, &b)| {
                 let a = f16::from_bits(a).to_f32();
@@ -148,11 +148,11 @@ impl F16VectorStore {
     pub fn from_f32_vectors(vectors: &[(String, Vec<f32>)]) -> Self {
         let dimension = vectors.first().map(|(_, v)| v.len()).unwrap_or(0);
         let mut store = Self::new(dimension);
-        
+
         for (doc_id, vector) in vectors {
             store.add(doc_id.clone(), vector);
         }
-        
+
         store
     }
 
@@ -164,15 +164,17 @@ impl F16VectorStore {
 
     /// Search for similar vectors
     pub fn search(&self, query: &[f32], k: usize) -> Vec<(String, f32)> {
-        let mut scores: Vec<(usize, f32)> = self.vectors
+        let mut scores: Vec<(usize, f32)> = self
+            .vectors
             .iter()
             .enumerate()
             .map(|(i, v)| (i, v.cosine_similarity_f32(query)))
             .collect();
 
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        
-        scores.into_iter()
+
+        scores
+            .into_iter()
             .take(k)
             .map(|(i, score)| (self.doc_ids[i].clone(), score))
             .collect()
@@ -185,7 +187,8 @@ impl F16VectorStore {
 
     /// Get vector by doc_id
     pub fn get_by_id(&self, doc_id: &str) -> Option<Vec<f32>> {
-        self.doc_ids.iter()
+        self.doc_ids
+            .iter()
             .position(|id| id == doc_id)
             .and_then(|i| self.get(i))
     }
@@ -232,7 +235,8 @@ pub fn f32_to_f16_bytes(values: &[f32]) -> Vec<u8> {
 
 /// Convert f16 bytes back to f32
 pub fn f16_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(2)
+    bytes
+        .chunks_exact(2)
         .map(|chunk| {
             let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
             f16::from_bits(bits).to_f32()

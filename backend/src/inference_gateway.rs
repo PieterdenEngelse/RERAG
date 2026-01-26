@@ -4,13 +4,13 @@
 // Provides semaphore-based concurrency control to prevent resource exhaustion
 // when multiple requests try to run inference simultaneously.
 
+use crate::perf::CacheAligned;
 use once_cell::sync::OnceCell;
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, warn};
-use crate::perf::CacheAligned;
 
 /// Configuration for the inference gateway
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ pub struct GatewayStats {
 }
 
 /// Inference gateway for controlling concurrent inference operations
-/// 
+///
 /// Metrics are cache-line aligned to prevent false sharing when
 /// embedding and LLM operations update their counters concurrently.
 pub struct InferenceGateway {

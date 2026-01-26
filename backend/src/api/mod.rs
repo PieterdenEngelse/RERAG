@@ -82,6 +82,177 @@ pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
     RETRIEVER.get().map(|h| Arc::clone(h))
 }
 
+// Global Neo4j client handle (Phase 27)
+#[cfg(feature = "neo4j")]
+static NEO4J_CLIENT: OnceLock<crate::graph::Neo4jClient> = OnceLock::new();
+
+#[cfg(feature = "neo4j")]
+pub fn set_neo4j_client(client: crate::graph::Neo4jClient) {
+    let _ = NEO4J_CLIENT.set(client);
+}
+
+#[cfg(feature = "neo4j")]
+pub fn get_neo4j_client() -> Option<&'static crate::graph::Neo4jClient> {
+    NEO4J_CLIENT.get()
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub fn set_neo4j_client(_client: ()) {
+    // No-op when neo4j feature is disabled
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub fn get_neo4j_client() -> Option<()> {
+    None
+}
+
+// Global KnowledgeBuilder for graph integration during indexing
+#[cfg(feature = "neo4j")]
+static KNOWLEDGE_BUILDER: OnceLock<std::sync::Arc<crate::graph::KnowledgeBuilder>> =
+    OnceLock::new();
+
+#[cfg(feature = "neo4j")]
+pub fn set_knowledge_builder(builder: std::sync::Arc<crate::graph::KnowledgeBuilder>) {
+    let _ = KNOWLEDGE_BUILDER.set(builder);
+}
+
+#[cfg(feature = "neo4j")]
+pub fn get_knowledge_builder() -> Option<&'static std::sync::Arc<crate::graph::KnowledgeBuilder>> {
+    KNOWLEDGE_BUILDER.get()
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub fn get_knowledge_builder() -> Option<()> {
+    None
+}
+
+/// Process a document and its chunks through the knowledge graph
+/// This extracts entities and stores them in Neo4j
+#[cfg(feature = "neo4j")]
+pub async fn index_to_knowledge_graph(
+    doc_id: &str,
+    title: &str,
+    source: &str,
+    chunks: &[(String, String)], // (chunk_id, chunk_content)
+) {
+    use crate::graph::knowledge_builder::{ChunkMeta, DocumentMeta};
+    use crate::tools::entity_extractor::EntityExtractorTool;
+    use tracing::{debug, warn};
+
+    let Some(kb) = get_knowledge_builder() else {
+        return;
+    };
+
+    // Check if entity extraction is enabled
+    let config = crate::graph::config::GraphConfig::from_env();
+    if !config.entity_extraction.enabled {
+        debug!("Entity extraction disabled, skipping knowledge graph indexing");
+        return;
+    }
+
+    // Add document to graph
+    let doc_meta = DocumentMeta {
+        id: doc_id.to_string(),
+        title: title.to_string(),
+        source: source.to_string(),
+        content_hash: {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            title.hash(&mut hasher);
+            format!("{:016x}", hasher.finish())
+        },
+        mime_type: "text/plain".to_string(),
+        chunk_count: chunks.len(),
+    };
+
+    if let Err(e) = kb.add_document(&doc_meta).await {
+        warn!(error = %e, doc_id = %doc_id, "Failed to add document to knowledge graph");
+        return;
+    }
+
+    // Process each chunk
+    let extractor = EntityExtractorTool::new();
+    let confidence_threshold = config.entity_extraction.confidence_threshold;
+
+    for (chunk_id, chunk_content) in chunks {
+        // Add chunk to graph
+        let chunk_meta = ChunkMeta {
+            id: chunk_id.clone(),
+            document_id: doc_id.to_string(),
+            content: chunk_content.clone(),
+            embedding_id: chunk_id.clone(),
+            position: chunk_id
+                .split('#')
+                .last()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            token_count: chunk_content.split_whitespace().count(),
+        };
+
+        if let Err(e) = kb.add_chunk(&chunk_meta).await {
+            warn!(error = %e, chunk_id = %chunk_id, "Failed to add chunk to knowledge graph");
+            continue;
+        }
+
+        // Extract entities from chunk
+        let extraction = extractor.extract(chunk_content);
+
+        for entity in &extraction.entities {
+            if entity.confidence >= confidence_threshold {
+                if let Err(e) = kb
+                    .add_entity_mention(
+                        chunk_id,
+                        &entity.text,
+                        entity.entity_type.label(),
+                        entity.confidence,
+                    )
+                    .await
+                {
+                    debug!(error = %e, entity = %entity.text, "Failed to add entity mention");
+                }
+            }
+        }
+
+        // Link co-occurring entities (entities in the same chunk are related)
+        let high_confidence_entities: Vec<_> = extraction
+            .entities
+            .iter()
+            .filter(|e| e.confidence >= confidence_threshold)
+            .collect();
+
+        for i in 0..high_confidence_entities.len() {
+            for j in (i + 1)..high_confidence_entities.len() {
+                let e1 = &high_confidence_entities[i];
+                let e2 = &high_confidence_entities[j];
+                let _ = kb
+                    .link_entities(
+                        &e1.text,
+                        &e2.text,
+                        "co_occurs_with",
+                        (e1.confidence + e2.confidence) / 2.0,
+                    )
+                    .await;
+            }
+        }
+    }
+
+    debug!(
+        doc_id = %doc_id,
+        chunks = chunks.len(),
+        "Indexed document to knowledge graph"
+    );
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub async fn index_to_knowledge_graph(
+    _doc_id: &str,
+    _title: &str,
+    _source: &str,
+    _chunks: &[(String, String)],
+) {
+    // No-op when neo4j feature is disabled
+}
+
 // Shared agent session state for chat commands
 #[derive(Default, Clone)]
 struct AgentChatState {
@@ -1092,22 +1263,22 @@ fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> 
 }
 
 // Track previous health status for change detection
-static LAST_HEALTH_STATUS: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+static LAST_HEALTH_STATUS: std::sync::OnceLock<std::sync::Mutex<String>> =
+    std::sync::OnceLock::new();
 
 /// Write to status-specific log file
 fn write_status_log(status: &str, reason: &str, is_change: bool) {
     use std::io::Write;
-    
+
     // Get log directory
-    let log_dir = std::env::var("LOG_DIR")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            format!("{}/.agentic-rag/logs", home)
-        });
-    
+    let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/.agentic-rag/logs", home)
+    });
+
     // Create log directory if needed
     let _ = std::fs::create_dir_all(&log_dir);
-    
+
     // Status to filename mapping
     let filename = match status {
         "healthy" => "status_healthy.log",
@@ -1118,14 +1289,17 @@ fn write_status_log(status: &str, reason: &str, is_change: bool) {
         "checking" => "status_checking.log",
         _ => "status_unknown.log",
     };
-    
+
     let log_path = format!("{}/{}", log_dir, filename);
-    
+
     // Format log entry
     let timestamp = chrono::Utc::now().to_rfc3339();
     let change_type = if is_change { "CHANGED" } else { "INIT" };
-    let entry = format!("[{}] [{}] {} | {}\n", timestamp, change_type, status, reason);
-    
+    let entry = format!(
+        "[{}] [{}] {} | {}\n",
+        timestamp, change_type, status, reason
+    );
+
     // Append to status-specific log file
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -1139,13 +1313,13 @@ fn write_status_log(status: &str, reason: &str, is_change: bool) {
 fn log_status_change(new_status: &str, reason: &str) {
     let status_lock = LAST_HEALTH_STATUS.get_or_init(|| std::sync::Mutex::new(String::new()));
     let mut last_status = status_lock.lock().unwrap();
-    
+
     if *last_status != new_status {
         let is_change = !last_status.is_empty();
-        
+
         // Write to status-specific log file
         write_status_log(new_status, reason, is_change);
-        
+
         // Also log to main log
         if is_change {
             warn!(
@@ -1153,7 +1327,10 @@ fn log_status_change(new_status: &str, reason: &str) {
                 last_status, new_status, reason
             );
         } else {
-            info!("Health status initialized: {} | Reason: {}", new_status, reason);
+            info!(
+                "Health status initialized: {} | Reason: {}",
+                new_status, reason
+            );
         }
         *last_status = new_status.to_string();
     }
@@ -1162,34 +1339,46 @@ fn log_status_change(new_status: &str, reason: &str) {
 /// Get status log file content
 pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let status = path.into_inner();
-    
+
     // Validate status name to prevent path traversal
-    let valid_statuses = ["healthy", "busy", "degraded", "unhealthy", "offline", "checking", "unknown", "initial"];
+    let valid_statuses = [
+        "healthy",
+        "busy",
+        "degraded",
+        "unhealthy",
+        "offline",
+        "checking",
+        "unknown",
+        "initial",
+    ];
     if !valid_statuses.contains(&status.as_str()) {
         return Ok(HttpResponse::BadRequest().json(json!({
             "error": "Invalid status name",
             "valid_statuses": valid_statuses
         })));
     }
-    
+
     // Get log directory
-    let log_dir = std::env::var("LOG_DIR")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            format!("{}/.agentic-rag/logs", home)
-        });
-    
+    let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/.agentic-rag/logs", home)
+    });
+
     let filename = format!("status_{}.log", status);
     let log_path = format!("{}/{}", log_dir, filename);
-    
+
     // Read log file
     match std::fs::read_to_string(&log_path) {
         Ok(content) => {
             // Return last 100 lines (most recent entries)
             let lines: Vec<&str> = content.lines().collect();
-            let start = if lines.len() > 100 { lines.len() - 100 } else { 0 };
+            let start = if lines.len() > 100 {
+                lines.len() - 100
+            } else {
+                0
+            };
             let recent_lines = lines[start..].join("\n");
-            
+
             Ok(HttpResponse::Ok().json(json!({
                 "status": status,
                 "log_path": log_path,
@@ -1198,33 +1387,29 @@ pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Err
                 "content": recent_lines
             })))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(HttpResponse::Ok().json(json!({
-                "status": status,
-                "log_path": log_path,
-                "total_lines": 0,
-                "showing_lines": 0,
-                "content": "",
-                "message": "No log entries yet for this status"
-            })))
-        }
-        Err(e) => {
-            Ok(HttpResponse::InternalServerError().json(json!({
-                "error": format!("Failed to read log file: {}", e),
-                "log_path": log_path
-            })))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HttpResponse::Ok().json(json!({
+            "status": status,
+            "log_path": log_path,
+            "total_lines": 0,
+            "showing_lines": 0,
+            "content": "",
+            "message": "No log entries yet for this status"
+        }))),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+            "error": format!("Failed to read log file: {}", e),
+            "log_path": log_path
+        }))),
     }
 }
 
 pub async fn health_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     // Check ONNX model exists
     let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
         .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
     let onnx_ready = std::path::Path::new(&onnx_model_path).exists();
-    
+
     if !onnx_ready {
         let reason = format!("ONNX model not found at: {}", onnx_model_path);
         log_status_change("unhealthy", &reason);
@@ -1258,20 +1443,57 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
         (None, false, None)
     };
 
+    // Check Neo4j status if enabled
+    #[cfg(feature = "neo4j")]
+    let neo4j_status: Option<(bool, bool)> = {
+        let config = crate::graph::config::GraphConfig::from_env();
+        if config.enabled {
+            if let Some(client) = get_neo4j_client() {
+                match client.health_check().await {
+                    Ok(connected) => Some((true, connected)),
+                    Err(_) => Some((true, false)),
+                }
+            } else {
+                Some((true, false)) // Enabled but client not initialized
+            }
+        } else {
+            None // Disabled
+        }
+    };
+
+    #[cfg(not(feature = "neo4j"))]
+    let neo4j_status: Option<(bool, bool)> = None;
+
     if let Some(retriever) = RETRIEVER.get() {
         let retriever = retriever.lock().unwrap();
         match retriever.health_check() {
             Ok(()) => {
-                let status = if is_busy { "busy" } else { "healthy" };
-                let reason = if is_busy {
+                // Check if Neo4j is enabled but not connected
+                let neo4j_issue = match neo4j_status {
+                    Some((true, false)) => true, // Enabled but not connected
+                    _ => false,
+                };
+
+                let status = if neo4j_issue {
+                    "degraded"
+                } else if is_busy {
+                    "busy"
+                } else {
+                    "healthy"
+                };
+
+                let reason = if neo4j_issue {
+                    "Neo4j enabled but not connected".to_string()
+                } else if is_busy {
                     message.clone().unwrap_or_else(|| "System busy".to_string())
                 } else {
-                    format!("All systems operational ({} docs, {} vectors)", 
-                        retriever.metrics.total_documents_indexed,
-                        retriever.metrics.total_vectors)
+                    format!(
+                        "All systems operational ({} docs, {} vectors)",
+                        retriever.metrics.total_documents_indexed, retriever.metrics.total_vectors
+                    )
                 };
                 log_status_change(status, &reason);
-                
+
                 let mut response = json!({
                     "status": status,
                     "documents": retriever.metrics.total_documents_indexed,
@@ -1295,6 +1517,14 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                 // Add message if busy
                 if let Some(msg) = message {
                     response["message"] = json!(msg);
+                }
+
+                // Add Neo4j status
+                if let Some((enabled, connected)) = neo4j_status {
+                    response["neo4j"] = json!({
+                        "enabled": enabled,
+                        "connected": connected
+                    });
                 }
 
                 Ok(HttpResponse::Ok().json(response))
@@ -1379,11 +1609,11 @@ async fn get_metrics() -> Result<HttpResponse, Error> {
 /// Returns: Statistics about all performance optimizations
 async fn get_optimization_stats() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         let retriever = retriever.lock().unwrap();
         let stats = retriever.get_optimization_stats();
-        
+
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "request_id": request_id,
@@ -1409,17 +1639,542 @@ async fn get_optimization_stats() -> Result<HttpResponse, Error> {
     }
 }
 
+/// GET /monitoring/io-uring
+/// Returns: io_uring async I/O statistics, configuration, and availability
+async fn get_io_uring_stats() -> Result<HttpResponse, Error> {
+    use crate::perf::io_uring as async_io;
+
+    let request_id = generate_request_id();
+    let stats = async_io::get_stats();
+    let config = async_io::get_config();
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "request_id": request_id,
+        "io_uring": {
+            "available": async_io::is_available(),
+            "feature_enabled": async_io::is_feature_enabled(),
+            "backend": async_io::backend_name(),
+            "config": {
+                // Category 1: Queue & Buffers
+                "ring_size": config.ring_size,
+                "cq_size": config.cq_size,
+                "buffer_size": config.buffer_size,
+                "buffer_pool_size": config.buffer_pool_size,
+                "clamp": config.clamp,
+                // Category 2: Polling
+                "sqpoll": config.sqpoll,
+                "sqpoll_idle_ms": config.sqpoll_idle_ms,
+                "sqpoll_cpu": config.sqpoll_cpu,
+                "iopoll": config.iopoll,
+                // Category 3: Optimization
+                "single_issuer": config.single_issuer,
+                "coop_taskrun": config.coop_taskrun,
+                "defer_taskrun": config.defer_taskrun,
+                "submit_all": config.submit_all,
+                "taskrun_flag": config.taskrun_flag,
+                // Category 4: Advanced
+                "r_disabled": config.r_disabled,
+                "attach_wq_fd": config.attach_wq_fd,
+                "dontfork": config.dontfork
+            },
+            "stats": {
+                "reads": stats.get_reads(),
+                "writes": stats.get_writes(),
+                "bytes_read": stats.get_bytes_read(),
+                "bytes_written": stats.get_bytes_written(),
+                "read_errors": stats.get_read_errors(),
+                "write_errors": stats.get_write_errors(),
+                "total_errors": stats.get_total_errors()
+            },
+            "env_vars": {
+                "IO_URING_RING_SIZE": "Submission/completion queue size (1-32768, power of 2)",
+                "IO_URING_BUFFER_SIZE": "Read/write buffer size in bytes (4096-16MB)",
+                "IO_URING_SQPOLL": "Enable kernel SQ polling thread (true/false)",
+                "IO_URING_SQPOLL_IDLE_MS": "SQ poll thread idle timeout in ms",
+                "IO_URING_BUFFER_POOL_SIZE": "Number of pre-allocated buffers (1-4096)",
+                "IO_URING_SINGLE_ISSUER": "Single issuer optimization (true/false)"
+            },
+            "description": "io_uring provides 2-3x faster file I/O on Linux 5.1+",
+            "available_functions": {
+                "vector_loading": "load_vectors_rkyv_async() / load_vectors_auto_async()",
+                "cache_loading": "load_search_cache_async()",
+                "document_ingestion": "index_file_async() / extract_text_async()",
+                "file_read": "perf::io_uring::read_file()",
+                "file_write": "perf::io_uring::write_file()",
+                "batch_read": "perf::io_uring::read_files()"
+            },
+            "current_usage": {
+                "startup_vector_load": "mmap (zero-copy, already optimal)",
+                "upload_indexing": "io_uring via extract_text_async()",
+                "reindex": "io_uring via index_all_documents_async()",
+                "note": "All file reads now use io_uring on Linux 5.1+ for 2-3x speedup"
+            }
+        }
+    })))
+}
+
+/// POST /monitoring/log-frontend-error
+/// Log frontend errors so they appear in the log viewer
+/// This allows page errors to be visible when filtering logs by color (red for errors)
+async fn log_frontend_error(body: web::Json<serde_json::Value>) -> Result<HttpResponse, Error> {
+    let page = body
+        .get("page")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let error = body
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown error");
+    let level = body
+        .get("level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("error");
+
+    // Log at the appropriate level so it appears in log filtering
+    match level {
+        "warn" | "warning" => {
+            tracing::warn!(page = %page, "Frontend error: {}", error);
+        }
+        _ => {
+            tracing::error!(page = %page, "Frontend error: {}", error);
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "status": "logged",
+        "page": page,
+        "level": level
+    })))
+}
+
+// ============================================================================
+// DOCKER MONITORING
+// ============================================================================
+
+/// Docker container info
+#[derive(Debug, Clone, Serialize)]
+struct DockerContainer {
+    name: String,
+    image: String,
+    status: String,
+    state: String,
+    ports: Vec<String>,
+    created: String,
+    health: Option<String>,
+}
+
+/// Docker stats for a container
+#[derive(Debug, Clone, Serialize)]
+struct DockerStats {
+    name: String,
+    cpu_percent: f64,
+    memory_usage: String,
+    memory_limit: String,
+    memory_percent: f64,
+    network_rx: String,
+    network_tx: String,
+}
+
+/// GET /monitoring/docker
+/// Returns Docker container status and stats for ag infrastructure
+async fn get_docker_status() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    // Try to get Docker container info by running docker commands
+    // This runs docker ps and docker stats to get container info
+
+    let containers = get_docker_containers().await;
+    let stats = get_docker_stats().await;
+    let docker_available = !containers.is_empty() || check_docker_available().await;
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "request_id": request_id,
+        "docker_available": docker_available,
+        "containers": containers,
+        "stats": stats
+    })))
+}
+
+/// Check if Docker is available
+async fn check_docker_available() -> bool {
+    match tokio::process::Command::new("docker")
+        .args(["info"])
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(output) => {
+            if output.status.success() {
+                return true;
+            }
+            // Check if it's a permission error
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("permission denied") {
+                warn!("Docker permission denied. Add user to docker group: sudo usermod -aG docker $USER");
+            }
+            false
+        }
+        Err(_) => false,
+    }
+}
+
+/// Get Docker container list
+async fn get_docker_containers() -> Vec<DockerContainer> {
+    // Run: docker ps -a --filter "name=ag-" --format json
+    let output = match tokio::process::Command::new("docker")
+        .args(["ps", "-a", "--filter", "name=ag-", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            warn!("Failed to run docker ps: {}", e);
+            return Vec::new();
+        }
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut containers = Vec::new();
+
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            let name = json["Names"].as_str().unwrap_or("").to_string();
+            let image = json["Image"].as_str().unwrap_or("").to_string();
+            let status = json["Status"].as_str().unwrap_or("").to_string();
+            let state = json["State"].as_str().unwrap_or("").to_string();
+            let ports_str = json["Ports"].as_str().unwrap_or("");
+            let created = json["CreatedAt"].as_str().unwrap_or("").to_string();
+
+            // Parse ports
+            let ports: Vec<String> = if ports_str.is_empty() {
+                Vec::new()
+            } else {
+                ports_str
+                    .split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            };
+
+            // Extract health from status if present
+            let health = if status.contains("(healthy)") {
+                Some("healthy".to_string())
+            } else if status.contains("(unhealthy)") {
+                Some("unhealthy".to_string())
+            } else if status.contains("(health: starting)") {
+                Some("starting".to_string())
+            } else {
+                None
+            };
+
+            containers.push(DockerContainer {
+                name,
+                image,
+                status,
+                state,
+                ports,
+                created,
+                health,
+            });
+        }
+    }
+
+    containers
+}
+
+/// Get Docker container stats
+async fn get_docker_stats() -> Vec<DockerStats> {
+    // Run: docker stats --no-stream --format json for ag containers
+    let output = match tokio::process::Command::new("docker")
+        .args(["stats", "--no-stream", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            warn!("Failed to run docker stats: {}", e);
+            return Vec::new();
+        }
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut stats = Vec::new();
+
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            let name = json["Name"].as_str().unwrap_or("").to_string();
+
+            // Only include ag containers
+            if !name.starts_with("ag-") {
+                continue;
+            }
+
+            let cpu_str = json["CPUPerc"].as_str().unwrap_or("0%");
+            let cpu_percent = cpu_str.trim_end_matches('%').parse::<f64>().unwrap_or(0.0);
+
+            let mem_usage = json["MemUsage"].as_str().unwrap_or("0B / 0B").to_string();
+            let (memory_usage, memory_limit) = if mem_usage.contains(" / ") {
+                let parts: Vec<&str> = mem_usage.split(" / ").collect();
+                (
+                    parts.get(0).unwrap_or(&"0B").to_string(),
+                    parts.get(1).unwrap_or(&"0B").to_string(),
+                )
+            } else {
+                (mem_usage.clone(), "0B".to_string())
+            };
+
+            let mem_perc_str = json["MemPerc"].as_str().unwrap_or("0%");
+            let memory_percent = mem_perc_str
+                .trim_end_matches('%')
+                .parse::<f64>()
+                .unwrap_or(0.0);
+
+            let net_io = json["NetIO"].as_str().unwrap_or("0B / 0B").to_string();
+            let (network_rx, network_tx) = if net_io.contains(" / ") {
+                let parts: Vec<&str> = net_io.split(" / ").collect();
+                (
+                    parts.get(0).unwrap_or(&"0B").to_string(),
+                    parts.get(1).unwrap_or(&"0B").to_string(),
+                )
+            } else {
+                (net_io.clone(), "0B".to_string())
+            };
+
+            stats.push(DockerStats {
+                name,
+                cpu_percent,
+                memory_usage,
+                memory_limit,
+                memory_percent,
+                network_rx,
+                network_tx,
+            });
+        }
+    }
+
+    stats
+}
+
+/// POST /monitoring/io-uring
+/// Save io_uring configuration to .env file
+async fn save_io_uring_config(body: web::Json<serde_json::Value>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 1: QUEUE & BUFFERS
+    // ═══════════════════════════════════════════════════════════════
+    let ring_size = body
+        .get("ring_size")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(256) as u32;
+    let cq_size = body.get("cq_size").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let buffer_size = body
+        .get("buffer_size")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(65536) as usize;
+    let buffer_pool_size = body
+        .get("buffer_pool_size")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(64) as usize;
+    let clamp = body.get("clamp").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 2: POLLING
+    // ═══════════════════════════════════════════════════════════════
+    let sqpoll = body
+        .get("sqpoll")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let sqpoll_idle_ms = body
+        .get("sqpoll_idle_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000) as u32;
+    let sqpoll_cpu = body
+        .get("sqpoll_cpu")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1) as i32;
+    let iopoll = body
+        .get("iopoll")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 3: OPTIMIZATION
+    // ═══════════════════════════════════════════════════════════════
+    let single_issuer = body
+        .get("single_issuer")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let coop_taskrun = body
+        .get("coop_taskrun")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let defer_taskrun = body
+        .get("defer_taskrun")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let submit_all = body
+        .get("submit_all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let taskrun_flag = body
+        .get("taskrun_flag")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // ═══════════════════════════════════════════════════════════════
+    // CATEGORY 4: ADVANCED
+    // ═══════════════════════════════════════════════════════════════
+    let r_disabled = body
+        .get("r_disabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let attach_wq_fd = body
+        .get("attach_wq_fd")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1) as i32;
+    let dontfork = body
+        .get("dontfork")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Validate ring_size is power of 2
+    if !ring_size.is_power_of_two() || ring_size < 1 || ring_size > 32768 {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "ring_size must be a power of 2 between 1 and 32768",
+            "request_id": request_id
+        })));
+    }
+
+    // Validate buffer_size
+    if buffer_size < 4096 || buffer_size > 16 * 1024 * 1024 {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "buffer_size must be between 4096 and 16MB",
+            "request_id": request_id
+        })));
+    }
+
+    // Build env content with all parameters
+    let env_content = format!(
+        "# io_uring Configuration (saved by UI)\n\
+         \n\
+         # Category 1: Queue & Buffers\n\
+         IO_URING_RING_SIZE={}\n\
+         IO_URING_CQ_SIZE={}\n\
+         IO_URING_BUFFER_SIZE={}\n\
+         IO_URING_BUFFER_POOL_SIZE={}\n\
+         IO_URING_CLAMP={}\n\
+         \n\
+         # Category 2: Polling\n\
+         IO_URING_SQPOLL={}\n\
+         IO_URING_SQPOLL_IDLE_MS={}\n\
+         IO_URING_SQPOLL_CPU={}\n\
+         IO_URING_IOPOLL={}\n\
+         \n\
+         # Category 3: Optimization\n\
+         IO_URING_SINGLE_ISSUER={}\n\
+         IO_URING_COOP_TASKRUN={}\n\
+         IO_URING_DEFER_TASKRUN={}\n\
+         IO_URING_SUBMIT_ALL={}\n\
+         IO_URING_TASKRUN_FLAG={}\n\
+         \n\
+         # Category 4: Advanced\n\
+         IO_URING_R_DISABLED={}\n\
+         IO_URING_ATTACH_WQ_FD={}\n\
+         IO_URING_DONTFORK={}\n",
+        ring_size,
+        cq_size,
+        buffer_size,
+        buffer_pool_size,
+        clamp,
+        sqpoll,
+        sqpoll_idle_ms,
+        sqpoll_cpu,
+        iopoll,
+        single_issuer,
+        coop_taskrun,
+        defer_taskrun,
+        submit_all,
+        taskrun_flag,
+        r_disabled,
+        attach_wq_fd,
+        dontfork
+    );
+
+    // Save to .env.io_uring file
+    let env_path = std::path::Path::new(".env.io_uring");
+    match std::fs::write(env_path, &env_content) {
+        Ok(_) => {
+            info!("Saved io_uring config to .env.io_uring");
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": "io_uring configuration saved to .env.io_uring",
+                "request_id": request_id,
+                "config": {
+                    "ring_size": ring_size,
+                    "cq_size": cq_size,
+                    "buffer_size": buffer_size,
+                    "buffer_pool_size": buffer_pool_size,
+                    "clamp": clamp,
+                    "sqpoll": sqpoll,
+                    "sqpoll_idle_ms": sqpoll_idle_ms,
+                    "sqpoll_cpu": sqpoll_cpu,
+                    "iopoll": iopoll,
+                    "single_issuer": single_issuer,
+                    "coop_taskrun": coop_taskrun,
+                    "defer_taskrun": defer_taskrun,
+                    "submit_all": submit_all,
+                    "taskrun_flag": taskrun_flag,
+                    "r_disabled": r_disabled,
+                    "attach_wq_fd": attach_wq_fd,
+                    "dontfork": dontfork
+                },
+                "note": "Restart backend to apply changes"
+            })))
+        }
+        Err(e) => {
+            error!("Failed to save io_uring config: {}", e);
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to save config: {}", e),
+                "request_id": request_id
+            })))
+        }
+    }
+}
+
 /// POST /monitoring/optimizations/build-hnsw
 /// Build HNSW index for O(log n) search
 async fn build_hnsw_index() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
         let start = std::time::Instant::now();
         retriever.build_hnsw_index();
         let elapsed = start.elapsed().as_millis();
-        
+
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "request_id": request_id,
@@ -1440,13 +2195,13 @@ async fn build_hnsw_index() -> Result<HttpResponse, Error> {
 /// Build Product Quantization index for 16x memory reduction
 async fn build_pq_index() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
         let start = std::time::Instant::now();
         retriever.build_pq_index();
         let elapsed = start.elapsed().as_millis();
-        
+
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "request_id": request_id,
@@ -1466,13 +2221,13 @@ async fn build_pq_index() -> Result<HttpResponse, Error> {
 /// Build FP16 vector store for 2x memory reduction
 async fn build_fp16_store() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
         let start = std::time::Instant::now();
         retriever.build_fp16_store();
         let elapsed = start.elapsed().as_millis();
-        
+
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "request_id": request_id,
@@ -1492,18 +2247,18 @@ async fn build_fp16_store() -> Result<HttpResponse, Error> {
 /// Build all optimization indexes
 async fn build_all_indexes() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
         let start = std::time::Instant::now();
-        
+
         retriever.build_hnsw_index();
         retriever.build_pq_index();
         retriever.build_fp16_store();
-        
+
         let elapsed = start.elapsed().as_millis();
         let stats = retriever.get_optimization_stats();
-        
+
         Ok(HttpResponse::Ok().json(json!({
             "status": "success",
             "request_id": request_id,
@@ -1524,10 +2279,11 @@ async fn build_all_indexes() -> Result<HttpResponse, Error> {
 /// Returns current embedding configuration (ONNX only)
 async fn get_embedding_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
-    let onnx_model_path = std::env::var("ONNX_MODEL_PATH").unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+
+    let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
+        .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
     let onnx_available = std::path::Path::new(&onnx_model_path).exists();
-    
+
     Ok(HttpResponse::Ok().json(json!({
         "status": "success",
         "request_id": request_id,
@@ -2125,7 +2881,9 @@ async fn commit_hardware_config(
 // ONNX CONFIG
 // ============================================================================
 
-use crate::perf::onnx_embedder::{OnnxConfig, OnnxExecutionMode, OnnxLogLevel, OnnxOptimizationLevel};
+use crate::perf::onnx_embedder::{
+    OnnxConfig, OnnxExecutionMode, OnnxLogLevel, OnnxOptimizationLevel,
+};
 
 fn onnx_opt_level_to_str(level: OnnxOptimizationLevel) -> &'static str {
     match level {
@@ -2186,7 +2944,7 @@ fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        
+
         std::sync::RwLock::new(OnnxConfig {
             model_path,
             num_threads,
@@ -2200,11 +2958,11 @@ fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig> {
 async fn get_onnx_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let config = get_onnx_config_storage().read().unwrap();
-    
+
     let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
     let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
     let log_level_str = onnx_log_level_to_str(config.log_level);
-    
+
     Ok(HttpResponse::Ok().json(OnnxConfigResponse {
         status: "ok".into(),
         message: "".into(),
@@ -2245,14 +3003,12 @@ async fn get_onnx_config() -> Result<HttpResponse, Error> {
 }
 
 /// Update ONNX configuration (requires restart to take effect for embedder)
-async fn set_onnx_config(
-    payload: web::Json<OnnxConfigRequest>,
-) -> Result<HttpResponse, Error> {
+async fn set_onnx_config(payload: web::Json<OnnxConfigRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let body = payload.into_inner();
-    
+
     let mut config = get_onnx_config_storage().write().unwrap();
-    
+
     // Update only provided fields
     if let Some(path) = body.model_path {
         config.model_path = path;
@@ -2317,7 +3073,10 @@ async fn set_onnx_config(
     if let Some(flag) = body.enable_profiling {
         config.enable_profiling = flag;
     }
-    apply_option_field(&mut config.profiling_output_path, body.profiling_output_path);
+    apply_option_field(
+        &mut config.profiling_output_path,
+        body.profiling_output_path,
+    );
     apply_option_field(&mut config.log_id, body.log_id);
     if let Some(level) = body.log_level {
         match parse_log_level(&level) {
@@ -2383,11 +3142,11 @@ async fn set_onnx_config(
     if let Some(flag) = body.no_env_execution_providers {
         config.no_env_execution_providers = flag;
     }
-    
+
     let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
     let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
     let log_level_str = onnx_log_level_to_str(config.log_level);
-    
+
     tracing::info!(
         request_id = %request_id,
         num_threads = config.num_threads,
@@ -2399,7 +3158,7 @@ async fn set_onnx_config(
         log_level = log_level_str,
         "ONNX config updated (restart required to apply)"
     );
-    
+
     Ok(HttpResponse::Ok().json(OnnxConfigResponse {
         status: "ok".into(),
         message: "ONNX config updated. Restart backend to apply changes to embedder.".into(),
@@ -2455,6 +3214,243 @@ struct ApiKeysRequest {
     #[serde(default)]
     anthropic_api_key: String,
 }
+
+// ============================================================================
+// NEO4J KNOWLEDGE GRAPH CONFIG (Phase 27)
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct Neo4jConfigResponse {
+    status: String,
+    message: String,
+    request_id: String,
+    feature_compiled: bool,
+    enabled: bool,
+    connected: bool,
+    uri: String,
+    user: String,
+    database: String,
+    max_connections: usize,
+    connection_timeout_ms: u64,
+    // Graph expansion settings
+    expansion_enabled: bool,
+    max_hops: usize,
+    max_chunks: usize,
+    entity_weight: f32,
+    concept_weight: f32,
+    min_relationship_strength: f32,
+    // Entity extraction settings
+    extraction_enabled: bool,
+    confidence_threshold: f32,
+    fuzzy_threshold: f32,
+    // Stats (if connected)
+    stats: Option<Neo4jStats>,
+}
+
+#[derive(Debug, Serialize)]
+struct Neo4jStats {
+    total_nodes: usize,
+    total_relationships: usize,
+    documents: usize,
+    chunks: usize,
+    entities: usize,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Neo4jConfigRequest {
+    enabled: Option<bool>,
+    uri: Option<String>,
+    user: Option<String>,
+    password: Option<String>,
+    database: Option<String>,
+    max_connections: Option<usize>,
+    connection_timeout_ms: Option<u64>,
+    // Graph expansion
+    expansion_enabled: Option<bool>,
+    max_hops: Option<usize>,
+    max_chunks: Option<usize>,
+    entity_weight: Option<f32>,
+    concept_weight: Option<f32>,
+    min_relationship_strength: Option<f32>,
+    // Entity extraction
+    extraction_enabled: Option<bool>,
+    confidence_threshold: Option<f32>,
+    fuzzy_threshold: Option<f32>,
+}
+
+async fn get_neo4j_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    let feature_compiled = crate::graph::is_neo4j_compiled();
+    let config = crate::graph::config::GraphConfig::from_env();
+
+    // Check if connected
+    #[cfg(feature = "neo4j")]
+    let (connected, stats) = {
+        if let Some(client) = get_neo4j_client() {
+            match client.health_check().await {
+                Ok(true) => {
+                    // Get stats
+                    let stats = client.get_stats().await.ok().map(|s| Neo4jStats {
+                        total_nodes: s.total_nodes,
+                        total_relationships: s.total_relationships,
+                        documents: *s.node_counts.get("Document").unwrap_or(&0),
+                        chunks: *s.node_counts.get("Chunk").unwrap_or(&0),
+                        entities: *s.node_counts.get("Entity").unwrap_or(&0),
+                    });
+                    (true, stats)
+                }
+                _ => (false, None),
+            }
+        } else {
+            (false, None)
+        }
+    };
+
+    #[cfg(not(feature = "neo4j"))]
+    let (connected, stats): (bool, Option<Neo4jStats>) = (false, None);
+
+    Ok(HttpResponse::Ok().json(Neo4jConfigResponse {
+        status: "ok".into(),
+        message: if connected {
+            "Connected to Neo4j".into()
+        } else {
+            "Not connected".into()
+        },
+        request_id,
+        feature_compiled,
+        enabled: config.enabled,
+        connected,
+        uri: config.uri,
+        user: config.user,
+        database: config.database,
+        max_connections: config.max_connections,
+        connection_timeout_ms: config.connection_timeout_ms,
+        expansion_enabled: config.expansion.enabled,
+        max_hops: config.expansion.max_hops,
+        max_chunks: config.expansion.max_chunks,
+        entity_weight: config.expansion.entity_weight,
+        concept_weight: config.expansion.concept_weight,
+        min_relationship_strength: config.expansion.min_relationship_strength,
+        extraction_enabled: config.entity_extraction.enabled,
+        confidence_threshold: config.entity_extraction.confidence_threshold,
+        fuzzy_threshold: config.entity_extraction.fuzzy_threshold,
+        stats,
+    }))
+}
+
+async fn save_neo4j_config(payload: web::Json<Neo4jConfigRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let Neo4jConfigRequest {
+        enabled,
+        uri,
+        user,
+        password,
+        database,
+        max_connections,
+        connection_timeout_ms,
+        expansion_enabled,
+        max_hops,
+        max_chunks,
+        entity_weight,
+        concept_weight,
+        min_relationship_strength,
+        extraction_enabled,
+        confidence_threshold,
+        fuzzy_threshold,
+    } = payload.into_inner();
+
+    // Capture the requested changes so operators can see what was submitted even
+    // though we still require editing .env + restart for them to take effect.
+    let requested_changes = json!({
+        "enabled": enabled,
+        "uri": uri,
+        "user": user,
+        "password": password.as_ref().map(|_| "***"),
+        "database": database,
+        "max_connections": max_connections,
+        "connection_timeout_ms": connection_timeout_ms,
+        "expansion": {
+            "enabled": expansion_enabled,
+            "max_hops": max_hops,
+            "max_chunks": max_chunks,
+            "entity_weight": entity_weight,
+            "concept_weight": concept_weight,
+            "min_relationship_strength": min_relationship_strength,
+        },
+        "entity_extraction": {
+            "enabled": extraction_enabled,
+            "confidence_threshold": confidence_threshold,
+            "fuzzy_threshold": fuzzy_threshold,
+        }
+    });
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "message": "Neo4j configuration is read from environment variables. Update .env and restart the application to apply changes.",
+        "request_id": request_id,
+        "restart_required": true,
+        "requested_changes": requested_changes
+    })))
+}
+
+async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    #[cfg(feature = "neo4j")]
+    {
+        if let Some(client) = get_neo4j_client() {
+            match client.health_check().await {
+                Ok(true) => {
+                    return Ok(HttpResponse::Ok().json(json!({
+                        "status": "ok",
+                        "message": "Successfully connected to Neo4j",
+                        "request_id": request_id,
+                        "connected": true
+                    })));
+                }
+                Ok(false) => {
+                    return Ok(HttpResponse::Ok().json(json!({
+                        "status": "error",
+                        "message": "Neo4j health check failed",
+                        "request_id": request_id,
+                        "connected": false
+                    })));
+                }
+                Err(e) => {
+                    return Ok(HttpResponse::Ok().json(json!({
+                        "status": "error",
+                        "message": format!("Neo4j connection error: {}", e),
+                        "request_id": request_id,
+                        "connected": false
+                    })));
+                }
+            }
+        } else {
+            return Ok(HttpResponse::Ok().json(json!({
+                "status": "error",
+                "message": "Neo4j client not initialized. Check NEO4J_ENABLED=true in .env and restart.",
+                "request_id": request_id,
+                "connected": false
+            })));
+        }
+    }
+
+    #[cfg(not(feature = "neo4j"))]
+    {
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "error",
+            "message": "Neo4j feature not compiled. Build with: cargo build --features neo4j",
+            "request_id": request_id,
+            "connected": false,
+            "feature_compiled": false
+        })))
+    }
+}
+
+// ============================================================================
+// API KEYS CONFIG
+// ============================================================================
 
 #[derive(Debug, Serialize)]
 struct ApiKeysResponse {
@@ -2670,6 +3666,38 @@ async fn get_cache_monitor_info() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(response))
 }
 
+/// POST /cache/clear
+/// Clear all caches (L1, L2, and optionally L3/Redis)
+async fn clear_cache() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    let retriever = match RETRIEVER.get() {
+        Some(handle) => handle,
+        None => {
+            return Ok(HttpResponse::ServiceUnavailable().json(json!({
+                "status": "error",
+                "error": "Retriever not initialized",
+                "request_id": request_id,
+            })));
+        }
+    };
+
+    // Clear caches
+    {
+        let mut guard = retriever.lock().unwrap();
+        guard.clear_cache();
+        guard.clear_l2_cache();
+    }
+
+    info!("[{}] Cache cleared via API", request_id);
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "message": "Cache cleared",
+        "request_id": request_id,
+    })))
+}
+
 async fn get_rate_limit_monitor_info(
     state: web::Data<RateLimitSharedState>,
 ) -> Result<HttpResponse, Error> {
@@ -2834,6 +3862,8 @@ async fn upload_document_inner(
 
     let mut indexed_files = Vec::new();
     let mut index_errors = Vec::new();
+    let io_backend = crate::perf::io_uring::backend_name();
+
     if !uploaded_files.is_empty() {
         if is_reindex_in_progress() {
             index_errors.push(json!({
@@ -2841,28 +3871,66 @@ async fn upload_document_inner(
                 "error": "Reindex already in progress; automatic indexing skipped",
             }));
         } else if let Some(handle) = RETRIEVER.get() {
+            // Phase 1: Read all files asynchronously using io_uring (outside mutex)
+            // This is where io_uring provides 2-3x speedup on Linux
+            let mut file_contents: Vec<(String, std::path::PathBuf, Option<String>)> = Vec::new();
+
+            for filename in &uploaded_files {
+                let path = Path::new(UPLOAD_DIR).join(filename);
+                // Use io_uring async read
+                let content = index::extract_text_async(&path).await;
+                file_contents.push((filename.clone(), path, content));
+            }
+
+            // Phase 2: Index with mutex (brief lock, no I/O)
+            // Collect chunks for graph indexing (done outside mutex)
+            let mut graph_index_tasks: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+
             match handle.lock() {
                 Ok(mut retriever) => {
                     let chunker = crate::index::default_chunker(config.chunker_mode);
-                    let chunker_ref = chunker.as_ref();
-                    for filename in &uploaded_files {
-                        let path = Path::new(UPLOAD_DIR).join(filename);
-                        match index::index_file(
-                            &mut *retriever,
-                            &path,
-                            config.chunker_mode,
-                            chunker_ref,
-                        ) {
-                            Ok(chunks) => indexed_files.push(json!({
-                                "file": filename,
-                                "chunks_indexed": chunks,
-                            })),
-                            Err(err) => index_errors.push(json!({
-                                "file": filename,
-                                "error": err,
-                            })),
+
+                    for (filename, path, content_opt) in file_contents {
+                        match content_opt {
+                            Some(content) => {
+                                // Index the pre-read content and get chunks for graph
+                                match index::index_content_with_graph(
+                                    &mut *retriever,
+                                    &path,
+                                    &content,
+                                    config.chunker_mode,
+                                    chunker.as_ref(),
+                                ) {
+                                    Ok((chunk_count, graph_chunks)) => {
+                                        indexed_files.push(json!({
+                                            "file": filename.clone(),
+                                            "chunks_indexed": chunk_count,
+                                            "io_backend": io_backend,
+                                        }));
+                                        // Queue for graph indexing (outside mutex)
+                                        if !graph_chunks.is_empty() {
+                                            graph_index_tasks.push((
+                                                filename.clone(),
+                                                path.to_string_lossy().to_string(),
+                                                graph_chunks,
+                                            ));
+                                        }
+                                    }
+                                    Err(err) => index_errors.push(json!({
+                                        "file": filename,
+                                        "error": err,
+                                    })),
+                                }
+                            }
+                            None => {
+                                index_errors.push(json!({
+                                    "file": filename,
+                                    "error": "Failed to extract text from file",
+                                }));
+                            }
                         }
                     }
+
                     if let Err(err) = retriever.commit() {
                         index_errors.push(json!({
                             "file": null,
@@ -2876,6 +3944,11 @@ async fn upload_document_inner(
                         "error": "Failed to lock retriever for indexing",
                     }));
                 }
+            }
+
+            // Phase 3: Index to knowledge graph (outside mutex, async)
+            for (filename, source, chunks) in graph_index_tasks {
+                index_to_knowledge_graph(&filename, &filename, &source, &chunks).await;
             }
         } else {
             index_errors.push(json!({
@@ -5483,9 +6556,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
             ));
         } else if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
             // Hybrid mode with no context: tell LLM to answer from its knowledge
-            parts.push(
-                "Answer the question based on your knowledge.".to_string()
-            );
+            parts.push("Answer the question based on your knowledge.".to_string());
         }
 
         // Add question
@@ -5855,6 +6926,7 @@ fn parse_log_line(line: &str) -> LogEntry {
 }
 
 pub mod agentic_monitor_routes;
+pub mod graph_routes;
 pub mod sys_routes;
 pub mod tool_routes;
 
@@ -6026,10 +7098,22 @@ pub fn start_api_server(
                     .route("/status-log/{status}", web::get().to(get_status_log))
                     .route("/metrics", web::get().to(get_metrics)) // ← Prometheus format
                     .route("/optimizations", web::get().to(get_optimization_stats)) // ← Performance optimization stats
-                    .route("/optimizations/build-hnsw", web::post().to(build_hnsw_index))
+                    .route("/io-uring", web::get().to(get_io_uring_stats)) // ← io_uring async I/O stats
+                    .route("/io-uring", web::post().to(save_io_uring_config)) // ← save io_uring config
+                    .route("/log-frontend-error", web::post().to(log_frontend_error)) // ← Log frontend errors
+                    .route(
+                        "/optimizations/build-hnsw",
+                        web::post().to(build_hnsw_index),
+                    )
                     .route("/optimizations/build-pq", web::post().to(build_pq_index))
-                    .route("/optimizations/build-fp16", web::post().to(build_fp16_store))
-                    .route("/optimizations/build-all", web::post().to(build_all_indexes))
+                    .route(
+                        "/optimizations/build-fp16",
+                        web::post().to(build_fp16_store),
+                    )
+                    .route(
+                        "/optimizations/build-all",
+                        web::post().to(build_all_indexes),
+                    )
                     .route("/ui/requests", web::get().to(get_ui_requests)) // ← Self-contained UI metrics for Requests
                     .route("/chunking/latest", web::get().to(get_chunking_stats))
                     .route("/chunking/logging", web::get().to(toggle_chunking_logging))
@@ -6098,7 +7182,9 @@ pub fn start_api_server(
                         "/memory/search/stats",
                         web::get().to(get_memory_search_layer_stats),
                     )
-                    .route("/memories/rag", web::get().to(get_recent_rag_memories)),
+                    .route("/memories/rag", web::get().to(get_recent_rag_memories))
+                    // Docker monitoring
+                    .route("/docker", web::get().to(get_docker_status)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES
@@ -6119,6 +7205,10 @@ pub fn start_api_server(
             .route("/config/hardware", web::post().to(commit_hardware_config))
             .route("/config/onnx", web::get().to(get_onnx_config))
             .route("/config/onnx", web::post().to(set_onnx_config))
+            // Neo4j Knowledge Graph config (Phase 27)
+            .route("/config/neo4j", web::get().to(get_neo4j_config))
+            .route("/config/neo4j", web::post().to(save_neo4j_config))
+            .route("/config/neo4j/test", web::post().to(test_neo4j_connection))
             .route("/config/api_keys", web::get().to(get_api_keys))
             .route("/config/api_keys", web::post().to(save_api_keys))
             .route(
@@ -6137,6 +7227,7 @@ pub fn start_api_server(
             .route("/summarize", web::post().to(summarize))
             .route("/save_vectors", web::post().to(save_vectors_handler))
             .route("/monitor/cache/info", web::get().to(get_cache_monitor_info))
+            .route("/cache/clear", web::post().to(clear_cache))
             .route(
                 "/monitor/rate_limits/info",
                 web::get().to(get_rate_limit_monitor_info),
@@ -6226,6 +7317,7 @@ pub fn start_api_server(
             )
             .service(web::scope("/sys").configure(sys_routes::sys_routes))
             .configure(tool_routes::configure_tool_routes)
+            .configure(graph_routes::configure_graph_routes)
     });
     if force_single_worker {
         http_server = http_server.workers(1);

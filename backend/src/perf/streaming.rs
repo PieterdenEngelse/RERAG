@@ -1,5 +1,5 @@
 //! Streaming Response Utilities
-//! 
+//!
 //! Provides utilities for streaming large responses instead of buffering.
 //! This reduces memory usage and improves time-to-first-byte.
 
@@ -9,7 +9,7 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 
 /// Streaming JSON array response
-/// 
+///
 /// Streams JSON array elements one at a time instead of buffering the entire array.
 pub struct JsonArrayStream<T> {
     items: Vec<T>,
@@ -84,31 +84,32 @@ impl<T> ChannelStream<T> {
 
 impl<T: Serialize + Send + 'static> ChannelStream<T> {
     pub fn into_json_stream(self) -> impl Stream<Item = Result<web::Bytes, std::io::Error>> {
-        stream::unfold((self.receiver, false, false), |(mut rx, started, finished)| async move {
-            if finished {
-                return None;
-            }
-
-            if !started {
-                return Some((Ok(web::Bytes::from_static(b"[")), (rx, true, false)));
-            }
-
-            match rx.recv().await {
-                Some(item) => {
-                    let json = serde_json::to_string(&item).unwrap_or_default();
-                    let bytes = web::Bytes::from(format!(",{}", json));
-                    Some((Ok(bytes), (rx, true, false)))
+        stream::unfold(
+            (self.receiver, false, false),
+            |(mut rx, started, finished)| async move {
+                if finished {
+                    return None;
                 }
-                None => {
-                    Some((Ok(web::Bytes::from_static(b"]")), (rx, true, true)))
+
+                if !started {
+                    return Some((Ok(web::Bytes::from_static(b"[")), (rx, true, false)));
                 }
-            }
-        })
+
+                match rx.recv().await {
+                    Some(item) => {
+                        let json = serde_json::to_string(&item).unwrap_or_default();
+                        let bytes = web::Bytes::from(format!(",{}", json));
+                        Some((Ok(bytes), (rx, true, false)))
+                    }
+                    None => Some((Ok(web::Bytes::from_static(b"]")), (rx, true, true))),
+                }
+            },
+        )
     }
 }
 
 /// Newline-delimited JSON (NDJSON) stream
-/// 
+///
 /// Each item is a separate JSON object followed by a newline.
 /// Useful for streaming to clients that process line-by-line.
 pub struct NdjsonStream<T> {
@@ -130,7 +131,7 @@ impl<T: Serialize> NdjsonStream<T> {
             let item = &state.items[state.index];
             let json = serde_json::to_string(item).unwrap_or_default();
             state.index += 1;
-            
+
             Some((Ok(web::Bytes::from(format!("{}\n", json))), state))
         })
     }
@@ -169,7 +170,7 @@ impl<T: Serialize> SseStream<T> {
             let item = &state.items[state.index];
             let json = serde_json::to_string(item).unwrap_or_default();
             state.index += 1;
-            
+
             let sse = format!("event: {}\ndata: {}\n\n", state.event_type, json);
             Some((Ok(web::Bytes::from(sse)), state))
         })
@@ -210,19 +211,25 @@ mod tests {
     #[tokio::test]
     async fn test_json_array_stream() {
         let items = vec![
-            TestItem { id: 1, name: "one".to_string() },
-            TestItem { id: 2, name: "two".to_string() },
+            TestItem {
+                id: 1,
+                name: "one".to_string(),
+            },
+            TestItem {
+                id: 2,
+                name: "two".to_string(),
+            },
         ];
 
         let stream = JsonArrayStream::new(items).into_stream();
         let bytes: Vec<_> = stream.collect().await;
-        
+
         let json: String = bytes
             .into_iter()
             .filter_map(|r| r.ok())
             .map(|b| String::from_utf8(b.to_vec()).unwrap())
             .collect();
-        
+
         assert!(json.starts_with('['));
         assert!(json.ends_with(']'));
         assert!(json.contains("\"id\":1"));
@@ -232,15 +239,21 @@ mod tests {
     #[tokio::test]
     async fn test_ndjson_stream() {
         let items = vec![
-            TestItem { id: 1, name: "one".to_string() },
-            TestItem { id: 2, name: "two".to_string() },
+            TestItem {
+                id: 1,
+                name: "one".to_string(),
+            },
+            TestItem {
+                id: 2,
+                name: "two".to_string(),
+            },
         ];
 
         let stream = NdjsonStream::new(items).into_stream();
         let bytes: Vec<_> = stream.collect().await;
-        
+
         assert_eq!(bytes.len(), 2);
-        
+
         let line1 = String::from_utf8(bytes[0].as_ref().unwrap().to_vec()).unwrap();
         assert!(line1.ends_with('\n'));
         assert!(line1.contains("\"id\":1"));

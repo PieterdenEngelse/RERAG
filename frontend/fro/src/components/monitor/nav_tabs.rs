@@ -20,6 +20,8 @@ pub fn NavTabs(props: NavTabsProps) -> Element {
         ("Agent", Route::MonitorObservations {}),
         ("Rate Limits", Route::MonitorRateLimits {}),
         ("Logs", Route::MonitorLogs {}),
+        ("Docker", Route::MonitorDocker {}),
+        ("Knowledge Graph", Route::MonitorKnowledgeGraph {}),
     ];
 
     rsx! {

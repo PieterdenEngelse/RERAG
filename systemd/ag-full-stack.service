@@ -1,0 +1,18 @@
+[Unit]
+Description=Agentic RAG backend with full observability stack
+Documentation=https://github.com/qodo-ai/ag
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/home/pde/ag
+ExecStart=/home/pde/ag/start-ag.sh
+StandardOutput=journal
+StandardError=journal
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

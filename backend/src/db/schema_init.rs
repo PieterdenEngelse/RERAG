@@ -1,6 +1,6 @@
 // ag/src/db/schema_init.rs v13.1.2
 use crate::path_manager::PathManager;
-use crate::perf::sqlite_opt::{SqliteConfig, optimize_connection};
+use crate::perf::sqlite_opt::{optimize_connection, SqliteConfig};
 use rusqlite::{Connection, Result as SqlResult};
 use tracing::info;
 
@@ -9,13 +9,13 @@ pub struct SchemaInitializer;
 impl SchemaInitializer {
     pub fn init(db_conn: &Connection) -> SqlResult<()> {
         info!("Initializing database schema v13.1.2");
-        
+
         // Apply SQLite performance optimizations (WAL mode, mmap, etc.)
         let config = SqliteConfig::default();
         if let Err(e) = optimize_connection(db_conn, &config) {
             tracing::warn!("Failed to apply SQLite optimizations: {}", e);
         }
-        
+
         let schema_sql = include_str!("../db/schema.sql");
         db_conn.execute_batch(schema_sql)?;
         info!("Database schema initialized with WAL mode");

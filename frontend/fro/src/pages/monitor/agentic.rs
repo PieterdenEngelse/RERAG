@@ -1,4 +1,11 @@
-use crate::{api, app::Route, components::monitor::*};
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+};
+use crate::{
+    api,
+    app::{PageErrors, Route},
+    components::monitor::*,
+};
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
 
@@ -162,6 +169,7 @@ pub fn MonitorAgentic() -> Element {
     // Fetch data on mount and periodically
     {
         let mut state = state.clone();
+        let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
                 let mut new_state = AgenticState {
@@ -177,8 +185,16 @@ pub fn MonitorAgentic() -> Element {
 
                 // Fetch agent stats
                 match api::fetch_agent_stats().await {
-                    Ok(stats) => new_state.agent_stats = Some(stats),
-                    Err(e) => new_state.error = Some(format!("Agent stats: {}", e)),
+                    Ok(stats) => {
+                        new_state.agent_stats = Some(stats);
+                        page_errors.with_mut(|e| e.clear_error("agentic"));
+                    }
+                    Err(e) => {
+                        let err = format!("Agent stats: {}", e);
+                        new_state.error = Some(err.clone());
+                        page_errors.with_mut(|errs| errs.set_error("agentic", &err));
+                        let _ = api::log_frontend_error("agentic", &err).await;
+                    }
                 }
 
                 // Fetch goals
@@ -517,22 +533,19 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 fn EpisodeInfoButton() -> Element {
     let mut show_tooltip = use_signal(|| false);
 
-    const INFO_BUTTON_CLASS: &str =
-        "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded border border-blue-500/40 bg-blue-500/10 flex items-center justify-center cursor-pointer hover:bg-blue-500/20";
-
     rsx! {
         button {
-            class: INFO_BUTTON_CLASS,
+            class: PARAM_ICON_BUTTON_CLASS,
+            style: PARAM_ICON_BUTTON_STYLE,
             onclick: move |_| show_tooltip.set(!show_tooltip()),
             title: "Show info",
             svg {
-                class: "w-3 h-3 text-blue-400",
+                class: INFO_ICON_SVG_CLASS,
                 view_box: "0 0 20 20",
                 fill: "none",
                 stroke: "currentColor",
-                stroke_width: "2",
-                circle { cx: "10", cy: "10", r: "9" }
-                line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
                 circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
             }
         }
@@ -567,22 +580,19 @@ fn EpisodeInfoButton() -> Element {
 fn AgentInfoButton() -> Element {
     let mut show_tooltip = use_signal(|| false);
 
-    const INFO_BUTTON_CLASS: &str =
-        "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded border border-blue-500/40 bg-blue-500/10 flex items-center justify-center cursor-pointer hover:bg-blue-500/20";
-
     rsx! {
         button {
-            class: INFO_BUTTON_CLASS,
+            class: PARAM_ICON_BUTTON_CLASS,
+            style: PARAM_ICON_BUTTON_STYLE,
             onclick: move |_| show_tooltip.set(!show_tooltip()),
             title: "What is an Agent?",
             svg {
-                class: "w-3 h-3 text-blue-400",
+                class: INFO_ICON_SVG_CLASS,
                 view_box: "0 0 20 20",
                 fill: "none",
                 stroke: "currentColor",
-                stroke_width: "2",
-                circle { cx: "10", cy: "10", r: "9" }
-                line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
                 circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
             }
         }

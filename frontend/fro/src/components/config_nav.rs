@@ -9,7 +9,9 @@ pub enum ConfigTab {
     Sampling,
     Prompt,
     Hardware,
+    IoUring,
     Onnx,
+    Neo4j,
     Other,
 }
 
@@ -30,12 +32,14 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
             Route::ConfigHardware {},
             ConfigTab::Hardware,
         ),
+        ("io_uring", Route::ConfigIoUring {}, ConfigTab::IoUring),
         ("ONNX", Route::ConfigOnnx {}, ConfigTab::Onnx),
+        ("Neo4j", Route::ConfigNeo4j {}, ConfigTab::Neo4j),
         ("Other", Route::ConfigOther {}, ConfigTab::Other),
     ];
 
     rsx! {
-        nav { class: "flex flex-wrap gap-4 text-sm text-gray-400",
+        nav { class: "flex flex-wrap gap-4 text-sm text-gray-400 px-2",
             for (label, route, tab_id) in tabs {
                 {
                     let is_active = props.active == tab_id;
