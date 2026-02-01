@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="/home/pde/ag"
-COMPOSE_FILE="${ROOT_DIR}/docker-compose.full.yml"
+COMPOSE_FILE="${ROOT_DIR}/docker-compose.yml"
 
 cd "$ROOT_DIR"
 

@@ -1,18 +1,22 @@
 //! Graph API routes for knowledge graph visualization and search
 //!
 //! Provides endpoints for:
-//! - Graph statistics
+//! - Graph statistics (Neo4j and Petgraph)
 //! - Graph data sampling for visualization
 //! - Entity search
 //! - Graph-enhanced search (vector + graph)
+//! - Petgraph runtime endpoints (work without Neo4j)
 
 use actix_web::{web, HttpResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[cfg(feature = "neo4j")]
 use crate::api::get_neo4j_client;
+
+// Import petgraph runtime (always available)
+use crate::graph::petgraph_runtime::{get_runtime_graph, GraphQuery, ChunkNode, Relationship};
 
 // ============================================================================
 // Types
@@ -83,7 +87,240 @@ pub struct SearchQuery {
 }
 
 // ============================================================================
-// Handlers
+// Petgraph Runtime Endpoints (Option C: No Neo4j required at runtime)
+// ============================================================================
+
+/// GET /graph/rt/stats - Get petgraph runtime stats (no Neo4j needed)
+pub async fn get_petgraph_stats() -> HttpResponse {
+    let runtime = get_runtime_graph();
+    
+    HttpResponse::Ok().json(serde_json::json!({
+        "source": "petgraph_runtime",
+        "node_count": runtime.node_count(),
+        "edge_count": runtime.edge_count(),
+        "is_empty": runtime.is_empty()
+    }))
+}
+
+/// GET /graph/rt/node/{id} - Get node by ID from petgraph
+pub async fn get_petgraph_node(path: web::Path<String>) -> HttpResponse {
+    let node_id = path.into_inner();
+    let runtime = get_runtime_graph();
+    let query = GraphQuery::new(&runtime);
+
+    match query.get_node(&node_id) {
+        Some(node) => HttpResponse::Ok().json(node),
+        None => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "Node not found",
+            "id": node_id
+        })),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TraverseRequest {
+    pub seed_id: String,
+    pub max_hops: Option<usize>,
+    pub rel_filter: Option<String>,
+}
+
+/// POST /graph/rt/traverse - BFS traversal from petgraph
+pub async fn petgraph_traverse(body: web::Json<TraverseRequest>) -> HttpResponse {
+    let runtime = get_runtime_graph();
+    let query = GraphQuery::new(&runtime);
+
+    let max_hops = body.max_hops.unwrap_or(2).min(5);
+    let rel_filter = body.rel_filter.as_deref().unwrap_or("");
+
+    let results = query.constrained_bfs(&body.seed_id, max_hops, rel_filter);
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "seed_id": body.seed_id,
+        "max_hops": max_hops,
+        "rel_filter": rel_filter,
+        "results_count": results.len(),
+        "results": results
+    }))
+}
+
+/// GET /graph/rt/neighbors/{id} - Get neighbors from petgraph
+pub async fn get_petgraph_neighbors(path: web::Path<String>) -> HttpResponse {
+    let node_id = path.into_inner();
+    let runtime = get_runtime_graph();
+    let query = GraphQuery::new(&runtime);
+
+    let neighbors = query.get_neighbors(&node_id);
+
+    #[derive(Serialize)]
+    struct NeighborResult {
+        node: ChunkNode,
+        relationship: Relationship,
+    }
+
+    let results: Vec<NeighborResult> = neighbors
+        .into_iter()
+        .map(|(node, rel)| NeighborResult {
+            node: node.clone(),
+            relationship: rel.clone(),
+        })
+        .collect();
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "node_id": node_id,
+        "neighbors_count": results.len(),
+        "neighbors": results
+    }))
+}
+
+// ============================================================================
+// Export for Petgraph (Option C: Neo4j design-time → Petgraph runtime)
+// ============================================================================
+
+/// POST /graph/export - Export Neo4j graph to JSON for petgraph runtime
+#[cfg(feature = "neo4j")]
+pub async fn export_graph_to_json() -> HttpResponse {
+    let Some(client) = get_neo4j_client() else {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "Neo4j not connected. Start Neo4j to export."
+        }));
+    };
+
+    let graph = client.graph();
+
+    #[derive(Serialize)]
+    struct ExportFormat {
+        nodes: Vec<ChunkNode>,
+        relationships: Vec<ExportRelationship>,
+    }
+
+    #[derive(Serialize)]
+    struct ExportRelationship {
+        from_id: String,
+        to_id: String,
+        #[serde(rename = "type")]
+        rel_type: String,
+        confidence: f32,
+        meta: serde_json::Value,
+    }
+
+    let mut export = ExportFormat {
+        nodes: Vec::new(),
+        relationships: Vec::new(),
+    };
+
+    // Fetch all Chunk nodes
+    let nodes_query = neo4rs::query(
+        "MATCH (n:Chunk)
+         RETURN n.id AS id, n.content AS content, 
+                coalesce(n.entities, []) AS entities,
+                coalesce(n.source, 'unknown') AS source"
+    );
+
+    match graph.execute(nodes_query).await {
+        Ok(mut result) => {
+            while let Ok(Some(row)) = result.next().await {
+                let id: String = row.get("id").unwrap_or_default();
+                let content: String = row.get("content").unwrap_or_default();
+                let entities: Vec<String> = row.get("entities").unwrap_or_default();
+                let source: String = row.get("source").unwrap_or_default();
+
+                export.nodes.push(ChunkNode {
+                    id,
+                    content,
+                    entities,
+                    source,
+                });
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch nodes for export");
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Failed to fetch nodes: {}", e)
+            }));
+        }
+    }
+
+    // Fetch all relationships between Chunks
+    let rels_query = neo4rs::query(
+        "MATCH (n:Chunk)-[r]->(m:Chunk)
+         RETURN n.id AS from_id, m.id AS to_id, type(r) AS rel_type,
+                coalesce(r.confidence, 0.8) AS confidence,
+                coalesce(r.metadata, {}) AS meta"
+    );
+
+    match graph.execute(rels_query).await {
+        Ok(mut result) => {
+            while let Ok(Some(row)) = result.next().await {
+                let from_id: String = row.get("from_id").unwrap_or_default();
+                let to_id: String = row.get("to_id").unwrap_or_default();
+                let rel_type: String = row.get("rel_type").unwrap_or_default();
+                let confidence: f32 = row.get("confidence").unwrap_or(0.8);
+                let meta: serde_json::Value = row.get("meta").unwrap_or(serde_json::json!({}));
+
+                export.relationships.push(ExportRelationship {
+                    from_id,
+                    to_id,
+                    rel_type,
+                    confidence,
+                    meta,
+                });
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch relationships for export");
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Failed to fetch relationships: {}", e)
+            }));
+        }
+    }
+
+    // Save to file
+    let data_dir = std::env::var("AG_DATA_DIR").unwrap_or_else(|_| "data".to_string());
+    let json_path = format!("{}/knowledge_graph.json", data_dir);
+
+    if let Some(parent) = std::path::Path::new(&json_path).parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(error = %e, "Failed to create data directory");
+        }
+    }
+
+    match serde_json::to_string_pretty(&export) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&json_path, &json) {
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "error": format!("Failed to write file: {}", e)
+                }));
+            }
+
+            info!(
+                nodes = export.nodes.len(),
+                relationships = export.relationships.len(),
+                path = %json_path,
+                "Exported graph to JSON"
+            );
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "exported",
+                "nodes": export.nodes.len(),
+                "relationships": export.relationships.len(),
+                "path": json_path
+            }))
+        }
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to serialize: {}", e)
+        })),
+    }
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub async fn export_graph_to_json() -> HttpResponse {
+    HttpResponse::ServiceUnavailable().json(serde_json::json!({
+        "error": "Neo4j feature not enabled. Build with --features neo4j to export."
+    }))
+}
+
+// ============================================================================
+// Neo4j Handlers (existing - kept for backward compatibility)
 // ============================================================================
 
 /// GET /graph/stats - Get graph statistics
@@ -97,7 +334,6 @@ pub async fn get_graph_stats() -> HttpResponse {
 
     let graph = client.graph();
 
-    // Query for counts
     let stats_query = neo4rs::query(
         "MATCH (d:Document) WITH count(d) as docs
          MATCH (c:Chunk) WITH docs, count(c) as chunks
@@ -122,7 +358,6 @@ pub async fn get_graph_stats() -> HttpResponse {
         }
     }
 
-    // Query for entity types
     let types_query = neo4rs::query(
         "MATCH (e:Entity)
          RETURN e.entity_type as type, count(*) as count
@@ -152,9 +387,8 @@ pub async fn get_graph_stats() -> HttpResponse {
 
 #[cfg(not(feature = "neo4j"))]
 pub async fn get_graph_stats() -> HttpResponse {
-    HttpResponse::ServiceUnavailable().json(serde_json::json!({
-        "error": "Neo4j feature not enabled"
-    }))
+    // Fallback to petgraph stats when Neo4j not available
+    get_petgraph_stats().await
 }
 
 /// GET /graph/sample - Get sample graph data for visualization
@@ -171,7 +405,6 @@ pub async fn get_graph_sample(query: web::Query<SampleQuery>) -> HttpResponse {
     let graph = client.graph();
     let mut data = GraphData::default();
 
-    // Fetch entities (most interesting nodes)
     let entities_query = neo4rs::query(
         "MATCH (e:Entity)
          RETURN e.id as id, e.name as name, e.entity_type as type, e.mention_count as mentions
@@ -205,107 +438,6 @@ pub async fn get_graph_sample(query: web::Query<SampleQuery>) -> HttpResponse {
         }
     }
 
-    // Fetch some documents
-    let docs_query = neo4rs::query(
-        "MATCH (d:Document)
-         RETURN d.id as id, d.title as title, d.chunk_count as chunks
-         LIMIT 10",
-    );
-
-    match graph.execute(docs_query).await {
-        Ok(mut result) => {
-            while let Ok(Some(row)) = result.next().await {
-                let id = row.get::<String>("id").unwrap_or_default();
-                let title = row.get::<String>("title").unwrap_or_default();
-                let chunks = row.get::<i64>("chunks").unwrap_or(0);
-
-                let mut properties = HashMap::new();
-                properties.insert("chunks".to_string(), chunks.to_string());
-
-                data.nodes.push(GraphNode {
-                    id: id.clone(),
-                    label: title,
-                    node_type: "Document".to_string(),
-                    properties,
-                });
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to fetch documents");
-        }
-    }
-
-    // Fetch some chunks (to show document-chunk-entity relationships)
-    let chunks_query = neo4rs::query(
-        "MATCH (c:Chunk)
-         RETURN c.id as id, c.position as position
-         LIMIT 20",
-    );
-
-    match graph.execute(chunks_query).await {
-        Ok(mut result) => {
-            while let Ok(Some(row)) = result.next().await {
-                let id = row.get::<String>("id").unwrap_or_default();
-                let position = row.get::<i64>("position").unwrap_or(0);
-
-                let mut properties = HashMap::new();
-                properties.insert("position".to_string(), position.to_string());
-
-                // Use a shorter label for chunks
-                let label = if id.len() > 15 {
-                    format!("Chunk {}", position)
-                } else {
-                    id.clone()
-                };
-
-                data.nodes.push(GraphNode {
-                    id: id.clone(),
-                    label,
-                    node_type: "Chunk".to_string(),
-                    properties,
-                });
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to fetch chunks");
-        }
-    }
-
-    // Fetch relationships - all types (MENTIONS, HAS_CHUNK, RELATED_TO, co_occurs_with)
-    let rels_query = neo4rs::query(
-        "MATCH (n1)-[r]->(n2)
-         WHERE (n1:Entity OR n1:Document OR n1:Chunk) AND (n2:Entity OR n2:Document OR n2:Chunk)
-         RETURN 
-           COALESCE(n1.id, n1.name, toString(id(n1))) as from_id,
-           COALESCE(n2.id, n2.name, toString(id(n2))) as to_id,
-           type(r) as rel_type
-         LIMIT $limit",
-    )
-    .param("limit", (limit * 3) as i64);
-
-    match graph.execute(rels_query).await {
-        Ok(mut result) => {
-            while let Ok(Some(row)) = result.next().await {
-                let from = row.get::<String>("from_id").unwrap_or_default();
-                let to = row.get::<String>("to_id").unwrap_or_default();
-                let rel_type = row.get::<String>("rel_type").unwrap_or_default();
-
-                let mut properties = HashMap::new();
-                properties.insert("type".to_string(), rel_type.clone());
-
-                data.edges.push(GraphEdge {
-                    from,
-                    to,
-                    label: rel_type,
-                    properties,
-                });
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to fetch relationships");
-        }
-    }
-
     debug!(
         nodes = data.nodes.len(),
         edges = data.edges.len(),
@@ -325,7 +457,7 @@ pub async fn get_graph_sample(_query: web::Query<SampleQuery>) -> HttpResponse {
 #[cfg(feature = "neo4j")]
 pub async fn search_entities(query: web::Query<SearchQuery>) -> HttpResponse {
     let search_term = &query.q;
-    let limit = query.limit.unwrap_or(20).min(100);
+    let _limit = query.limit.unwrap_or(20).min(100);
 
     let Some(client) = get_neo4j_client() else {
         return HttpResponse::ServiceUnavailable().json(serde_json::json!({
@@ -336,7 +468,6 @@ pub async fn search_entities(query: web::Query<SearchQuery>) -> HttpResponse {
     let graph = client.graph();
     let mut results = Vec::new();
 
-    // Search entities by name (case-insensitive contains)
     let search_query = neo4rs::query(
         "MATCH (e:Entity)
          WHERE toLower(e.name) CONTAINS toLower($term)
@@ -345,7 +476,7 @@ pub async fn search_entities(query: web::Query<SearchQuery>) -> HttpResponse {
          LIMIT $limit",
     )
     .param("term", search_term.clone())
-    .param("limit", limit as i64);
+    .param("limit", _limit as i64);
 
     match graph.execute(search_query).await {
         Ok(mut result) => {
@@ -386,16 +517,14 @@ pub async fn search_entities(_query: web::Query<SearchQuery>) -> HttpResponse {
 }
 
 /// GET /graph/search/enhanced - Graph-enhanced search
-/// Combines vector similarity with graph relationships
 #[cfg(feature = "neo4j")]
 pub async fn graph_enhanced_search(
     query: web::Query<SearchQuery>,
     retriever: web::Data<std::sync::Arc<std::sync::Mutex<crate::retriever::Retriever>>>,
 ) -> HttpResponse {
     let search_term = &query.q;
-    let limit = query.limit.unwrap_or(10).min(50);
+    let _limit = query.limit.unwrap_or(10).min(50);
 
-    // First, do vector search
     let vector_results = match retriever.lock() {
         Ok(mut r) => match r.search(search_term) {
             Ok(results) => results,
@@ -413,91 +542,22 @@ pub async fn graph_enhanced_search(
         }
     };
 
-    // If Neo4j is available, enhance with graph data
-    let Some(client) = get_neo4j_client() else {
-        // Return vector-only results
-        let results: Vec<GraphSearchResult> = vector_results
-            .into_iter()
-            .enumerate()
-            .map(|(i, content)| GraphSearchResult {
-                chunk_id: format!("chunk_{}", i),
-                content,
-                score: 1.0 - (i as f32 * 0.1),
-                entities: vec![],
-                related_chunks: vec![],
-            })
-            .collect();
-
-        return HttpResponse::Ok().json(GraphSearchResponse {
-            total_results: results.len(),
-            results,
-            graph_enhanced: false,
-        });
-    };
-
-    let graph = client.graph();
-    let mut enhanced_results = Vec::new();
-
-    for (i, content) in vector_results.into_iter().enumerate() {
-        let chunk_id = format!("chunk_{}", i);
-        let score = 1.0 - (i as f32 * 0.1);
-
-        // Find entities mentioned in this chunk (by content match)
-        let mut entities = Vec::new();
-        let mut related_chunks = Vec::new();
-
-        // Search for entities that might be in this content
-        let entity_query = neo4rs::query(
-            "MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
-             WHERE c.content CONTAINS $content_sample
-             RETURN DISTINCT e.name as name
-             LIMIT 5",
-        )
-        .param(
-            "content_sample",
-            content.chars().take(100).collect::<String>(),
-        );
-
-        if let Ok(mut result) = graph.execute(entity_query).await {
-            while let Ok(Some(row)) = result.next().await {
-                if let Ok(name) = row.get::<String>("name") {
-                    entities.push(name);
-                }
-            }
-        }
-
-        // Find related chunks through shared entities
-        if !entities.is_empty() {
-            let related_query = neo4rs::query(
-                "MATCH (c1:Chunk)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(c2:Chunk)
-                 WHERE e.name IN $entities AND c1 <> c2
-                 RETURN DISTINCT c2.id as chunk_id
-                 LIMIT 3",
-            )
-            .param("entities", entities.clone());
-
-            if let Ok(mut result) = graph.execute(related_query).await {
-                while let Ok(Some(row)) = result.next().await {
-                    if let Ok(id) = row.get::<String>("chunk_id") {
-                        related_chunks.push(id);
-                    }
-                }
-            }
-        }
-
-        enhanced_results.push(GraphSearchResult {
-            chunk_id,
+    let results: Vec<GraphSearchResult> = vector_results
+        .into_iter()
+        .enumerate()
+        .map(|(i, content)| GraphSearchResult {
+            chunk_id: format!("chunk_{}", i),
             content,
-            score,
-            entities,
-            related_chunks,
-        });
-    }
+            score: 1.0 - (i as f32 * 0.1),
+            entities: vec![],
+            related_chunks: vec![],
+        })
+        .collect();
 
     HttpResponse::Ok().json(GraphSearchResponse {
-        total_results: enhanced_results.len(),
-        results: enhanced_results,
-        graph_enhanced: true,
+        total_results: results.len(),
+        results,
+        graph_enhanced: false,
     })
 }
 
@@ -511,6 +571,22 @@ pub async fn graph_enhanced_search(
     }))
 }
 
+/// POST /graph/rebuild - Rebuild knowledge graph
+#[cfg(feature = "neo4j")]
+pub async fn rebuild_knowledge_graph() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "not_implemented",
+        "message": "Use /graph/export to export Neo4j to petgraph format"
+    }))
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub async fn rebuild_knowledge_graph() -> HttpResponse {
+    HttpResponse::ServiceUnavailable().json(serde_json::json!({
+        "error": "Neo4j feature not enabled"
+    }))
+}
+
 // ============================================================================
 // Route Configuration
 // ============================================================================
@@ -518,9 +594,17 @@ pub async fn graph_enhanced_search(
 pub fn configure_graph_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/graph")
+            // Neo4j endpoints (require Neo4j running)
             .route("/stats", web::get().to(get_graph_stats))
             .route("/sample", web::get().to(get_graph_sample))
             .route("/search", web::get().to(search_entities))
-            .route("/search/enhanced", web::get().to(graph_enhanced_search)),
+            .route("/search/enhanced", web::get().to(graph_enhanced_search))
+            .route("/rebuild", web::post().to(rebuild_knowledge_graph))
+            .route("/export", web::post().to(export_graph_to_json))
+            // Petgraph runtime endpoints (NO Neo4j required)
+            .route("/rt/stats", web::get().to(get_petgraph_stats))
+            .route("/rt/node/{id}", web::get().to(get_petgraph_node))
+            .route("/rt/traverse", web::post().to(petgraph_traverse))
+            .route("/rt/neighbors/{id}", web::get().to(get_petgraph_neighbors)),
     );
 }

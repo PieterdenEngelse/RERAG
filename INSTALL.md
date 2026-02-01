@@ -13,11 +13,20 @@
 
 ```bash
 # Start all services (Neo4j, Redis, Prometheus, Grafana, Loki, Tempo, OTel)
-docker compose -f docker-compose.full.yml up -d
+docker compose up -d
+
+# Or start only core services (Neo4j + Redis)
+docker compose up -d neo4j redis
 
 # Verify services are running
-docker compose -f docker-compose.full.yml ps
+docker compose ps
 ```
+
+> **Port conflicts?** If you have existing services on default ports, use:
+> ```bash
+> docker compose -f docker-compose.alt-ports.yml up -d
+> ```
+> See [Alternate Ports](#alternate-ports) for port mapping.
 
 ### 2. Configure Environment
 
@@ -25,7 +34,7 @@ docker compose -f docker-compose.full.yml ps
 # Copy example config
 cp .env.example .env
 
-# Edit if needed (defaults work with docker-compose.full.yml)
+# Edit if needed (defaults work with docker-compose.yml)
 nano .env
 ```
 
@@ -52,7 +61,7 @@ ollama pull phi
 | **ag Frontend** | http://localhost:1789 | - |
 | **ag Backend API** | http://localhost:3010 | - |
 | **Neo4j Browser** | http://localhost:7474 | neo4j / agpassword123 |
-| **Grafana** | http://localhost:3000 | admin / admin |
+| **Grafana** | http://localhost:3001 | admin / admin |
 | **Prometheus** | http://localhost:9090 | - |
 
 ---
@@ -74,6 +83,28 @@ Features available without infrastructure:
 - ❌ Redis caching
 - ❌ Distributed tracing
 - ❌ Metrics dashboards
+
+---
+
+## Docker Compose Files
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.yml` | Default ports - standard setup |
+| `docker-compose.alt-ports.yml` | Alternate ports - for users with existing services |
+
+### Alternate Ports
+
+If you have existing services (Grafana, Prometheus, etc.) on default ports:
+
+| Service | Default | Alternate |
+|---------|---------|-----------|
+| Grafana | 3001 | 13001 |
+| Prometheus | 9090 | 19090 |
+| Redis | 6379 | 16379 |
+| Loki | 3100 | 13100 |
+| Tempo | 3200, 4317 | 13200, 14317 |
+| OTel | 4318 | 14318 |
 
 ---
 
@@ -117,14 +148,14 @@ Features available without infrastructure:
 
 ### Check service health
 ```bash
-docker compose -f docker-compose.full.yml ps
-docker compose -f docker-compose.full.yml logs <service-name>
+docker compose ps
+docker compose logs <service-name>
 ```
 
 ### Reset everything
 ```bash
-docker compose -f docker-compose.full.yml down -v
-docker compose -f docker-compose.full.yml up -d
+docker compose down -v
+docker compose up -d
 ```
 
 ### Neo4j connection issues
@@ -177,10 +208,10 @@ docker logs ag-redis
 
 ```bash
 # Pull latest images
-docker compose -f docker-compose.full.yml pull
+docker compose pull
 
 # Restart with new images
-docker compose -f docker-compose.full.yml up -d
+docker compose up -d
 ```
 
 ---
@@ -189,8 +220,8 @@ docker compose -f docker-compose.full.yml up -d
 
 ```bash
 # Stop and remove containers
-docker compose -f docker-compose.full.yml down
+docker compose down
 
 # Also remove data volumes (WARNING: deletes all data)
-docker compose -f docker-compose.full.yml down -v
+docker compose down -v
 ```

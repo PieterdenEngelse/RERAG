@@ -228,3 +228,97 @@ aws cloudfront create-invalidation --distribution-id {dist_id} --paths "/*"
 - CloudFlare: Free tier (100K requests/day), Pro $20/month
 - AWS CloudFront: ~$0.085/GB transfer, $0.0075/10K requests
 - Fastly: ~$0.12/GB transfer, $50/month minimum
+
+
+Cost of Complexity (Real Numbers for Your Stack)
+Feature
+	
+Dev Time
+	
+Runtime Cost
+	
+Failure Risk
+	
+Value for Your RAG
+Relationship indexing (hash maps)
+	
++4 hrs
+	
++0.2ms/query
+	
+Medium (cache invalidation bugs)
+	
+⚠️ Only matters for >10k nodes
+Async graph traversal
+	
++6 hrs
+	
++0.5ms (tokio overhead)
+	
+High (deadlocks)
+	
+❌ petgraph is already single-threaded fast
+Query planner (LLM-generated Cypher)
+	
++16 hrs
+	
++45ms (LLM call)
+	
+Critical (hallucinated queries)
+	
+❌ Defeats "sub-ms traversal" goal
+Minimal wrapper (what I provided)
+	
++20 mins
+	
++0.0ms
+	
+None
+	
+✅ Unlocks 100× speedup immedi
+
+When to Add Complexity (The Expansion Path)
+Start minimal → expand only when proven necessary:
+Signal
+	
+Minimal Works?
+	
+Add This
+Queries need >2-hop reasoning
+	
+❌ Fails at 3+ hops
+	
+Louvain community detection
+>10k nodes in subgraph
+	
+❌ Traversal slows
+	
+Relationship index (HashMap<rel_type, Vec<edge>>)
+Need temporal constraints ("after 2020")
+	
+❌ Can't filter by time
+	
+Edge metadata indexing
+Agent needs explainable paths
+	
+✅ Already have shortest_path()
+	
+Path visualization UI
+You expand from a working system — not toward one.
+
+# 1. Enable entity extraction (if not already)
+echo "ENTITY_EXTRACTION_ENABLED=true" >> .env
+
+# 2. Reindex to extract entities + relationships
+curl -X POST http://localhost:3010/reindex/async
+
+# 3. Monitor progress
+watch -n 2 'curl -s http://localhost:3010/index/info | jq .'
+
+# 4. After completion, restart to load populated graph
+cargo run --features neo4j 2>&1 | grep "ParallelGroup"
+
+# Expected on restart:
+# ParallelGroup: Compiled 1247 nodes, 3892 edges from Neo4j in 1.82s
+
+StepRequired?What You Have NowWhat's Needed(1) API routes✅ YesRoutes check for Neo4j → return "Neo4j not connected"Routes use petgraph instead(2) main.rs init✅ YesOnly inits petgraph if Neo4j feature enabledInit petgraph from file always(3) Export endpoint✅ YesNoneSave Neo4j → JSON (one-time use)

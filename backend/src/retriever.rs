@@ -274,9 +274,13 @@ pub async fn reindex_atomic(
     }
     let vectors_tmp = vectors_path.with_file_name("vectors.new.json");
 
-    // Ensure no stale temp vectors file remains
+    // Ensure no stale temp vectors files remain (both JSON and rkyv)
     if vectors_tmp.exists() {
         let _ = std::fs::remove_file(&vectors_tmp);
+    }
+    let vectors_tmp_rkyv = vectors_path.with_file_name("vectors.new.rkyv");
+    if vectors_tmp_rkyv.exists() {
+        let _ = std::fs::remove_file(&vectors_tmp_rkyv);
     }
 
     // Build temp retriever bound to temp paths
@@ -850,6 +854,20 @@ impl Retriever {
     }
 
     pub fn add_vector_with_id(&mut self, doc_id: String, vector: Vec<f32>) {
+        // Check if this doc_id already exists - if so, update in place to avoid orphans
+        if let Some(&existing_idx) = self.doc_id_to_vector_idx.get(&doc_id) {
+            // Update existing vector in place
+            if existing_idx < self.vectors.len() {
+                self.vectors[existing_idx] = vector.clone();
+                // Update HNSW index if it exists
+                if let Some(ref mut hnsw) = self.hnsw_index {
+                    hnsw.add(doc_id, vector);
+                }
+                return;
+            }
+        }
+
+        // New document - add to the end
         let idx = self.vectors.len();
         // Add to bloom filter for O(1) existence checks
         self.doc_bloom_filter.insert(&doc_id);
@@ -1480,7 +1498,8 @@ impl Retriever {
     }
 
     /// Auto-detect and load vectors from rkyv or JSON format
-    /// Prefers mmap (fastest), falls back to rkyv read, then JSON, migrates if needed
+    /// Compares modification times and loads the NEWER file to prevent stale data
+    /// Prefers rkyv for speed, but only if it's not older than JSON
     pub fn load_vectors_auto(&mut self, base_path: &str) -> Result<(), RetrieverError> {
         let rkyv_path = base_path.replace(".json", ".rkyv");
         let json_path = if base_path.ends_with(".json") {
@@ -1489,8 +1508,45 @@ impl Retriever {
             format!("{}.json", base_path.trim_end_matches(".rkyv"))
         };
 
-        // Try mmap first (fastest - zero-copy access)
-        if Path::new(&rkyv_path).exists() {
+        let rkyv_exists = Path::new(&rkyv_path).exists();
+        let json_exists = Path::new(&json_path).exists();
+
+        // Get modification times to determine which file is newer
+        let rkyv_mtime = if rkyv_exists {
+            std::fs::metadata(&rkyv_path)
+                .and_then(|m| m.modified())
+                .ok()
+        } else {
+            None
+        };
+        let json_mtime = if json_exists {
+            std::fs::metadata(&json_path)
+                .and_then(|m| m.modified())
+                .ok()
+        } else {
+            None
+        };
+
+        // Determine which file to load based on modification time
+        let use_rkyv = match (rkyv_mtime, json_mtime) {
+            (Some(rkyv_t), Some(json_t)) => {
+                if json_t > rkyv_t {
+                    info!(
+                        "JSON file is newer than rkyv ({:?} > {:?}), loading from JSON",
+                        json_t, rkyv_t
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            (Some(_), None) => true,  // Only rkyv exists
+            (None, Some(_)) => false, // Only JSON exists
+            (None, None) => false,    // Neither exists
+        };
+
+        if use_rkyv {
+            // Try mmap first (fastest - zero-copy access)
             match self.load_vectors_mmap(&rkyv_path) {
                 Ok(()) => {
                     info!("Loaded vectors via mmap: {}", rkyv_path);
@@ -1513,7 +1569,7 @@ impl Retriever {
         }
 
         // Try JSON (slower but more compatible)
-        if Path::new(&json_path).exists() {
+        if json_exists {
             self.load_vectors(&json_path)?;
             info!("Loaded vectors from JSON: {}", json_path);
 
@@ -1536,7 +1592,8 @@ impl Retriever {
     }
 
     /// Async version of load_vectors_auto using io_uring for 2-3x faster file reads
-    /// Prefers mmap (fastest), falls back to io_uring async read, then sync read
+    /// Compares modification times and loads the NEWER file to prevent stale data
+    /// Prefers rkyv for speed, but only if it's not older than JSON
     pub async fn load_vectors_auto_async(&mut self, base_path: &str) -> Result<(), RetrieverError> {
         let rkyv_path = base_path.replace(".json", ".rkyv");
         let json_path = if base_path.ends_with(".json") {
@@ -1545,8 +1602,45 @@ impl Retriever {
             format!("{}.json", base_path.trim_end_matches(".rkyv"))
         };
 
-        // Try mmap first (fastest - zero-copy access)
-        if Path::new(&rkyv_path).exists() {
+        let rkyv_exists = Path::new(&rkyv_path).exists();
+        let json_exists = Path::new(&json_path).exists();
+
+        // Get modification times to determine which file is newer
+        let rkyv_mtime = if rkyv_exists {
+            std::fs::metadata(&rkyv_path)
+                .and_then(|m| m.modified())
+                .ok()
+        } else {
+            None
+        };
+        let json_mtime = if json_exists {
+            std::fs::metadata(&json_path)
+                .and_then(|m| m.modified())
+                .ok()
+        } else {
+            None
+        };
+
+        // Determine which file to load based on modification time
+        let use_rkyv = match (rkyv_mtime, json_mtime) {
+            (Some(rkyv_t), Some(json_t)) => {
+                if json_t > rkyv_t {
+                    info!(
+                        "JSON file is newer than rkyv ({:?} > {:?}), loading from JSON",
+                        json_t, rkyv_t
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            (Some(_), None) => true,  // Only rkyv exists
+            (None, Some(_)) => false, // Only JSON exists
+            (None, None) => false,    // Neither exists
+        };
+
+        if use_rkyv {
+            // Try mmap first (fastest - zero-copy access)
             match self.load_vectors_mmap(&rkyv_path) {
                 Ok(()) => {
                     info!("Loaded vectors via mmap: {}", rkyv_path);
@@ -1573,7 +1667,7 @@ impl Retriever {
         }
 
         // Try JSON (slower but more compatible)
-        if Path::new(&json_path).exists() {
+        if json_exists {
             self.load_vectors(&json_path)?;
             info!("Loaded vectors from JSON: {}", json_path);
 
@@ -2129,6 +2223,93 @@ mod tests {
         assert_eq!(retriever2.doc_id_to_vector_idx.len(), 2);
         assert_eq!(retriever2.vectors[0], vec![0.1, 0.2, 0.3]);
         assert_eq!(retriever2.doc_id_to_vector_idx.get("doc1"), Some(&0));
+    }
+
+    /// Test that add_vector_with_id updates in place for duplicate doc_ids
+    /// This prevents orphaned vectors when the same document is indexed twice
+    #[test]
+    fn test_add_vector_with_id_no_orphans() {
+        let temp_dir = tempdir().unwrap();
+        let json_path = temp_dir.path().join("test_vectors.json");
+        let index_path = temp_dir.path().join("index");
+        std::fs::create_dir_all(&index_path).unwrap();
+
+        let mut retriever = Retriever::new_with_vector_file(
+            index_path.to_str().unwrap(),
+            json_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        // Add a vector
+        retriever.add_vector_with_id("doc1".to_string(), vec![0.1, 0.2, 0.3]);
+        assert_eq!(retriever.vectors.len(), 1);
+        assert_eq!(retriever.doc_id_to_vector_idx.len(), 1);
+        assert_eq!(retriever.vectors[0], vec![0.1, 0.2, 0.3]);
+
+        // Add the same doc_id again with different vector - should update in place
+        retriever.add_vector_with_id("doc1".to_string(), vec![0.4, 0.5, 0.6]);
+        
+        // Should still have only 1 vector (no orphan created)
+        assert_eq!(retriever.vectors.len(), 1, "Should not create orphan vector");
+        assert_eq!(retriever.doc_id_to_vector_idx.len(), 1, "Should still have 1 mapping");
+        
+        // Vector should be updated to new value
+        assert_eq!(retriever.vectors[0], vec![0.4, 0.5, 0.6], "Vector should be updated");
+        
+        // Mapping should still point to index 0
+        assert_eq!(retriever.doc_id_to_vector_idx.get("doc1"), Some(&0));
+
+        // Add a different doc_id - should create new entry
+        retriever.add_vector_with_id("doc2".to_string(), vec![0.7, 0.8, 0.9]);
+        assert_eq!(retriever.vectors.len(), 2);
+        assert_eq!(retriever.doc_id_to_vector_idx.len(), 2);
+        assert_eq!(retriever.doc_id_to_vector_idx.get("doc2"), Some(&1));
+    }
+
+    /// Test that load_vectors_auto prefers newer JSON over older rkyv
+    /// This prevents loading stale data when JSON was updated but rkyv wasn't
+    #[test]
+    fn test_load_vectors_auto_prefers_newer_file() {
+        use std::thread::sleep;
+        use std::time::Duration;
+
+        let temp_dir = tempdir().unwrap();
+        let json_path = temp_dir.path().join("vectors.json");
+        let rkyv_path = temp_dir.path().join("vectors.rkyv");
+        let index_path = temp_dir.path().join("index");
+        std::fs::create_dir_all(&index_path).unwrap();
+
+        // Create retriever and save with 2 vectors to rkyv
+        let mut retriever = Retriever::new_with_vector_file(
+            index_path.to_str().unwrap(),
+            json_path.to_str().unwrap(),
+        )
+        .unwrap();
+        retriever.add_vector_with_id("doc1".to_string(), vec![0.1, 0.2, 0.3]);
+        retriever.add_vector_with_id("doc2".to_string(), vec![0.4, 0.5, 0.6]);
+        retriever.save_vectors_rkyv(rkyv_path.to_str().unwrap()).unwrap();
+
+        // Wait a bit to ensure different modification times
+        sleep(Duration::from_millis(100));
+
+        // Now save with 3 vectors to JSON (newer file)
+        retriever.add_vector_with_id("doc3".to_string(), vec![0.7, 0.8, 0.9]);
+        retriever.save_vectors(json_path.to_str().unwrap()).unwrap();
+
+        // Create new retriever and load - should load from newer JSON (3 vectors)
+        let mut retriever2 = Retriever::new_with_vector_file(
+            index_path.to_str().unwrap(),
+            json_path.to_str().unwrap(),
+        )
+        .unwrap();
+        retriever2.load_vectors_auto(json_path.to_str().unwrap()).unwrap();
+
+        // Should have 3 vectors from the newer JSON file
+        assert_eq!(
+            retriever2.vectors.len(), 3,
+            "Should load from newer JSON file with 3 vectors, not older rkyv with 2"
+        );
+        assert_eq!(retriever2.doc_id_to_vector_idx.len(), 3);
     }
 }
 

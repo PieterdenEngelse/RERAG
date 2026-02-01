@@ -203,7 +203,7 @@ async fn main() -> std::io::Result<()> {
             let neo4j_start = Instant::now();
             info!("🔗 Initializing Neo4j Knowledge Graph...");
 
-            match Neo4jClient::new(graph_config).await {
+            match Neo4jClient::new(graph_config.clone()).await {
                 Ok(client) => {
                     let duration_ms = neo4j_start.elapsed().as_millis() as u64;
                     info!(
@@ -227,6 +227,30 @@ async fn main() -> std::io::Result<()> {
 
                     // Store client globally for API access
                     ag::api::set_neo4j_client(client);
+
+                    // Spawn background task to compile Neo4j → petgraph runtime
+                    // Create a NEW Neo4j connection for the background task
+                    let graph_config_for_petgraph = GraphConfig::from_env();
+                    actix_web::rt::spawn(async move {
+                        info!("ParallelGroup: Compiling Neo4j → petgraph runtime (background)...");
+                        
+                        match Neo4jClient::new(graph_config_for_petgraph).await {
+                            Ok(client_for_graph) => {
+                                ag::graph::petgraph_runtime::initialize_from_neo4j(client_for_graph).await;
+                                
+                                // Log the result
+                                let runtime = ag::graph::petgraph_runtime::get_runtime_graph();
+                                info!(
+                                    "ParallelGroup: Runtime graph ready ({} nodes, {} edges)",
+                                    runtime.node_count(),
+                                    runtime.edge_count()
+                                );
+                            }
+                            Err(e) => {
+                                warn!("ParallelGroup: Failed to create Neo4j client for graph compilation: {}", e);
+                            }
+                        }
+                    });
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to initialize Neo4j Knowledge Graph");
@@ -241,6 +265,35 @@ async fn main() -> std::io::Result<()> {
     #[cfg(not(feature = "neo4j"))]
     {
         debug!("Neo4j feature not compiled (build with --features neo4j)");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PHASE 5.6: Initialize Petgraph Runtime (always, from files)
+    // ─────────────────────────────────────────────────────────────
+
+    {
+        let petgraph_start = Instant::now();
+        info!("📊 Initializing Petgraph runtime graph...");
+
+        let data_dir = std::env::var("AG_DATA_DIR").unwrap_or_else(|_| "data".to_string());
+        ag::graph::petgraph_runtime::initialize_standalone(&data_dir).await;
+
+        let runtime = ag::graph::petgraph_runtime::get_runtime_graph();
+        let duration_ms = petgraph_start.elapsed().as_millis() as u64;
+
+        if runtime.is_empty() {
+            info!(
+                duration_ms = duration_ms,
+                "📊 Petgraph runtime initialized (empty - export from Neo4j with POST /graph/export)"
+            );
+        } else {
+            info!(
+                duration_ms = duration_ms,
+                nodes = runtime.node_count(),
+                edges = runtime.edge_count(),
+                "✅ Petgraph runtime initialized from file"
+            );
+        }
     }
 
     // ─────────────────────────────────────────────────────────────

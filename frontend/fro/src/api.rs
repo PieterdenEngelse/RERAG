@@ -2316,6 +2316,37 @@ pub async fn fetch_docker_status() -> Result<DockerStatusResponse, String> {
     fetch_json("/monitoring/docker").await
 }
 
+/// Docker action response
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct DockerActionResponse {
+    pub status: String,
+    pub action: Option<String>,
+    pub success: Option<bool>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Execute a docker action (restart, stop, start, up, down)
+pub async fn docker_action(action: &str, container: Option<&str>) -> Result<DockerActionResponse, String> {
+    let url = api_url("/monitoring/docker/action");
+    let body = serde_json::json!({
+        "action": action,
+        "container": container
+    });
+    
+    gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<DockerActionResponse>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ============================================================================
 // KNOWLEDGE GRAPH API
 // ============================================================================
@@ -2362,4 +2393,27 @@ pub async fn graph_search(query: &str, limit: usize) -> Result<GraphSearchRespon
         limit
     ))
     .await
+}
+
+/// Response from rebuilding the knowledge graph
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RebuildGraphResponse {
+    pub status: String,
+    pub documents_processed: usize,
+    pub chunks_processed: usize,
+    pub entities_extracted: usize,
+    pub errors: Vec<String>,
+}
+
+/// Rebuild the knowledge graph from all indexed documents
+pub async fn rebuild_knowledge_graph() -> Result<RebuildGraphResponse, String> {
+    let url = api_url("/graph/rebuild");
+
+    gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }

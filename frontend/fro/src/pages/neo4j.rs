@@ -250,6 +250,53 @@ pub fn ConfigNeo4j() -> Element {
         }
     };
 
+    // Rebuild knowledge graph handler
+    let mut rebuilding = use_signal(|| false);
+    let on_rebuild = {
+        move |_| {
+            rebuilding.set(true);
+            save_status.set(Some("Rebuilding knowledge graph...".to_string()));
+            save_error.set(None);
+
+            spawn(async move {
+                match api::rebuild_knowledge_graph().await {
+                    Ok(result) => {
+                        // Update stats
+                        stats_entities.set(result.entities_extracted);
+                        
+                        let msg = format!(
+                            "✅ Rebuilt! {} docs, {} chunks, {} entities",
+                            result.documents_processed,
+                            result.chunks_processed,
+                            result.entities_extracted
+                        );
+                        save_status.set(Some(msg));
+                        
+                        if !result.errors.is_empty() {
+                            save_error.set(Some(format!("Warnings: {}", result.errors.join(", "))));
+                        }
+                        
+                        // Refresh stats by re-fetching config
+                        if let Ok(config) = api::fetch_neo4j_config().await {
+                            if let Some(stats) = config.stats {
+                                stats_total_nodes.set(stats.total_nodes);
+                                stats_total_relationships.set(stats.total_relationships);
+                                stats_documents.set(stats.documents);
+                                stats_chunks.set(stats.chunks);
+                                stats_entities.set(stats.entities);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        save_error.set(Some(format!("Rebuild failed: {}", e)));
+                        save_status.set(None);
+                    }
+                }
+                rebuilding.set(false);
+            });
+        }
+    };
+
     rsx! {
         div { class: "p-6 space-y-6 w-full",
             // Navigation
@@ -303,9 +350,10 @@ pub fn ConfigNeo4j() -> Element {
                                     button {
                                         class: "btn btn-sm",
                                         style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                                        disabled: !enabled(),
+                                        onclick: on_rebuild,
+                                        disabled: !enabled() || rebuilding(),
                                         title: "Rebuild knowledge graph from all indexed documents",
-                                        "Rebuild"
+                                        if rebuilding() { "Rebuilding..." } else { "Rebuild" }
                                     }
                                     button {
                                         class: "btn btn-sm",

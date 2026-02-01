@@ -1,0 +1,227 @@
+// src/graph/petgraph_runtime.rs
+
+use super::client::Neo4jClient;
+use petgraph::graph::{Graph, NodeIndex};
+use petgraph::Directed;
+use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
+use tracing::info;
+use std::time::Instant;
+use std::path::Path;
+use serde_json;
+use bincode;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChunkNode {
+    pub id: String,
+    pub content: String,
+    pub entities: Vec<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Relationship {
+    pub r#type: String,
+    pub confidence: f32,
+    pub meta: serde_json::Value,
+}
+
+pub type KnowledgeGraph = Graph<ChunkNode, Relationship, Directed>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeGraph {
+    pub graph: KnowledgeGraph,
+    pub node_index_by_id: HashMap<String, NodeIndex>,
+}
+
+impl RuntimeGraph {
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new(),
+            node_index_by_id: HashMap::new(),
+        }
+    }
+    pub fn node_count(&self) -> usize { self.graph.node_count() }
+    pub fn edge_count(&self) -> usize { self.graph.edge_count() }
+    pub fn is_empty(&self) -> bool { self.graph.node_count() == 0 }
+}
+
+pub static RUNTIME_GRAPH: OnceCell<Arc<RuntimeGraph>> = OnceCell::const_new();
+
+pub fn get_runtime_graph() -> Arc<RuntimeGraph> {
+    RUNTIME_GRAPH.get().cloned().unwrap_or_else(|| Arc::new(RuntimeGraph::new()))
+}
+
+pub struct GraphCompiler {
+    neo4j_client: Neo4jClient,
+    data_dir: String,
+}
+
+impl GraphCompiler {
+    pub fn new(neo4j_client: Neo4jClient, data_dir: &str) -> Self {
+        Self { neo4j_client, data_dir: data_dir.into() }
+    }
+
+    pub async fn compile(&self) -> RuntimeGraph {
+        let disk_path = format!("{}/runtime_graph.bin", self.data_dir);
+        let start = Instant::now();
+
+        if let Ok(graph) = Self::load_from_disk(&disk_path) {
+            info!("ParallelGroup: Loaded {} nodes, {} edges from disk in {:?}", graph.node_count(), graph.edge_count(), start.elapsed());
+            return graph;
+        }
+
+        info!("ParallelGroup: Compiling knowledge graph from Neo4j (cold start)...");
+        match self.compile_from_neo4j().await {
+            Ok(graph) => {
+                let _ = Self::save_to_disk(&graph, &disk_path);
+                info!("ParallelGroup: Compiled {} nodes, {} edges in {:?}", graph.node_count(), graph.edge_count(), start.elapsed());
+                graph
+            }
+            Err(e) => {
+                info!("ParallelGroup: Compilation failed (using empty graph): {}", e);
+                RuntimeGraph::new()
+            }
+        }
+    }
+
+    async fn compile_from_neo4j(&self) -> Result<RuntimeGraph, Box<dyn std::error::Error>> {
+        let query = neo4rs::Query::new(r#"
+            MATCH (n:Chunk)-[r]->(m:Chunk)
+            RETURN 
+                n.id AS from_id, n.content AS from_content,
+                coalesce(n.entities, []) AS from_entities,
+                coalesce(n.source, 'unknown') AS from_source,
+                type(r) AS rel_type,
+                coalesce(r.confidence, 0.8) AS confidence,
+                coalesce(r.metadata, {}) AS metadata,
+                m.id AS to_id, m.content AS to_content,
+                coalesce(m.entities, []) AS to_entities,
+                coalesce(m.source, 'unknown') AS to_source
+        "#.to_string());
+        
+        let graph_client = self.neo4j_client.graph();
+        let mut stream = graph_client.execute(query).await?;
+        
+        let mut runtime = RuntimeGraph::new();
+        let mut node_cache = HashMap::new();
+
+        while let Some(row) = stream.next().await? {
+            let from_id: String = row.get("from_id")?;
+            let from_content: String = row.get("from_content")?;
+            let from_entities: Vec<String> = row.get("from_entities").unwrap_or_default();
+            let from_source: String = row.get("from_source").unwrap_or("unknown".into());
+            let to_id: String = row.get("to_id")?;
+            let to_content: String = row.get("to_content")?;
+            let to_entities: Vec<String> = row.get("to_entities").unwrap_or_default();
+            let to_source: String = row.get("to_source").unwrap_or("unknown".into());
+            let rel_type: String = row.get("rel_type")?;
+            let confidence: f32 = row.get("confidence").unwrap_or(0.8);
+            let meta: serde_json::Value = row.get("metadata").unwrap_or(serde_json::json!({}));
+
+            let from_idx = *node_cache.entry(from_id.clone()).or_insert_with(|| {
+                let idx = runtime.graph.add_node(ChunkNode {
+                    id: from_id.clone(),
+                    content: from_content.clone(),
+                    entities: from_entities.clone(),
+                    source: from_source.clone(),
+                });
+                runtime.node_index_by_id.insert(from_id.clone(), idx);
+                idx
+            });
+
+            let to_idx = *node_cache.entry(to_id.clone()).or_insert_with(|| {
+                let idx = runtime.graph.add_node(ChunkNode {
+                    id: to_id.clone(),
+                    content: to_content.clone(),
+                    entities: to_entities.clone(),
+                    source: to_source.clone(),
+                });
+                runtime.node_index_by_id.insert(to_id.clone(), idx);
+                idx
+            });
+
+            runtime.graph.add_edge(
+                from_idx,
+                to_idx,
+                Relationship {
+                    r#type: rel_type,
+                    confidence,
+                    meta,
+                },
+            );
+        }
+
+        Ok(runtime)
+    }
+
+    fn save_to_disk(graph: &RuntimeGraph, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(Path::new(path).parent().unwrap())?;
+        let data = bincode::serialize(graph)?;
+        std::fs::write(path, data)?;
+        Ok(())
+    }
+
+    fn load_from_disk(path: &str) -> Result<RuntimeGraph, Box<dyn std::error::Error>> {
+        let data = std::fs::read(path)?;
+        Ok(bincode::deserialize(&data)?)
+    }
+}
+
+pub struct GraphQuery<'a> {
+    runtime: &'a RuntimeGraph,
+}
+
+impl<'a> GraphQuery<'a> {
+    pub fn new(runtime: &'a RuntimeGraph) -> Self {
+        Self { runtime }
+    }
+
+    pub fn has_data(&self) -> bool {
+        !self.runtime.is_empty()
+    }
+
+    pub fn constrained_bfs(&self, seed_id: &str, max_hops: usize, rel_filter: &str) -> Vec<&ChunkNode> {
+        let Some(&start) = self.runtime.node_index_by_id.get(seed_id) else {
+            return vec![];
+        };
+        
+        let mut results = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = vec![(start, 0)];
+        
+        while let Some((current, depth)) = queue.pop() {
+            if depth > max_hops || visited.contains(&current) {
+                continue;
+            }
+            visited.insert(current);
+            
+            if depth > 0 {
+                results.push(&self.runtime.graph[current]);
+            }
+            
+            if depth < max_hops {
+                for edge in self.runtime.graph.neighbors(current) {
+                    let edge_id = self.runtime.graph.find_edge(current, edge).unwrap();
+                    let edge_weight = self.runtime.graph.edge_weight(edge_id).unwrap();
+                    
+                    if edge_weight.r#type.contains(rel_filter) && edge_weight.confidence > 0.6 {
+                        queue.push((edge, depth + 1));
+                    }
+                }
+            }
+        }
+        
+        results
+    }
+}
+
+pub async fn initialize_from_neo4j(neo4j_client: Neo4jClient) {
+    if RUNTIME_GRAPH.get().is_none() {
+        let compiler = GraphCompiler::new(neo4j_client, "data");
+        let runtime_graph = Arc::new(compiler.compile().await);
+        let _ = RUNTIME_GRAPH.set(runtime_graph);
+    }
+}

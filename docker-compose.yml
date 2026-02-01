@@ -1,22 +1,40 @@
-
-# Full infrastructure stack for ag - Agentic RAG Platform
-# 
-# Usage:
-#   docker compose up -d
+# ag Infrastructure Stack
 #
-# Note: Grafana on 3001 (3000 is used by Qodo)
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose up -d neo4j redis  # Start only core dependencies
+#   docker compose down               # Stop all services
+#
+# Services:
+#   Core (required for full functionality):
+#     - neo4j     :7474 (browser), :7687 (bolt) - Knowledge Graph
+#     - redis     :6379                          - L3 Cache
+#
+#   Observability (optional):
+#     - prometheus :9090  - Metrics collection
+#     - grafana    :3001  - Dashboards (3001 because Qodo uses 3000)
+#     - loki       :3100  - Log aggregation
+#     - tempo      :3200  - Distributed tracing
+#     - otel       :4318  - Telemetry collector
+#
+# Profiles:
+#   docker compose up -d                        # All services
+#   docker compose --profile core up -d         # Just Neo4j + Redis
+#   docker compose --profile observability up -d # Just observability stack
 
 services:
   # ═══════════════════════════════════════════════════════════════
-  # NEO4J - Knowledge Graph for GraphRAG
+  # CORE SERVICES (Required for full ag functionality)
   # ═══════════════════════════════════════════════════════════════
+
   neo4j:
     image: neo4j:5
     container_name: ag-neo4j
     restart: unless-stopped
+    profiles: ["", "core"]
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "7474:7474"  # Browser UI
+      - "7687:7687"  # Bolt protocol
     environment:
       - NEO4J_AUTH=neo4j/agpassword123
       - NEO4J_PLUGINS=["apoc"]
@@ -25,20 +43,25 @@ services:
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
+      - /home/pde/.conf/neo4j:/var/lib/neo4j/conf
+      - /home/pde/.certs/neo4j:/certs:ro
+
+
+      
+
+      
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
 
-  # ═══════════════════════════════════════════════════════════════
-  # REDIS - L3 Cache
-  # ═══════════════════════════════════════════════════════════════
   redis:
     image: redis:7-alpine
     container_name: ag-redis
     restart: unless-stopped
+    profiles: ["", "core"]
     ports:
       - "6379:6379"
     volumes:
@@ -51,12 +74,14 @@ services:
       retries: 5
 
   # ═══════════════════════════════════════════════════════════════
-  # PROMETHEUS - Metrics Collection
+  # OBSERVABILITY SERVICES (Optional - for monitoring/debugging)
   # ═══════════════════════════════════════════════════════════════
+
   prometheus:
     image: prom/prometheus:v2.49.1
     container_name: ag-prometheus
     restart: unless-stopped
+    profiles: ["", "observability"]
     ports:
       - "9090:9090"
     volumes:
@@ -68,72 +93,104 @@ services:
       - '--web.enable-lifecycle'
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # ═══════════════════════════════════════════════════════════════
-  # GRAFANA - Dashboards & Visualization (port 3001 - Qodo uses 3000)
-  # ═══════════════════════════════════════════════════════════════
   grafana:
     image: grafana/grafana:10.4.2
     container_name: ag-grafana
     restart: unless-stopped
+    profiles: ["", "observability"]
     ports:
-      - "3001:3000"
+      - "3001:3002"  # 3001 external (Qodo uses 3000)
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_HTTP_PORT=3002
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./ops/observability/grafana.ini:/etc/grafana/grafana.ini:ro
     depends_on:
       - prometheus
       - loki
       - tempo
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3002/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # ═══════════════════════════════════════════════════════════════
-  # LOKI - Log Aggregation
-  # ═══════════════════════════════════════════════════════════════
   loki:
     image: grafana/loki:2.9.4
     container_name: ag-loki
     restart: unless-stopped
+    profiles: ["", "observability"]
     ports:
       - "3100:3100"
     volumes:
       - ./ops/observability/loki/config.yml:/etc/loki/config.yml:ro
       - loki-data:/loki
     command: -config.file=/etc/loki/config.yml
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # ═══════════════════════════════════════════════════════════════
-  # TEMPO - Distributed Tracing
-  # ═══════════════════════════════════════════════════════════════
   tempo:
     image: grafana/tempo:2.3.1
     container_name: ag-tempo
     restart: unless-stopped
+    profiles: ["", "observability"]
     ports:
-      - "3200:3200"
-      - "4317:4317"
+      - "3200:3200"  # Tempo API
+      - "4317:4317"  # OTLP gRPC
     volumes:
       - ./ops/observability/tempo/config.yml:/etc/tempo/config.yml:ro
       - tempo-data:/tmp/tempo
     command: -config.file=/etc/tempo/config.yml
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3200/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # ═══════════════════════════════════════════════════════════════
-  # OTEL COLLECTOR - Telemetry Pipeline
-  # ═══════════════════════════════════════════════════════════════
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.96.0
     container_name: ag-otel
     restart: unless-stopped
+    profiles: ["", "observability"]
     ports:
-      - "4318:4318"
-      - "8888:8888"
+      - "4318:4318"  # OTLP HTTP
+      - "8888:8888"  # Metrics
+      - "13133:13133"  # Health check
     volumes:
       - ./ops/observability/otel-collector.yml:/etc/otelcol/config.yaml:ro
     command: ["--config=/etc/otelcol/config.yaml"]
     depends_on:
       - tempo
       - loki
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  visual-cypher:
+    image: nginx:alpine
+    container_name: visual-cypher
+    volumes:
+      - ./visual-cypher-builder/dist:/usr/share/nginx/html:ro
+    ports:
+      - "8081:80"
+    depends_on:
+      - neo4j
+    
 
 volumes:
   neo4j-data:

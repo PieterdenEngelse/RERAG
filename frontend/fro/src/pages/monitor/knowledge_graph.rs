@@ -4,7 +4,9 @@ use crate::api;
 use crate::app::Route;
 use crate::components::monitor::NavTabs;
 use crate::components::ActiveDropdown;
-use crate::pages::hardware::constants::{INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE};
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -110,42 +112,78 @@ pub fn MonitorKnowledgeGraph() -> Element {
     };
 
     rsx! {
-        // Info modal
+        // Info modal - compact legend with links
         if show_info() {
             div {
-                class: "fixed inset-0 z-[10000] flex items-center justify-center bg-black/70",
+                class: "fixed inset-0 z-[10000] flex items-center justify-center bg-black/60",
                 onclick: move |_| show_info.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-lg mx-4 shadow-xl",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-5 shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
-                    div { class: "flex items-center justify-between mb-4",
-                        h2 { class: "text-lg font-semibold text-gray-100", "Knowledge Graph Help" }
-                        button {
-                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
-                            onclick: move |_| show_info.set(false),
-                            "×"
-                        }
-                    }
-                    div { class: "text-sm text-gray-300 space-y-3",
-                        p { "The Knowledge Graph visualizes relationships between documents, chunks, and entities extracted from your content." }
+                    div { class: "flex items-start gap-8",
+                        // Nodes column
                         div {
-                            h3 { class: "font-semibold text-gray-200 mt-3", "Node Types:" }
-                            ul { class: "list-disc ml-5 mt-1 space-y-1",
-                                li { span { class: "text-blue-400", "Document" } " - Original uploaded files" }
-                                li { span { class: "text-green-400", "Chunk" } " - Text segments from documents" }
-                                li { span { class: "text-purple-400", "Entity" } " - Extracted people, places, organizations, etc." }
+                            h3 { class: "text-sm font-semibold text-gray-300 mb-2", "Nodes:" }
+                            div { class: "space-y-1",
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-3 h-3 rounded-full", style: "background-color: #3b82f6;" }
+                                    span { class: "text-blue-400", "Doc" }
+                                }
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-3 h-3 rounded-full", style: "background-color: #22c55e;" }
+                                    span { class: "text-green-400", "Chunk" }
+                                }
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-3 h-3 rounded-full", style: "background-color: #a855f7;" }
+                                    span { class: "text-purple-400", "Entity" }
+                                }
                             }
                         }
+                        // Separator
+                        div { class: "text-gray-600 text-2xl", "|" }
+                        // Relations column
                         div {
-                            h3 { class: "font-semibold text-gray-200 mt-3", "Relationship Types:" }
-                            ul { class: "list-disc ml-5 mt-1 space-y-1",
-                                li { span { style: "color: #f59e0b;", "HAS_CHUNK" } " - Document contains chunk" }
-                                li { span { style: "color: #10b981;", "MENTIONS" } " - Chunk mentions entity" }
-                                li { span { style: "color: #8b5cf6;", "RELATED_TO" } " - Entity related to entity" }
-                                li { span { style: "color: #ec4899;", "co_occurs" } " - Entities appear together" }
+                            h3 { class: "text-sm font-semibold text-gray-300 mb-2", "Relations:" }
+                            div { class: "space-y-1",
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-4 h-1 rounded", style: "background-color: #f59e0b;" }
+                                    span { style: "color: #f59e0b;", "HAS_CHUNK" }
+                                }
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-4 h-1 rounded", style: "background-color: #10b981;" }
+                                    span { style: "color: #10b981;", "MENTIONS" }
+                                }
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-4 h-1 rounded", style: "background-color: #8b5cf6;" }
+                                    span { style: "color: #8b5cf6;", "RELATED_TO" }
+                                }
+                                a {
+                                    href: "#",
+                                    class: "flex items-center gap-2 text-sm hover:underline",
+                                    onclick: move |e| { e.prevent_default(); show_info.set(false); },
+                                    span { class: "w-4 h-1 rounded", style: "background-color: #ec4899;" }
+                                    span { style: "color: #ec4899;", "co_occurs" }
+                                }
                             }
                         }
-                        p { class: "mt-3 text-gray-400", "Click on any node to see its details. Click the title to exit fullscreen." }
                     }
                 }
             }
@@ -283,10 +321,18 @@ pub fn MonitorKnowledgeGraph() -> Element {
                             // Info button (fullscreen only) - centered
                             if fullscreen() {
                                 button {
-                                    class: "w-6 h-6 rounded-full flex items-center justify-center cursor-pointer hover:opacity-80",
-                                    style: "background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
                                     onclick: move |_| show_info.set(true),
-                                    span { class: "text-white text-sm font-bold", "i" }
+                                    svg {
+                                        class: INFO_ICON_SVG_CLASS,
+                                        view_box: "0 0 20 20",
+                                        fill: "none",
+                                        stroke: "currentColor",
+                                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                        circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                    }
                                 }
                             }
                             // Nodes legend
@@ -396,6 +442,34 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                 width: "100%",
                                 height: "100%",
                                 view_box: if fullscreen() { "0 0 1800 1000" } else { "0 0 1200 800" },
+
+                                // Empty state message when no data
+                                if graph_data().nodes.is_empty() {
+                                    text {
+                                        x: if fullscreen() { "900" } else { "600" },
+                                        y: if fullscreen() { "400" } else { "300" },
+                                        text_anchor: "middle",
+                                        fill: "#6b7280",
+                                        font_size: "24",
+                                        "No graph data available"
+                                    }
+                                    text {
+                                        x: if fullscreen() { "900" } else { "600" },
+                                        y: if fullscreen() { "450" } else { "340" },
+                                        text_anchor: "middle",
+                                        fill: "#4b5563",
+                                        font_size: "14",
+                                        "Upload documents and enable Neo4j integration to build the knowledge graph"
+                                    }
+                                    text {
+                                        x: if fullscreen() { "900" } else { "600" },
+                                        y: if fullscreen() { "490" } else { "375" },
+                                        text_anchor: "middle",
+                                        fill: "#4b5563",
+                                        font_size: "12",
+                                        "Go to Settings → Neo4j to configure"
+                                    }
+                                }
 
                                 // Draw edges
                                 for edge in graph_data().edges.iter() {

@@ -4,7 +4,8 @@ use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{error, info};
+use tokio::time::timeout;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedisCacheSummary {
@@ -23,24 +24,45 @@ pub struct RedisCache {
 
 impl RedisCache {
     /// Create new Redis cache connection
+    /// Uses a 5-second timeout to prevent blocking if Redis is unavailable
     pub async fn new(redis_url: &str, ttl_secs: u64) -> Result<Self, Box<dyn std::error::Error>> {
+        const CONNECTION_TIMEOUT_SECS: u64 = 5;
+        
         match redis::Client::open(redis_url) {
-            Ok(client) => match ConnectionManager::new(client).await {
-                Ok(manager) => {
-                    info!("Redis L3 cache connected (TTL: {} seconds)", ttl_secs);
-                    Ok(Self {
-                        client: Some(manager),
-                        ttl: Duration::from_secs(ttl_secs),
-                        enabled: true,
-                    })
+            Ok(client) => {
+                // Wrap connection in timeout to prevent indefinite blocking
+                match timeout(
+                    Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+                    ConnectionManager::new(client),
+                )
+                .await
+                {
+                    Ok(Ok(manager)) => {
+                        info!("Redis L3 cache connected (TTL: {} seconds)", ttl_secs);
+                        Ok(Self {
+                            client: Some(manager),
+                            ttl: Duration::from_secs(ttl_secs),
+                            enabled: true,
+                        })
+                    }
+                    Ok(Err(e)) => {
+                        error!("Failed to create Redis connection manager: {}", e);
+                        warn!("Continuing without L3 cache...");
+                        Ok(Self::disabled())
+                    }
+                    Err(_) => {
+                        error!(
+                            "Redis connection timed out after {} seconds - is Redis running?",
+                            CONNECTION_TIMEOUT_SECS
+                        );
+                        warn!("Continuing without L3 cache...");
+                        Ok(Self::disabled())
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to create Redis connection manager: {}", e);
-                    Ok(Self::disabled())
-                }
-            },
+            }
             Err(e) => {
                 error!("Failed to open Redis client: {}", e);
+                warn!("Continuing without L3 cache...");
                 Ok(Self::disabled())
             }
         }

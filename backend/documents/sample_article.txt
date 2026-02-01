@@ -1,0 +1,14 @@
+Artificial Intelligence in Healthcare: A 2024 Overview
+
+Dr. Sarah Chen, a leading researcher at Stanford University, published groundbreaking research on AI diagnostics in January 2024. Her team at the Stanford AI Lab collaborated with Google Health and Microsoft Research to develop new machine learning models.
+
+The project received $5 million in funding from the National Institutes of Health (NIH) and the Bill & Melinda Gates Foundation. The research was conducted in Palo Alto, California, with additional testing sites in Boston, Massachusetts and London, United Kingdom.
+
+Key findings include:
+- 95% accuracy in early cancer detection
+- 40% reduction in diagnostic time
+- Cost savings of approximately $2.3 billion annually for the US healthcare system
+
+Contact: sarah.chen@stanford.edu | Phone: +1-650-555-0123
+
+The full paper was published in Nature Medicine on February 15, 2024.

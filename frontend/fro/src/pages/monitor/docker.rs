@@ -5,6 +5,7 @@ use crate::{
     api,
     app::{PageErrors, Route},
     components::monitor::*,
+    pages::hardware::constants::{INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE},
 };
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
@@ -153,7 +154,7 @@ pub fn MonitorDocker() -> Element {
                     div { class: "text-red-400 text-sm", "Failed to fetch Docker status: {err}" }
                 }
             } else {
-                // Container Status Grid
+                // Container Status Grid with Quick Actions
                 Panel {
                     title: Some("Container Status".into()),
                     refresh: Some("5s".into()),
@@ -167,6 +168,27 @@ pub fn MonitorDocker() -> Element {
                         div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4",
                             for container in &snapshot.containers {
                                 ContainerCard { container: container.clone() }
+                            }
+                            // Quick Actions card - appears as last item in grid
+                            div { class: "bg-gray-800/50 rounded-lg border border-gray-700 p-4",
+                                h3 { class: "text-sm font-semibold text-gray-300 mb-3", "Quick Actions" }
+                                div { class: "flex flex-col gap-2",
+                                    ActionButton {
+                                        label: "Restart All",
+                                        icon: "🔁",
+                                        action: "restart",
+                                    }
+                                    ActionButton {
+                                        label: "Stop All",
+                                        icon: "⏹️",
+                                        action: "down",
+                                    }
+                                    ActionButton {
+                                        label: "Start All",
+                                        icon: "▶️",
+                                        action: "up",
+                                    }
+                                }
                             }
                         }
                     }
@@ -218,37 +240,6 @@ pub fn MonitorDocker() -> Element {
                     }
                 }
 
-                // Quick Actions
-                Panel { title: Some("Quick Actions".into()),
-                    div { class: "flex flex-wrap gap-3",
-                        ActionButton {
-                            label: "Refresh",
-                            icon: "🔄",
-                            command: "docker compose ps",
-                        }
-                        ActionButton {
-                            label: "View Logs",
-                            icon: "📋",
-                            command: "docker compose logs -f --tail=100",
-                        }
-                        ActionButton {
-                            label: "Restart All",
-                            icon: "🔁",
-                            command: "docker compose restart",
-                        }
-                        ActionButton {
-                            label: "Stop All",
-                            icon: "⏹️",
-                            command: "docker compose down",
-                        }
-                        ActionButton {
-                            label: "Start All",
-                            icon: "▶️",
-                            command: "docker compose up -d",
-                        }
-                    }
-                }
-
                 // Service URLs
                 Panel { title: Some("Service URLs".into()),
                     div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm",
@@ -267,18 +258,20 @@ pub fn MonitorDocker() -> Element {
 /// Container status card component
 #[component]
 fn ContainerCard(container: api::DockerContainer) -> Element {
-    let state_color = match container.state.as_str() {
-        "running" => "text-green-400",
-        "restarting" => "text-yellow-400",
-        "exited" | "dead" => "text-red-400",
-        _ => "text-gray-400",
+    // State display - rust color for active, red for inactive
+    let (state_text, state_style) = match container.state.as_str() {
+        "running" => ("active process", "color: #7C2A02;"), // Rust color
+        "restarting" => ("restarting", "color: #facc15;"), // yellow
+        "exited" | "dead" => ("no active process", "color: #ef4444;"), // red
+        _ => ("unknown", "color: #9ca3af;"), // gray
     };
 
+    // Health badge - shows 'healthy' or 'not healthy' text
     let health_badge = match container.health.as_deref() {
-        Some("healthy") => Some(("✓", "bg-green-500/20 text-green-400")),
-        Some("unhealthy") => Some(("✗", "bg-red-500/20 text-red-400")),
-        Some("starting") => Some(("…", "bg-yellow-500/20 text-yellow-400")),
-        _ => None,
+        Some("healthy") => Some(("healthy", "bg-green-500/20 text-green-400")),
+        Some("unhealthy") => Some(("not healthy", "bg-red-500/20 text-red-400")),
+        Some("starting") => Some(("starting", "bg-yellow-500/20 text-yellow-400")),
+        _ => None, // No health check configured
     };
 
     // Extract service name from container name (remove "ag-" prefix)
@@ -287,12 +280,43 @@ fn ContainerCard(container: api::DockerContainer) -> Element {
         .strip_prefix("ag-")
         .unwrap_or(&container.name);
 
+    // Extract just the version from image (e.g., "grafana/grafana:10.4.2" -> "v10.4.2")
+    let version = container
+        .image
+        .split(':')
+        .last()
+        .map(|v| if v.starts_with('v') { v.to_string() } else { format!("v{}", v) })
+        .unwrap_or_else(|| "latest".to_string());
+
+    // Extract unique external port numbers only
+    // Formats: "0.0.0.0:7474->7474/tcp", "[::]:7474->7474/tcp", "7474/tcp"
+    let mut port_set = std::collections::BTreeSet::new();
+    for p in &container.ports {
+        // Try to extract external port from "host:port->" pattern
+        if let Some(arrow) = p.find("->") {
+            let before_arrow = &p[..arrow];
+            // Find the port after the last ':'
+            if let Some(colon) = before_arrow.rfind(':') {
+                let port = &before_arrow[colon + 1..];
+                if let Ok(num) = port.parse::<u16>() {
+                    port_set.insert(num);
+                }
+            }
+        }
+    }
+    let ports_simple: Vec<String> = port_set.iter().map(|p| p.to_string()).collect();
+    let ports_detail = container.ports.join("\n");
+    let has_ports = !ports_simple.is_empty();
+
     rsx! {
         div { class: BOARD_CLASS,
             div { class: "flex items-start justify-between mb-2",
                 div {
                     h3 { class: "text-gray-200 font-semibold text-sm", "{display_name}" }
-                    p { class: "text-gray-500 text-xs truncate max-w-[150px]", title: "{container.image}", "{container.image}" }
+                    p { class: "text-gray-500 text-xs",
+                        "Docker image: "
+                        span { "{version}" }
+                    }
                 }
                 if let Some((icon, class)) = health_badge {
                     span { class: "px-2 py-0.5 rounded text-xs {class}", "{icon}" }
@@ -302,15 +326,10 @@ fn ContainerCard(container: api::DockerContainer) -> Element {
             div { class: "space-y-1",
                 div { class: "flex justify-between",
                     span { class: LABEL_CLASS, "State" }
-                    span { class: "{state_color} text-xs font-medium", "{container.state}" }
+                    span { class: "text-xs font-medium", style: "{state_style}", "{state_text}" }
                 }
-                if !container.ports.is_empty() {
-                    div { class: "flex justify-between",
-                        span { class: LABEL_CLASS, "Ports" }
-                        span { class: "text-gray-300 text-xs font-mono",
-                            {container.ports.join(", ")}
-                        }
-                    }
+                if has_ports {
+                    PortsRow { ports_simple: ports_simple.clone(), ports_detail: ports_detail.clone() }
                 }
                 div { class: "flex justify-between",
                     span { class: LABEL_CLASS, "Status" }
@@ -321,21 +340,181 @@ fn ContainerCard(container: api::DockerContainer) -> Element {
     }
 }
 
-/// Action button component
+/// Ports row with simple display and info button for details
 #[component]
-fn ActionButton(label: &'static str, icon: &'static str, command: &'static str) -> Element {
+fn PortsRow(ports_simple: Vec<String>, ports_detail: String) -> Element {
+    let mut show_detail = use_signal(|| false);
+
     rsx! {
-        div { class: "group relative",
-            button {
-                class: "flex items-center gap-2 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-200 transition-colors",
-                title: command,
-                span { "{icon}" }
-                span { "{label}" }
+        div { class: "flex justify-between items-center",
+            // Label with info button
+            div { class: "flex items-center gap-1",
+                span { class: LABEL_CLASS, "Ports" }
+                // Small info button after "Ports"
+                button {
+                    class: PARAM_ICON_BUTTON_CLASS,
+                    style: PARAM_ICON_BUTTON_STYLE,
+                    onclick: move |_| show_detail.set(!show_detail()),
+                    title: "Show port details",
+                    svg {
+                        class: INFO_ICON_SVG_CLASS,
+                        view_box: "0 0 20 20",
+                        fill: "none",
+                        stroke: "currentColor",
+                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                        circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                    }
+                }
             }
-            // Tooltip with command
+            // Port numbers
+            span { class: "text-gray-300 text-xs font-mono",
+                {ports_simple.join(", ")}
+            }
+        }
+        // Detail popup
+        if show_detail() {
             div {
-                class: "absolute bottom-full left-0 mb-2 px-2 py-1 bg-gray-900 text-xs text-gray-300 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap font-mono",
-                "{command}"
+                class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show_detail.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-4 max-w-md shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-3",
+                        h3 { class: "text-sm font-semibold text-gray-100", "Port Mappings" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-lg font-bold",
+                            onclick: move |_| show_detail.set(false),
+                            "×"
+                        }
+                    }
+                    pre { class: "bg-gray-900 text-green-400 p-3 rounded font-mono text-xs whitespace-pre-wrap",
+                        "{ports_detail}"
+                    }
+                    p { class: "text-xs text-gray-500 mt-2", "Format: host:port->container:port/protocol" }
+                }
+            }
+        }
+    }
+}
+
+/// Action button component - executes docker actions with info button
+#[component]
+fn ActionButton(label: &'static str, icon: &'static str, action: &'static str) -> Element {
+    let mut status = use_signal(|| "idle".to_string()); // idle, loading, success, error
+    let mut error_msg = use_signal(|| None::<String>);
+    let mut show_info = use_signal(|| false);
+
+    let command = match action {
+        "restart" => "docker compose restart",
+        "down" => "docker compose down",
+        "up" => "docker compose up -d",
+        "stop" => "docker compose stop",
+        "start" => "docker compose start",
+        _ => action,
+    };
+
+    let execute_action = move |_| {
+        let action_str = action.to_string();
+        status.set("loading".to_string());
+        error_msg.set(None);
+        
+        spawn(async move {
+            match api::docker_action(&action_str, None).await {
+                Ok(resp) => {
+                    if resp.success.unwrap_or(false) {
+                        status.set("success".to_string());
+                    } else {
+                        status.set("error".to_string());
+                        error_msg.set(resp.stderr.or(resp.error));
+                    }
+                }
+                Err(e) => {
+                    status.set("error".to_string());
+                    error_msg.set(Some(e));
+                }
+            }
+            // Reset after 3 seconds
+            TimeoutFuture::new(3000).await;
+            status.set("idle".to_string());
+        });
+    };
+
+    let btn_class = match status().as_str() {
+        "loading" => "flex-1 flex items-center gap-2 px-3 py-2 bg-yellow-600 rounded-l text-sm text-white transition-colors cursor-wait",
+        "success" => "flex-1 flex items-center gap-2 px-3 py-2 bg-green-600 rounded-l text-sm text-white transition-colors",
+        "error" => "flex-1 flex items-center gap-2 px-3 py-2 bg-red-600 rounded-l text-sm text-white transition-colors",
+        _ => "flex-1 flex items-center gap-2 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-l text-sm text-gray-200 transition-colors",
+    };
+
+    let display_label = match status().as_str() {
+        "loading" => "Running...",
+        "success" => "Done!",
+        "error" => "Failed",
+        _ => label,
+    };
+
+    rsx! {
+        div { class: "flex w-full",
+            // Main action button
+            button {
+                class: btn_class,
+                onclick: execute_action,
+                disabled: status() == "loading",
+                title: "Execute: {command}",
+                span { class: "w-6 text-center", "{icon}" }
+                span { "{display_label}" }
+            }
+            // Info button - explicit square size matching action button height
+            // Default: 24px button with 20px icon (83.3% ratio)
+            // Here: 36px button, so icon = 36 * 0.833 = 30px
+            button {
+                class: "shrink-0 rounded-r flex items-center justify-center cursor-pointer hover:opacity-80",
+                style: "background-color: #7C2A02; border: 1px solid #7C2A02; width: 36px; height: 36px;",
+                onclick: move |_| show_info.set(!show_info()),
+                title: "Show command info",
+                svg {
+                    style: "width: 30px; height: 30px; color: #cccccc;", // 80% white
+                    view_box: "0 0 20 20",
+                    fill: "none",
+                    stroke: "currentColor",
+                    circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                    line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                    circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                }
+            }
+        }
+
+        // Error tooltip
+        if let Some(err) = error_msg() {
+            div {
+                class: "absolute top-full left-0 mt-1 p-2 bg-red-900 text-red-200 text-xs rounded max-w-xs z-10",
+                "{err}"
+            }
+        }
+
+        // Info modal
+        if show_info() {
+            div {
+                class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show_info.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-md shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "{icon} {label}" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_info.set(false),
+                            "×"
+                        }
+                    }
+                    div { class: "mb-4",
+                        p { class: "text-sm text-gray-400 mb-2", "This button executes:" }
+                        code { class: "block bg-gray-900 text-green-400 p-3 rounded font-mono text-sm", "{command}" }
+                    }
+                    p { class: "text-xs text-gray-500", "Runs in the ag project directory" }
+                }
             }
         }
     }

@@ -20,6 +20,7 @@ actix-service = "2"
 # Async Runtime
 tokio = { version = "1.47.1", features = ["full"] }
 futures-util = "0.3.31"
+futures = "0.3"  # Required for neo4rs RowStream iteration
 
 # Serialization
 serde_json = "1.0.145"
@@ -125,9 +126,16 @@ libc = "0.2.177"
 neo4rs = { version = "0.7", optional = true }
 deadpool = { version = "0.10", optional = true }
 
+# petgraph Runtime (Phase 28) - In-memory graph for sub-ms traversal
+# Neo4j compiles ONCE at startup → petgraph serves ALL queries in RAM
+petgraph = { version = "0.6", features = ["serde-1"] }
+bincode = "1.3"  # Fast graph persistence to disk
+
+
 [features]
 default = ["onnx", "io_uring", "neo4j"]
 profiling = []
+
 
 # Phase 13.1.0a: Installer feature - enables all installer functionality
 installer = [
@@ -161,10 +169,13 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+tempfile = "3"
 
 [[bench]]
 name = "vector_storage"
 harness = false
+
+
 
 # fastembed is only available on Linux/macOS (ONNX Runtime doesn't support Windows GNU target)
 # On Windows, the hash-based fallback embedder is used automatically

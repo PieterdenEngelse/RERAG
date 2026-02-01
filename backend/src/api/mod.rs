@@ -1974,6 +1974,109 @@ async fn get_docker_stats() -> Vec<DockerStats> {
     stats
 }
 
+// ============================================================================
+// DOCKER ACTIONS
+// ============================================================================
+
+/// Docker action request
+#[derive(Debug, serde::Deserialize)]
+struct DockerActionRequest {
+    action: String,
+    container: Option<String>,
+}
+
+/// POST /monitoring/docker/action
+/// Execute docker compose actions (restart, stop, start, logs)
+async fn docker_action(body: web::Json<DockerActionRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let action = &body.action;
+    let container = body.container.as_deref();
+
+    info!("Docker action requested: {} container={:?}", action, container);
+
+    let (cmd, args): (&str, Vec<&str>) = match action.as_str() {
+        "restart" => {
+            if let Some(c) = container {
+                ("docker", vec!["restart", c])
+            } else {
+                ("docker", vec!["compose", "-f", "docker-compose.yml", "restart"])
+            }
+        }
+        "stop" => {
+            if let Some(c) = container {
+                ("docker", vec!["stop", c])
+            } else {
+                ("docker", vec!["compose", "-f", "docker-compose.yml", "stop"])
+            }
+        }
+        "start" => {
+            if let Some(c) = container {
+                ("docker", vec!["start", c])
+            } else {
+                ("docker", vec!["compose", "-f", "docker-compose.yml", "up", "-d"])
+            }
+        }
+        "down" => {
+            ("docker", vec!["compose", "-f", "docker-compose.yml", "down"])
+        }
+        "up" => {
+            ("docker", vec!["compose", "-f", "docker-compose.yml", "up", "-d"])
+        }
+        _ => {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "error": format!("Unknown action: {}", action)
+            })));
+        }
+    };
+
+    // Execute the command
+    let output = tokio::process::Command::new(cmd)
+        .args(&args)
+        .current_dir("/home/pde/ag")
+        .output()
+        .await;
+
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let success = output.status.success();
+
+            if success {
+                info!("Docker action {} completed successfully", action);
+                Ok(HttpResponse::Ok().json(json!({
+                    "status": "ok",
+                    "request_id": request_id,
+                    "action": action,
+                    "success": true,
+                    "stdout": stdout,
+                    "stderr": stderr
+                })))
+            } else {
+                warn!("Docker action {} failed: {}", action, stderr);
+                Ok(HttpResponse::Ok().json(json!({
+                    "status": "error",
+                    "request_id": request_id,
+                    "action": action,
+                    "success": false,
+                    "stdout": stdout,
+                    "stderr": stderr
+                })))
+            }
+        }
+        Err(e) => {
+            error!("Failed to execute docker action {}: {}", action, e);
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "error": format!("Failed to execute: {}", e)
+            })))
+        }
+    }
+}
+
 /// POST /monitoring/io-uring
 /// Save io_uring configuration to .env file
 async fn save_io_uring_config(body: web::Json<serde_json::Value>) -> Result<HttpResponse, Error> {
@@ -7184,7 +7287,8 @@ pub fn start_api_server(
                     )
                     .route("/memories/rag", web::get().to(get_recent_rag_memories))
                     // Docker monitoring
-                    .route("/docker", web::get().to(get_docker_status)),
+                    .route("/docker", web::get().to(get_docker_status))
+                    .route("/docker/action", web::post().to(docker_action)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES

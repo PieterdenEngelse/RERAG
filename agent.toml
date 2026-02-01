@@ -7,12 +7,28 @@ workspace_root = "/home/pde/ag"
 frontend_path  = "frontend/fro"
 backend_path   = "backend"
 
-[commands]
-init    = "qodo --init"
-status  = "qodo --status"
-backend = "cd backend && RUST_LOG=info cargo run"
-frontend= "cd frontend/fro && npm run css:watch"
-stack   = "docker compose -f docker-compose.full.yml up -d"
+[commands.init]
+command = "qodo --init"
+execution = "shell"
+
+[commands.status]
+command = "qodo --status"
+execution = "shell"
+
+[commands.backend]
+command = "cd backend && RUST_LOG=info cargo run"
+execution = "shell"
+working_dir = "backend"
+
+[commands.frontend]
+command = "npm run css:watch"
+execution = "shell"
+working_dir = "frontend/fro"
+
+[commands.stack]
+command = "docker compose up -d"
+execution = "shell"
+working_dir = "."
 
 [env]
 RUST_LOG = "info"

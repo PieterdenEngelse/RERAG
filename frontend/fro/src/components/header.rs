@@ -201,22 +201,21 @@ pub fn Header() -> Element {
     let show_status_tooltip = status_hover_refcount() > 0;
 
     rsx! {
-        header { class: "sticky top-0 shadow-md py-0 px-0.5 transition-colors {header_bg} flex items-center relative",
+        header {
+            class: "sticky top-0 shadow-md py-0 px-0.5 transition-colors {header_bg} flex items-center relative",
             style: "z-index: 60;",
 
             // Rust icon - ml-4 aligns with Panel p-4 padding where llama image sits
-            div {
-                class: "ml-4",
+            div { class: "ml-4",
                 img {
-                    src: asset!("/assets/rusticon_1.png"),
+                    src: asset!("/assets/rusticon_black_bg.png"),
                     alt: "Rust Icon",
                     class: "h-8 w-8",
                 }
             }
 
             // Title and status centered together
-            div {
-                class: "absolute inset-x-0 flex justify-center pointer-events-none",
+            div { class: "absolute inset-x-0 flex justify-center pointer-events-none",
                 div { class: "flex items-center gap-2 pointer-events-auto",
                     h1 {
                         class: "font-medium text-center text-white",
@@ -229,7 +228,14 @@ pub fn Header() -> Element {
                             style: style_override.unwrap_or(""),
                             title: format!("Status: {} (click for details)", tooltip_text),
                             onmouseenter: move |_| status_hover_refcount.with_mut(|count| *count += 1),
-                            onmouseleave: move |_| status_hover_refcount.with_mut(|count| if *count > 0 { *count -= 1; }),
+                            onmouseleave: move |_| {
+                                status_hover_refcount
+                                    .with_mut(|count| {
+                                        if *count > 0 {
+                                            *count -= 1;
+                                        }
+                                    })
+                            },
                             onclick: move |_| {
                                 match status_for_click.as_str() {
                                     "healthy" | "ok" => show_green_details.set(true),
@@ -243,7 +249,7 @@ pub fn Header() -> Element {
                         }
                         button {
                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #7C2A02; border: 1px solid #7C2A02;",
                             onclick: move |_| show_status_info.set(true),
                             title: "Status info",
                             svg {
@@ -251,9 +257,26 @@ pub fn Header() -> Element {
                                 view_box: "0 0 20 20",
                                 fill: "none",
                                 stroke: "currentColor",
-                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
-                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                circle {
+                                    cx: "10",
+                                    cy: "10",
+                                    r: "9",
+                                    stroke_width: "1",
+                                }
+                                line {
+                                    x1: "10",
+                                    y1: "8",
+                                    x2: "10",
+                                    y2: "14",
+                                    stroke_width: "1.5",
+                                }
+                                circle {
+                                    cx: "10",
+                                    cy: "6.3",
+                                    r: "1",
+                                    fill: "currentColor",
+                                    stroke: "none",
+                                }
                             }
                         }
                     }
@@ -264,13 +287,16 @@ pub fn Header() -> Element {
                 div {
                     class: "absolute top-12 left-1/2 -translate-x-1/2 z-[65]",
                     onmouseenter: move |_| status_hover_refcount.with_mut(|count| *count += 1),
-                    onmouseleave: move |_| status_hover_refcount.with_mut(|count| if *count > 0 { *count -= 1; }),
-                    div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3 max-w-md select-text",
-                        pre {
-                            class: "whitespace-pre-wrap text-xs text-gray-100",
-                            "{tooltip_text}"
-                        }
+                    onmouseleave: move |_| {
+                        status_hover_refcount
+                            .with_mut(|count| {
+                                if *count > 0 {
+                                    *count -= 1;
+                                }
+                            })
+                    },
+                    div { class: "bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3 max-w-md select-text",
+                        pre { class: "whitespace-pre-wrap text-xs text-gray-100", "{tooltip_text}" }
                     }
                 }
             }
@@ -284,7 +310,7 @@ pub fn Header() -> Element {
                     style: "font-family: ui-sans-serif, system-ui, sans-serif;",
                     {
                         let home_color = if matches!(current_route, Route::Home {}) {
-                            "#1D6B9A"
+                            "#7C2A02"
                         } else if is_dark() {
                             "white"
                         } else {
@@ -307,8 +333,19 @@ pub fn Header() -> Element {
                         }
                     }
                     {
-                        let monitor_color = if matches!(current_route, Route::MonitorOverview {} | Route::MonitorAgentic {} | Route::MonitorRequests {} | Route::MonitorCache {} | Route::MonitorIndex {} | Route::MonitorRateLimits {} | Route::MonitorLogs {} | Route::MonitorDocker {} | Route::MonitorKnowledgeGraph {}) {
-                            "#1D6B9A"
+                        let monitor_color = if matches!(
+                            current_route,
+                            Route::MonitorOverview {}
+                            | Route::MonitorAgentic {}
+                            | Route::MonitorRequests {}
+                            | Route::MonitorCache {}
+                            | Route::MonitorIndex {}
+                            | Route::MonitorRateLimits {}
+                            | Route::MonitorLogs {}
+                            | Route::MonitorDocker {}
+                            | Route::MonitorKnowledgeGraph {}
+                        ) {
+                            "#7C2A02"
                         } else if is_dark() {
                             "white"
                         } else {
@@ -324,8 +361,16 @@ pub fn Header() -> Element {
                         }
                     }
                     {
-                        let config_color = if matches!(current_route, Route::Config {} | Route::ConfigHardware {} | Route::ConfigSampling {} | Route::ConfigPrompt {} | Route::ConfigOther {} | Route::Parameters {}) {
-                            "#1D6B9A"
+                        let config_color = if matches!(
+                            current_route,
+                            Route::Config {}
+                            | Route::ConfigHardware {}
+                            | Route::ConfigSampling {}
+                            | Route::ConfigPrompt {}
+                            | Route::ConfigOther {}
+                            | Route::Parameters {}
+                        ) {
+                            "#7C2A02"
                         } else if is_dark() {
                             "white"
                         } else {
@@ -342,7 +387,7 @@ pub fn Header() -> Element {
                     }
                     {
                         let train_color = if matches!(current_route, Route::Train {}) {
-                            "#1D6B9A"
+                            "#7C2A02"
                         } else if is_dark() {
                             "white"
                         } else {
@@ -359,7 +404,7 @@ pub fn Header() -> Element {
                     }
                     {
                         let docu_color = if matches!(current_route, Route::Docu {}) {
-                            "#1D6B9A"
+                            "#7C2A02"
                         } else if is_dark() {
                             "white"
                         } else {
@@ -375,12 +420,16 @@ pub fn Header() -> Element {
                         }
                     }
                     NavDropdown { title: "Help".to_string(),
-                        DropdownActionItem { onclick: move |_| show_help.set(ShowHelpCommands(true)), "/help commands" }
+                        DropdownActionItem { onclick: move |_| show_help.set(ShowHelpCommands(true)),
+                            "/help commands"
+                        }
                         DropdownItem { to: Route::Home {}, "Design" }
                         DropdownItem { to: Route::Home {}, "Consulting" }
                     }
                     NavDropdown { title: "About".to_string(),
-                        DropdownActionItem { onclick: move |_| show_rag_info.set(ShowRagInfo(true)), "RAG" }
+                        DropdownActionItem { onclick: move |_| show_rag_info.set(ShowRagInfo(true)),
+                            "RAG"
+                        }
                         DropdownItem { to: Route::About {}, "Company" }
                         DropdownItem { to: Route::About {}, "Contact" }
                     }
@@ -395,12 +444,45 @@ pub fn Header() -> Element {
 
             if menu_open() {
                 div { class: "md:hidden mt-4 pb-4 flex flex-col gap-4",
-                    Link { to: Route::Home {}, class: "text-teal-200 hover:text-white transition-colors", onclick: move |_| { clear_chat.set(ClearChat(true)); menu_open.set(false); }, "Home" }
-                    Link { to: Route::MonitorOverview {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Monitor" }
-                    Link { to: Route::Config {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Config" }
-                    Link { to: Route::Train {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Train" }
-                    Link { to: Route::Docu {}, class: "text-teal-100 hover:text-white transition-colors", onclick: move |_| menu_open.set(false), "Docu" }
-                    Link { to: Route::About {}, class: "hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors", onclick: move |_| menu_open.set(false), "About" }
+                    Link {
+                        to: Route::Home {},
+                        class: "text-teal-200 hover:text-white transition-colors",
+                        onclick: move |_| {
+                            clear_chat.set(ClearChat(true));
+                            menu_open.set(false);
+                        },
+                        "Home"
+                    }
+                    Link {
+                        to: Route::MonitorOverview {},
+                        class: "text-teal-100 hover:text-white transition-colors",
+                        onclick: move |_| menu_open.set(false),
+                        "Monitor"
+                    }
+                    Link {
+                        to: Route::Config {},
+                        class: "text-teal-100 hover:text-white transition-colors",
+                        onclick: move |_| menu_open.set(false),
+                        "Config"
+                    }
+                    Link {
+                        to: Route::Train {},
+                        class: "text-teal-100 hover:text-white transition-colors",
+                        onclick: move |_| menu_open.set(false),
+                        "Train"
+                    }
+                    Link {
+                        to: Route::Docu {},
+                        class: "text-teal-100 hover:text-white transition-colors",
+                        onclick: move |_| menu_open.set(false),
+                        "Docu"
+                    }
+                    Link {
+                        to: Route::About {},
+                        class: "hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors",
+                        onclick: move |_| menu_open.set(false),
+                        "About"
+                    }
                     button {
                         class: "text-left text-teal-100 hover:text-white transition-colors",
                         onclick: move |_| {
@@ -662,7 +744,9 @@ pub fn Header() -> Element {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
-                        h3 { class: "text-lg font-semibold text-orange-400", "Unexpected Status (Orange)" }
+                        h3 { class: "text-lg font-semibold text-orange-400",
+                            "Unexpected Status (Orange)"
+                        }
                         a {
                             class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
                             href: "#log",
@@ -863,12 +947,20 @@ pub fn Header() -> Element {
 
                                         div { class: "text-gray-400", "Indexing:" }
                                         div { class: if load.indexing { "text-pink-400 font-semibold" } else { "text-gray-500" },
-                                            if load.indexing { "Yes ⚡" } else { "No" }
+                                            if load.indexing {
+                                                "Yes ⚡"
+                                            } else {
+                                                "No"
+                                            }
                                         }
 
                                         div { class: "text-gray-400", "LLM Active:" }
                                         div { class: if load.llm_active { "text-pink-400 font-semibold" } else { "text-gray-500" },
-                                            if load.llm_active { "Yes 🤖" } else { "No" }
+                                            if load.llm_active {
+                                                "Yes 🤖"
+                                            } else {
+                                                "No"
+                                            }
                                         }
                                     }
                                 }
@@ -915,7 +1007,9 @@ pub fn Header() -> Element {
                     class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
-                        h3 { class: "text-lg font-semibold text-purple-400", "Checking / Slow Response (Purple Pulsing)" }
+                        h3 { class: "text-lg font-semibold text-purple-400",
+                            "Checking / Slow Response (Purple Pulsing)"
+                        }
                         a {
                             class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
                             href: "#log",
@@ -1163,9 +1257,7 @@ pub fn Header() -> Element {
                         }
                     } else {
                         div { class: "flex-1 overflow-auto bg-gray-900 rounded p-3 font-mono text-xs",
-                            pre { class: "whitespace-pre-wrap text-gray-300",
-                                "{log_content()}"
-                            }
+                            pre { class: "whitespace-pre-wrap text-gray-300", "{log_content()}" }
                         }
                     }
                     button {

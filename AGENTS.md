@@ -40,7 +40,7 @@ cd frontend/fro && dx serve --platform web
 
 ## Coding Style & Naming Conventions
 - **Indentation**: 4 spaces across Rust, TOML, and Dioxus components (see `backend/src/main.rs`). Tabs are reserved for Makefiles.
-- **File naming**: Rust modules use `snake_case` (`monitoring_config.rs`), Dioxus components prefer `UpperCamelCase` files sitting in `src/components/`, and scripts/configs lean on kebab-case (`docker-compose.full.yml`).
+- **File naming**: Rust modules use `snake_case` (`monitoring_config.rs`), Dioxus components prefer `UpperCamelCase` files sitting in `src/components/`, and scripts/configs lean on kebab-case (`docker-compose.yml`).
 - **Function/variable naming**: Follow Rust defaults (`snake_case` for functions and locals, `SCREAMING_SNAKE_CASE` constants). Frontend hooks and helpers use `camelCase` inside `api.rs` and component logic.
 - **Linting**: Always run `cargo fmt` and `cargo clippy --all-targets -- -D warnings`. Frontend code respects `dx fmt` (bundled with the Dioxus CLI) and the Tailwind CLI handles deterministic CSS builds.
 
@@ -152,7 +152,7 @@ ag/
 - **Web Framework:** Actix Web 4.11.0 with actix-cors/multipart/service for HTTP, upload, and middleware ergonomics.
 - **Retrieval & Storage:** Tantivy 0.24.2 for vector search, LanceDB/SQLite via `rusqlite` for metadata, optional Neo4j (via `neo4rs`) for GraphRAG, Redis 0.32 as L3 cache.
 - **Frontend:** Dioxus 0.6 rendered to web via `dx serve`, styled by Tailwind CLI 4.1.14 + DaisyUI 5.5.5.
-- **Observability:** `tracing` + OpenTelemetry 0.21, Prometheus 0.13 exporters, Grafana/Tempo/Loki stacks orchestrated by `docker-compose.full*.yml`.
+- **Observability:** `tracing` + OpenTelemetry 0.21, Prometheus 0.13 exporters, Grafana/Tempo/Loki stacks orchestrated by `docker-compose*.yml`.
 
 ### Key Libraries
 - `llm 1.3.4` for model execution hooks (Ollama/ONNX bridging).
@@ -170,7 +170,7 @@ ag/
 
 ### Required Services
 - **Ollama / LLM backend** – Provides embedding and chat models referenced by backend LLM settings.
-- **Prometheus + Grafana + Tempo** – Defined in `docker-compose.full.yml` and `prometheus/` with dashboards under `grafana-*.json`; scrape `/monitoring/metrics` and ingest OTLP traces.
+- **Prometheus + Grafana + Tempo** – Defined in `docker-compose.yml` and `prometheus/` with dashboards under `grafana-*.json`; scrape `/monitoring/metrics` and ingest OTLP traces.
 - **Redis (optional)** – Toggled via `REDIS_ENABLED` env vars to host the L3 cache for retrieval workloads.
 - **Neo4j (optional)** – Enabled via Cargo `neo4j` feature and envs to store graph relationships for GraphRAG.
 
@@ -221,7 +221,7 @@ OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 3. Frontend monitoring pages (`/monitor/requests`, `/monitor/memories`) call the same APIs via `frontend/fro/src/api.rs` helpers.
 
 ### Observability bootstrap
-1. Start infra: `docker compose -f docker-compose.full.yml up -d`.
+1. Start infra: `docker compose up -d`.
 2. Run `./complete-tracing-setup.sh` or `./setup-tempo-tls.sh` to align certificates and OTLP endpoints.
 3. Import dashboards from `grafana-*.json` and ensure Prometheus scrapes `http://<host>:3010/monitoring/metrics` successfully.
 
