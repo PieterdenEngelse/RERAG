@@ -1,0 +1,28 @@
+use dioxus::prelude::*;
+
+pub fn MonitorDocker(cx: Scope) -> Element {
+    let show_no_container = use_state(&cx, || false);
+
+    cx.render(rsx! {
+        div {
+            h1 { "Docker Containers" }
+            
+            if *show_no_container.get() {
+                p { "No containers found" }
+                button {
+                    onclick: move |_| show_no_container.set(false),
+                    "Hide Message"
+                }
+            } else {
+                ul {
+                    li { "Container 1" }
+                    li { "Container 2" }
+                }
+                button {
+                    onclick: move |_| show_no_container.set(true),
+                    "Show No Containers Message" 
+                }
+            }
+        }
+    })
+}

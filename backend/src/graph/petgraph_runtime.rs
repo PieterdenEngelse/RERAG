@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn test_basic_graph_operations() {
         let mut graph = RuntimeGraph::new();
-        
+
         // Add nodes
         let idx1 = graph.graph.add_node(ChunkNode {
             id: "n1".into(),
@@ -506,83 +506,105 @@ mod tests {
             entities: vec!["farewell".into()],
             source: "test.pdf".into(),
         });
-        
+
         graph.node_index_by_id.insert("n1".into(), idx1);
         graph.node_index_by_id.insert("n2".into(), idx2);
-        
+
         // Add edge
-        graph.graph.add_edge(idx1, idx2, Relationship {
-            r#type: "FOLLOWS".into(),
-            confidence: 0.95,
-            meta: serde_json::json!({}),
-        });
-        
+        graph.graph.add_edge(
+            idx1,
+            idx2,
+            Relationship {
+                r#type: "FOLLOWS".into(),
+                confidence: 0.95,
+                meta: serde_json::json!({}),
+            },
+        );
+
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);
         assert!(!graph.is_empty());
-        
+
         println!("✅ Basic graph operations: PASSED");
     }
 
     #[test]
     fn test_graph_query() {
         let mut graph = RuntimeGraph::new();
-        
+
         // Create: n1 -> n2 -> n3
         let idx1 = graph.graph.add_node(ChunkNode {
-            id: "n1".into(), content: "First".into(),
-            entities: vec![], source: "test".into(),
+            id: "n1".into(),
+            content: "First".into(),
+            entities: vec![],
+            source: "test".into(),
         });
         let idx2 = graph.graph.add_node(ChunkNode {
-            id: "n2".into(), content: "Second".into(),
-            entities: vec![], source: "test".into(),
+            id: "n2".into(),
+            content: "Second".into(),
+            entities: vec![],
+            source: "test".into(),
         });
         let idx3 = graph.graph.add_node(ChunkNode {
-            id: "n3".into(), content: "Third".into(),
-            entities: vec![], source: "test".into(),
+            id: "n3".into(),
+            content: "Third".into(),
+            entities: vec![],
+            source: "test".into(),
         });
-        
+
         graph.node_index_by_id.insert("n1".into(), idx1);
         graph.node_index_by_id.insert("n2".into(), idx2);
         graph.node_index_by_id.insert("n3".into(), idx3);
-        
-        graph.graph.add_edge(idx1, idx2, Relationship {
-            r#type: "NEXT".into(), confidence: 0.9, meta: serde_json::json!({}),
-        });
-        graph.graph.add_edge(idx2, idx3, Relationship {
-            r#type: "NEXT".into(), confidence: 0.8, meta: serde_json::json!({}),
-        });
-        
+
+        graph.graph.add_edge(
+            idx1,
+            idx2,
+            Relationship {
+                r#type: "NEXT".into(),
+                confidence: 0.9,
+                meta: serde_json::json!({}),
+            },
+        );
+        graph.graph.add_edge(
+            idx2,
+            idx3,
+            Relationship {
+                r#type: "NEXT".into(),
+                confidence: 0.8,
+                meta: serde_json::json!({}),
+            },
+        );
+
         let query = GraphQuery::new(&graph);
-        
+
         // Test get_node
         let node = query.get_node("n1");
         assert!(node.is_some());
         assert_eq!(node.unwrap().content, "First");
         println!("✅ get_node: PASSED");
-        
+
         // Test get_neighbors
         let neighbors = query.get_neighbors("n1");
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].0.id, "n2");
         println!("✅ get_neighbors: PASSED");
-        
+
         // Test BFS 1 hop
         let results = query.constrained_bfs("n1", 1, "");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "n2");
         println!("✅ BFS 1-hop: PASSED");
-        
+
         // Test BFS 2 hops
         let results = query.constrained_bfs("n1", 2, "");
         assert_eq!(results.len(), 2);
         println!("✅ BFS 2-hop: PASSED");
-        
+
         // Test BFS with filter
         let results = query.constrained_bfs("n1", 2, "NEXT");
         assert_eq!(results.len(), 2);
         println!("✅ BFS with filter: PASSED");
-        
+
         // Test non-existent node
         let results = query.constrained_bfs("nonexistent", 1, "");
         assert!(results.is_empty());
@@ -594,9 +616,9 @@ mod tests {
         // Create temp directory
         let temp_dir = std::env::temp_dir().join("petgraph_test");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         let json_path = temp_dir.join("knowledge_graph.json");
-        
+
         // Write test JSON
         let json_data = r#"{
             "nodes": [
@@ -607,22 +629,22 @@ mod tests {
                 {"from_id": "a1", "to_id": "a2", "type": "LINKS_TO", "confidence": 0.85}
             ]
         }"#;
-        
+
         fs::write(&json_path, json_data).unwrap();
-        
+
         // Load it
         let result = GraphCompiler::load_from_json(json_path.to_str().unwrap());
         assert!(result.is_ok(), "Failed to load JSON: {:?}", result.err());
-        
+
         let graph = result.unwrap();
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);
         assert!(graph.node_index_by_id.contains_key("a1"));
         assert!(graph.node_index_by_id.contains_key("a2"));
-        
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
-        
+
         println!("✅ JSON loading: PASSED");
     }
 
@@ -631,7 +653,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("petgraph_bin_test");
         fs::create_dir_all(&temp_dir).unwrap();
         let bin_path = temp_dir.join("test.bin");
-        
+
         // Create graph
         let mut graph = RuntimeGraph::new();
         let idx = graph.graph.add_node(ChunkNode {
@@ -641,21 +663,21 @@ mod tests {
             source: "test".into(),
         });
         graph.node_index_by_id.insert("bin_test".into(), idx);
-        
+
         // Save
         let save_result = GraphCompiler::save_to_disk(&graph, bin_path.to_str().unwrap());
         assert!(save_result.is_ok());
         println!("✅ Binary save: PASSED");
-        
+
         // Load
         let load_result = GraphCompiler::load_from_disk(bin_path.to_str().unwrap());
         assert!(load_result.is_ok());
-        
+
         let loaded = load_result.unwrap();
         assert_eq!(loaded.node_count(), 1);
         assert!(loaded.node_index_by_id.contains_key("bin_test"));
         println!("✅ Binary load: PASSED");
-        
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -664,7 +686,7 @@ mod tests {
     async fn test_compile_standalone() {
         let temp_dir = std::env::temp_dir().join("petgraph_compile_test");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         // Create JSON file
         let json_data = r#"{
             "nodes": [
@@ -673,18 +695,18 @@ mod tests {
             "relationships": []
         }"#;
         fs::write(temp_dir.join("knowledge_graph.json"), json_data).unwrap();
-        
+
         // Compile
         let compiler = GraphCompiler::new_standalone(temp_dir.to_str().unwrap());
         let graph = compiler.compile().await;
-        
+
         assert_eq!(graph.node_count(), 1);
         println!("✅ Compile standalone: PASSED");
-        
+
         // Check binary cache was created
         assert!(temp_dir.join("runtime_graph.bin").exists());
         println!("✅ Binary cache created: PASSED");
-        
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
     }

@@ -17,31 +17,31 @@ pub mod petgraph_runtime;
 
 // Only compile Neo4j modules when the feature is enabled
 #[cfg(feature = "neo4j")]
-pub mod client;
+pub mod agent_memory_graph;
 #[cfg(feature = "neo4j")]
-pub mod schema;
+pub mod client;
 #[cfg(feature = "neo4j")]
 pub mod graph_retriever;
 #[cfg(feature = "neo4j")]
 pub mod knowledge_builder;
 #[cfg(feature = "neo4j")]
-pub mod agent_memory_graph;
+pub mod schema;
 
 // Re-exports: Petgraph (always available)
 pub use petgraph_runtime::{
-    get_runtime_graph, export_to_json, initialize_standalone,
-    ChunkNode, GraphQuery, Relationship, RuntimeGraph,
+    export_to_json, get_runtime_graph, initialize_standalone, ChunkNode, GraphQuery, Relationship,
+    RuntimeGraph,
 };
 
 // Re-exports: Neo4j (only when feature enabled)
+#[cfg(feature = "neo4j")]
+pub use agent_memory_graph::{AgentMemoryGraph, AgentStats, Pattern, SimilarEpisode};
 #[cfg(feature = "neo4j")]
 pub use client::{GraphStats, Neo4jClient, Neo4jError};
 #[cfg(feature = "neo4j")]
 pub use graph_retriever::{ExpandedChunk, GraphExpansionConfig, GraphRetriever, RelatedEntity};
 #[cfg(feature = "neo4j")]
 pub use knowledge_builder::{ChunkMeta, DocumentMeta, GraphBuildStats, KnowledgeBuilder};
-#[cfg(feature = "neo4j")]
-pub use agent_memory_graph::{AgentMemoryGraph, AgentStats, Pattern, SimilarEpisode};
 
 /// Check if Neo4j feature is enabled at compile time
 pub fn is_neo4j_compiled() -> bool {

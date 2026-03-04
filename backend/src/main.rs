@@ -233,11 +233,14 @@ async fn main() -> std::io::Result<()> {
                     let graph_config_for_petgraph = GraphConfig::from_env();
                     actix_web::rt::spawn(async move {
                         info!("ParallelGroup: Compiling Neo4j → petgraph runtime (background)...");
-                        
+
                         match Neo4jClient::new(graph_config_for_petgraph).await {
                             Ok(client_for_graph) => {
-                                ag::graph::petgraph_runtime::initialize_from_neo4j(client_for_graph).await;
-                                
+                                ag::graph::petgraph_runtime::initialize_from_neo4j(
+                                    client_for_graph,
+                                )
+                                .await;
+
                                 // Log the result
                                 let runtime = ag::graph::petgraph_runtime::get_runtime_graph();
                                 info!(
@@ -325,7 +328,7 @@ async fn main() -> std::io::Result<()> {
         let upload_dir = ag::api::UPLOAD_DIR.to_string();
 
         // Spawn as background task - doesn't block server startup
-        actix_web::rt::spawn(async move {
+            tokio::task::spawn_blocking(move || {
             let indexing_start = Instant::now();
             debug!("Background indexing task started");
 

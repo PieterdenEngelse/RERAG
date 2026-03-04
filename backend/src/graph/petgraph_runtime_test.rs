@@ -2,9 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::graph::petgraph_runtime::{
-        ChunkNode, GraphCompiler, GraphQuery, RuntimeGraph,
-    };
+    use crate::graph::petgraph_runtime::{ChunkNode, GraphCompiler, GraphQuery, RuntimeGraph};
     use std::fs;
     use tempfile::tempdir;
 

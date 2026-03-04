@@ -263,7 +263,7 @@ pub fn ConfigNeo4j() -> Element {
                     Ok(result) => {
                         // Update stats
                         stats_entities.set(result.entities_extracted);
-                        
+
                         let msg = format!(
                             "✅ Rebuilt! {} docs, {} chunks, {} entities",
                             result.documents_processed,
@@ -271,11 +271,11 @@ pub fn ConfigNeo4j() -> Element {
                             result.entities_extracted
                         );
                         save_status.set(Some(msg));
-                        
+
                         if !result.errors.is_empty() {
                             save_error.set(Some(format!("Warnings: {}", result.errors.join(", "))));
                         }
-                        
+
                         // Refresh stats by re-fetching config
                         if let Ok(config) = api::fetch_neo4j_config().await {
                             if let Some(stats) = config.stats {

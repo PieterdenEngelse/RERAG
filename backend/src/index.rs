@@ -18,6 +18,25 @@ pub fn index_all_documents(
     let entries =
         fs::read_dir(folder).map_err(|e| format!("read_dir('{}') failed: {}", folder, e))?;
 
+    // Collect existing doc_ids to skip already-indexed files
+    let existing_docs = retriever.get_all_doc_ids().unwrap_or_default();
+    let existing_files: std::collections::HashSet<String> = existing_docs
+        .iter()
+        .filter_map(|id| id.split('#').next().map(|s| s.to_string()))
+        .collect();
+    debug!(
+        "index_all_documents: found {} already-indexed files",
+        existing_files.len()
+    );
+
+    // Begin batch mode — single writer, single commit
+    retriever
+        .begin_batch()
+        .map_err(|e| format!("begin_batch failed: {}", e))?;
+
+    let mut indexed_count = 0usize;
+    let mut skipped_count = 0usize;
+
     for entry_res in entries {
         let entry = match entry_res {
             Ok(e) => e,
@@ -29,6 +48,17 @@ pub fn index_all_documents(
         let path = entry.path();
         let path_str = path.to_string_lossy();
         if path.is_file() {
+            // Skip already-indexed files
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            if existing_files.contains(filename) {
+                debug!("index_all_documents: skipping already-indexed file='{}'", filename);
+                skipped_count += 1;
+                continue;
+            }
+
             // Use MIME detection to determine if file is indexable
             let (content_type, detection_info) = match detect_file_type_with_info(&path) {
                 Ok(result) => result,
@@ -40,12 +70,10 @@ pub fn index_all_documents(
                     continue;
                 }
             };
-
             debug!(
                 "index_all_documents: considering file='{}' content_type={:?} method={}",
                 path_str, content_type, detection_info.detection_method
             );
-
             // Only index text-based files
             if content_type.is_text_based() {
                 match index_file_with_detection(
@@ -55,10 +83,13 @@ pub fn index_all_documents(
                     chunker,
                     detection_info,
                 ) {
-                    Ok(chunks) => debug!(
-                        "indexed file='{}' chunks={} type={:?}",
-                        path_str, chunks, content_type
-                    ),
+                    Ok(chunks) => {
+                        debug!(
+                            "indexed file='{}' chunks={} type={:?}",
+                            path_str, chunks, content_type
+                        );
+                        indexed_count += 1;
+                    }
                     Err(e) => warn!("index_file failed for '{}': {}", path_str, e),
                 }
             } else {
@@ -71,6 +102,11 @@ pub fn index_all_documents(
             debug!("index_all_documents: skipping non-file path='{}'", path_str);
         }
     }
+
+    info!(
+        "index_all_documents: indexed={} skipped={} (already indexed)",
+        indexed_count, skipped_count
+    );
 
     retriever
         .commit()

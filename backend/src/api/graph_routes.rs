@@ -1,22 +1,27 @@
 //! Graph API routes for knowledge graph visualization and search
+//! v1.3.0 - Extracted rebuild_graph_from_index() helper for reuse
 //!
 //! Provides endpoints for:
 //! - Graph statistics (Neo4j and Petgraph)
 //! - Graph data sampling for visualization
 //! - Entity search
 //! - Graph-enhanced search (vector + graph)
+//! - Graph rebuild from indexed documents
 //! - Petgraph runtime endpoints (work without Neo4j)
+//!
+//! INSTALLER IMPACT (v1.3.0): None - same routes, same response types
 
 use actix_web::{web, HttpResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tantivy::schema::Value;
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "neo4j")]
 use crate::api::get_neo4j_client;
 
 // Import petgraph runtime (always available)
-use crate::graph::petgraph_runtime::{get_runtime_graph, GraphQuery, ChunkNode, Relationship};
+use crate::graph::petgraph_runtime::{get_runtime_graph, ChunkNode, GraphQuery, Relationship};
 
 // ============================================================================
 // Types
@@ -75,6 +80,16 @@ pub struct GraphSearchResponse {
     pub graph_enhanced: bool,
 }
 
+/// Result of a knowledge graph rebuild operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphBuildResult {
+    pub status: String,
+    pub documents_processed: usize,
+    pub chunks_processed: usize,
+    pub entities_extracted: usize,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SampleQuery {
     pub limit: Option<usize>,
@@ -93,7 +108,7 @@ pub struct SearchQuery {
 /// GET /graph/rt/stats - Get petgraph runtime stats (no Neo4j needed)
 pub async fn get_petgraph_stats() -> HttpResponse {
     let runtime = get_runtime_graph();
-    
+
     HttpResponse::Ok().json(serde_json::json!({
         "source": "petgraph_runtime",
         "node_count": runtime.node_count(),
@@ -213,7 +228,7 @@ pub async fn export_graph_to_json() -> HttpResponse {
         "MATCH (n:Chunk)
          RETURN n.id AS id, n.content AS content, 
                 coalesce(n.entities, []) AS entities,
-                coalesce(n.source, 'unknown') AS source"
+                coalesce(n.source, 'unknown') AS source",
     );
 
     match graph.execute(nodes_query).await {
@@ -245,7 +260,7 @@ pub async fn export_graph_to_json() -> HttpResponse {
         "MATCH (n:Chunk)-[r]->(m:Chunk)
          RETURN n.id AS from_id, m.id AS to_id, type(r) AS rel_type,
                 coalesce(r.confidence, 0.8) AS confidence,
-                coalesce(r.metadata, {}) AS meta"
+                coalesce(r.metadata, {}) AS meta",
     );
 
     match graph.execute(rels_query).await {
@@ -320,7 +335,7 @@ pub async fn export_graph_to_json() -> HttpResponse {
 }
 
 // ============================================================================
-// Neo4j Handlers (existing - kept for backward compatibility)
+// Neo4j Handlers
 // ============================================================================
 
 /// GET /graph/stats - Get graph statistics
@@ -392,6 +407,7 @@ pub async fn get_graph_stats() -> HttpResponse {
 }
 
 /// GET /graph/sample - Get sample graph data for visualization
+/// v1.1.0: Fixed - fetches all node types + edges + uses elementId() for reliable IDs
 #[cfg(feature = "neo4j")]
 pub async fn get_graph_sample(query: web::Query<SampleQuery>) -> HttpResponse {
     let limit = query.limit.unwrap_or(50).min(200);
@@ -404,14 +420,82 @@ pub async fn get_graph_sample(query: web::Query<SampleQuery>) -> HttpResponse {
 
     let graph = client.graph();
     let mut data = GraphData::default();
+    let mut all_node_ids: Vec<String> = Vec::new();
 
+    // Proportional limits per node type
+    let doc_limit = ((limit as f64) * 0.2).ceil() as i64;
+    let chunk_limit = ((limit as f64) * 0.3).ceil() as i64;
+    let entity_limit = ((limit as f64) * 0.5).ceil() as i64;
+
+    // ── 1. Fetch Document nodes ──────────────────────────────────
+    let docs_query = neo4rs::query(
+        "MATCH (d:Document)
+         RETURN elementId(d) AS id,
+                coalesce(d.title, d.name, 'Untitled') AS label
+         LIMIT $limit",
+    )
+    .param("limit", doc_limit);
+
+    match graph.execute(docs_query).await {
+        Ok(mut result) => {
+            while let Ok(Some(row)) = result.next().await {
+                let id = row.get::<String>("id").unwrap_or_default();
+                let label = row.get::<String>("label").unwrap_or_default();
+
+                if !id.is_empty() {
+                    all_node_ids.push(id.clone());
+                    data.nodes.push(GraphNode {
+                        id,
+                        label: truncate_label(&label, 30),
+                        node_type: "Document".to_string(),
+                        properties: HashMap::new(),
+                    });
+                }
+            }
+        }
+        Err(e) => warn!(error = %e, "Failed to fetch Document nodes"),
+    }
+
+    // ── 2. Fetch Chunk nodes ─────────────────────────────────────
+    let chunks_query = neo4rs::query(
+        "MATCH (c:Chunk)
+         RETURN elementId(c) AS id,
+                coalesce(c.chunk_id, left(c.content, 40), 'chunk') AS label
+         LIMIT $limit",
+    )
+    .param("limit", chunk_limit);
+
+    match graph.execute(chunks_query).await {
+        Ok(mut result) => {
+            while let Ok(Some(row)) = result.next().await {
+                let id = row.get::<String>("id").unwrap_or_default();
+                let label = row.get::<String>("label").unwrap_or_default();
+
+                if !id.is_empty() {
+                    all_node_ids.push(id.clone());
+                    data.nodes.push(GraphNode {
+                        id,
+                        label: truncate_label(&label, 40),
+                        node_type: "Chunk".to_string(),
+                        properties: HashMap::new(),
+                    });
+                }
+            }
+        }
+        Err(e) => warn!(error = %e, "Failed to fetch Chunk nodes"),
+    }
+
+    // ── 3. Fetch Entity nodes ────────────────────────────────────
     let entities_query = neo4rs::query(
         "MATCH (e:Entity)
-         RETURN e.id as id, e.name as name, e.entity_type as type, e.mention_count as mentions
+         RETURN elementId(e) AS id,
+                coalesce(e.name, e.label, 'entity') AS name,
+                coalesce(e.entity_type, 'Unknown') AS type,
+                coalesce(e.mention_count, 0) AS mentions
          ORDER BY e.mention_count DESC
          LIMIT $limit",
     )
-    .param("limit", limit as i64);
+    .param("limit", entity_limit);
 
     match graph.execute(entities_query).await {
         Ok(mut result) => {
@@ -421,20 +505,54 @@ pub async fn get_graph_sample(query: web::Query<SampleQuery>) -> HttpResponse {
                 let entity_type = row.get::<String>("type").unwrap_or_default();
                 let mentions = row.get::<i64>("mentions").unwrap_or(0);
 
-                let mut properties = HashMap::new();
-                properties.insert("entity_type".to_string(), entity_type.clone());
-                properties.insert("mentions".to_string(), mentions.to_string());
+                if !id.is_empty() {
+                    let mut properties = HashMap::new();
+                    properties.insert("entity_type".to_string(), entity_type);
+                    properties.insert("mentions".to_string(), mentions.to_string());
 
-                data.nodes.push(GraphNode {
-                    id: id.clone(),
-                    label: name,
-                    node_type: "Entity".to_string(),
-                    properties,
-                });
+                    all_node_ids.push(id.clone());
+                    data.nodes.push(GraphNode {
+                        id,
+                        label: name,
+                        node_type: "Entity".to_string(),
+                        properties,
+                    });
+                }
             }
         }
-        Err(e) => {
-            warn!(error = %e, "Failed to fetch entities");
+        Err(e) => warn!(error = %e, "Failed to fetch Entity nodes"),
+    }
+
+    // ── 4. Fetch edges between sampled nodes ─────────────────────
+    if !all_node_ids.is_empty() {
+        let edges_query = neo4rs::query(
+            "MATCH (a)-[r]->(b)
+             WHERE elementId(a) IN $ids AND elementId(b) IN $ids
+             RETURN elementId(a) AS from_id,
+                    elementId(b) AS to_id,
+                    type(r) AS rel_type
+             LIMIT 500",
+        )
+        .param("ids", all_node_ids);
+
+        match graph.execute(edges_query).await {
+            Ok(mut result) => {
+                while let Ok(Some(row)) = result.next().await {
+                    let from = row.get::<String>("from_id").unwrap_or_default();
+                    let to = row.get::<String>("to_id").unwrap_or_default();
+                    let label = row.get::<String>("rel_type").unwrap_or_default();
+
+                    if !from.is_empty() && !to.is_empty() {
+                        data.edges.push(GraphEdge {
+                            from,
+                            to,
+                            label,
+                            properties: HashMap::new(),
+                        });
+                    }
+                }
+            }
+            Err(e) => warn!(error = %e, "Failed to fetch edges"),
         }
     }
 
@@ -454,6 +572,7 @@ pub async fn get_graph_sample(_query: web::Query<SampleQuery>) -> HttpResponse {
 }
 
 /// GET /graph/search - Search for entities
+/// v1.1.0: Fixed - uses elementId() for reliable IDs
 #[cfg(feature = "neo4j")]
 pub async fn search_entities(query: web::Query<SearchQuery>) -> HttpResponse {
     let search_term = &query.q;
@@ -471,7 +590,7 @@ pub async fn search_entities(query: web::Query<SearchQuery>) -> HttpResponse {
     let search_query = neo4rs::query(
         "MATCH (e:Entity)
          WHERE toLower(e.name) CONTAINS toLower($term)
-         RETURN e.id as id, e.name as name, e.entity_type as type, e.mention_count as mentions
+         RETURN elementId(e) AS id, e.name as name, e.entity_type as type, e.mention_count as mentions
          ORDER BY e.mention_count DESC
          LIMIT $limit",
     )
@@ -571,13 +690,163 @@ pub async fn graph_enhanced_search(
     }))
 }
 
-/// POST /graph/rebuild - Rebuild knowledge graph
+// ============================================================================
+// Graph Rebuild - Shared Helper + HTTP Handler
+// ============================================================================
+
+/// Rebuild knowledge graph from Tantivy index.
+/// Shared helper called by both POST /graph/rebuild and reindex job.
+/// Uses the existing index_to_knowledge_graph pipeline (EntityExtractorTool + KnowledgeBuilder).
+///
+/// v1.3.0: Extracted from rebuild_knowledge_graph handler for reuse.
+#[cfg(feature = "neo4j")]
+pub async fn rebuild_graph_from_index() -> GraphBuildResult {
+    use crate::api::{get_knowledge_builder, get_retriever_handle};
+
+    // Check KnowledgeBuilder
+    if get_knowledge_builder().is_none() {
+        return GraphBuildResult {
+            status: "error".to_string(),
+            documents_processed: 0,
+            chunks_processed: 0,
+            entities_extracted: 0,
+            errors: vec!["KnowledgeBuilder not initialized. Is Neo4j connected?".to_string()],
+        };
+    }
+
+    // Read all doc_ids + content from Tantivy
+    let Some(retriever_handle) = get_retriever_handle() else {
+        return GraphBuildResult {
+            status: "error".to_string(),
+            documents_processed: 0,
+            chunks_processed: 0,
+            entities_extracted: 0,
+            errors: vec!["Retriever not initialized".to_string()],
+        };
+    };
+
+    let chunks_data: Vec<(String, String)> = match retriever_handle.lock() {
+        Ok(ret) => {
+            let reader = match ret.index.reader() {
+                Ok(r) => r,
+                Err(e) => {
+                    return GraphBuildResult {
+                        status: "error".to_string(),
+                        documents_processed: 0,
+                        chunks_processed: 0,
+                        entities_extracted: 0,
+                        errors: vec![format!("Failed to get index reader: {}", e)],
+                    };
+                }
+            };
+            let searcher = reader.searcher();
+            let mut results = Vec::new();
+
+            for segment_reader in searcher.segment_readers() {
+                let store_reader = match segment_reader.get_store_reader(1) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                for doc_num in 0..segment_reader.max_doc() {
+                    if segment_reader.is_deleted(doc_num) {
+                        continue;
+                    }
+                    if let Ok(doc) = store_reader.get::<tantivy::TantivyDocument>(doc_num) {
+                        let doc_id = doc
+                            .get_first(ret.doc_id_field)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let content = doc
+                            .get_first(ret.content_field)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !doc_id.is_empty() && !content.is_empty() {
+                            results.push((doc_id, content));
+                        }
+                    }
+                }
+            }
+            results
+        }
+        Err(_) => {
+            return GraphBuildResult {
+                status: "error".to_string(),
+                documents_processed: 0,
+                chunks_processed: 0,
+                entities_extracted: 0,
+                errors: vec!["Failed to lock retriever".to_string()],
+            };
+        }
+    };
+    // Retriever lock is dropped here
+
+    if chunks_data.is_empty() {
+        return GraphBuildResult {
+            status: "completed".to_string(),
+            documents_processed: 0,
+            chunks_processed: 0,
+            entities_extracted: 0,
+            errors: vec![],
+        };
+    }
+
+    // Group by document (filename before #)
+    let mut docs_map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (chunk_id, content) in &chunks_data {
+        let filename = chunk_id.split('#').next().unwrap_or(chunk_id).to_string();
+        docs_map
+            .entry(filename)
+            .or_default()
+            .push((chunk_id.clone(), content.clone()));
+    }
+
+    info!(
+        documents = docs_map.len(),
+        total_chunks = chunks_data.len(),
+        "Starting knowledge graph rebuild from index"
+    );
+
+    // Use the existing index_to_knowledge_graph pipeline
+    // which handles KnowledgeBuilder + EntityExtractorTool + entity linking
+    let mut docs_processed = 0usize;
+    for (filename, chunks) in &docs_map {
+        crate::api::index_to_knowledge_graph(filename, filename, filename, chunks).await;
+        docs_processed += 1;
+    }
+
+    info!(
+        docs = docs_processed,
+        "Knowledge graph rebuild completed"
+    );
+
+    GraphBuildResult {
+        status: "completed".to_string(),
+        documents_processed: docs_processed,
+        chunks_processed: chunks_data.len(),
+        entities_extracted: 0, // exact count tracked inside index_to_knowledge_graph
+        errors: vec![],
+    }
+}
+
+#[cfg(not(feature = "neo4j"))]
+pub async fn rebuild_graph_from_index() -> GraphBuildResult {
+    GraphBuildResult {
+        status: "error".to_string(),
+        documents_processed: 0,
+        chunks_processed: 0,
+        entities_extracted: 0,
+        errors: vec!["Neo4j feature not enabled".to_string()],
+    }
+}
+
+/// POST /graph/rebuild - Rebuild knowledge graph from indexed documents
+/// v1.3.0: Now delegates to rebuild_graph_from_index() helper
 #[cfg(feature = "neo4j")]
 pub async fn rebuild_knowledge_graph() -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "not_implemented",
-        "message": "Use /graph/export to export Neo4j to petgraph format"
-    }))
+    let result = rebuild_graph_from_index().await;
+    HttpResponse::Ok().json(result)
 }
 
 #[cfg(not(feature = "neo4j"))]
@@ -585,6 +854,19 @@ pub async fn rebuild_knowledge_graph() -> HttpResponse {
     HttpResponse::ServiceUnavailable().json(serde_json::json!({
         "error": "Neo4j feature not enabled"
     }))
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Truncate a label string to max_len characters, appending "..." if truncated
+fn truncate_label(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
 }
 
 // ============================================================================

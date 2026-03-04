@@ -2,6 +2,7 @@ pub mod components;
 pub mod constants;
 mod help_content;
 mod helpers;
+pub mod quantization;
 pub mod state;
 
 use components::{info_modal, InfoIcon};
@@ -73,6 +74,7 @@ pub fn ConfigHardware() -> Element {
     let physical_cores = use_signal(|| Option::<usize>::None);
     let gpus: Signal<Option<Vec<api::GpuInfo>>> = use_signal(|| None);
     let system_info: Signal<Option<api::SystemInfo>> = use_signal(|| None);
+    let memory_info: Signal<Option<api::MemoryInfo>> = use_signal(|| None);
     let models: Signal<Vec<api::ModelInfo>> = use_signal(Vec::new);
     let models_loading = use_signal(|| false);
     let model_error = use_signal(|| Option::<String>::None);
@@ -142,6 +144,7 @@ pub fn ConfigHardware() -> Element {
     let show_vocab_only_info = use_signal(|| false);
     let show_reload_info = use_signal(|| false);
     let show_rope_tuning_info = use_signal(|| false);
+    let show_quantization_info = use_signal(|| false);
 
     {
         let mut hardware_config = hardware_config.clone();
@@ -203,12 +206,16 @@ pub fn ConfigHardware() -> Element {
     {
         let mut gpus = gpus.clone();
         let mut system_info = system_info.clone();
+        let mut memory_info = memory_info.clone();
         use_future(move || async move {
             if let Ok(info) = api::fetch_gpus().await {
                 gpus.set(Some(info));
             }
             if let Ok(info) = api::fetch_system_info().await {
                 system_info.set(Some(info));
+            }
+            if let Ok(info) = api::fetch_memory().await {
+                memory_info.set(Some(info));
             }
         });
     }
@@ -489,6 +496,7 @@ pub fn ConfigHardware() -> Element {
     let active_model_in_list = available_models.iter().any(|m| m.name == active_model_name);
     let gpus_value = gpus();
     let system_info_value = system_info();
+    let memory_info_value = memory_info();
     let anthropic_llm = anthropic_llm_config();
 
     let mut backend_info_signal = show_backend_info.clone();
@@ -510,6 +518,7 @@ pub fn ConfigHardware() -> Element {
     let mut vocab_only_info_signal = show_vocab_only_info.clone();
     let mut reload_info_signal = show_reload_info.clone();
     let mut rope_tuning_info_signal = show_rope_tuning_info.clone();
+    let mut quantization_info_signal = show_quantization_info.clone();
     let mut temperature_info_signal = show_temperature_info.clone();
     let mut top_k_info_signal = show_top_k_info.clone();
     let mut top_p_info_signal = show_top_p_info.clone();
@@ -622,28 +631,44 @@ pub fn ConfigHardware() -> Element {
                             }
                         }
                         div { class: "flex flex-col gap-1",
-                            span { class: "text-[0.7rem] text-gray-400", "Active model" }
+                            span { class: "text-[0.7rem] text-gray-400", "Model name (e.g., llama3:7b, phi3:3.8b)" }
                             input {
                                 r#type: "text",
                                 class: PARAM_TEXT_INPUT_CLASS,
-                                value: if active_model_name.is_empty() { "Not set".to_string() } else { active_model_name.clone() },
-                                readonly: true,
+                                placeholder: "Enter model name (e.g., llama3:7b)",
+                                value: hardware_values.model.clone(),
+                                oninput: move |evt| {
+                                    let value = evt.value();
+                                    hardware_config.with_mut(|cfg| cfg.model = value);
+                                },
                             }
                         }
                         div { class: "flex items-center gap-2",
                             select {
                                 class: "select select-sm select-bordered bg-gray-700 text-gray-200",
-                                value: if active_model_in_list { hardware_values.model.clone() } else { active_model_name.clone() },
+                                value: hardware_values.model.clone(),
                                 onchange: move |evt| {
                                     let value = evt.value();
                                     hardware_config.with_mut(|cfg| cfg.model = value);
                                 },
-                                option {
-                                    value: active_model_name.clone(),
-                                    disabled: true,
-                                    selected: !active_model_in_list,
-                                    "Active model: {active_model_name}"
+                                // Placeholder when no models
+                                if available_models.is_empty() {
+                                    option {
+                                        value: "",
+                                        disabled: true,
+                                        selected: hardware_values.model.is_empty(),
+                                        "No models available (start Ollama)"
+                                    }
                                 }
+                                // Show current model if set but not in list
+                                if !hardware_values.model.is_empty() && !active_model_in_list {
+                                    option {
+                                        value: hardware_values.model.clone(),
+                                        selected: true,
+                                        "Current: {hardware_values.model}"
+                                    }
+                                }
+                                // Show only real discovered models
                                 for model in available_models.iter() {
                                     option {
                                         value: model.name.clone(),
@@ -692,6 +717,88 @@ pub fn ConfigHardware() -> Element {
                             div { class: "text-xs text-green-300", "Model list loaded." }
                         }
                     }
+                    // Quantization recommendations based on model name
+                    div { class: PARAM_BLOCK_CLASS,
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-gray-300 font-medium", "Quantization Guide" }
+                            button {
+                                class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
+                                onclick: move |_| quantization_info_signal.set(true),
+                                title: "Quantization help",
+                                InfoIcon {}
+                            }
+                        }
+                        {
+                            let model_name = hardware_values.model.clone();
+                            let model_size = quantization::parse_model_size(&model_name);
+                            let available_gb = memory_info_value.as_ref().map(|m| m.available_memory_gb).unwrap_or(8.0);
+                            
+                            if let Some(size) = model_size {
+                                let recommendations = quantization::get_recommendations(size.params_billions, available_gb);
+                                rsx! {
+                                    div { class: "text-xs text-gray-400 mb-2",
+                                        "Detected: {size.size_string} model • Available RAM: {available_gb:.1} GB"
+                                    }
+                                    div { class: "flex flex-wrap gap-1",
+                                        for rec in recommendations.iter() {
+                                            {
+                                                let bg = if rec.is_recommended {
+                                                    "bg-green-700 border-green-500"
+                                                } else if rec.fits_in_memory {
+                                                    "bg-gray-700 border-gray-500"
+                                                } else {
+                                                    "bg-red-900/50 border-red-700"
+                                                };
+                                                let txt = if rec.is_recommended {
+                                                    "text-green-200 font-bold"
+                                                } else if rec.fits_in_memory {
+                                                    "text-gray-300"
+                                                } else {
+                                                    "text-red-300 line-through"
+                                                };
+                                                rsx! {
+                                                    div {
+                                                        class: "px-2 py-1 rounded border text-[10px] {bg}",
+                                                        title: "{rec.level.description} (~{rec.estimated_memory_gb:.1} GB)",
+                                                        span { class: txt,
+                                                            "{rec.level.name}"
+                                                            if rec.is_recommended {
+                                                                " ✓"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(rec) = recommendations.iter().find(|r| r.is_recommended) {
+                                        div { class: "text-[10px] text-green-400 mt-2",
+                                            "Recommended: {rec.level.name} (~{rec.estimated_memory_gb:.1} GB)"
+                                        }
+                                        if let Some(warn) = &rec.warning {
+                                            div { class: "text-[10px] text-orange-400", "{warn}" }
+                                        }
+                                    }
+                                }
+                            } else if model_name.is_empty() {
+                                rsx! {
+                                    div { class: "text-xs text-gray-500",
+                                        "Enter a model name above (e.g., llama3:7b, phi3:3.8b)"
+                                    }
+                                }
+                            } else {
+                                rsx! {
+                                    div { class: "text-xs text-yellow-400",
+                                        "Could not detect model size from '{model_name}'."
+                                    }
+                                    div { class: "text-xs text-gray-500",
+                                        "Tip: Include size in name like 'model:7b' or 'model:3.8b'"
+                                    }
+                                }
+                            }
+                        }
+                    }
                         }
                     }
                     // Right side: save button, vertically centered
@@ -708,7 +815,7 @@ pub fn ConfigHardware() -> Element {
             }
 
             Panel { title: Some("System overview".into()), refresh: None,
-                div { class: "grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-gray-200",
+                div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs text-gray-200",
                     div { class: "rounded border border-gray-700 bg-gray-800 p-4 flex flex-col gap-2",
                         span { class: "text-sm text-gray-300 font-semibold", "CPU" }
                         span { "{physical_cores_text}" }
@@ -718,6 +825,33 @@ pub fn ConfigHardware() -> Element {
                             span { "Arch: {info.arch}" }
                         } else {
                             span { "Collecting system info…" }
+                        }
+                    }
+                    div { class: "rounded border border-gray-700 bg-gray-800 p-4 flex flex-col gap-2",
+                        span { class: "text-sm text-gray-300 font-semibold", "Memory" }
+                        if let Some(mem) = memory_info_value.clone() {
+                            span { "Total: {mem.total_memory_gb:.1} GB" }
+                            span { "Available: {mem.available_memory_gb:.1} GB" }
+                            span { "Usage: {mem.usage_percent:.1}%" }
+                            // Quantization recommendation
+                            {
+                                let available = mem.available_memory_gb;
+                                let (rec, color) = if available >= 16.0 {
+                                    ("q8_0 / f16", "text-green-400")
+                                } else if available >= 8.0 {
+                                    ("q5_k_m / q6_k", "text-green-400")
+                                } else if available >= 5.0 {
+                                    ("q4_k_m / q5_k_s", "text-yellow-400")
+                                } else {
+                                    ("q4_0 / q4_k_s", "text-orange-400")
+                                };
+                                rsx! {
+                                    span { class: "mt-1 text-[10px] text-gray-400", "Recommended quant:" }
+                                    span { class: "text-[10px] {color}", "{rec}" }
+                                }
+                            }
+                        } else {
+                            span { "Detecting memory…" }
                         }
                     }
                     div { class: "rounded border border-gray-700 bg-gray-800 p-4 flex flex-col gap-2",
@@ -2458,6 +2592,9 @@ pub fn ConfigHardware() -> Element {
         }
         if show_rope_tuning_info() {
             { info_modal(HelpTopic::RopeTuning.title(), show_rope_tuning_info, HelpTopic::RopeTuning.paragraphs()) }
+        }
+        if show_quantization_info() {
+            { info_modal(HelpTopic::Quantization.title(), show_quantization_info, HelpTopic::Quantization.paragraphs()) }
         }
         // Sampling parameter help modals
         if show_temperature_info() {

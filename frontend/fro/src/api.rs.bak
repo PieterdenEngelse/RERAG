@@ -2563,22 +2563,6 @@ pub async fn docker_action(
 }
 
 // ============================================================================
-// OLLAMA STATUS API
-// ============================================================================
-
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
-pub struct OllamaStatusResponse {
-    pub available: bool,
-    pub version: Option<String>,
-    pub loaded_model: Option<String>,
-    pub model_count: usize,
-}
-
-pub async fn fetch_ollama_status() -> Result<OllamaStatusResponse, String> {
-    fetch_json("/monitoring/ollama").await
-}
-
-// ============================================================================
 // KNOWLEDGE GRAPH API
 // ============================================================================
 
@@ -2647,26 +2631,4 @@ pub async fn rebuild_knowledge_graph() -> Result<RebuildGraphResponse, String> {
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
-}
-
-// ============================================================================
-// OLLAMA STATUS API
-// ============================================================================
-
-// ============================================================================
-// CONTAINER INSPECT API
-// ============================================================================
-
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
-pub struct ContainerInspectResponse {
-    pub name: String,
-    pub restart_count: u64,
-    pub exit_code: i64,
-    pub started_at: String,
-    pub finished_at: String,
-    pub logs: String,
-}
-
-pub async fn fetch_container_inspect(name: &str) -> Result<ContainerInspectResponse, String> {
-    fetch_json(&format!("/monitoring/docker/inspect?name={}", urlencoding::encode(name))).await
 }

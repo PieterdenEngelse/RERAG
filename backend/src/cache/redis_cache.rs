@@ -27,7 +27,7 @@ impl RedisCache {
     /// Uses a 5-second timeout to prevent blocking if Redis is unavailable
     pub async fn new(redis_url: &str, ttl_secs: u64) -> Result<Self, Box<dyn std::error::Error>> {
         const CONNECTION_TIMEOUT_SECS: u64 = 5;
-        
+
         match redis::Client::open(redis_url) {
             Ok(client) => {
                 // Wrap connection in timeout to prevent indefinite blocking

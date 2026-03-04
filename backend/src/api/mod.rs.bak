@@ -4906,7 +4906,6 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
             let duration_ms = start.elapsed().as_millis() as u64;
             let vectors = retriever.metrics.total_vectors as u64;
             let mappings = retriever.metrics.total_documents_indexed as u64;
-            drop(retriever); // Release lock before async graph rebuild
 
             match res {
                 Ok(_) => {
@@ -4921,7 +4920,7 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
                     );
                     crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
                 }
-                Err(ref e) => {
+                Err(e) => {
                     job.status = "failed".to_string();
                     job.completed_at = Some(Utc::now().to_rfc3339());
                     job.error = Some(e.to_string());
@@ -4934,11 +4933,6 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
                 }
             }
             jobs_map.lock().unwrap().insert(job_id_clone.clone(), job);
-            // v1.3.0: Rebuild knowledge graph after successful reindex
-            if res.is_ok() {
-                let graph_result = crate::api::graph_routes::rebuild_graph_from_index().await;
-                info!("Post-reindex graph rebuild: {} docs, {} chunks", graph_result.documents_processed, graph_result.chunks_processed);
-            }
         } else {
             let mut job = jobs_map
                 .lock()
@@ -7951,8 +7945,7 @@ pub fn start_api_server(
                     .route("/memories/rag", web::get().to(get_recent_rag_memories))
                     // Docker monitoring
                     .route("/docker", web::get().to(get_docker_status))
-                    .route("/docker/action", web::post().to(docker_action))
-                    .route("/ollama", web::get().to(get_ollama_status)),
+                    .route("/docker/action", web::post().to(docker_action)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES
@@ -8124,119 +8117,7 @@ pub fn start_api_server(
         http_server = http_server.workers(1);
     }
     http_server
-        .client_request_timeout(std::time::Duration::from_secs(30))
         .bind(bind_addr.clone())
         .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", bind_addr, e))
         .run()
-}
-
-/// GET /monitoring/ollama
-/// Returns Ollama service status fetched directly from the Ollama API
-async fn get_ollama_status() -> Result<HttpResponse, Error> {
-    let request_id = generate_request_id();
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .unwrap_or_default();
-
-    // Check version
-    let version_resp = client
-        .get("http://localhost:11434/api/version")
-        .send()
-        .await;
-
-    let available = version_resp.as_ref().map(|r| r.status().is_success()).unwrap_or(false);
-
-    let version = if let Ok(resp) = version_resp {
-        resp.json::<serde_json::Value>().await
-            .ok()
-            .and_then(|v| v["version"].as_str().map(|s| s.to_string()))
-    } else {
-        None
-    };
-
-    // Get loaded/available models
-    let tags_resp = client
-        .get("http://localhost:11434/api/tags")
-        .send()
-        .await;
-
-    let (loaded_model, model_count) = if let Ok(resp) = tags_resp {
-        if let Ok(json) = resp.json::<serde_json::Value>().await {
-            let models = json["models"].as_array();
-            let count = models.map(|m| m.len()).unwrap_or(0);
-            let first = models
-                .and_then(|m| m.first())
-                .and_then(|m| m["name"].as_str())
-                .map(|s| s.to_string());
-            (first, count)
-        } else {
-            (None, 0)
-        }
-    } else {
-        (None, 0)
-    };
-
-    Ok(HttpResponse::Ok().json(json!({
-        "status": "ok",
-        "request_id": request_id,
-        "available": available,
-        "version": version,
-        "loaded_model": loaded_model,
-        "model_count": model_count
-    })))
-}
-
-/// GET /monitoring/docker/inspect?name=<container>
-async fn get_container_inspect(query: web::Query<std::collections::HashMap<String, String>>) -> Result<HttpResponse, Error> {
-    let request_id = generate_request_id();
-    let name = match query.get("name") {
-        Some(n) => n.clone(),
-        None => return Ok(HttpResponse::BadRequest().json(json!({"error": "name is required"}))),
-    };
-
-    // docker inspect
-    let inspect_out = tokio::process::Command::new("docker")
-        .args(["inspect", "--format", "{{json .State}}", &name])
-        .env("DOCKER_HOST", "unix:///var/run/docker.sock")
-        .output().await;
-
-    let (restart_count, exit_code, started_at, finished_at) = if let Ok(out) = inspect_out {
-        let text = String::from_utf8_lossy(&out.stdout);
-        let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        (
-            json["RestartCount"].as_u64().unwrap_or(0),
-            json["ExitCode"].as_i64().unwrap_or(0),
-            json["StartedAt"].as_str().unwrap_or("").to_string(),
-            json["FinishedAt"].as_str().unwrap_or("").to_string(),
-        )
-    } else {
-        (0, 0, String::new(), String::new())
-    };
-
-    // docker logs --tail 20
-    let logs_out = tokio::process::Command::new("docker")
-        .args(["logs", "--tail", "20", "--timestamps", &name])
-        .env("DOCKER_HOST", "unix:///var/run/docker.sock")
-        .output().await;
-
-    let logs = if let Ok(out) = logs_out {
-        // docker logs writes to stderr by default
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        if stderr.is_empty() { stdout } else { stderr }
-    } else {
-        "Failed to fetch logs".to_string()
-    };
-
-    Ok(HttpResponse::Ok().json(json!({
-        "status": "ok",
-        "request_id": request_id,
-        "name": name,
-        "restart_count": restart_count,
-        "exit_code": exit_code,
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "logs": logs
-    })))
 }

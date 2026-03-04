@@ -22,8 +22,8 @@ chrono = { version = "0.4", features = ["serde"] }
 # State management
 dioxus-signals = "0.7.0"
 
-# HTTP client improvements
-reqwest = { version = "0.11", features = ["json", "stream"] }
+# HTTP client - WASM compatible (no TLS features, no stream for WASM)
+reqwest = { version = "0.11", default-features = false, features = ["json"] }
 wasm-bindgen-futures = "0.4"
 
 # Markdown rendering (for displaying LLM responses)
@@ -36,4 +36,3 @@ markdown = "1.0"
 [features]
 default = ["web"]
 web = ["dioxus/web"]
-

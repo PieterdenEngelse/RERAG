@@ -896,7 +896,7 @@ pub fn Home() -> Element {
                                     }
                                     button {
                                         class: "shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80 pointer-events-auto",
-                                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #7C2A02; border: 1px solid #7C2A02;",
                                         onclick: move |evt| {
                                             evt.stop_propagation();
                                             show_backend_info.set(true);
@@ -906,11 +906,11 @@ pub fn Home() -> Element {
                                             class: INFO_ICON_SVG_CLASS,
                                             view_box: "0 0 20 20",
                                             fill: "none",
-                                            stroke: "currentColor",
+                                            stroke: "#026B7C",
                                             stroke_width: "1.5",
                                             circle { cx: "10", cy: "10", r: "9" }
                                             line { x1: "10", y1: "8", x2: "10", y2: "14" }
-                                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                            circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                         }
                                     }
                                 }
@@ -941,7 +941,7 @@ pub fn Home() -> Element {
                                         button {
                                             class: "btn btn-sm rounded-lg px-3",
                                             style: if chat_mode() == "rag" {
-                                                "background-color:white; border-color:white; color:black; box-shadow:none;"
+                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
                                             } else {
                                                 "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
                                             },
@@ -959,10 +959,10 @@ pub fn Home() -> Element {
                                                 class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
-                                                stroke: "currentColor",
+                                                stroke: "#7C2A02",
                                                 circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
                                                 line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#7C2A02", stroke: "none" }
                                             }
                                         }
                                     }
@@ -972,7 +972,7 @@ pub fn Home() -> Element {
                                         button {
                                             class: "btn btn-sm rounded-lg px-3",
                                             style: if chat_mode() == "llm" {
-                                                "background-color:white; border-color:white; color:black; box-shadow:none;"
+                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
                                             } else {
                                                 "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
                                             },
@@ -983,7 +983,7 @@ pub fn Home() -> Element {
                                         }
                                         button {
                                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: #026B7C; border: 1px solid #026B7C;",
                                             onclick: move |_| show_llm_info.set(true),
                                             title: "Info about LLM mode",
                                             svg {
@@ -1003,9 +1003,9 @@ pub fn Home() -> Element {
                                         button {
                                             class: "btn btn-sm rounded-lg px-3",
                                             style: if chat_mode() == "hybrid" {
-                                                "background-color:white; border-color:white; color:black; box-shadow:none;"
+                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
                                             } else {
-                                                "background-color:transparent; border: 1 px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
+                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
                                             },
                                             onclick: move |_| chat_mode.set("hybrid".to_string()),
                                             title: "Search documents + LLM enhancement",
@@ -1176,17 +1176,17 @@ pub fn Home() -> Element {
                                         }
                                         button {
                                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer pointer-events-auto",
-                                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #026B7C; border: 1px solid #026B7C;",
                                             onclick: move |_| show_cache_info.set(true),
                                             title: "Info about KV caching",
                                             svg {
                                                 class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
-                                                stroke: "currentColor",
+                                                stroke: "#7C2A02",
                                                 circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
                                                 line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#7C2A02", stroke: "none" }
                                             }
                                         }
                                     }
@@ -1201,51 +1201,6 @@ pub fn Home() -> Element {
                                             "KV Cache enabled"
                                         } else {
                                             "KV Cache disabled"
-                                        }
-                                    }
-                                }
-                                div {
-                                    class: "flex flex-col items-center gap-1",
-                                    div {
-                                        class: "flex items-center gap-2",
-                                        span {
-                                            class: "text-sm font-medium",
-                                            style: "color: white;",
-                                            "Prompt Cache"
-                                        }
-                                        label {
-                                            class: "flex items-center gap-2 cursor-pointer pointer-events-auto",
-                                            input {
-                                                r#type: "checkbox",
-                                                class: "toggle toggle-sm !border !border-white",
-                                                style: {
-                                                    format!(
-                                                        "border: 1px solid white; background-color: {};",
-                                                        if prompt_caching_enabled() { "" } else { "#d1d5db" }
-                                                    )
-                                                },
-                                                checked: prompt_caching_enabled(),
-                                                onchange: move |evt| {
-                                                    let new_value = evt.checked();
-                                                    prompt_caching_enabled.set(new_value);
-                                                    spawn(async move {
-                                                        let _ = api::set_prompt_caching(new_value).await;
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                    p {
-                                        class: "text-xs text-center",
-                                        style: if prompt_caching_enabled() {
-                                            "color: #22c55e;"
-                                        } else {
-                                            "color: rgba(255,255,255,0.5);"
-                                        },
-                                        if prompt_caching_enabled() {
-                                            "Prompt Cache enabled"
-                                        } else {
-                                            "Prompt Cache disabled"
                                         }
                                     }
                                 }
@@ -2003,6 +1958,38 @@ pub fn Home() -> Element {
 
                         div {
                             class: "text-sm space-y-2",
+
+                            // What is KV Cache
+                            div {
+                                class: "bg-base-200 p-2 rounded border border-base-300",
+                                h4 { class: "text-xs font-semibold text-base-content/70", "What is KV Cache?" }
+                                div {
+                                    class: "text-xs mt-1 space-y-1",
+                                    p {
+                                        strong { "KV" }
+                                        " stands for "
+                                        strong { "Key-Value" }
+                                        ". In the transformer attention mechanism:"
+                                    }
+                                    ul {
+                                        class: "list-disc ml-4 space-y-1",
+                                        li {
+                                            strong { "K (Key)" }
+                                            " and "
+                                            strong { "V (Value)" }
+                                            " are two of the three matrices computed during self-attention (the third being "
+                                            strong { "Q - Query" }
+                                            ")"
+                                        }
+                                        li { "When generating text token-by-token, the model recomputes attention for all previous tokens" }
+                                        li {
+                                            "The "
+                                            strong { "KV Cache" }
+                                            " stores the Key and Value vectors from previous tokens so they don't need to be recomputed"
+                                        }
+                                    }
+                                }
+                            }
 
                             // Link to attention explanation
                             div {

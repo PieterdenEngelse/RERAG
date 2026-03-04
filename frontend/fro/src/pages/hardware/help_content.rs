@@ -42,6 +42,8 @@ pub enum HelpTopic {
     NumPredict,
     NumKeep,
     StopSequences,
+    // Quantization
+    Quantization,
 }
 
 impl HelpTopic {
@@ -85,6 +87,7 @@ impl HelpTopic {
             Self::NumPredict => "Max Tokens (num_predict)",
             Self::NumKeep => "Tokens to Keep (num_keep)",
             Self::StopSequences => "Stop Sequences",
+            Self::Quantization => "Quantization Guide",
         }
     }
 
@@ -336,6 +339,15 @@ impl HelpTopic {
                 "Enter multiple sequences separated by commas.",
                 "Common examples: </s>, <|endoftext|>, <|end|>, ###, [DONE]",
                 "Useful for controlling output format and preventing runaway generation.",
+            ],
+            Self::Quantization => vec![
+                "Quantization reduces model precision to save memory. Lower bits = smaller size but slightly reduced quality.",
+                "Common levels: q4_0 (4-bit, smallest), q5_k_m (5-bit, balanced), q8_0 (8-bit, high quality), f16 (16-bit, full precision).",
+                "With Ollama, quantization is set when you PULL the model, not at runtime. The model tag determines the quantization.",
+                "Example: 'phi3.5:latest' and 'phi3.5:3.8b-mini-instruct-q4_0' are the SAME model if they share the same ID.",
+                "To use a different quantization, pull a model with that specific tag: 'ollama pull phi3:3.8b-mini-instruct-q8_0'.",
+                "The recommendation shown here helps you choose which quantization tag to pull based on your available RAM.",
+                "If size detection fails (shows 'Could not detect'), include the size in the model name like 'llama3:7b' or 'phi3:3.8b'.",
             ],
         }
     }

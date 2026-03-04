@@ -21,10 +21,12 @@ pub fn Header() -> Element {
     let mut show_orange_details = use_signal(|| false);
     let mut show_tantivy_details = use_signal(|| false);
     let mut status_hover_refcount = use_signal(|| 0i32);
+    
     let mut show_inverted_index_details = use_signal(|| false);
     let mut show_busy_details = use_signal(|| false);
     let mut show_checking_details = use_signal(|| false);
     let mut show_indices_details = use_signal(|| false);
+    
     // Log modal state
     let mut show_log_modal = use_signal(|| false);
     let mut log_status_type = use_signal(|| String::new());
@@ -122,6 +124,22 @@ pub fn Header() -> Element {
                         }
                     }
 
+                    // Check Ollama status by trying to fetch models
+                    match api::fetch_models("ollama").await {
+                        Ok(models) => {
+                            if models.is_empty() {
+                                // Ollama might be running but has no models, or is offline
+                                // Try a direct check - empty list could mean offline
+                                page_errors.with_mut(|e| e.set_error("ollama", "Ollama offline or no models"));
+                            } else {
+                                page_errors.with_mut(|e| e.clear_error("ollama"));
+                            }
+                        }
+                        Err(_) => {
+                            page_errors.with_mut(|e| e.set_error("ollama", "Ollama not running"));
+                        }
+                    }
+
                     last_health_response.set(Some(resp));
                     timeout_count.set(0); // Reset timeout counter on success
                 }
@@ -171,6 +189,12 @@ pub fn Header() -> Element {
         }
     };
 
+    let modal_target = if has_page_errors {
+        "page_errors".to_string()
+    } else {
+        status.clone()
+    };
+        
     let tooltip_text = if has_page_errors {
         let all_errors = errors.get_all_errors();
         let error_lines: Vec<String> = all_errors
@@ -218,8 +242,8 @@ pub fn Header() -> Element {
             div { class: "absolute inset-x-0 flex justify-center pointer-events-none",
                 div { class: "flex items-center gap-2 pointer-events-auto",
                     h1 {
-                        class: "font-medium text-center text-white",
-                        style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem;",
+                        class: "font-medium text-center",
+                        style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem; color: #026B7C;",
                         "Rust Agentic Retrieval Augumented Generation"
                     }
                     div { class: "flex items-center gap-1",
@@ -237,31 +261,36 @@ pub fn Header() -> Element {
                                     })
                             },
                             onclick: move |_| {
-                                match status_for_click.as_str() {
-                                    "healthy" | "ok" => show_green_details.set(true),
-                                    "degraded" => show_yellow_details.set(true),
-                                    "offline" | "unhealthy" => show_red_details.set(true),
-                                    "busy" => show_busy_details.set(true),
-                                    "checking" => show_checking_details.set(true),
-                                    _ => show_orange_details.set(true),
+                                let has_pe = !page_errors.read().errors.is_empty();
+                                if has_pe {
+                                    show_red_details.set(true);
+                                } else {
+                                    match health_status().as_str() {
+                                        "healthy" | "ok" => show_green_details.set(true),
+                                        "degraded" => show_yellow_details.set(true),
+                                        "offline" | "unhealthy" => show_red_details.set(true),
+                                        "busy" => show_busy_details.set(true),
+                                        "checking" => show_checking_details.set(true),
+                                        _ => show_orange_details.set(true),
+                                    }
                                 }
                             },
                         }
                         button {
                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #7C2A02; border: 1px solid #7C2A02;",
+                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
                             onclick: move |_| show_status_info.set(true),
                             title: "Status info",
                             svg {
                                 class: INFO_ICON_SVG_CLASS,
                                 view_box: "0 0 20 20",
                                 fill: "none",
-                                stroke: "currentColor",
+                                stroke: "#026B7C",
                                 circle {
                                     cx: "10",
                                     cy: "10",
                                     r: "9",
-                                    stroke_width: "1",
+                                    stroke_width: "1.5",
                                 }
                                 line {
                                     x1: "10",
@@ -274,7 +303,7 @@ pub fn Header() -> Element {
                                     cx: "10",
                                     cy: "6.3",
                                     r: "1",
-                                    fill: "currentColor",
+                                    fill: "#026B7C",
                                     stroke: "none",
                                 }
                             }
@@ -687,7 +716,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_red_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-red-400", "Offline / Unhealthy (Red)" }
@@ -696,12 +725,13 @@ pub fn Header() -> Element {
                             href: "#log",
                             onclick: move |evt| {
                                 evt.stop_propagation();
-                                log_status_type.set("unhealthy".to_string());
+                                let current_status = health_status();
+                                log_status_type.set(current_status.clone());
                                 log_loading.set(true);
                                 log_error.set(None);
                                 show_log_modal.set(true);
                                 spawn(async move {
-                                    match api::get_status_log("unhealthy").await {
+                                    match api::get_status_log(&current_status).await {
                                         Ok(resp) => {
                                             log_content.set(resp.content);
                                             log_total_lines.set(resp.total_lines);
@@ -717,8 +747,35 @@ pub fn Header() -> Element {
                             "Log"
                         }
                     }
+
+                    // Show active page errors if any
+                    {
+                        let current_errors = page_errors();
+                        if current_errors.has_errors() {
+                            let all_errors = current_errors.get_all_errors();
+                            rsx! {
+                                div { class: "bg-red-900/30 border border-red-700 rounded-lg p-4 space-y-2",
+                                    h4 { class: "text-red-300 font-semibold mb-2", "Active Service Errors" }
+                                    for (source , message) in all_errors.iter() {
+                                        div { class: "flex items-start gap-2",
+                                            span { class: "text-red-400 font-mono text-xs bg-red-900/50 px-2 py-0.5 rounded shrink-0",
+                                                "{source}"
+                                            }
+                                            span { class: "text-gray-200 text-sm", "{message}" }
+                                        }
+                                    }
+                                }
+                                div { class: "text-xs text-gray-500",
+                                    "Backend health status: "
+                                    span { class: "font-mono text-gray-300", "{health_status()}" }
+                                }
+                            }
+                        } else {
+                            rsx! {}
+                        }
+                    }
                     p { class: "text-gray-200 leading-relaxed",
-                        "Red appears when either: (1) The frontend's health_check() request failed entirely (network error, timeout, backend not running), setting status to \"offline\". (2) The backend responded with status: \"unhealthy\" because retriever.health_check() failed."
+                        "Red appears when either: (1) The frontend's health_check() request failed entirely (network error, timeout, backend not running), setting status to \"offline\". (2) The backend responded with status: \"unhealthy\" because retriever.health_check() failed. (3) A monitored service (Neo4j, Redis, Docker, Ollama) reported an error."
                     }
                     p { class: "text-gray-200 leading-relaxed",
                         "Common failure reasons from retriever.health_check(): index directory missing or not a directory, unable to create index reader, vector/document mapping inconsistency, search test failure, vector file not writable, or insufficient disk space (< 100 MB)."
@@ -1091,6 +1148,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#initial-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_initial_status_details.set(true);
                                     },
@@ -1108,6 +1166,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#green-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_green_details.set(true);
                                     },
@@ -1128,6 +1187,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#busy-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_busy_details.set(true);
                                     },
@@ -1148,6 +1208,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#checking-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_checking_details.set(true);
                                     },
@@ -1165,6 +1226,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#yellow-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_yellow_details.set(true);
                                     },
@@ -1182,6 +1244,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#red-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_red_details.set(true);
                                     },
@@ -1199,6 +1262,7 @@ pub fn Header() -> Element {
                                     class: "text-gray-400 text-sm underline decoration-dotted",
                                     href: "#orange-status",
                                     onclick: move |evt| {
+                                        evt.prevent_default();
                                         evt.stop_propagation();
                                         show_orange_details.set(true);
                                     },

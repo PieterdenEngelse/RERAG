@@ -713,7 +713,11 @@ impl Retriever {
                 "Batch already in progress".to_string(),
             ));
         }
-        self.index_writer = Some(self.index.writer(256_000_000)?);
+        let writer = self.index.writer(256_000_000)?;
+        // Configure merge policy to auto-compact segments
+        let merge_policy = tantivy::merge_policy::LogMergePolicy::default();
+        writer.set_merge_policy(Box::new(merge_policy));
+        self.index_writer = Some(writer);
         self.batch_mode = true;
         debug!("Batch indexing mode started");
         Ok(())
@@ -1901,6 +1905,32 @@ impl Retriever {
         let _ = self.doc_id_to_vector_idx.len();
         Ok(())
     }
+    /// Returns all doc_ids currently in the Tantivy index
+    pub fn get_all_doc_ids(&self) -> Result<Vec<String>, RetrieverError> {
+        let reader = self.index.reader().map_err(|e| {
+            RetrieverError::IndexError(format!("Failed to get reader: {}", e))
+        })?;
+        let searcher = reader.searcher();
+        let mut doc_ids = Vec::new();
+        for segment_reader in searcher.segment_readers() {
+            let store_reader = segment_reader
+                .get_store_reader(1)
+                .map_err(|e| RetrieverError::IndexError(format!("Store reader error: {}", e)))?;
+            for doc_id in 0..segment_reader.max_doc() {
+                if segment_reader.is_deleted(doc_id) {
+                    continue;
+                }
+                if let Ok(doc) = store_reader.get::<tantivy::TantivyDocument>(doc_id) {
+                    if let Some(value) = doc.get_first(self.doc_id_field) {
+                        if let Some(text) = value.as_str() {
+                            doc_ids.push(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(doc_ids)
+    }
 }
 
 // Phase 11 Step 2: L2 Cache Methods - Version 1.0.0
@@ -2248,14 +2278,26 @@ mod tests {
 
         // Add the same doc_id again with different vector - should update in place
         retriever.add_vector_with_id("doc1".to_string(), vec![0.4, 0.5, 0.6]);
-        
+
         // Should still have only 1 vector (no orphan created)
-        assert_eq!(retriever.vectors.len(), 1, "Should not create orphan vector");
-        assert_eq!(retriever.doc_id_to_vector_idx.len(), 1, "Should still have 1 mapping");
-        
+        assert_eq!(
+            retriever.vectors.len(),
+            1,
+            "Should not create orphan vector"
+        );
+        assert_eq!(
+            retriever.doc_id_to_vector_idx.len(),
+            1,
+            "Should still have 1 mapping"
+        );
+
         // Vector should be updated to new value
-        assert_eq!(retriever.vectors[0], vec![0.4, 0.5, 0.6], "Vector should be updated");
-        
+        assert_eq!(
+            retriever.vectors[0],
+            vec![0.4, 0.5, 0.6],
+            "Vector should be updated"
+        );
+
         // Mapping should still point to index 0
         assert_eq!(retriever.doc_id_to_vector_idx.get("doc1"), Some(&0));
 
@@ -2287,7 +2329,9 @@ mod tests {
         .unwrap();
         retriever.add_vector_with_id("doc1".to_string(), vec![0.1, 0.2, 0.3]);
         retriever.add_vector_with_id("doc2".to_string(), vec![0.4, 0.5, 0.6]);
-        retriever.save_vectors_rkyv(rkyv_path.to_str().unwrap()).unwrap();
+        retriever
+            .save_vectors_rkyv(rkyv_path.to_str().unwrap())
+            .unwrap();
 
         // Wait a bit to ensure different modification times
         sleep(Duration::from_millis(100));
@@ -2302,11 +2346,14 @@ mod tests {
             json_path.to_str().unwrap(),
         )
         .unwrap();
-        retriever2.load_vectors_auto(json_path.to_str().unwrap()).unwrap();
+        retriever2
+            .load_vectors_auto(json_path.to_str().unwrap())
+            .unwrap();
 
         // Should have 3 vectors from the newer JSON file
         assert_eq!(
-            retriever2.vectors.len(), 3,
+            retriever2.vectors.len(),
+            3,
             "Should load from newer JSON file with 3 vectors, not older rkyv with 2"
         );
         assert_eq!(retriever2.doc_id_to_vector_idx.len(), 3);

@@ -190,7 +190,36 @@ services:
       - "8081:80"
     depends_on:
       - neo4j
-    
+
+  # ═══════════════════════════════════════════════════════════════
+  # LLM SERVICE (Ollama for embeddings and chat)
+  # ═══════════════════════════════════════════════════════════════
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ag-ollama
+    restart: unless-stopped
+    profiles: ["", "core"]
+    ports:
+      - "11434:11434"  # Ollama API
+    volumes:
+      - ollama-data:/root/.ollama  # Persist downloaded models
+    environment:
+      - OLLAMA_HOST=0.0.0.0  # Listen on all interfaces
+    # Uncomment for NVIDIA GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 volumes:
   neo4j-data:
@@ -200,3 +229,4 @@ volumes:
   grafana-data:
   loki-data:
   tempo-data:
+  ollama-data:

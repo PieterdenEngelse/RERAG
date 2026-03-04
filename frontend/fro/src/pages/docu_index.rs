@@ -12,7 +12,9 @@ pub fn DocuIndex() -> Element {
     let mut show_bias_modal = use_signal(|| false);
     let mut show_threads_modal = use_signal(|| false);
     let mut show_entities_production_modal = use_signal(|| false);
-
+    let mut show_lora_export_modal = use_signal(|| false);
+    let mut show_neo4j_modal = use_signal(|| false);
+    let mut show_pipeline_modal = use_signal(|| false);
     rsx! {
         div { class: "min-h-screen bg-base-200 p-6",
 
@@ -75,6 +77,25 @@ pub fn DocuIndex() -> Element {
                         onclick: move |_| show_entities_production_modal.set(true),
                         "Entities Production"
                     }
+
+                    button {
+                        class: "text-primary hover:underline text-lg font-semibold text-left block",
+                        onclick: move |_| show_pipeline_modal.set(true),
+                        "AG Pipeline"
+                    }
+
+                    button {
+                        class: "text-primary hover:underline text-lg font-semibold text-left block",
+                        onclick: move |_| show_lora_export_modal.set(true),
+                        "LoRA EXPORT"
+                    }
+
+                    button {
+                        class: "text-primary hover:underline text-lg font-semibold text-left block",
+                        onclick: move |_| show_neo4j_modal.set(true),
+                        "Neo4j"
+                    }
+                
                 }
             }
         }
@@ -1818,6 +1839,102 @@ let embedding = task::spawn_blocking(move || {{
             }
         }
 
+        if show_lora_export_modal() {
+            div {
+                class: "fixed inset-0 bg-gray-800",
+                style: "top: 2.5rem; z-index: 50; overflow-y: auto; overscroll-behavior: contain;",
+
+                div { class: "p-6 max-w-4xl mx-auto pb-20",
+                    div { class: "flex justify-between items-start mb-4",
+                        h2 { class: "text-2xl font-bold text-white", "LoRA Export" }
+                        button {
+                            class: "text-white text-xl hover:text-gray-300",
+                            onclick: move |_| show_lora_export_modal.set(false),
+                            "×"
+                        }
+                    }
+                    div { class: "space-y-4 text-sm text-gray-200",
+                        div { class: "space-y-1",
+                            p {
+                                "This board controls the entire LoRA snapshot pipeline. It talks to "
+                                code { "/training/export_snapshot" }
+                                ", the same endpoints that power the CLI scripts under "
+                                code { "tools/lora_training/" }
+                                "."
+                            }
+                            p {
+                                "Use it when you need a fresh JSONL dataset for fine-tuning or when you want uploads to trigger exports automatically without touching env files."
+                            }
+                        }
+                        div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
+                            div { class: "space-y-1",
+                                strong { "Status card" }
+                                p {
+                                    "Shows the live job state reported by the backend (running, idle, or last error) plus timestamps from the last run. It's read-only, but it confirms whether a manual or auto run actually started."
+                                }
+                            }
+                            div { class: "space-y-1",
+                                strong { "Run Export" }
+                                p {
+                                    "Immediately launches "
+                                    code { "export_docs.py" }
+                                    " followed by "
+                                    code { "normalize_dataset.py" }
+                                    ". It respects whatever filter is configured below so you can export a narrow slice when testing."
+                                }
+                            }
+                            div { class: "space-y-1",
+                                strong { "Auto-export after upload" }
+                                p {
+                                    "When enabled, every successful document upload batch schedules a LoRA export after the debounce window. Set the debounce (ms) to wait for multiple uploads before firing a single job."
+                                }
+                            }
+                            div { class: "space-y-1",
+                                strong { "Filter override" }
+                                p {
+                                    "Writes to "
+                                    code { "LORA_EXPORT_ONLY" }
+                                    " in-memory before the scripts run. Provide comma-separated paths relative to "
+                                    code { "documents/" }
+                                    ". Leave blank to export everything."
+                                }
+                            }
+                        }
+                        div { class: "space-y-1",
+                            strong { "How it differs from the Reindex board" }
+                            p {
+                                "Reindex rebuilds the Tantivy/LanceDB search indexes so the RAG engine stays accurate. The LoRA board only curates datasets for model fine-tuning. It's normal to run LoRA exports more frequently than full reindexes when you are training adapters."
+                            }
+                        }
+                        div { class: "space-y-1 text-xs text-gray-400",
+                            p {
+                                "Whenever you press "Save
+                                "/"Apply
+                                ", the backend stores the override in memory and responds with the latest config. The panel polls every 5 seconds so you'll see changes made from other clients."
+                            }
+                            p { "Direct API equivalents:" }
+                            ul { class: "list-disc ml-5 space-y-1",
+                                li {
+                                    code { "POST /training/export_snapshot" }
+                                }
+                                li {
+                                    code { "GET/POST /training/export_snapshot/config" }
+                                }
+                                li {
+                                    code { "POST /training/export_snapshot/filter" }
+                                }
+                            }
+                        }
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm mt-6 w-full",
+                        onclick: move |_| show_lora_export_modal.set(false),
+                        "Got it!"
+                    }
+                }
+            }
+        }
+
         // Entities Production Modal
         if show_entities_production_modal() {
             div {
@@ -2008,13 +2125,8 @@ let embedding = task::spawn_blocking(move || {{
                             " = concrete instances"
                         }
                     }
-                
-                }
-            }
-        }
-    }
-}
-p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
+
+                    p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                     ul { class: "space-y-1 text-sm text-gray-300 ml-4 list-disc",
                         li { "detect entities" }
                         li { "classify entities" }
@@ -2024,7 +2136,9 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                     }
 
                     // How Concepts and Entities Matter for Embeddings, ONNX, and Neo4j
-                    h3 { class: "text-xl font-bold text-white mt-8 mb-3", "How Concepts and Entities Matter for Embeddings, ONNX, and Neo4j" }
+                    h3 { class: "text-xl font-bold text-white mt-8 mb-3",
+                        "How Concepts and Entities Matter for Embeddings, ONNX, and Neo4j"
+                    }
                     p { class: "text-sm text-gray-300 mb-4",
                         "A knowledge graph uses two kinds of nodes:"
                     }
@@ -2062,7 +2176,9 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                     }
 
                     // How This Relates to Embeddings
-                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2", "How This Relates to Embeddings" }
+                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2",
+                        "How This Relates to Embeddings"
+                    }
                     p { class: "text-sm text-gray-300 mb-2",
                         "Embeddings give you a vector representation:"
                     }
@@ -2075,12 +2191,12 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                         li { "The embedding vector (v) belongs to an n-dimensional real vector space" }
                         li { "Every concept and entity can have its own embedding" }
                     }
-                    p { class: "text-sm text-gray-300 mt-3",
-                        "This is where things get interesting."
-                    }
+                    p { class: "text-sm text-gray-300 mt-3", "This is where things get interesting." }
 
                     // Concepts get concept embeddings
-                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2", "Concepts get concept embeddings" }
+                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2",
+                        "Concepts get concept embeddings"
+                    }
                     p { class: "text-sm text-gray-300 mb-2",
                         "These capture the general meaning of a category."
                     }
@@ -2089,7 +2205,9 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                     }
 
                     // Entities get entity embeddings
-                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2", "Entities get entity embeddings" }
+                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2",
+                        "Entities get entity embeddings"
+                    }
                     p { class: "text-sm text-gray-300 mb-2",
                         "These capture the specific meaning of a particular instance."
                     }
@@ -2155,12 +2273,12 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                         li { "Support RAG pipelines" }
                         li { "Build hybrid symbolic + semantic reasoning systems" }
                     }
-                    p { class: "text-sm text-gray-300 mt-2",
-                        "This is where the power emerges."
-                    }
+                    p { class: "text-sm text-gray-300 mt-2", "This is where the power emerges." }
 
                     // Putting It All Together
-                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2", "Putting It All Together" }
+                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2",
+                        "Putting It All Together"
+                    }
                     p { class: "text-sm text-gray-300 mb-2", "Here's the full pipeline:" }
                     div { class: "bg-gray-700 rounded p-4 my-2 font-mono text-xs text-blue-300 whitespace-pre",
                         "          ONNX Model\n"
@@ -2201,7 +2319,9 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                     ul { class: "space-y-1 text-sm text-gray-300 ml-4 list-disc",
                         li { "Find cities similar to Paris" }
                         li { "Find entities similar to a concept" }
-                        li { "Build hybrid reasoning systems that mix symbolic edges with semantic vectors" }
+                        li {
+                            "Build hybrid reasoning systems that mix symbolic edges with semantic vectors"
+                        }
                     }
 
                     button {
@@ -2212,5 +2332,273 @@ p { class: "text-sm text-gray-300 mt-4 mb-2", "Embeddings help you:" }
                 }
             }
         }
-    }  
-}      
+
+        // AG Pipeline Modal
+        if show_pipeline_modal() {
+            div {
+                class: "fixed inset-0 bg-gray-800",
+                style: "top: 2.5rem; z-index: 50; overflow-y: auto; overscroll-behavior: contain;",
+
+                div { class: "p-6 max-w-4xl mx-auto pb-20",
+
+                    div { class: "flex justify-between items-start mb-4",
+                        h2 { class: "text-2xl font-bold text-white", "AG Pipeline" }
+                        button {
+                            class: "text-white text-xl hover:text-gray-300",
+                            onclick: move |_| show_pipeline_modal.set(false),
+                            "×"
+                        }
+                    }
+
+                    p { class: "text-lg text-gray-200 mb-6",
+                        "The AG system processes documents through a multi-stage pipeline, from upload to agentic retrieval."
+                    }
+
+                    // Pipeline diagram
+                    div { class: "bg-gray-700 rounded p-4 my-4 font-mono text-xs text-blue-300 whitespace-pre",
+                        "  Document Upload\n"
+                        "        │\n"
+                        "        ▼\n"
+                        "     Parsing\n"
+                        "        │\n"
+                        "        ▼\n"
+                        "    Chunking\n"
+                        "        │\n"
+                        "        ▼\n"
+                        "   Embedding\n"
+                        "        │\n"
+                        "        ▼\n"
+                        "    Indexing\n"
+                        "        │\n"
+                        "        ▼\n"
+                        " Graph Building\n"
+                        "        │\n"
+                        "        ▼\n"
+                        "   Retrieval\n"
+                        "        │\n"
+                        "        ▼\n"
+                        "     Agent"
+                    }
+
+                    // Step 1
+                    h3 { class: "text-xl font-bold text-white mt-8 mb-3", "1. Document Upload" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        "User uploads a file via the "
+                        code { class: "text-green-300", "/upload" }
+                        " endpoint. Supported formats include PDF, TXT, MD, and other text-based files."
+                    }
+
+                    // Step 2
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "2. Parsing" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "parser.rs" }
+                        " extracts raw text from the uploaded file. Handles PDF, plain text, Markdown, and other formats using MIME detection."
+                    }
+
+                    // Step 3
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "3. Chunking" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "chunker.rs" }
+                        " splits the extracted text into smaller, semantically meaningful chunks. Supports multiple chunking strategies including fixed-size, sentence-aware, and adaptive chunking."
+                    }
+
+                    // Step 4
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "4. Embedding" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "embedder.rs" }
+                        " generates dense vector representations for each chunk using the ONNX embedding model. Each chunk becomes a fixed-length numerical vector that captures its semantic meaning."
+                    }
+
+                    // Step 5
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "5. Indexing" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "index.rs" }
+                        " stores each chunk in two places: the Tantivy full-text search index for keyword search, and the vector store for semantic similarity search."
+                    }
+
+                    // Step 6
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "6. Graph Building" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "knowledge_builder.rs" }
+                        " creates Document, Chunk, and Entity nodes in the Neo4j knowledge graph. Extracts entities from chunk content and builds relationships between them (HAS_CHUNK, MENTIONS, RELATED_TO)."
+                    }
+
+                    // Step 7
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "7. Retrieval" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "retriever.rs" }
+                        " handles search queries by combining Tantivy full-text search with vector similarity search. Supports hybrid search with configurable weighting and multi-layer caching (L1/L2/L3)."
+                    }
+
+                    // Step 8
+                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "8. Agent" }
+                    p { class: "text-sm text-gray-300 mb-2",
+                        code { class: "text-green-300", "agent.rs" }
+                        " / "
+                        code { class: "text-green-300", "agentic.rs" }
+                        " orchestrates the LLM with tools. Takes the retrieved context, constructs prompts, calls Ollama for inference, and manages the agentic decision loop including tool composition and memory."
+                    }
+
+                    button {
+                        class: "btn btn-primary btn-sm mt-8 w-full",
+                        onclick: move |_| show_pipeline_modal.set(false),
+                        "Got it!"
+                    }
+                }
+            }
+        }
+        // Neo4j Modal - Full info, compact layout
+        if show_neo4j_modal() {
+            div {
+                class: "fixed inset-0 bg-gray-800 flex items-center justify-center",
+                style: "top: 2.5rem; z-index: 50;",
+                onclick: move |_| show_neo4j_modal.set(false),
+
+                div {
+                    class: "bg-gray-900 rounded-lg p-4 max-w-6xl w-[98vw] max-h-[calc(100vh-4rem)]",
+                    onclick: move |evt| evt.stop_propagation(),
+
+                    // Header row
+                    div { class: "flex justify-between items-center mb-2",
+                        div {
+                            h2 { class: "text-lg font-bold text-white", "Neo4j in RAG: GraphRAG" }
+                            p { class: "text-xs text-cyan-400",
+                                "How Neo4j enhances retrieval-augmented generation"
+                            }
+                        }
+                        button {
+                            class: "btn btn-sm btn-circle btn-ghost text-white",
+                            onclick: move |_| show_neo4j_modal.set(false),
+                            "✕"
+                        }
+                    }
+
+                    // Three-column layout
+                    div { class: "grid grid-cols-1 lg:grid-cols-3 gap-3",
+                        // Column 1: Problem, Solution, Use Cases
+                        div { class: "space-y-2",
+                            div { class: "p-2 rounded bg-red-900/20 border border-red-700/30",
+                                h3 { class: "text-xs font-semibold text-red-300 mb-1",
+                                    "❌ The Problem with Traditional RAG"
+                                }
+                                p { class: "text-[11px] text-gray-300",
+                                    "Vector search alone misses connections between concepts. Query about \"rate limiting\" finds rate limit docs, but misses related monitoring docs that share entities."
+                                }
+                            }
+                            div { class: "p-2 rounded bg-green-900/20 border border-green-700/30",
+                                h3 { class: "text-xs font-semibold text-green-300 mb-1",
+                                    "✅ Neo4j Solution: Entity-Aware Retrieval"
+                                }
+                                p { class: "text-[11px] text-gray-300",
+                                    "Neo4j stores entities and relationships extracted from documents. When you search, it finds additional relevant chunks by following entity connections."
+                                }
+                            }
+                        }
+
+                        // Column 2: Use Cases
+                        div { class: "space-y-1.5",
+                            h3 { class: "text-xs font-semibold text-cyan-300 mb-1",
+                                "📊 Use Cases"
+                            }
+                            div { class: "p-1.5 rounded bg-gray-700/50 border border-gray-600",
+                                span { class: "text-xs font-medium text-white",
+                                    "1. Entity-Based Expansion"
+                                }
+                                p { class: "text-[10px] text-gray-400",
+                                    "Chunks sharing entities (APIs, configs) are linked even if text differs"
+                                }
+                            }
+                            div { class: "p-1.5 rounded bg-gray-700/50 border border-gray-600",
+                                span { class: "text-xs font-medium text-white", "2. Multi-Hop Reasoning" }
+                                p { class: "text-[10px] text-gray-400",
+                                    "Traverse 2+ relationships: RateLimiter → Prometheus → Grafana"
+                                }
+                            }
+                            div { class: "p-1.5 rounded bg-gray-700/50 border border-gray-600",
+                                span { class: "text-xs font-medium text-white",
+                                    "3. Cross-Document Queries"
+                                }
+                                p { class: "text-[10px] text-gray-400",
+                                    "Find connections across different files via shared entities"
+                                }
+                            }
+                            div { class: "p-1.5 rounded bg-gray-700/50 border border-gray-600",
+                                span { class: "text-xs font-medium text-white", "4. Agent Memory" }
+                                p { class: "text-[10px] text-gray-400",
+                                    "Store past interactions as graph, learn from successful queries"
+                                }
+                            }
+                        }
+
+                        // Column 3: Flow diagram + Config
+                        div { class: "space-y-2",
+                            h3 { class: "text-xs font-semibold text-cyan-300 mb-1",
+                                "🔄 RAG Flow with Neo4j"
+                            }
+                            div { class: "p-2 rounded bg-gray-700 font-mono text-[10px] leading-tight",
+                                pre { class: "text-gray-300",
+                                    "Query: \"How do I configure rate limiting?\"\n"
+                                    "         │\n"
+                                    "         ▼\n"
+                                    "┌─────────────────┐   ┌─────────────────┐\n"
+                                    "│ Vector Search   │   │ Graph Search    │\n"
+                                    "│ (Tantivy)       │   │ (Neo4j)         │\n"
+                                    "└────────┬────────┘   └────────┬────────┘\n"
+                                    "         └─────────┬─────────┘\n"
+                                    "                   ▼\n"
+                                    "        ┌───────────────────┐\n"
+                                    "        │ Graph Expansion   │\n"
+                                    "        │ + Merged Context  │\n"
+                                    "        └─────────┬─────────┘\n"
+                                    "                  ▼\n"
+                                    "           Better Answer"
+                                }
+                            }
+                            // Config
+                            h3 { class: "text-xs font-semibold text-cyan-300 mt-2 mb-1",
+                                "⚙️ Configuration"
+                            }
+                            div { class: "grid grid-cols-2 gap-1 text-[10px] font-mono",
+                                div { class: "px-1.5 py-0.5 rounded bg-gray-700",
+                                    span { class: "text-cyan-400", "NEO4J_ENABLED" }
+                                    span { class: "text-gray-500", "=true" }
+                                }
+                                div { class: "px-1.5 py-0.5 rounded bg-gray-700",
+                                    span { class: "text-cyan-400", "GRAPH_EXPANSION_MAX_HOPS" }
+                                    span { class: "text-gray-500", "=2" }
+                                }
+                                div { class: "px-1.5 py-0.5 rounded bg-gray-700",
+                                    span { class: "text-cyan-400", "GRAPH_EXPANSION_MAX_CHUNKS" }
+                                    span { class: "text-gray-500", "=10" }
+                                }
+                                div { class: "px-1.5 py-0.5 rounded bg-gray-700",
+                                    span { class: "text-cyan-400", "GRAPH_ENTITY_WEIGHT" }
+                                    span { class: "text-gray-500", "=0.7" }
+                                }
+                            }
+                        }
+                    }
+
+                    // Footer
+                    div { class: "flex justify-between items-center mt-2 pt-2 border-t border-gray-700",
+                        p { class: "text-[11px] text-gray-500",
+                            "Access Neo4j Browser at "
+                            a {
+                                class: "text-cyan-400 hover:underline",
+                                href: "http://localhost:7474",
+                                target: "_blank",
+                                "localhost:7474"
+                            }
+                            ". Configure in Settings → Neo4j or via environment variables."
+                        }
+                        button {
+                            class: "btn btn-primary btn-xs",
+                            onclick: move |_| show_neo4j_modal.set(false),
+                            "Got it!"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -4,6 +4,8 @@
 
 **Treat AGENTS.md as your own operating manual—read and follow it, don't just write it.**
 
+Always tell the user when you have finished a requested task, even if there were no code changes.
+
 Info buttons across the app share the same styling constants: `QUICK_ACTION_INFO_BUTTON_CLASS` (wrapper) + `INFO_ICON_SVG_CLASS` (5×5 white SVG).
 
 - After editing AGENTS.md or reorganizing the repo, run:

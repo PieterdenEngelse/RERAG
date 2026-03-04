@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use num_cpus;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use sysinfo::System;
 use wgpu::Instance;
 
 #[derive(Serialize)]
@@ -22,6 +23,23 @@ struct SystemInfo {
     arch: String,
     physical_cores: usize,
     logical_cores: usize,
+}
+
+/// Memory information for quantization recommendations
+#[derive(Serialize)]
+struct MemoryInfo {
+    /// Total system RAM in bytes
+    total_memory_bytes: u64,
+    /// Available (free) RAM in bytes
+    available_memory_bytes: u64,
+    /// Used RAM in bytes
+    used_memory_bytes: u64,
+    /// Total RAM in GB (for display)
+    total_memory_gb: f64,
+    /// Available RAM in GB (for display)
+    available_memory_gb: f64,
+    /// Memory usage percentage
+    usage_percent: f64,
 }
 
 // Vendor IDs from PCI database
@@ -64,6 +82,33 @@ fn get_backend_name(backend: wgpu::Backend) -> String {
 
 async fn get_physical_cores() -> impl Responder {
     HttpResponse::Ok().json(num_cpus::get_physical())
+}
+
+/// Get system memory information for quantization recommendations
+async fn get_memory() -> impl Responder {
+    let mut sys = System::new_all();
+    sys.refresh_memory();
+    
+    let total = sys.total_memory();
+    let available = sys.available_memory();
+    let used = sys.used_memory();
+    
+    let total_gb = total as f64 / 1_073_741_824.0;
+    let available_gb = available as f64 / 1_073_741_824.0;
+    let usage_percent = if total > 0 {
+        (used as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    HttpResponse::Ok().json(MemoryInfo {
+        total_memory_bytes: total,
+        available_memory_bytes: available,
+        used_memory_bytes: used,
+        total_memory_gb: (total_gb * 10.0).round() / 10.0,  // Round to 1 decimal
+        available_memory_gb: (available_gb * 10.0).round() / 10.0,
+        usage_percent: (usage_percent * 10.0).round() / 10.0,
+    })
 }
 
 async fn get_gpus() -> impl Responder {
@@ -415,6 +460,7 @@ async fn get_custom_models() -> impl Responder {
 
 pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/cores").route(web::get().to(get_physical_cores)));
+    cfg.service(web::resource("/memory").route(web::get().to(get_memory)));
     cfg.service(web::resource("/gpus").route(web::get().to(get_gpus)));
     cfg.service(web::resource("/gpu-names").route(web::get().to(get_gpu_names)));
     cfg.service(web::resource("/info").route(web::get().to(get_system_info)));

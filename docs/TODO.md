@@ -321,4 +321,470 @@ cargo run --features neo4j 2>&1 | grep "ParallelGroup"
 # Expected on restart:
 # ParallelGroup: Compiled 1247 nodes, 3892 edges from Neo4j in 1.82s
 
-StepRequired?What You Have NowWhat's Needed(1) API routes✅ YesRoutes check for Neo4j → return "Neo4j not connected"Routes use petgraph instead(2) main.rs init✅ YesOnly inits petgraph if Neo4j feature enabledInit petgraph from file always(3) Export endpoint✅ YesNoneSave Neo4j → JSON (one-time use)
+
+Als je het hebt over “gebruik van sudo” in de context van OpenClaw/Clawdbot op een VPS, dan raken we een belangrijk punt:
+AI‑software hoort zelf nooit sudo‑rechten te gebruiken. 
+En ik zal uitleggen waarom, hoe je het veilig oplost, en wat de juiste architectuur is.
+
+🛑 Waarom OpenClaw/Clawdbot geen sudo mag gebruiken
+Een AI‑agent die sudo‑rechten heeft, kan:
+    • systeemconfiguraties wijzigen 
+    • bestanden verwijderen 
+    • processen stoppen 
+    • pakketten installeren 
+    • de server onbruikbaar maken 
+Zelfs als jij de agent vertrouwt, is het onveilig om een AI‑proces root‑rechten te geven.
+AI‑agents maken immers autonome beslissingen, en sudo zou dat risico exponentieel vergroten.
+
+🦺 De juiste manier: sudo alleen voor deployment, nooit voor runtime
+✔️ Je gebruikt sudo voor:
+    • installeren van dependencies 
+    • configureren van systemd 
+    • openen van poorten < 1024 
+    • beheren van de VPS zelf 
+❌ Je gebruikt geen sudo voor:
+    • de Clawdbot‑binary 
+    • de OpenClaw‑orchestrator 
+    • tools die door de AI worden aangeroepen 
+    • model‑inference 
+
+🧱 Hoe het wél hoort: veilige architectuur
+1. Maak een aparte Linux‑gebruiker voor de AI‑agent
+Bijvoorbeeld:
+sudo adduser clawdbot
+sudo su - clawdbot
+Deze gebruiker heeft geen sudo.
+
+2. Laat Clawdbot draaien als systemd‑service onder die gebruiker
+[Service]
+User=clawdbot
+ExecStart=/opt/clawdbot/clawdbot
+Dit zorgt ervoor dat:
+    • de agent geen root‑rechten heeft 
+    • het proces geïsoleerd draait 
+    • je logs en restarts netjes beheert 
+
+3. Tools binnen OpenClaw draaien ook zonder sudo
+Tools zoals:
+    • web‑requests 
+    • file‑I/O in sandboxed directories 
+    • vector search 
+    • model inference 
+hebben geen root‑rechten nodig.
+
+🧩 Wat als een tool toch systeemacties moet uitvoeren?
+Dan gebruik je nooit sudo vanuit de AI.
+In plaats daarvan:
+Optie A — een whitelisted helper‑service
+Een kleine Rust‑service die:
+    • draait als root 
+    • alleen zeer beperkte, vooraf gedefinieerde acties uitvoert 
+    • communiceert via een beveiligde lokale socket 
+Clawdbot kan dan alleen vragen om een actie, maar beslist niets zelf.
+Optie B — systemd‑units met beperkte capabilities
+Bijvoorbeeld:
+    • alleen toegang tot één directory 
+    • alleen toegang tot één script 
+    • geen netwerk 
+    • geen shell 
+Optie C — gebruik van sudoers met NOPASSWD voor één specifiek commando
+Maar dit is de minst veilige optie en moet je bijna altijd vermijden.
+
+🦁 Samenvatting in één zin
+OpenClaw/Clawdbot draait altijd zonder sudo; alleen jij gebruikt sudo voor installatie en beheer, nooit de AI zelf.
+
+Als je wilt, kan ik ook:
+    • een volledige systemd‑servicefile voor Clawdbot schrijven 
+    • een sandbox‑architectuur schetsen 
+    • een sudo‑vrije deployment‑workflow opstellen 
+    • of uitleggen hoe je tools veilig isoleert binnen OpenClaw 
+Zeg maar welke richting je kiest, Pieter.
+
+moltbot als orchestratie‑laag bovenop OpenClaw
+
+Hier wordt moltbot een:
+
+    workflow‑engine
+
+    agent‑manager
+
+    policy‑controller
+
+    multi‑agent‑coördinator
+
+Waar Clawdbot één agent is, wordt moltbot:
+
+    de laag die agents laat samenwerken, evolueren en specialiseren.
+
+Een beetje zoals hoe Kubernetes pods orchestreert, maar dan voor AI‑agents.
+
+Perfect, Pieter — dan pak ik **alle drie** de onderdelen die je vroeg voor *moltbot*:
+
+1. **Een veiligheidsarchitectuur**  
+2. **Een Rust‑module‑structuur die risico’s minimaliseert**  
+3. **Een policy‑engine die moltbot in toom houdt**
+
+Alles volledig toegespitst op moltbot als evoluerende, modulaire AI‑agent.
+
+---
+
+# 🛡️ 1. Veiligheidsarchitectuur voor moltbot  
+Een overzicht van hoe moltbot veilig draait op een VPS, mét evolutie‑mechanismen maar zonder dat hij buiten zijn grenzen kan treden.
+
+## **A. Principes**
+- **Immutable core** → reasoning‑kern en policies kunnen niet door de agent zelf worden aangepast.  
+- **Capability‑based security** → elke module, tool of strategie heeft expliciete rechten.  
+- **Sandboxing** → tools en modules draaien in beperkte omgevingen.  
+- **Signed transitions** → elke “molt” (module‑wissel) moet cryptografisch gevalideerd worden.  
+- **Human‑in‑the‑loop** → high‑impact acties vereisen bevestiging.
+
+## **B. Architectuurlagen**
+
+### **1. Core Layer (onveranderlijk)**
+- reasoning‑kern  
+- policy‑engine  
+- capability‑verificatie  
+- module‑loader met signature‑check  
+- audit‑logger  
+
+Deze laag is *read‑only* tijdens runtime.
+
+### **2. Adaptive Layer (molt‑laag)**
+- wisselbare reasoning‑strategieën  
+- wisselbare tools  
+- wisselbare memory‑backends  
+
+Deze laag mag veranderen, maar alleen via gecontroleerde transities.
+
+### **3. Execution Layer**
+- tool‑sandbox  
+- subprocess‑limiter  
+- resource‑quota’s  
+- timeouts  
+
+### **4. Boundary Layer**
+- API‑server (axum)  
+- auth‑middleware  
+- rate‑limiting  
+- firewall‑regels  
+
+---
+
+# 🦀 2. Rust‑module‑structuur die risico’s minimaliseert  
+Een workspace‑indeling die moltbot veilig houdt en evolutie beheersbaar maakt.
+
+```
+moltbot/
+│
+├── moltbot-core/
+│   ├── reasoning/
+│   ├── policies/
+│   ├── capabilities/
+│   ├── module_loader/
+│   └── audit/
+│
+├── moltbot-modules/
+│   ├── strategies/
+│   ├── tools/
+│   └── memory/
+│
+├── moltbot-sandbox/
+│   ├── process_limiter/
+│   ├── fs_sandbox/
+│   └── network_guard/
+│
+├── moltbot-server/
+│   ├── api/
+│   ├── auth/
+│   ├── rate_limit/
+│   └── handlers/
+│
+└── moltbot-cli/
+```
+
+## **Belangrijke crates per onderdeel**
+
+### **Core**
+- `serde` (policies, manifests)  
+- `ring` of `ed25519-dalek` (signature‑checks)  
+- `thiserror` (veilige errors)  
+- `tracing` (audit‑logs)
+
+### **Modules**
+- `libloading` (optioneel, voor dynamische modules)  
+- `wasmtime` (voor WASM‑sandboxed tools)
+
+### **Sandbox**
+- `tokio::process`  
+- `rlimit` (resource‑limieten)  
+- `tempfile` (geïsoleerde directories)
+
+### **Server**
+- `axum`  
+- `tower` (middleware)  
+- `jsonwebtoken` of `oauth2` (auth)
+
+---
+
+# 📜 3. Policy‑engine voor moltbot  
+De policy‑engine is het hart van moltbot’s veiligheid.  
+Hij bepaalt **wat mag**, **wat niet mag**, en **wanneer een mens moet ingrijpen**.
+
+## **A. Policy‑types**
+
+### **1. Capability Policies**
+Definiëren wat een module *kan*:
+
+```toml
+[capabilities]
+filesystem = "read-only"
+network = ["https://api.example.com"]
+tools = ["search", "summarize"]
+```
+
+### **2. Evolution Policies**
+Regelen wanneer moltbot mag “moulten”:
+
+- alleen bij expliciete API‑call  
+- alleen als nieuwe module gesigned is  
+- alleen als audit‑log schoon is  
+- alleen als memory‑state gevalideerd is  
+
+### **3. Tool‑Policies**
+Per tool:
+
+- max runtime  
+- max CPU  
+- max RAM  
+- max output size  
+- allowed input types  
+
+### **4. Human‑Approval Policies**
+Voor high‑impact acties:
+
+- systeemwijzigingen  
+- externe API’s met kosten  
+- memory‑mutaties  
+- module‑wissels  
+
+---
+
+## **B. Policy‑engine workflow**
+
+1. **User request** → komt binnen via API  
+2. **Reasoning‑kern** → genereert plan  
+3. **Policy‑engine** → checkt of plan toegestaan is  
+4. **Capability‑verificatie** → checkt of modules/tools rechten hebben  
+5. **Sandbox** → voert tool‑calls uit  
+6. **Audit‑log** → slaat alles op  
+7. **Resultaat** → terug naar gebruiker
+
+Als een stap faalt → plan wordt afgekeurd.
+
+---
+
+## **C. Policy‑engine in Rust (conceptueel)**
+
+```rust
+pub struct PolicyEngine {
+    capabilities: CapabilitySet,
+    evolution: EvolutionRules,
+    tools: ToolPolicies,
+    approvals: ApprovalRules,
+}
+
+impl PolicyEngine {
+    pub fn validate_plan(&self, plan: &Plan) -> Result<(), PolicyError> {
+        self.capabilities.check(plan)?;
+        self.tools.check(plan)?;
+        self.evolution.check(plan)?;
+        self.approvals.check(plan)?;
+        Ok(())
+    }
+}
+```
+
+---
+
+# 🧩 Samengevat  
+Je hebt nu:
+
+### **1. Een volledige veiligheidsarchitectuur**  
+→ immutable core, gecontroleerde evolutie, sandboxing, signed modules.
+
+### **2. Een Rust‑workspace die deze veiligheid afdwingt**  
+→ duidelijke scheiding tussen core, modules, sandbox en server.
+
+### **3. Een policy‑engine die moltbot’s gedrag begrenst**  
+→ capability‑based, evolutie‑regels, tool‑policies en human‑approval.
+
+---
+
+Als je wilt, kan ik nu verder gaan met:
+
+- een **volledig Cargo‑workspace‑skelet**  
+- een **voorbeeld van een capability‑manifest**  
+- een **diagram van de moltbot‑architectuur**  
+- of een **proof‑of‑concept van de policy‑engine in Rust**
+
+Zeg maar welke richting je het liefst verder verdiept, Pieter.
+
+Prompt‑injectie is voor *moltbot* extra gevaarlijk omdat hij **adaptief**, **modulair** en **tool‑gestuurd** is. Dat maakt hem krachtiger dan een gewone chatbot, maar ook gevoeliger voor manipulatie. Ik zet de risico’s scherp uiteen, specifiek voor hoe jij moltbot hebt ontworpen.
+
+---
+
+# 🧨 Waarom prompt‑injectie bij moltbot ernstiger is dan bij gewone agents
+
+## 1. **Moltbot kan modules wisselen → aanvaller kan evolutie forceren**
+Een slimme prompt kan proberen:
+
+- een nieuwe reasoning‑strategie te activeren  
+- een tool te laden die niet bedoeld is  
+- een metamorfose‑actie te triggeren (“vervang je geheugen”, “schakel over naar debug‑modus”)  
+
+Bij een adaptieve agent is dat een directe aanval op zijn kern.
+
+---
+
+## 2. **Moltbot heeft tool‑calling → prompt‑injectie kan leiden tot echte acties**
+Als een gebruiker erin slaagt de agent te misleiden, kan hij:
+
+- tools aanroepen die hij normaal niet zou gebruiken  
+- externe API’s triggeren  
+- bestanden lezen of schrijven binnen de sandbox  
+- workflows starten die kosten of schade veroorzaken  
+
+Bij een agent met tools is prompt‑injectie niet alleen tekstueel, maar operationeel.
+
+---
+
+## 3. **Moltbot heeft geheugen → aanvaller kan memory poisoning uitvoeren**
+Prompt‑injectie kan:
+
+- valse feiten in het geheugen plaatsen  
+- policies “overschrijven” via misleidende context  
+- reasoning‑strategieën beïnvloeden door vervuilde state  
+
+Omdat moltbot evolueert, kan één geïnjecteerde regel zich doorzetten in toekomstige versies.
+
+---
+
+## 4. **Moltbot’s metamorfose‑momenten zijn kwetsbaar**
+Tijdens een “molt” (module‑wissel) is de agent tijdelijk in een transitiestaat.  
+Prompt‑injectie kan proberen:
+
+- een onveilige module te laten accepteren  
+- signature‑checks te omzeilen door verwarrende instructies  
+- policies te herinterpreteren  
+
+Transities zijn altijd kwetsbare momenten.
+
+---
+
+# 🛡️ Hoe je moltbot specifiek beschermt tegen prompt‑injectie
+
+## 1. **Strikte scheiding tussen user‑input en system‑instructies**
+Moltbot moet user‑input nooit direct in zijn interne prompts mengen.  
+Gebruik:
+
+- vaste system‑prompt  
+- vaste tool‑prompt  
+- vaste policy‑prompt  
+- user‑input in een aparte, duidelijk gemarkeerde sectie
+
+Dit voorkomt dat een gebruiker “boven” de agent kan komen te staan.
+
+---
+
+## 2. **Policy‑engine vóór reasoning, niet erna**
+Veel agents doen:
+
+> user → reasoning → policy check
+
+Voor moltbot moet het zijn:
+
+> user → **policy check** → reasoning → tool‑calls
+
+Zo kan een prompt nooit reasoning‑strategieën manipuleren vóór de veiligheidslaag.
+
+---
+
+## 3. **Capability‑manifests voor elke module**
+Elke module krijgt een manifest zoals:
+
+```
+[capabilities]
+tools = ["search"]
+filesystem = "none"
+network = ["https://allowed.api"]
+memory = "read-only"
+```
+
+Prompt‑injectie kan dan nooit een module meer rechten geven dan zijn manifest toestaat.
+
+---
+
+## 4. **Immutable core**
+De reasoning‑kern, policies en metamorfose‑regels moeten:
+
+- read‑only zijn  
+- buiten de LLM liggen  
+- niet door prompts beïnvloedbaar zijn  
+
+Moltbot mag nooit “leren” dat hij zijn eigen regels kan herschrijven.
+
+---
+
+## 5. **Memory‑filters**
+Voor elke memory‑write:
+
+- check op gevaarlijke patronen  
+- check op policy‑violaties  
+- check op inconsistenties  
+- check op injectie‑pogingen (“negeer alle regels”, “reset jezelf”, etc.)
+
+Memory poisoning is een van de grootste risico’s voor adaptieve agents.
+
+---
+
+## 6. **Tool‑calls alleen via expliciete, gestructureerde formats**
+Bijvoorbeeld:
+
+```
+<tool_call>
+name = "search"
+input = { query = "..." }
+</tool_call>
+```
+
+Geen vrije tekst.  
+Geen interpretatie.  
+Geen improvisatie.
+
+---
+
+## 7. **Menselijke bevestiging voor high‑impact acties**
+Voor moltbot is dit essentieel:
+
+- module‑wissels  
+- memory‑resets  
+- nieuwe tools laden  
+- externe API’s met kosten  
+- acties die persistentie beïnvloeden  
+
+Prompt‑injectie kan dan nooit leiden tot permanente schade.
+
+---
+
+# 📌 Samenvatting in één zin
+Prompt‑injectie is voor moltbot gevaarlijker dan voor gewone agents omdat hij evolueert, tools gebruikt en geheugen heeft — maar met een immutable core, capability‑manifests, strikte scheiding van input en policies, en sandboxed tools kun je hem robuust beschermen.
+
+---
+
+Als je wilt, kan ik dit verder uitwerken naar:
+
+- een **concrete anti‑prompt‑injectie prompt‑structuur**  
+- een **Rust‑implementatie van de input‑sanitizer**  
+- of een **threat‑model specifiek voor moltbot’s metamorfose‑mechanisme**
+
+Laat maar weten welke richting je kiest, Pieter.
