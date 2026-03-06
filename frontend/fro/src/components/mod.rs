@@ -27,3 +27,6 @@ pub use embedding_toggle::EmbeddingToggle;
 
 pub mod global_error_bar;
 pub use global_error_bar::GlobalErrorBar;
+
+pub mod home_settings_boards;
+pub use home_settings_boards::HomeSettingsBoards;

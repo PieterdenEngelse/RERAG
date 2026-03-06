@@ -18,6 +18,15 @@ This refreshes metadata for Qodo Command.
 
 - When documenting or replying with shell steps, always include the full commands explicitly (no hidden copy buttons).
 
+- **Break difficult tasks into steps.** When a task involves creating or modifying a large file (100+ lines), don't try to write it all at once. Instead:
+  1. Create a skeleton first (imports, struct/function signatures, placeholder comments).
+  2. Fill in one section at a time with targeted edits.
+  3. Verify after each step (`cargo fmt`, quick read-back).
+  
+  This avoids stalling on large writes and makes each change reviewable.
+
+- **Answer questions before acting.** When the user asks a question (e.g., "do you see X?", "is Y correct?"), answer the question first and wait for instructions. Do not assume intent and make changes unprompted.
+
 ## Project Structure & Module Organization
 The workspace is defined in `Cargo.toml` and contains `backend/` (Actix Web API, retrieval core, monitoring), `frontend/fro/` (Dioxus Web UI plus Tailwind assets), and `tools/memory_cli/` for operational helpers. Backend modules live under `backend/src/` (`api/`, `memory/`, `monitoring/`, `middleware/`, `retriever.rs`, etc.), while long‑running assets such as Tantivy segments, LanceDB pages, and SQLite files are created under repo‑level folders like `documents/`, `tantivy_index/`, and `db/`. Integration and reliability suites mirror runtime modules inside `backend/tests/`. The frontend keeps UI primitives in `src/components/`, views/pages under `src/pages/monitor/*`, and shared fetch logic in `src/api.rs`.
 

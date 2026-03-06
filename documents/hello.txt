@@ -1,1 +1,0 @@
-Hello RAG world. This is an end-to-end retrieval test.

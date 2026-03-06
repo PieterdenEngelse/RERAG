@@ -1,8 +1,9 @@
 use crate::api::{self, RagMemoryItem};
-use crate::app::{ClearChat, ShowRagInfo};
-use crate::components::BackendSelector;
+use crate::app::{ClearChat, Route, ShowRagInfo};
+use crate::components::{BackendSelector, HomeSettingsBoards};
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -154,7 +155,7 @@ pub fn Home() -> Element {
     let mut delete_docs_status = use_signal(|| Option::<String>::None);
 
     // Chat mode: "rag", "llm", or "hybrid"
-    let mut chat_mode = use_signal(|| "hybrid".to_string());
+    let mut chat_mode = use_signal(|| "auto".to_string());
 
     let mut show_delete_memories_modal = use_signal(|| false);
     let mut rag_memories = use_signal(|| Vec::<RagMemoryItem>::new());
@@ -194,6 +195,8 @@ pub fn Home() -> Element {
     let mut show_rag_info = use_signal(|| false);
     let mut show_llm_info = use_signal(|| false);
     let mut show_hybrid_info = use_signal(|| false);
+    let mut show_auto_info = use_signal(|| false);
+    let mut show_strict_info = use_signal(|| false);
 
     // Training feedback state - track last response for rating
     let mut last_query = use_signal(|| String::new());
@@ -870,392 +873,29 @@ pub fn Home() -> Element {
     };
 
     rsx! {
-        // Welcome text with RAG toggle - fixed centered relative to full viewport (aligns with header title)
-        if messages().is_empty() {
-            div {
-                class: "fixed inset-x-0 z-10 pointer-events-none",
-                style: "top: 3rem;",
-                div {
-                    class: "max-w-2xl mx-auto w-full flex flex-col items-center",
-                    style: "padding-left: 0.5cm; padding-right: 0.5cm; width: calc(min(90vw, 34rem));",
-                    div {
-                        class: "flex flex-col items-center w-full gap-4 pointer-events-auto",
-                        style: "transform: translateY(1cm);",
-                        p { class: "text-xs text-base-content/60 text-center", "Use these to set the starting context" }
-
-                        // Row with Backend, Mode and RAG boards side by side
-                        div {
-                            class: "flex justify-center gap-4 w-full",
-
-                            // Backend board
-                            div {
-                                class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                                style: "min-width: 12rem;",
-                                div {
-                                    class: "flex items-center gap-2",
-                                    label {
-                                        class: "font-medium text-center",
-                                        style: "color: white; font-size: 1.1rem;",
-                                        "Runtime"
-                                    }
-                                    button {
-                                        class: "shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80 pointer-events-auto",
-                                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                        onclick: move |evt| {
-                                            evt.stop_propagation();
-                                            show_backend_info.set(true);
-                                        },
-                                        title: "Info about runtime selection",
-                                        svg {
-                                            class: INFO_ICON_SVG_CLASS,
-                                            view_box: "0 0 20 20",
-                                            fill: "none",
-                                            stroke: "#026B7C",
-                                            stroke_width: "1.5",
-                                            circle { cx: "10", cy: "10", r: "9" }
-                                            line { x1: "10", y1: "8", x2: "10", y2: "14" }
-                                            circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                        }
-                                    }
-                                }
-                                BackendSelector {
-                                    current_backend: current_backend,
-                                    clear_model_on_change: true,
-                                    show_save_button: true,
-                                    show_info_button: false,
-                                }
-                            }
-
-                            // Mode board
-                            div {
-                                class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                                label {
-                                    class: "font-medium text-center",
-                                    style: "color: white; font-size: 1.1rem;",
-                                    "Mode"
-                                }
-                                div {
-                                    class: "flex justify-center",
-                                    div {
-                                        class: "flex",
-                                        style: "gap: 1.08rem;",
-                                    // RAG mode button with info
-                                    div {
-                                        class: "flex items-center gap-1",
-                                        button {
-                                            class: "btn btn-sm rounded-lg px-3",
-                                            style: if chat_mode() == "rag" {
-                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
-                                            } else {
-                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
-                                            },
-                                            onclick: move |_| chat_mode.set("rag".to_string()),
-                                            title: "Search documents only",
-                                            span { style: "font-size: 0.75em;", "📚" }
-                                            " RAG"
-                                        }
-                                        button {
-                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                            onclick: move |_| show_rag_info.set(true),
-                                            title: "Info about RAG mode",
-                                            svg {
-                                                class: INFO_ICON_SVG_CLASS,
-                                                view_box: "0 0 20 20",
-                                                fill: "none",
-                                                stroke: "#026B7C",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                            }
-                                        }
-                                    }
-                                    // LLM mode button with info
-                                    div {
-                                        class: "flex items-center gap-1",
-                                        button {
-                                            class: "btn btn-sm rounded-lg px-3",
-                                            style: if chat_mode() == "llm" {
-                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
-                                            } else {
-                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
-                                            },
-                                            onclick: move |_| chat_mode.set("llm".to_string()),
-                                            title: "Use LLM only (no document search)",
-                                            span { style: "font-size: 0.75em;", "🤖" }
-                                            " LLM"
-                                        }
-                                        button {
-                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                            onclick: move |_| show_llm_info.set(true),
-                                            title: "Info about LLM mode",
-                                            svg {
-                                                class: INFO_ICON_SVG_CLASS,
-                                                view_box: "0 0 20 20",
-                                                fill: "none",
-                                                stroke: "#026B7C",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                            }
-                                        }
-                                    }
-                                    // Hybrid mode button with info
-                                    div {
-                                        class: "flex items-center gap-1",
-                                        button {
-                                            class: "btn btn-sm rounded-lg px-3",
-                                            style: if chat_mode() == "hybrid" {
-                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
-                                            } else {
-                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
-                                            },
-                                            onclick: move |_| chat_mode.set("hybrid".to_string()),
-                                            title: "Search documents + LLM enhancement",
-                                            span { style: "font-size: 0.75em;", "⚡" }
-                                            " Hybrid"
-                                        }
-                                        button {
-                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                            onclick: move |_| show_hybrid_info.set(true),
-                                            title: "Info about Hybrid mode",
-                                            svg {
-                                                class: INFO_ICON_SVG_CLASS,
-                                                view_box: "0 0 20 20",
-                                                fill: "none",
-                                                stroke: "#026B7C",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            p {
-                                class: "text-xs font-medium text-center",
-                                style: "color: white;",
-                                match chat_mode().as_str() {
-                                    "rag" => "RAG mode - searches your documents only",
-                                    "llm" => "LLM mode - uses AI without document search",
-                                    "hybrid" => "Hybrid mode - documents + AI fallback",
-                                    _ => "Select a mode"
-                                }
-                            }
-                            }
-
-                                                    // RAG board
-                            div {
-                                class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                                style: "min-width: calc(12rem + 2cm); padding-left: calc(1.25rem + 1cm); padding-right: calc(1.25rem + 1cm);",
-                                label {
-                                    class: "font-medium text-center",
-                                    style: "color: white; font-size: 1.1rem;",
-                                    "RAG Add's"
-                                }
-                                div {
-                                    class: "flex justify-center",
-                                    style: "gap: 1.08rem;",
-                                    // Documents buttons
-                                    div {
-                                        class: "flex flex-col items-center",
-                                        style: "width: 7.5rem;",
-                                        div { class: "flex gap-1",
-                                            // Info (standard styling)
-                                            button {
-                                                class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                                style: "width: 2rem; height: 2rem; min-width: 2rem; min-height: 2rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                                onclick: move |evt| {
-                                                    evt.stop_propagation();
-                                                    show_info.set(ShowRagInfo(true));
-                                                },
-                                                title: "Info about documents",
-                                                svg {
-                                                    class: INFO_ICON_SVG_CLASS,
-                                                    view_box: "0 0 20 20",
-                                                    fill: "none",
-                                                    stroke: "#026B7C",
-                                                    circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                    line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                    circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                                }
-                                            }
-                                            button {
-                                                class: "btn rounded-full px-4 text-xl font-bold",
-                                                style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
-                                                onclick: move |_| show_upload_panel.set(!show_upload_panel()),
-                                                title: "Toggle documents panel",
-                                                "+"
-                                            }
-                                            button {
-                                                class: "btn rounded-full px-4 text-xl font-bold text-white",
-                                                style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
-                                                onclick: move |_| {
-                                                    show_delete_docs_modal.set(true);
-                                                    spawn(async move {
-                                                        match api::list_documents().await {
-                                                            Ok(mut resp) => {
-                                                                resp.documents.sort();
-                                                                documents.set(resp.documents);
-                                                            }
-                                                            Err(e) => upload_status.set(Some(format!("Failed to load: {}", e))),
-                                                        }
-                                                    });
-                                                },
-                                                title: "Delete documents",
-                                                "-"
-                                            }
-                                        }
-                                        span {
-                                            class: "text-sm mt-1 font-medium",
-                                            style: "color: white;",
-                                            "Documents"
-                                        }
-                                    }
-                                    // Memories buttons
-                                    div {
-                                        class: "flex flex-col items-center",
-                                        style: "width: 7.5rem;",
-                                        div { class: "flex gap-1",
-                                            a {
-                                                class: "btn rounded-full px-4 text-xl font-bold cursor-pointer",
-                                                style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none; text-decoration: none;",
-                                                href: "/config/memories",
-                                                title: "Add RAG memories",
-                                                "+"
-                                            }
-                                            button {
-                                                class: "btn rounded-full px-4 text-xl font-bold text-white",
-                                                style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
-                                                onclick: move |_| {
-                                                    show_delete_memories_modal.set(true);
-                                                    memories_loading.set(true);
-                                                    memory_error.set(None);
-                                                    spawn(async move {
-                                                        match api::fetch_rag_memories(100).await {
-                                                            Ok(resp) => rag_memories.set(resp.memories),
-                                                            Err(e) => memory_error.set(Some(e)),
-                                                        }
-                                                        memories_loading.set(false);
-                                                    });
-                                                },
-                                                title: "Delete memories",
-                                                "-"
-                                            }
-                                            // Info (standard styling)
-                                            button {
-                                                class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                                style: "width: 2rem; height: 2rem; min-width: 2rem; min-height: 2rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                                onclick: move |evt| {
-                                                    evt.stop_propagation();
-                                                    show_info.set(ShowRagInfo(true));
-                                                },
-                                                title: "Info about memories",
-                                                svg {
-                                                    class: INFO_ICON_SVG_CLASS,
-                                                    view_box: "0 0 20 20",
-                                                    fill: "none",
-                                                    stroke: "#026B7C",
-                                                    circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                    line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                    circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                                }
-                                            }
-                                        }
-                                        span {
-                                            class: "text-sm mt-1 font-medium",
-                                            style: "color: white;",
-                                            "Memories"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // KV Cache and Embedding boards - horizontally centered
-                        div {
-                            class: "flex justify-center gap-4 w-full pointer-events-auto",
-                            style: "margin-top: 1cm;",
-
-                            // KV board
-                            div {
-                                class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-2",
-                                label {
-                                    class: "font-medium text-center",
-                                    style: "color: white; font-size: 1.1rem;",
-                                    "KV Cache"
-                                }
-                                div {
-                                class: "flex items-center justify-center gap-6 w-full",
-                                div {
-                                    class: "flex flex-col items-center gap-1",
-                                    div {
-                                        class: "flex items-center gap-2",
-                                        span {
-                                            class: "text-sm font-medium",
-                                            style: "color: white;",
-                                            "KV Cache"
-                                        }
-                                        label {
-                                            class: "flex items-center gap-2 cursor-pointer pointer-events-auto",
-                                            input {
-                                                r#type: "checkbox",
-                                                class: "toggle toggle-sm !border !border-white",
-                                                style: {
-                                                    format!(
-                                                        "border: 1px solid white; background-color: {};",
-                                                        if prompt_caching_enabled() { "" } else { "#d1d5db" }
-                                                    )
-                                                },
-                                                checked: prompt_caching_enabled(),
-                                                onchange: move |evt| {
-                                                    let new_value = evt.checked();
-                                                    prompt_caching_enabled.set(new_value);
-                                                    spawn(async move {
-                                                        let _ = api::set_prompt_caching(new_value).await;
-                                                    });
-                                                }
-                                            }
-                                        }
-                                        button {
-                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer pointer-events-auto",
-                                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                            onclick: move |_| show_cache_info.set(true),
-                                            title: "Info about KV caching",
-                                            svg {
-                                                class: INFO_ICON_SVG_CLASS,
-                                                view_box: "0 0 20 20",
-                                                fill: "none",
-                                                stroke: "#026B7C",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                            }
-                                        }
-                                    }
-                                    p {
-                                        class: "text-xs text-center",
-                                        style: if prompt_caching_enabled() {
-                                            "color: #22c55e;"
-                                        } else {
-                                            "color: rgba(255,255,255,0.5);"
-                                        },
-                                        if prompt_caching_enabled() {
-                                            "KV Cache enabled"
-                                        } else {
-                                            "KV Cache disabled"
-                                        }
-                                    }
-                                }
-                                } // end inner flex
-                            } // end KV board
-                        } // end horizontal container
-                    }
-                }
-            }
+        // Settings boards — always visible
+        HomeSettingsBoards {
+            current_backend: current_backend,
+            show_backend_info: show_backend_info,
+            chat_mode: chat_mode,
+            show_rag_info: show_rag_info,
+            show_llm_info: show_llm_info,
+            show_hybrid_info: show_hybrid_info,
+            show_auto_info: show_auto_info,
+            show_strict_info: show_strict_info,
+            show_upload_panel: show_upload_panel,
+            show_delete_docs_modal: show_delete_docs_modal,
+            documents: documents,
+            upload_status: upload_status,
+            show_delete_memories_modal: show_delete_memories_modal,
+            memories_loading: memories_loading,
+            memory_error: memory_error,
+            rag_memories: rag_memories,
+            show_info: show_info,
+            prompt_caching_enabled: prompt_caching_enabled,
+            show_cache_info: show_cache_info,
         }
+
 
         // Full height container that fills below the global header
         div {
@@ -2026,6 +1666,108 @@ pub fn Home() -> Element {
                         button {
                             class: "btn btn-primary btn-xs w-full mt-3",
                             onclick: move |_| show_hybrid_info.set(false),
+                            "Close"
+                        }
+                    }
+                }
+            }
+
+            // Auto Mode Info Modal
+            if show_auto_info() {
+                div {
+                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
+                    onclick: move |_| show_auto_info.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-md",
+                        style: "margin-top: -3cm;",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "\u{2728} Auto Mode" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_auto_info.set(false),
+                                "\u{2715}"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-2",
+                            p { class: "font-semibold text-amber-400", "Smart Adaptive Mode" }
+                            p { "Automatically picks the best strategy based on retrieval quality. Searches your documents first, then decides:" }
+                            div {
+                                class: "bg-base-200 p-2 rounded mt-2",
+                                p { class: "font-medium", "How it works:" }
+                                ul {
+                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "High confidence (\u{2265}3 chunks, \u{2265}800 chars): Uses strict grounded RAG \u{2014} answers only from documents" }
+                                    li { "Low confidence: Falls back to Hybrid mode \u{2014} LLM enhanced with whatever context was found" }
+                                    li { "No documents found: Falls back to pure LLM" }
+                                }
+                            }
+                            p { class: "text-xs text-base-content/60 mt-2", "Best for: Default choice \u{2014} accurate when docs are strong, flexible when they're not" }
+                        }
+
+                        button {
+                            class: "btn btn-primary btn-xs w-full mt-3",
+                            onclick: move |_| show_auto_info.set(false),
+                            "Close"
+                        }
+                    }
+                }
+            }
+
+            // Strict RAG Info Modal
+            if show_strict_info() {
+                div {
+                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
+                    onclick: move |_| show_strict_info.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-md",
+                        style: "margin-top: -3cm;",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "\u{1F512} Strict RAG Mode" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_strict_info.set(false),
+                                "\u{2715}"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-2",
+                            p { class: "font-semibold text-red-400", "Grounded Answers Only" }
+                            p { "Uses the LLM to generate answers but strictly from your documents. The AI will never make things up or use outside knowledge." }
+                            div {
+                                class: "bg-base-200 p-2 rounded mt-2",
+                                p { class: "font-medium", "Behavior:" }
+                                ul {
+                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "Documents found: LLM answers using ONLY the retrieved context" }
+                                    li { "No documents found: Returns \"I don't know\" (no LLM fallback)" }
+                                    li {
+                                        "Lower "
+                                        Link {
+                                            to: Route::ConfigSampling {},
+                                            class: "text-blue-500 hover:text-blue-400 no-underline hover:underline",
+                                            "temperature"
+                                        }
+                                        " (0.3) for more deterministic answers — can be set on the Sampling board on the page that shows when you click temperature"
+                                    }
+                                }
+                            }
+                            p { class: "text-xs text-base-content/60 mt-2", "Best for: When accuracy matters most \u{2014} compliance, factual queries, avoiding hallucination" }
+                        }
+
+                        button {
+                            class: "btn btn-primary btn-xs w-full mt-3",
+                            onclick: move |_| show_strict_info.set(false),
                             "Close"
                         }
                     }

@@ -30,6 +30,11 @@ pub enum AgentMode {
     /// Combine: search documents + LLM fallback/enhancement
     #[default]
     Hybrid,
+    /// Prefer strict grounded RAG when retrieval is strong, else Hybrid
+    Auto,
+    /// Strict grounded RAG: LLM answers only from retrieved context.
+    /// If no chunks found, says "I don't know" (no LLM fallback).
+    RagStrict,
 }
 
 /// Verbosity level for responses
@@ -604,6 +609,46 @@ impl<'a> Agent<'a> {
                         used_chunks,
                     };
                 }
+                AgentMode::RagStrict => {
+                    // Strict RAG: no chunks means "I don't know"
+                    let answer =
+                        "I don't have enough information in the knowledge base to answer this question.".to_string();
+                    steps.push(AgentStep {
+                        kind: "plan".into(),
+                        message: "No chunks found; strict RAG returns 'I don't know'".into(),
+                    });
+                    self.store_memory(query, &answer);
+                    self.store_episode(query, &answer, 0, false);
+                    return AgentResponse {
+                        answer,
+                        steps,
+                        used_chunks,
+                    };
+                }
+                AgentMode::Auto => {
+                    // Auto with no chunks: fall back to Hybrid (LLM-only)
+                    steps.push(AgentStep {
+                        kind: "plan".into(),
+                        message: "Auto mode: no chunks found; falling back to LLM".into(),
+                    });
+                    crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                    crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                    let answer = self.call_llm(query, None, AgentMode::Hybrid, goal_context_opt);
+                    steps.push(AgentStep {
+                        kind: "llm".into(),
+                        message: "Generated response with LLM (Auto fallback)".into(),
+                    });
+                    self.store_memory(query, &answer);
+                    self.store_episode(query, &answer, 0, true);
+                    if let Some((ref goal_id, _)) = related_goal {
+                        self.record_goal_progress(goal_id, query, true);
+                    }
+                    return AgentResponse {
+                        answer,
+                        steps,
+                        used_chunks,
+                    };
+                }
                 AgentMode::Llm => unreachable!(), // Already handled above
             }
         }
@@ -632,6 +677,50 @@ impl<'a> Agent<'a> {
                 crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
                 crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
                 self.call_llm(query, Some(&context), mode, goal_context_opt)
+            }
+            AgentMode::RagStrict => {
+                // Strict grounded RAG: call LLM but force it to answer only from context
+                let context = used_chunks.join("\n\n");
+                steps.push(AgentStep {
+                    kind: "llm".into(),
+                    message: format!(
+                        "Strict RAG: generating grounded answer from {} chunks",
+                        used_chunks.len()
+                    ),
+                });
+                crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                self.call_llm_strict(query, &context, goal_context_opt)
+            }
+            AgentMode::Auto => {
+                // Auto: check retrieval confidence to decide strict RAG vs Hybrid
+                let context = used_chunks.join("\n\n");
+                let high_confidence = used_chunks.len() >= 3 && context.len() >= 800;
+                if high_confidence {
+                    steps.push(AgentStep {
+                        kind: "llm".into(),
+                        message: format!(
+                            "Auto mode: high confidence ({} chunks, {} chars) → strict grounded RAG",
+                            used_chunks.len(),
+                            context.len()
+                        ),
+                    });
+                    crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                    crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                    self.call_llm_strict(query, &context, goal_context_opt)
+                } else {
+                    steps.push(AgentStep {
+                        kind: "llm".into(),
+                        message: format!(
+                            "Auto mode: low confidence ({} chunks, {} chars) → Hybrid",
+                            used_chunks.len(),
+                            context.len()
+                        ),
+                    });
+                    crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                    crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                    self.call_llm(query, Some(&context), AgentMode::Hybrid, goal_context_opt)
+                }
             }
             AgentMode::Llm => unreachable!(), // Already handled above
         };
@@ -676,7 +765,8 @@ impl<'a> Agent<'a> {
         let mut config = match mode {
             AgentMode::Rag => LlmConfig::documents_only(),
             AgentMode::Llm => LlmConfig::llm_only(),
-            AgentMode::Hybrid => LlmConfig::combined(),
+            AgentMode::Hybrid | AgentMode::Auto => LlmConfig::combined(),
+            AgentMode::RagStrict => LlmConfig::documents_only(),
         };
 
         // Apply temperature override if set
@@ -845,6 +935,129 @@ impl<'a> Agent<'a> {
         prompt_parts.push("Answer:".to_string());
 
         prompt_parts.join("\n\n")
+    }
+
+    /// Call LLM with strict grounding: answer ONLY from the provided context.
+    /// If the context doesn't contain the answer, the LLM is instructed to say so.
+    fn call_llm_strict(&self, query: &str, context: &str, goal_context: Option<&str>) -> String {
+        use crate::db::llm_settings::LlmConfig;
+
+        let mut config = LlmConfig::documents_only();
+        // Use lower temperature for strict grounding (more deterministic)
+        config.temperature = config.temperature.min(0.3);
+
+        if let Some(temp) = self.settings.temperature {
+            config.temperature = temp;
+        }
+
+        let ollama_url =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let model = self.settings.model.clone().unwrap_or_else(|| {
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "phi:latest".to_string())
+        });
+
+        // Build strict grounding prompt
+        let mut prompt_parts = Vec::new();
+        if let Some(goals) = goal_context {
+            if !goals.is_empty() {
+                prompt_parts.push(goals.to_string());
+            }
+        }
+        prompt_parts.push(format!("Context:\n{}", context));
+        prompt_parts.push(format!("Question: {}", query));
+        prompt_parts.push("Answer:".to_string());
+        let prompt = prompt_parts.join("\n\n");
+
+        // Strict grounding system instruction
+        let system =
+            "You are a precise assistant. Answer the question using ONLY the provided context. \
+            Do not use any outside knowledge. If the context does not contain enough information \
+            to answer the question, respond with: \"I don't have enough information in the \
+            knowledge base to answer this question.\" Be concise and accurate."
+                .to_string();
+
+        let url = format!("{}/api/generate", ollama_url);
+
+        #[derive(serde::Serialize)]
+        struct OllamaOptions {
+            temperature: f32,
+            top_p: f32,
+            top_k: usize,
+            num_predict: usize,
+            repeat_penalty: f32,
+        }
+
+        #[derive(serde::Serialize)]
+        struct OllamaRequest {
+            model: String,
+            prompt: String,
+            stream: bool,
+            options: OllamaOptions,
+            system: String,
+        }
+
+        #[derive(serde::Deserialize, Debug)]
+        struct OllamaResponse {
+            response: String,
+            #[serde(default)]
+            #[allow(dead_code)]
+            done: bool,
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+        let request_body = OllamaRequest {
+            model,
+            prompt,
+            stream: false,
+            options: OllamaOptions {
+                temperature: config.temperature,
+                top_p: config.top_p,
+                top_k: config.top_k,
+                num_predict: config.max_tokens,
+                repeat_penalty: config.repeat_penalty,
+            },
+            system,
+        };
+
+        crate::monitoring::mark_llm_started();
+        let llm_start = std::time::Instant::now();
+
+        let (result, success) = match client.post(&url).json(&request_body).send() {
+            Ok(response) => match response.text() {
+                Ok(text) => match serde_json::from_str::<OllamaResponse>(&text) {
+                    Ok(data) => (data.response.trim().to_string(), true),
+                    Err(e) => (format!("Failed to parse LLM response: {}", e), false),
+                },
+                Err(e) => (format!("Failed to read LLM response: {}", e), false),
+            },
+            Err(e) => (
+                format!("LLM error: {}. Make sure Ollama is running.", e),
+                false,
+            ),
+        };
+
+        let llm_time = llm_start.elapsed().as_millis() as u64;
+        crate::monitoring::mark_llm_finished();
+
+        crate::monitoring::record_tool_execution(
+            "LLMGenerate",
+            query,
+            success,
+            &if success {
+                format!("{} chars generated (strict)", result.len())
+            } else {
+                result.clone()
+            },
+            llm_time,
+            if success { 1.0 } else { 0.0 },
+            Some("ollama"),
+        );
+
+        result
     }
 
     /// Fetch active goals for this agent

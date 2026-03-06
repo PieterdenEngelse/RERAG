@@ -1741,6 +1741,76 @@ impl Retriever {
         Ok(())
     }
 
+    /// Incrementally delete all chunks belonging to a document from both Tantivy and the vector store.
+    ///
+    /// Chunk IDs are stored as: "{filename}#{i}".
+    pub fn delete_document_by_filename(&mut self, filename: &str) -> Result<usize, RetrieverError> {
+        let prefix = format!("{}#", filename);
+        let chunk_ids: Vec<String> = self
+            .doc_id_to_vector_idx
+            .keys()
+            .filter(|id| id.starts_with(&prefix))
+            .cloned()
+            .collect();
+
+        if chunk_ids.is_empty() {
+            debug!(
+                filename,
+                "No chunks found for document; skipping incremental delete"
+            );
+            return Ok(0);
+        }
+
+        // 1) Delete from Tantivy index
+        let mut writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+            self.index.writer(256_000_000)?;
+        for chunk_id in &chunk_ids {
+            let term = tantivy::Term::from_field_text(self.doc_id_field, chunk_id);
+            writer.delete_term(term);
+        }
+        writer.commit()?;
+
+        // 2) Rebuild vector store + mapping without deleted chunk IDs
+        let mut new_vectors: Vec<Vec<f32>> =
+            Vec::with_capacity(self.vectors.len().saturating_sub(chunk_ids.len()));
+        let mut new_map: HashMap<String, usize> = HashMap::with_capacity(
+            self.doc_id_to_vector_idx
+                .len()
+                .saturating_sub(chunk_ids.len()),
+        );
+
+        // Avoid O(n^2): use a hash set for membership.
+        let delete_set: std::collections::HashSet<&str> =
+            chunk_ids.iter().map(|s| s.as_str()).collect();
+
+        // Iterate in old vector order to preserve ordering as much as possible.
+        let mut pairs: Vec<(&String, &usize)> = self.doc_id_to_vector_idx.iter().collect();
+        pairs.sort_by_key(|(_, idx)| **idx);
+
+        for (doc_id, old_idx) in pairs {
+            if delete_set.contains(doc_id.as_str()) {
+                continue;
+            }
+            if let Some(vec) = self.vectors.get(*old_idx) {
+                let new_idx = new_vectors.len();
+                new_vectors.push(vec.clone());
+                new_map.insert(doc_id.clone(), new_idx);
+            }
+        }
+
+        self.vectors = new_vectors;
+        self.doc_id_to_vector_idx = new_map;
+        self.metrics.total_vectors = self.vectors.len();
+
+        // Clear caches and refresh doc count.
+        self.clear_cache();
+        if let Ok(reader) = self.index.reader() {
+            self.metrics.total_documents_indexed = reader.searcher().num_docs() as usize;
+        }
+
+        Ok(chunk_ids.len())
+    }
+
     fn check_disk_space(&self, min_free_bytes: u64) -> Result<(), RetrieverError> {
         let path = Path::new(&self.index_dir_path);
         let available_space = fs2::available_space(path)

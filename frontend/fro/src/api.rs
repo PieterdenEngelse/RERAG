@@ -2561,7 +2561,6 @@ pub async fn docker_action(
     action: &str,
     container: Option<&str>,
 ) -> Result<DockerActionResponse, String> {
-
     let url = api_url("/monitoring/docker/action");
     let body = serde_json::json!({
         "action": action,

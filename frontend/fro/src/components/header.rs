@@ -1,4 +1,5 @@
 use crate::api;
+use crate::app::RuntimeSuspended;
 use crate::app::{ClearChat, PageErrors, Route, ShowHelpCommands, ShowRagInfo};
 use crate::components::dark_mode_toggle::DarkModeToggle;
 use crate::components::nav_dropdown::{DropdownActionItem, DropdownItem, NavDropdown};
@@ -6,7 +7,6 @@ use crate::pages::hardware::constants::{
     INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
     QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
 };
-use crate::app::RuntimeSuspended;
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
 
@@ -78,12 +78,29 @@ pub fn Header() -> Element {
                     match api::fetch_docker_status().await {
                         Ok(docker_info) => {
                             if docker_info.docker_available {
-                                let running = docker_info
+                                // Treat Neo4j + visual-cypher as optional when Neo4j is disabled.
+                                // This avoids a persistent "Docker degraded" warning when the operator
+                                // intentionally runs without the KG stack.
+                                let neo4j_required =
+                                    resp.neo4j.as_ref().map(|s| s.enabled).unwrap_or(false);
+                                let required_containers: Vec<_> = docker_info
                                     .containers
+                                    .iter()
+                                    .filter(|c| {
+                                        if neo4j_required {
+                                            true
+                                        } else {
+                                            c.name != "ag-neo4j" && c.name != "visual-cypher"
+                                        }
+                                    })
+                                    .collect();
+
+                                let running = required_containers
                                     .iter()
                                     .filter(|c| c.state == "running")
                                     .count();
-                                let total = docker_info.containers.len();
+                                let total = required_containers.len();
+
                                 if total > 0 && running < total {
                                     page_errors.with_mut(|e| {
                                         e.set_error(
@@ -124,17 +141,18 @@ pub fn Header() -> Element {
                         match api::fetch_models("ollama").await {
                             Ok(models) => {
                                 if models.is_empty() {
+                                    // We can reach Ollama, but there are no models available.
+                                    // Treat this as a major error because chat/embeddings cannot run.
                                     page_errors.with_mut(|e| {
-                                        e.set_error("ollama", "Ollama offline or no models")
+                                        e.set_error("ollama", "Ollama online, but no models")
                                     });
                                 } else {
                                     page_errors.with_mut(|e| e.clear_error("ollama"));
                                 }
                             }
                             Err(_) => {
-                                page_errors.with_mut(|e| {
-                                    e.set_error("ollama", "Ollama not running")
-                                });
+                                page_errors
+                                    .with_mut(|e| e.set_error("ollama", "Ollama not reachable"));
                             }
                         }
                     }

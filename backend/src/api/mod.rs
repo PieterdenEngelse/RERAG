@@ -3381,7 +3381,7 @@ async fn generate_synthetic_qa(
     payload: Option<web::Json<SyntheticQaRequest>>,
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    
+
     let (questions_per_chunk, max_chunks, ollama_model) = if let Some(p) = payload {
         (
             p.questions_per_chunk.unwrap_or(3),
@@ -3461,14 +3461,14 @@ async fn spawn_synthetic_qa_job(
             "--ollama-model".to_string(),
             model,
         ];
-        
+
         if let Some(max) = max_chunks {
             args.push("--max-chunks".to_string());
             args.push(max.to_string());
         }
 
         tracing::info!(args = ?args, "Running generate_synthetic_qa.py...");
-        
+
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let result = run_script_with_args(&workspace_root, &synthetic_script, &args_refs);
 
@@ -3491,7 +3491,7 @@ async fn spawn_synthetic_qa_job(
         state.running = false;
         state.last_finished = Some(Utc::now());
         state.examples_generated = examples_count;
-        
+
         if let Err(ref err) = result {
             state.last_error = Some(err.clone());
         } else {
@@ -3587,15 +3587,30 @@ async fn synthetic_qa_examples(
         .lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| {
-            serde_json::from_str::<serde_json::Value>(line).ok().map(|v| {
-                SyntheticQaExample {
-                    instruction: v.get("instruction").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    context: v.get("context").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    response: v.get("response").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .map(|v| SyntheticQaExample {
+                    instruction: v
+                        .get("instruction")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    context: v
+                        .get("context")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    response: v
+                        .get("response")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     source: v.get("source").and_then(|v| v.as_str()).map(String::from),
-                    timestamp: v.get("timestamp").and_then(|v| v.as_str()).map(String::from),
-                }
-            })
+                    timestamp: v
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                })
         })
         .collect();
 
@@ -3603,11 +3618,8 @@ async fn synthetic_qa_examples(
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(10).min(100); // Cap at 100
 
-    let examples: Vec<SyntheticQaExample> = all_examples
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect();
+    let examples: Vec<SyntheticQaExample> =
+        all_examples.into_iter().skip(offset).take(limit).collect();
 
     Ok(HttpResponse::Ok().json(SyntheticQaExamplesResponse {
         status: "ok".into(),
@@ -4821,12 +4833,32 @@ pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Er
     let request_id = generate_request_id();
     let filename = path.into_inner();
     let filepath = format!("{}/{}", UPLOAD_DIR, filename);
+
     match fs::remove_file(&filepath) {
-        Ok(_) => Ok(HttpResponse::Ok().json(json!({
-            "status": "success",
-            "message": format!("Deleted {}", filename),
-            "request_id": request_id
-        }))),
+        Ok(_) => {
+            // Incrementally delete from the live index so the deleted document
+            // does not keep showing up in search results.
+            let mut deleted_chunks: Option<usize> = None;
+            if let Some(retriever) = RETRIEVER.get() {
+                if let Ok(mut retriever) = retriever.lock() {
+                    match retriever.delete_document_by_filename(&filename) {
+                        Ok(count) => {
+                            deleted_chunks = Some(count);
+                        }
+                        Err(e) => {
+                            warn!(error = %e, filename, "Failed to delete document chunks from index");
+                        }
+                    }
+                }
+            }
+
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": format!("Deleted {}", filename),
+                "deleted_chunks": deleted_chunks,
+                "request_id": request_id
+            })))
+        }
         Err(_) => Ok(HttpResponse::NotFound().json(json!({
             "status": "error",
             "message": "File not found",
@@ -5007,7 +5039,10 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
             // v1.3.0: Rebuild knowledge graph after successful reindex
             if res.is_ok() {
                 let graph_result = crate::api::graph_routes::rebuild_graph_from_index().await;
-                info!("Post-reindex graph rebuild: {} docs, {} chunks", graph_result.documents_processed, graph_result.chunks_processed);
+                info!(
+                    "Post-reindex graph rebuild: {} docs, {} chunks",
+                    graph_result.documents_processed, graph_result.chunks_processed
+                );
             }
         } else {
             let mut job = jobs_map
@@ -5214,8 +5249,14 @@ pub enum ChatMode {
     /// Only use LLM (no document search)
     Llm,
     /// Combine: search documents + LLM fallback/enhancement
-    #[default]
     Hybrid,
+    /// Prefer RAG, but fall back to Hybrid when retrieval confidence is low.
+    #[default]
+    Auto,
+    /// Strict grounded RAG: LLM answers only from retrieved context.
+    /// If no chunks are found, responds with "I don't know".
+    #[serde(alias = "rag_strict")]
+    RagStrict,
 }
 
 #[derive(serde::Deserialize)]
@@ -6732,6 +6773,8 @@ async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> 
             ChatMode::Rag => crate::agent::AgentMode::Rag,
             ChatMode::Llm => crate::agent::AgentMode::Llm,
             ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
+            ChatMode::Auto => crate::agent::AgentMode::Auto,
+            ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
         };
         let query_clone = req.query.clone();
         let top_k = req.top_k;
@@ -6907,6 +6950,8 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
             ChatMode::Rag => crate::agent::AgentMode::Rag,
             ChatMode::Llm => crate::agent::AgentMode::Llm,
             ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
+            ChatMode::Auto => crate::agent::AgentMode::Auto,
+            ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
         };
         let query_str = query.query.clone();
         let top_k = query.top_k;
@@ -7283,10 +7328,15 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
         ChatMode::Rag => crate::agent::AgentMode::Rag,
         ChatMode::Llm => crate::agent::AgentMode::Llm,
         ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
+        ChatMode::Auto => crate::agent::AgentMode::Auto,
+        ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
     };
 
     // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
-    if matches!(agent_mode, crate::agent::AgentMode::Rag) {
+    if matches!(
+        agent_mode,
+        crate::agent::AgentMode::Rag | crate::agent::AgentMode::RagStrict
+    ) {
         if let Some(retriever) = RETRIEVER.get() {
             let query_clone = req.query.clone();
             let top_k = req.top_k;
@@ -7326,8 +7376,11 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     let mut context = String::new();
     let mut used_chunks: Vec<String> = Vec::new();
 
-    // For Hybrid mode, first get RAG context
-    if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
+    // For Hybrid/Auto mode, first get RAG context
+    if matches!(
+        agent_mode,
+        crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto
+    ) {
         let search_start = std::time::Instant::now();
         if let Some(retriever) = RETRIEVER.get() {
             if let Ok(mut r) = retriever.lock() {
@@ -7390,8 +7443,11 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                 "Context (ignore if not relevant to the question):\n{}\n\nAnswer the question directly. If the context above is not relevant, use your own knowledge.",
                 context
             ));
-        } else if matches!(agent_mode, crate::agent::AgentMode::Hybrid) {
-            // Hybrid mode with no context: tell LLM to answer from its knowledge
+        } else if matches!(
+            agent_mode,
+            crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto
+        ) {
+            // Hybrid/Auto mode with no context: tell LLM to answer from its knowledge
             parts.push("Answer the question based on your knowledge.".to_string());
         }
 
@@ -7405,9 +7461,11 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     // Get mode-specific config
     use crate::db::llm_settings::LlmConfig;
     let mut config = match agent_mode {
-        crate::agent::AgentMode::Rag => LlmConfig::documents_only(),
+        crate::agent::AgentMode::Rag | crate::agent::AgentMode::RagStrict => {
+            LlmConfig::documents_only()
+        }
         crate::agent::AgentMode::Llm => LlmConfig::llm_only(),
-        crate::agent::AgentMode::Hybrid => LlmConfig::combined(),
+        crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto => LlmConfig::combined(),
     };
 
     // Apply temperature override if set
@@ -8217,10 +8275,14 @@ async fn get_ollama_status() -> Result<HttpResponse, Error> {
         .send()
         .await;
 
-    let available = version_resp.as_ref().map(|r| r.status().is_success()).unwrap_or(false);
+    let available = version_resp
+        .as_ref()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
 
     let version = if let Ok(resp) = version_resp {
-        resp.json::<serde_json::Value>().await
+        resp.json::<serde_json::Value>()
+            .await
             .ok()
             .and_then(|v| v["version"].as_str().map(|s| s.to_string()))
     } else {
@@ -8228,10 +8290,7 @@ async fn get_ollama_status() -> Result<HttpResponse, Error> {
     };
 
     // Get loaded/available models
-    let tags_resp = client
-        .get("http://localhost:11434/api/tags")
-        .send()
-        .await;
+    let tags_resp = client.get("http://localhost:11434/api/tags").send().await;
 
     let (loaded_model, model_count) = if let Ok(resp) = tags_resp {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
@@ -8260,7 +8319,9 @@ async fn get_ollama_status() -> Result<HttpResponse, Error> {
 }
 
 /// GET /monitoring/docker/inspect?name=<container>
-async fn get_container_inspect(query: web::Query<std::collections::HashMap<String, String>>) -> Result<HttpResponse, Error> {
+async fn get_container_inspect(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let name = match query.get("name") {
         Some(n) => n.clone(),
@@ -8271,7 +8332,8 @@ async fn get_container_inspect(query: web::Query<std::collections::HashMap<Strin
     let inspect_out = tokio::process::Command::new("docker")
         .args(["inspect", "--format", "{{json .State}}", &name])
         .env("DOCKER_HOST", "unix:///var/run/docker.sock")
-        .output().await;
+        .output()
+        .await;
 
     let (restart_count, exit_code, started_at, finished_at) = if let Ok(out) = inspect_out {
         let text = String::from_utf8_lossy(&out.stdout);
@@ -8290,13 +8352,18 @@ async fn get_container_inspect(query: web::Query<std::collections::HashMap<Strin
     let logs_out = tokio::process::Command::new("docker")
         .args(["logs", "--tail", "20", "--timestamps", &name])
         .env("DOCKER_HOST", "unix:///var/run/docker.sock")
-        .output().await;
+        .output()
+        .await;
 
     let logs = if let Ok(out) = logs_out {
         // docker logs writes to stderr by default
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        if stderr.is_empty() { stdout } else { stderr }
+        if stderr.is_empty() {
+            stdout
+        } else {
+            stderr
+        }
     } else {
         "Failed to fetch logs".to_string()
     };
