@@ -6,6 +6,7 @@ use crate::pages::hardware::constants::{
     INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
     QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
 };
+use crate::app::RuntimeSuspended;
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
 
@@ -21,12 +22,12 @@ pub fn Header() -> Element {
     let mut show_orange_details = use_signal(|| false);
     let mut show_tantivy_details = use_signal(|| false);
     let mut status_hover_refcount = use_signal(|| 0i32);
-    
+
     let mut show_inverted_index_details = use_signal(|| false);
     let mut show_busy_details = use_signal(|| false);
     let mut show_checking_details = use_signal(|| false);
     let mut show_indices_details = use_signal(|| false);
-    
+
     // Log modal state
     let mut show_log_modal = use_signal(|| false);
     let mut log_status_type = use_signal(|| String::new());
@@ -41,6 +42,7 @@ pub fn Header() -> Element {
     let mut show_rag_info = use_context::<Signal<ShowRagInfo>>();
     let mut clear_chat = use_context::<Signal<ClearChat>>();
     let mut page_errors = use_context::<Signal<PageErrors>>();
+    let runtime_suspended = use_context::<Signal<RuntimeSuspended>>();
 
     let header_bg = "bg-gray-900";
 
@@ -49,23 +51,12 @@ pub fn Header() -> Element {
     // Track consecutive timeouts to show "checking" state
     let mut timeout_count: Signal<u32> = use_signal(|| 0);
 
-    // Main health check loop (includes Neo4j status)
+    // Main health check loop
     use_future(move || async move {
         loop {
             match api::health_check().await {
                 Ok(resp) => {
                     health_status.set(resp.status.clone());
-
-                    // Check Neo4j status from health response
-                    if let Some(ref neo4j) = resp.neo4j {
-                        if neo4j.enabled && !neo4j.connected {
-                            page_errors.with_mut(|e| e.set_error("neo4j", "Neo4j not connected"));
-                        } else {
-                            page_errors.with_mut(|e| e.clear_error("neo4j"));
-                        }
-                    } else {
-                        page_errors.with_mut(|e| e.clear_error("neo4j"));
-                    }
 
                     // Check Redis status from cache endpoint
                     match api::fetch_cache_info().await {
@@ -124,19 +115,27 @@ pub fn Header() -> Element {
                         }
                     }
 
-                    // Check Ollama status by trying to fetch models
-                    match api::fetch_models("ollama").await {
-                        Ok(models) => {
-                            if models.is_empty() {
-                                // Ollama might be running but has no models, or is offline
-                                // Try a direct check - empty list could mean offline
-                                page_errors.with_mut(|e| e.set_error("ollama", "Ollama offline or no models"));
-                            } else {
-                                page_errors.with_mut(|e| e.clear_error("ollama"));
+                    // Check Ollama status by trying to fetch models.
+                    // If the runtime is intentionally suspended (e.g., during bulk uploads),
+                    // do not mark it as an error in the global status light.
+                    if runtime_suspended().0 {
+                        page_errors.with_mut(|e| e.clear_error("ollama"));
+                    } else {
+                        match api::fetch_models("ollama").await {
+                            Ok(models) => {
+                                if models.is_empty() {
+                                    page_errors.with_mut(|e| {
+                                        e.set_error("ollama", "Ollama offline or no models")
+                                    });
+                                } else {
+                                    page_errors.with_mut(|e| e.clear_error("ollama"));
+                                }
                             }
-                        }
-                        Err(_) => {
-                            page_errors.with_mut(|e| e.set_error("ollama", "Ollama not running"));
+                            Err(_) => {
+                                page_errors.with_mut(|e| {
+                                    e.set_error("ollama", "Ollama not running")
+                                });
+                            }
                         }
                     }
 
@@ -194,7 +193,7 @@ pub fn Header() -> Element {
     } else {
         status.clone()
     };
-        
+
     let tooltip_text = if has_page_errors {
         let all_errors = errors.get_all_errors();
         let error_lines: Vec<String> = all_errors
@@ -373,6 +372,7 @@ pub fn Header() -> Element {
                             | Route::MonitorLogs {}
                             | Route::MonitorDocker {}
                             | Route::MonitorKnowledgeGraph {}
+                            | Route::MonitorAgSystemd {}
                         ) {
                             "#7C2A02"
                         } else if is_dark() {
@@ -775,7 +775,7 @@ pub fn Header() -> Element {
                         }
                     }
                     p { class: "text-gray-200 leading-relaxed",
-                        "Red appears when either: (1) The frontend's health_check() request failed entirely (network error, timeout, backend not running), setting status to \"offline\". (2) The backend responded with status: \"unhealthy\" because retriever.health_check() failed. (3) A monitored service (Neo4j, Redis, Docker, Ollama) reported an error."
+                        "Red appears when either: (1) The frontend's health_check() request failed entirely (network error, timeout, backend not running), setting status to \"offline\". (2) The backend responded with status: \"unhealthy\" because retriever.health_check() failed. (3) A monitored service (Redis, Docker, Ollama) reported an error."
                     }
                     p { class: "text-gray-200 leading-relaxed",
                         "Common failure reasons from retriever.health_check(): index directory missing or not a directory, unable to create index reader, vector/document mapping inconsistency, search test failure, vector file not writable, or insufficient disk space (< 100 MB)."

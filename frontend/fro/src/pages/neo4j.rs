@@ -97,6 +97,7 @@ pub fn ConfigNeo4j() -> Element {
     // Status state
     let mut feature_compiled = use_signal(|| false);
     let mut connected = use_signal(|| false);
+    let mut container_up = use_signal(|| Option::<bool>::None);
     let mut stats_total_nodes = use_signal(|| 0usize);
     let mut stats_total_relationships = use_signal(|| 0usize);
     let mut stats_documents = use_signal(|| 0usize);
@@ -109,6 +110,7 @@ pub fn ConfigNeo4j() -> Element {
     // Load config on mount
     use_effect(move || {
         spawn(async move {
+            // Fetch Neo4j config/status
             match api::fetch_neo4j_config().await {
                 Ok(config) => {
                     // Update state from API response
@@ -141,6 +143,23 @@ pub fn ConfigNeo4j() -> Element {
                         stats_entities.set(stats.entities);
                     }
                     loading.set(false);
+
+                    // Fetch Docker container status for Neo4j (up/down)
+                    spawn(async move {
+                        match api::fetch_docker_status().await {
+                            Ok(docker) => {
+                                let up = docker
+                                    .containers
+                                    .iter()
+                                    .find(|c| c.name == "ag-neo4j")
+                                    .map(|c| c.state == "running");
+                                container_up.set(up);
+                            }
+                            Err(_) => {
+                                container_up.set(None);
+                            }
+                        }
+                    });
                 }
                 Err(e) => {
                     error.set(Some(format!("Failed to load config: {}", e)));
@@ -207,6 +226,12 @@ pub fn ConfigNeo4j() -> Element {
     let mut show_help = use_signal(|| false);
     let mut show_schema = use_signal(|| false);
 
+    // Action button info modals
+    let mut show_reset_action_info = use_signal(|| false);
+    let mut show_test_action_info = use_signal(|| false);
+    let mut show_rebuild_action_info = use_signal(|| false);
+    let mut show_save_action_info = use_signal(|| false);
+
     // Get global page errors context
     let mut _page_errors = use_context::<Signal<PageErrors>>();
 
@@ -225,25 +250,35 @@ pub fn ConfigNeo4j() -> Element {
     };
 
     // Test connection handler
+    let mut test_status = use_signal(|| Option::<String>::None);
+    let mut test_error = use_signal(|| Option::<String>::None);
+
     let on_test_connection = {
         move |_| {
-            save_status.set(Some("Testing connection...".to_string()));
-            save_error.set(None);
+            test_status.set(Some("Testing connection...".to_string()));
+            test_error.set(None);
 
             spawn(async move {
                 match api::test_neo4j_connection().await {
                     Ok(result) => {
                         connected.set(result.connected);
                         if result.connected {
-                            save_status.set(Some("✅ Connected to Neo4j!".to_string()));
+                            test_status.set(Some("Connected".to_string()));
+                            test_error.set(None);
                         } else {
-                            save_error.set(Some(format!("❌ {}", result.message)));
-                            save_status.set(None);
+                            // Make the message more actionable than "health check failed"
+                            let msg = if result.message.to_lowercase().contains("health check") {
+                                "Connection failed. Is the Neo4j container running and are URI/user/password correct?".to_string()
+                            } else {
+                                result.message
+                            };
+                            test_error.set(Some(msg));
+                            test_status.set(None);
                         }
                     }
                     Err(e) => {
-                        save_error.set(Some(format!("Test failed: {}", e)));
-                        save_status.set(None);
+                        test_error.set(Some(format!("Request failed: {}", e)));
+                        test_status.set(None);
                     }
                 }
             });
@@ -324,6 +359,20 @@ pub fn ConfigNeo4j() -> Element {
                                 title: "What is GraphRAG?",
                                 InfoIcon {}
                             }
+                            span { class: "text-xs font-semibold text-gray-400", "Status:" }
+                            span {
+                                class: "text-xs font-semibold text-cyan-400",
+                                if connected() { "Connected" } else { "Disconnected" }
+                            }
+                            span { class: "text-xs font-semibold text-gray-400", "Container:" }
+                            span {
+                                class: "text-xs font-semibold text-cyan-400",
+                                match container_up() {
+                                    Some(true) => "Up",
+                                    Some(false) => "Down",
+                                    None => "Unknown",
+                                }
+                            }
                         }
                         div { class: "flex items-center gap-3",
                             if let Some(msg) = save_status() {
@@ -334,36 +383,56 @@ pub fn ConfigNeo4j() -> Element {
                             }
                             div { class: "flex flex-col items-center gap-1",
                                 div { class: "flex items-center gap-2",
-                                    button {
-                                        class: "btn btn-sm",
-                                        style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                                        onclick: reset_to_defaults,
-                                        "Reset"
+                                    div { class: "flex items-center gap-1",
+                                        button {
+                                            class: "btn btn-sm",
+                                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                                            onclick: reset_to_defaults,
+                                            "Reset"
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_reset_action_info.set(true),
+                                            title: "Reset info",
+                                            InfoIcon {}
+                                        }
                                     }
-                                    button {
-                                        class: "btn btn-sm",
-                                        style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                                        onclick: on_test_connection,
-                                        disabled: !enabled(),
-                                        "Test"
+                                    div { class: "flex items-center gap-1",
+                                        button {
+                                            class: "btn btn-sm",
+                                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                                            onclick: on_rebuild,
+                                            disabled: !enabled() || rebuilding(),
+                                            title: "Rebuild knowledge graph from all indexed documents",
+                                            if rebuilding() { "Rebuilding..." } else { "Rebuild" }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_rebuild_action_info.set(true),
+                                            title: "Rebuild info",
+                                            InfoIcon {}
+                                        }
                                     }
-                                    button {
-                                        class: "btn btn-sm",
-                                        style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                                        onclick: on_rebuild,
-                                        disabled: !enabled() || rebuilding(),
-                                        title: "Rebuild knowledge graph from all indexed documents",
-                                        if rebuilding() { "Rebuilding..." } else { "Rebuild" }
-                                    }
-                                    button {
-                                        class: "btn btn-sm",
-                                        style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                                        onclick: on_save,
-                                        disabled: saving(),
-                                        if saving() { "Saving…" } else { "Save" }
+                                    div { class: "flex items-center gap-1",
+                                        button {
+                                            class: "btn btn-sm",
+                                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                                            onclick: on_save,
+                                            disabled: saving(),
+                                            if saving() { "Saving…" } else { "Save" }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_save_action_info.set(true),
+                                            title: "Save info",
+                                            InfoIcon {}
+                                        }
                                     }
                                 }
-                                span { class: "text-xs text-white italic", "App restart required" }
+                                span { class: "text-xs text-white italic", "Restart required" }
                             }
                         }
                     }
@@ -372,92 +441,40 @@ pub fn ConfigNeo4j() -> Element {
                     div { class: "text-gray-100 text-xs",
                         div { class: "flex flex-wrap gap-4 items-stretch",
 
-                            // ═══════════════════════════════════════════════════════════════
-                            // STATUS BOARD
-                            // ═══════════════════════════════════════════════════════════════
-                            div { class: "rounded border border-gray-600 p-4 w-fit",
-                                div { class: "flex items-center gap-2 mb-3",
-                                    span { class: "text-sm text-gray-300 font-semibold", "Neo4j Status" }
-                                }
-                                div { class: "flex flex-wrap gap-6 justify-start",
-                                    // Status column
-                                    div { class: PARAM_COLUMN_CLASS,
-                                        span { class: "text-gray-300 font-semibold text-xs", "Status" }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "feature_compiled" }
-                                            span { class: if feature_compiled() { "text-green-400" } else { "text-red-400" },
-                                                if feature_compiled() { "✓ Yes" } else { "✗ No" }
-                                            }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "enabled" }
-                                            span { class: if enabled() { "text-green-400" } else { "text-yellow-400" },
-                                                if enabled() { "✓ Yes" } else { "○ No" }
-                                            }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "connected" }
-                                            span { class: if connected() { "text-green-400" } else { "text-gray-500" },
-                                                if connected() { "✓ Yes" } else { "○ No" }
-                                            }
-                                        }
-                                    }
-                                    // Stats column
-                                    div { class: PARAM_COLUMN_CLASS,
-                                        span { class: "text-gray-300 font-semibold text-xs", "Graph Stats" }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "total_nodes" }
-                                            span { class: "text-gray-200", "{stats_total_nodes}" }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "total_relationships" }
-                                            span { class: "text-gray-200", "{stats_total_relationships}" }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "documents" }
-                                            span { class: "text-gray-200", "{stats_documents}" }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "chunks" }
-                                            span { class: "text-gray-200", "{stats_chunks}" }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "entities" }
-                                            span { class: "text-gray-200", "{stats_entities}" }
-                                        }
-                                    }
-                                }
-                            }
 
                             // ═══════════════════════════════════════════════════════════════
                             // CATEGORY 1: CONNECTION
                             // ═══════════════════════════════════════════════════════════════
-                            div { class: "rounded border border-gray-600 p-4 w-fit",
+                            div { class: "rounded border border-gray-600 p-4 w-fit relative",
                                 div { class: "flex items-center gap-2 mb-3",
-                                    span { class: "text-sm text-gray-300 font-semibold", "1. Connection" }
+                                    span { class: "text-sm text-gray-300 font-semibold", "Connection" }
                                 }
                                 div { class: "flex flex-wrap gap-6 justify-start",
                                     // Enable column
-                                    div { class: PARAM_COLUMN_CLASS,
-                                        span { class: "text-gray-300 font-semibold text-xs", "Enable" }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "neo4j_enabled" }
-                                            div { class: "flex items-end gap-2",
-                                                input {
-                                                    r#type: "checkbox",
-                                                    class: CHECKBOX_CLASS,
-                                                    checked: enabled(),
-                                                    onchange: move |_| enabled.set(!enabled()),
-                                                }
-                                                button {
-                                                    class: PARAM_ICON_BUTTON_CLASS,
-                                                    style: PARAM_ICON_BUTTON_STYLE,
-                                                    onclick: move |_| show_enabled_info.set(true),
-                                                    InfoIcon {}
+                                    // Hide when not connected to avoid confusing "enabled" state while Neo4j is offline.
+                                    if connected() {
+                                        div { class: PARAM_COLUMN_CLASS,
+                                            span { class: "text-gray-300 font-semibold text-xs", "Enable" }
+                                            div { class: PARAM_BLOCK_CLASS,
+                                                label { class: PARAM_LABEL_CLASS, "neo4j_enabled" }
+                                                div { class: "flex items-end gap-2",
+                                                    input {
+                                                        r#type: "checkbox",
+                                                        class: CHECKBOX_CLASS,
+                                                        checked: enabled(),
+                                                        onchange: move |_| enabled.set(!enabled()),
+                                                    }
+                                                    button {
+                                                        class: PARAM_ICON_BUTTON_CLASS,
+                                                        style: PARAM_ICON_BUTTON_STYLE,
+                                                        onclick: move |_| show_enabled_info.set(true),
+                                                        InfoIcon {}
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+
                                     // Server column
                                     div { class: PARAM_COLUMN_CLASS,
                                         span { class: "text-gray-300 font-semibold text-xs", "Server" }
@@ -586,6 +603,38 @@ pub fn ConfigNeo4j() -> Element {
                                         }
                                     }
                                 }
+
+                                // Test connection (button left, message right on same row)
+                                div { class: "mt-3 w-full flex items-start gap-3",
+                                    // Left: button + info icon
+                                    div { class: "flex items-center gap-2",
+                                        button {
+                                            class: "btn btn-sm",
+                                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                                            onclick: on_test_connection,
+                                            disabled: !enabled(),
+                                            "Test"
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_test_action_info.set(true),
+                                            title: "Test info",
+                                            InfoIcon {}
+                                        }
+                                    }
+
+                                    // Right: message area (same height as button; reserves space to prevent jumping)
+                                    div { class: "flex-1 min-h-[2rem] pt-1",
+                                        if let Some(msg) = test_status() {
+                                            div { class: "text-xs text-cyan-400 whitespace-normal break-words", "{msg}" }
+                                        } else if let Some(err) = test_error() {
+                                            div { class: "text-xs text-red-400 whitespace-normal break-words", "{err}" }
+                                        } else {
+                                            div { class: "text-xs text-gray-600", "" }
+                                        }
+                                    }
+                                }
                             }
 
                             // ═══════════════════════════════════════════════════════════════
@@ -593,7 +642,7 @@ pub fn ConfigNeo4j() -> Element {
                             // ═══════════════════════════════════════════════════════════════
                             div { class: "rounded border border-gray-600 p-4 w-fit",
                                 div { class: "flex items-center gap-2 mb-3",
-                                    span { class: "text-sm text-gray-300 font-semibold", "2. Graph Expansion" }
+                                    span { class: "text-sm text-gray-300 font-semibold", "Graph Expansion" }
                                 }
                                 div { class: "flex flex-wrap gap-6 justify-start",
                                     // Enable column
@@ -740,11 +789,42 @@ pub fn ConfigNeo4j() -> Element {
                             }
 
                             // ═══════════════════════════════════════════════════════════════
+                            // GRAPH STATS
+                            // ═══════════════════════════════════════════════════════════════
+                            div { class: "rounded border border-gray-600 p-4 w-fit",
+                                div { class: "flex items-center gap-2 mb-3",
+                                    span { class: "text-sm text-gray-300 font-semibold", "Graph Stats" }
+                                }
+                                div { class: "grid grid-cols-2 gap-x-10 gap-y-2",
+                                    div { class: PARAM_BLOCK_CLASS,
+                                        label { class: PARAM_LABEL_CLASS, "total_nodes" }
+                                        span { class: "text-gray-200", "{stats_total_nodes}" }
+                                    }
+                                    div { class: PARAM_BLOCK_CLASS,
+                                        label { class: PARAM_LABEL_CLASS, "total_relationships" }
+                                        span { class: "text-gray-200", "{stats_total_relationships}" }
+                                    }
+                                    div { class: PARAM_BLOCK_CLASS,
+                                        label { class: PARAM_LABEL_CLASS, "documents" }
+                                        span { class: "text-gray-200", "{stats_documents}" }
+                                    }
+                                    div { class: PARAM_BLOCK_CLASS,
+                                        label { class: PARAM_LABEL_CLASS, "chunks" }
+                                        span { class: "text-gray-200", "{stats_chunks}" }
+                                    }
+                                    div { class: PARAM_BLOCK_CLASS,
+                                        label { class: PARAM_LABEL_CLASS, "entities" }
+                                        span { class: "text-gray-200", "{stats_entities}" }
+                                    }
+                                }
+                            }
+
+                            // ═══════════════════════════════════════════════════════════════
                             // CATEGORY 3: ENTITY EXTRACTION
                             // ═══════════════════════════════════════════════════════════════
                             div { class: "rounded border border-gray-600 p-4 w-fit",
                                 div { class: "flex items-center gap-2 mb-3",
-                                    span { class: "text-sm text-gray-300 font-semibold", "3. Entity Extraction" }
+                                    span { class: "text-sm text-gray-300 font-semibold", "Entity Extraction" }
                                 }
                                 div { class: "flex flex-wrap gap-6 justify-start",
                                     // Enable column
@@ -872,12 +952,43 @@ pub fn ConfigNeo4j() -> Element {
                     }
                 }
 
+                // Action button info modals
+                if show_reset_action_info() {
+                    {info_modal("Reset", show_reset_action_info, vec![
+                        "Resets the form fields on this page back to their default values.",
+                        "This does not change the running backend configuration until you click Save.",
+                        "Use this if you want to undo edits and return to the defaults."
+                    ])}
+                }
+                if show_test_action_info() {
+                    {info_modal("Test", show_test_action_info, vec![
+                        "Attempts to connect to Neo4j using the current settings (URI/user/password/database).",
+                        "This is a connectivity check only — it does not modify data.",
+                        "Use this after changing connection settings or after starting the Neo4j container."
+                    ])}
+                }
+                if show_rebuild_action_info() {
+                    {info_modal("Rebuild", show_rebuild_action_info, vec![
+                        "Rebuilds the Neo4j knowledge graph from already-indexed documents.",
+                        "This can take time depending on how many documents/chunks you have.",
+                        "Use this after ingesting documents or changing extraction settings."
+                    ])}
+                }
+                if show_save_action_info() {
+                    {info_modal("Save", show_save_action_info, vec![
+                        "Saves the current settings.",
+                        "Note: in the current implementation this UI shows success but the backend save endpoint is marked TODO.",
+                        "In a production setup, changing these settings may require a restart to take full effect."
+                    ])}
+                }
+
                 // Info modals - Category 1
                 if show_enabled_info() {
                     {info_modal("neo4j_enabled", show_enabled_info, vec![
-                        "Enable or disable Neo4j knowledge graph integration.",
-                        "When enabled, documents will be indexed into Neo4j for graph-based retrieval.",
-                        "Requires a running Neo4j instance. Default: false."
+                        "Enables Neo4j integration inside AG (GraphRAG ingestion + graph queries).",
+                        "Does NOT start the Neo4j container — it only controls whether the backend will try to use Neo4j.",
+                        "When enabled, the backend will use Neo4j if it is reachable; if Neo4j is down or misconfigured, graph features may be skipped or fail until it’s available.",
+                        "Use this toggle to turn graph ingestion on/off without changing Docker/container state."
                     ])}
                 }
                 if show_uri_info() {

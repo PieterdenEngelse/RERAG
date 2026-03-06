@@ -166,6 +166,7 @@ pub fn Home() -> Element {
 
     // Info panel state (global context)
     let mut show_info = use_context::<Signal<ShowRagInfo>>();
+    let mut runtime_suspended = use_context::<Signal<crate::app::RuntimeSuspended>>();
 
     // Clear chat signal (triggered by Home link in header)
     let clear_chat = use_context::<Signal<ClearChat>>();
@@ -216,7 +217,10 @@ pub fn Home() -> Element {
     use_effect(move || {
         spawn(async move {
             match api::list_documents().await {
-                Ok(resp) => documents.set(resp.documents),
+                Ok(mut resp) => {
+                    resp.documents.sort();
+                    documents.set(resp.documents);
+                }
                 Err(_) => {} // Silently fail
             }
         });
@@ -892,16 +896,16 @@ pub fn Home() -> Element {
                                     label {
                                         class: "font-medium text-center",
                                         style: "color: white; font-size: 1.1rem;",
-                                        "Backend"
+                                        "Runtime"
                                     }
                                     button {
                                         class: "shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80 pointer-events-auto",
-                                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #7C2A02; border: 1px solid #7C2A02;",
+                                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
                                         onclick: move |evt| {
                                             evt.stop_propagation();
                                             show_backend_info.set(true);
                                         },
-                                        title: "Info about backend selection",
+                                        title: "Info about runtime selection",
                                         svg {
                                             class: INFO_ICON_SVG_CLASS,
                                             view_box: "0 0 20 20",
@@ -952,17 +956,17 @@ pub fn Home() -> Element {
                                         }
                                         button {
                                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
                                             onclick: move |_| show_rag_info.set(true),
                                             title: "Info about RAG mode",
                                             svg {
                                                 class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
-                                                stroke: "#7C2A02",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                                stroke: "#026B7C",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
                                                 line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#7C2A02", stroke: "none" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                             }
                                         }
                                     }
@@ -983,17 +987,17 @@ pub fn Home() -> Element {
                                         }
                                         button {
                                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: #026B7C; border: 1px solid #026B7C;",
+                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
                                             onclick: move |_| show_llm_info.set(true),
                                             title: "Info about LLM mode",
                                             svg {
                                                 class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
-                                                stroke: "currentColor",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                                stroke: "#026B7C",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
                                                 line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                             }
                                         }
                                     }
@@ -1014,17 +1018,17 @@ pub fn Home() -> Element {
                                         }
                                         button {
                                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
                                             onclick: move |_| show_hybrid_info.set(true),
                                             title: "Info about Hybrid mode",
                                             svg {
                                                 class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
-                                                stroke: "currentColor",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                                stroke: "#026B7C",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
                                                 line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                             }
                                         }
                                     }
@@ -1057,8 +1061,27 @@ pub fn Home() -> Element {
                                     // Documents buttons
                                     div {
                                         class: "flex flex-col items-center",
-                                        style: "width: 5.5rem;",
+                                        style: "width: 7.5rem;",
                                         div { class: "flex gap-1",
+                                            // Info (standard styling)
+                                            button {
+                                                class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                                                style: "width: 2rem; height: 2rem; min-width: 2rem; min-height: 2rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                                                onclick: move |evt| {
+                                                    evt.stop_propagation();
+                                                    show_info.set(ShowRagInfo(true));
+                                                },
+                                                title: "Info about documents",
+                                                svg {
+                                                    class: INFO_ICON_SVG_CLASS,
+                                                    view_box: "0 0 20 20",
+                                                    fill: "none",
+                                                    stroke: "#026B7C",
+                                                    circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                                    line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                                    circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
+                                                }
+                                            }
                                             button {
                                                 class: "btn rounded-full px-4 text-xl font-bold",
                                                 style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
@@ -1073,7 +1096,10 @@ pub fn Home() -> Element {
                                                     show_delete_docs_modal.set(true);
                                                     spawn(async move {
                                                         match api::list_documents().await {
-                                                            Ok(resp) => documents.set(resp.documents),
+                                                            Ok(mut resp) => {
+                                                                resp.documents.sort();
+                                                                documents.set(resp.documents);
+                                                            }
                                                             Err(e) => upload_status.set(Some(format!("Failed to load: {}", e))),
                                                         }
                                                     });
@@ -1091,7 +1117,7 @@ pub fn Home() -> Element {
                                     // Memories buttons
                                     div {
                                         class: "flex flex-col items-center",
-                                        style: "width: 5.5rem;",
+                                        style: "width: 7.5rem;",
                                         div { class: "flex gap-1",
                                             a {
                                                 class: "btn rounded-full px-4 text-xl font-bold cursor-pointer",
@@ -1117,6 +1143,25 @@ pub fn Home() -> Element {
                                                 },
                                                 title: "Delete memories",
                                                 "-"
+                                            }
+                                            // Info (standard styling)
+                                            button {
+                                                class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                                                style: "width: 2rem; height: 2rem; min-width: 2rem; min-height: 2rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                                                onclick: move |evt| {
+                                                    evt.stop_propagation();
+                                                    show_info.set(ShowRagInfo(true));
+                                                },
+                                                title: "Info about memories",
+                                                svg {
+                                                    class: INFO_ICON_SVG_CLASS,
+                                                    view_box: "0 0 20 20",
+                                                    fill: "none",
+                                                    stroke: "#026B7C",
+                                                    circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                                    line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                                    circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
+                                                }
                                             }
                                         }
                                         span {
@@ -1176,17 +1221,17 @@ pub fn Home() -> Element {
                                         }
                                         button {
                                             class: "shrink-0 rounded flex items-center justify-center cursor-pointer pointer-events-auto",
-                                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: #026B7C; border: 1px solid #026B7C;",
+                                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
                                             onclick: move |_| show_cache_info.set(true),
                                             title: "Info about KV caching",
                                             svg {
                                                 class: INFO_ICON_SVG_CLASS,
                                                 view_box: "0 0 20 20",
                                                 fill: "none",
-                                                stroke: "#7C2A02",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                                stroke: "#026B7C",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
                                                 line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#7C2A02", stroke: "none" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                             }
                                         }
                                     }
@@ -1234,7 +1279,7 @@ pub fn Home() -> Element {
                             // Info button for supported file types
                             button {
                                 class: "w-5 h-5 min-w-5 min-h-5 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80 pointer-events-auto",
-                                style: "background-color: #1D6B9A; border: 1px solid #1D6B9A;",
+                                style: "background-color: transparent; border: 1.5px solid #026B7C;",
                                 onclick: move |evt| {
                                     evt.stop_propagation();
                                     show_file_types_info.set(true);
@@ -1243,11 +1288,10 @@ pub fn Home() -> Element {
                                     class: INFO_ICON_SVG_CLASS,
                                     view_box: "0 0 20 20",
                                     fill: "none",
-                                    stroke: "currentColor",
-                                    stroke_width: "1.5",
-                                    circle { cx: "10", cy: "10", r: "9" }
-                                    line { x1: "10", y1: "8", x2: "10", y2: "14" }
-                                    circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                    stroke: "#026B7C",
+                                    circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                    line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                    circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                 }
                             }
                         }
@@ -1275,6 +1319,7 @@ pub fn Home() -> Element {
                                 class: if is_uploading() { "btn-disabled" } else { "" },
                                 input {
                                     r#type: "file",
+                                    multiple: true,
                                     class: "hidden",
                                     // Documents: pdf, txt, md, html, xml, json
                                     // Code: rs, py, js, ts, go, java, cs, cpp, c, rb, php, sh, sql, yaml, toml
@@ -1298,6 +1343,29 @@ pub fn Home() -> Element {
                                                 let mut success_count = 0;
 
                                                 if total_files > 0 {
+                                                    // Heuristic: only stop runtime for "bulk" uploads
+                                                    // (3+ files OR any file >=2MB OR total size >=5MB).
+                                                    let mut total_bytes: u64 = 0;
+                                                    let mut any_large: bool = false;
+                                                    for f in &files {
+                                                        let size = f.size();
+                                                        total_bytes += size;
+                                                        if size >= 2 * 1024 * 1024 {
+                                                            any_large = true;
+                                                        }
+                                                    }
+                                                    let stop_runtime = total_files >= 3
+                                                        || any_large
+                                                        || total_bytes >= 5 * 1024 * 1024;
+
+                                                    if stop_runtime {
+                                                        upload_status.set(Some(
+                                                            "Stopping runtime to free resources for upload…".to_string(),
+                                                        ));
+                                                        runtime_suspended.set(crate::app::RuntimeSuspended(true));
+                                                        let _ = api::runtime_action("stop").await;
+                                                    }
+
                                                     for file_data in &files {
                                                         let file_name = file_data.name();
                                                         upload_status.set(Some(format!("Uploading: {}", file_name)));
@@ -1319,6 +1387,14 @@ pub fn Home() -> Element {
                                                         }
                                                     }
 
+                                                    if stop_runtime {
+                                                        upload_status.set(Some(
+                                                            "Starting runtime again…".to_string(),
+                                                        ));
+                                                        let _ = api::runtime_action("start").await;
+                                                        runtime_suspended.set(crate::app::RuntimeSuspended(false));
+                                                    }
+
                                                     // Show final status
                                                     if success_count == total_files {
                                                         upload_status.set(Some(format!("✓ {} file(s) uploaded", success_count)));
@@ -1328,7 +1404,8 @@ pub fn Home() -> Element {
 
                                                     // Refresh document list
                                                     if success_count > 0 {
-                                                        if let Ok(docs) = api::list_documents().await {
+                                                        if let Ok(mut docs) = api::list_documents().await {
+                                                            docs.documents.sort();
                                                             documents.set(docs.documents);
                                                         }
                                                     }
@@ -1396,9 +1473,38 @@ pub fn Home() -> Element {
                                     class: "space-y-0.5",
                                     for doc in documents() {
                                         li {
-                                            class: "text-xs truncate py-0.5 px-1 hover:bg-base-200 rounded",
+                                            class: "flex items-center justify-between gap-2 text-xs py-0.5 px-1 hover:bg-base-200 rounded",
                                             title: "{doc}",
-                                            "📄 {doc}"
+                                            span { class: "truncate", "📄 {doc}" }
+                                            button {
+                                                class: "btn btn-ghost btn-xs",
+                                                title: "Delete",
+                                                onclick: move |_| {
+                                                    let doc = doc.clone();
+                                                    spawn(async move {
+                                                        // Simple confirmation
+                                                        let ok = web_sys::window()
+                                                            .and_then(|w| {
+                                                                w.confirm_with_message(&format!(
+                                                                    "Delete '{}' ?",
+                                                                    doc
+                                                                ))
+                                                                .ok()
+                                                            })
+                                                            .unwrap_or(false);
+                                                        if !ok {
+                                                            return;
+                                                        }
+
+                                                        let _ = api::delete_document(&doc).await;
+                                                        if let Ok(mut resp) = api::list_documents().await {
+                                                            resp.documents.sort();
+                                                            documents.set(resp.documents);
+                                                        }
+                                                    });
+                                                },
+                                                "🗑"
+                                            }
                                         }
                                     }
                                 }
@@ -1421,6 +1527,20 @@ pub fn Home() -> Element {
                             class: "btn btn-ghost btn-xs",
                             onclick: move |_| error_msg.set(None),
                             "✕"
+                        }
+                    }
+                }
+
+                // Runtime suspended banner (during bulk uploads)
+                if runtime_suspended().0 {
+                    div {
+                        class: "alert mx-2 mt-2 py-2 text-sm flex-shrink-0",
+                        style: "background-color: rgba(2, 107, 124, 0.12); border: 1px solid #026B7C;",
+                        div { class: "flex flex-col gap-1",
+                            span { class: "font-semibold text-white", "Runtime temporarily stopped" }
+                            span { class: "text-xs text-gray-200",
+                                "The LLM runtime is stopped while documents are uploading to free resources for indexing. Chat will be available again when the upload finishes."
+                            }
                         }
                     }
                 }
@@ -1707,10 +1827,17 @@ pub fn Home() -> Element {
                                 ul {
                                     class: "list-disc list-inside mt-1",
                                     li { "Upload documents (PDF, text, markdown, HTML, JSON, XML) or code files" }
+                                    li { "Indexing runs (extract → chunk → embed → store) so your documents become searchable" }
                                     li { "Ask questions in the chat" }
-                                    li { "Relevant content is found and sent to the LLM" }
+                                    li { "Relevant content is found and sent to the LLM runtime" }
                                     li { "Get answers grounded in your documents" }
                                 }
+                            }
+
+                            p {
+                                strong { "During bulk uploads:" }
+                                br {}
+                                "When you add documents, the app will automatically stop the LLM runtime to free CPU/RAM for indexing. While the runtime is stopped, chat/LLM answers are not available. Start the runtime again when the upload is finished to re-enable chat."
                             }
 
                             p {
@@ -2492,7 +2619,10 @@ pub fn Home() -> Element {
                                         }
                                     }
                                     match api::list_documents().await {
-                                        Ok(resp) => documents.set(resp.documents),
+                                        Ok(mut resp) => {
+                                            resp.documents.sort();
+                                            documents.set(resp.documents);
+                                        }
                                         Err(e) => upload_status.set(Some(format!("Failed to load: {}", e))),
                                     }
                                     if errors.is_empty() {
@@ -2629,6 +2759,14 @@ pub fn Home() -> Element {
                                 li { span { class: "text-gray-200", "JSON:" } " .json" }
                             }
                         }
+                        div {
+                            class: "p-3 rounded border border-gray-700 bg-gray-900/30",
+                            h3 { class: "font-semibold text-cyan-300 mb-1", "Tip for bulk uploads" }
+                            p { class: "text-gray-300",
+                                "When you add documents, the app will automatically stop the LLM runtime to free CPU/RAM for indexing. While the runtime is stopped, chat/LLM answers are not available. Start the runtime again when the upload is finished to re-enable chat."
+                            }
+                        }
+
                         // Code Files section
                         div {
                             h3 { class: "font-semibold text-purple-300 mb-2", "Code Files" }

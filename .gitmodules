@@ -1,0 +1,3 @@
+[submodule "visual-cypher-builder"]
+    path = visual-cypher-builder
+    url = https://github.com/neo4j-labs/visual-cypher-builder.git

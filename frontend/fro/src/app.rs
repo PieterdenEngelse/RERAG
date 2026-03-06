@@ -3,10 +3,10 @@ use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx,
-    ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgentic, MonitorCache,
-    MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
-    MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTools, PageNotFound,
-    Parameters, Train,
+    ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd,
+    MonitorAgentic, MonitorCache, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs,
+    MonitorObservations, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests,
+    MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 use dioxus_router::{Outlet, Routable, Router};
@@ -57,6 +57,8 @@ pub enum Route {
         MonitorRateLimits {},
         #[route("/monitor/logs")]
         MonitorLogs {},
+        #[route("/monitor/ag-systemd")]
+        MonitorAgSystemd {},
         #[route("/monitor/tools")]
         MonitorTools {},
         #[route("/monitor/docker")]
@@ -85,6 +87,10 @@ pub struct ShowRagInfo(pub bool);
 /// Signal for clearing chat messages (triggered by Home link)
 #[derive(Clone, Copy, Default)]
 pub struct ClearChat(pub bool);
+
+/// Signal indicating the LLM runtime is intentionally stopped (e.g., during bulk uploads)
+#[derive(Clone, Copy, Default)]
+pub struct RuntimeSuspended(pub bool);
 
 /// Global page error state - pages report their API errors here
 /// The header status light uses this to show red when any page has errors
@@ -199,6 +205,7 @@ pub fn App() -> Element {
     use_context_provider(|| Signal::new(ShowRagInfo(false))); // RAG info panel
     use_context_provider(|| Signal::new(ActiveDropdown(None))); // Active dropdown tracker
     use_context_provider(|| Signal::new(ClearChat(false))); // Clear chat trigger
+    use_context_provider(|| Signal::new(RuntimeSuspended(false))); // LLM runtime suspended flag
     use_context_provider(|| Signal::new(PageErrors::default())); // Global page errors state
 
     rsx! {

@@ -1,3 +1,4 @@
+pub mod ag_systemd;
 pub mod agentic;
 pub mod cache;
 pub mod docker;
@@ -10,6 +11,8 @@ pub mod rag;
 pub mod rate_limits;
 pub mod requests;
 pub mod tools;
+
+pub use ag_systemd::MonitorAgSystemd;
 pub use agentic::MonitorAgentic;
 pub use cache::MonitorCache;
 pub use docker::MonitorDocker;

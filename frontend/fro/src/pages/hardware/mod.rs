@@ -733,7 +733,7 @@ pub fn ConfigHardware() -> Element {
                             let model_name = hardware_values.model.clone();
                             let model_size = quantization::parse_model_size(&model_name);
                             let available_gb = memory_info_value.as_ref().map(|m| m.available_memory_gb).unwrap_or(8.0);
-                            
+
                             if let Some(size) = model_size {
                                 let recommendations = quantization::get_recommendations(size.params_billions, available_gb);
                                 rsx! {

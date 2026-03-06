@@ -30,8 +30,10 @@ services:
   neo4j:
     image: neo4j:5
     container_name: ag-neo4j
-    restart: unless-stopped
-    profiles: ["", "core"]
+    # Neo4j is only needed for ingestion/GraphRAG. Keep it opt-in.
+    # Start explicitly with: docker compose --profile core up -d neo4j
+    restart: "no"
+    profiles: ["core"]
     ports:
       - "7474:7474"  # Browser UI
       - "7687:7687"  # Bolt protocol
@@ -184,6 +186,7 @@ services:
   visual-cypher:
     image: nginx:alpine
     container_name: visual-cypher
+    profiles: ["core"]
     volumes:
       - ./visual-cypher-builder/dist:/usr/share/nginx/html:ro
     ports:

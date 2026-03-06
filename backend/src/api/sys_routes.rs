@@ -88,11 +88,11 @@ async fn get_physical_cores() -> impl Responder {
 async fn get_memory() -> impl Responder {
     let mut sys = System::new_all();
     sys.refresh_memory();
-    
+
     let total = sys.total_memory();
     let available = sys.available_memory();
     let used = sys.used_memory();
-    
+
     let total_gb = total as f64 / 1_073_741_824.0;
     let available_gb = available as f64 / 1_073_741_824.0;
     let usage_percent = if total > 0 {
@@ -100,12 +100,12 @@ async fn get_memory() -> impl Responder {
     } else {
         0.0
     };
-    
+
     HttpResponse::Ok().json(MemoryInfo {
         total_memory_bytes: total,
         available_memory_bytes: available,
         used_memory_bytes: used,
-        total_memory_gb: (total_gb * 10.0).round() / 10.0,  // Round to 1 decimal
+        total_memory_gb: (total_gb * 10.0).round() / 10.0, // Round to 1 decimal
         available_memory_gb: (available_gb * 10.0).round() / 10.0,
         usage_percent: (usage_percent * 10.0).round() / 10.0,
     })

@@ -99,7 +99,7 @@ pub struct ModelSize {
 }
 
 /// Parse model size from model name
-/// 
+///
 /// Examples:
 /// - "llama3:7b" → 7.0B
 /// - "phi3:3.8b" → 3.8B
@@ -111,7 +111,7 @@ pub fn parse_model_size(model_name: &str) -> Option<ModelSize> {
 }
 
 /// Calculate memory requirement for a model with given quantization
-/// 
+///
 /// Formula: (params * bits_per_weight) / 8 + overhead
 /// Overhead accounts for KV cache, activations, etc. (~1.5GB typical)
 pub fn calculate_memory_gb(params_billions: f64, quant: &QuantizationLevel) -> f64 {
@@ -148,7 +148,7 @@ pub fn get_recommendations(
             } else {
                 None
             };
-            
+
             QuantizationRecommendation {
                 level,
                 estimated_memory_gb: estimated,
@@ -158,7 +158,7 @@ pub fn get_recommendations(
             }
         })
         .collect();
-    
+
     // Mark the best fitting option as recommended
     // Prefer highest quality that fits
     for rec in recommendations.iter_mut().rev() {
@@ -167,7 +167,7 @@ pub fn get_recommendations(
             break;
         }
     }
-    
+
     // If nothing fits, recommend the smallest
     if !recommendations.iter().any(|r| r.is_recommended) {
         if let Some(first) = recommendations.first_mut() {
@@ -179,32 +179,34 @@ pub fn get_recommendations(
             ));
         }
     }
-    
+
     recommendations
 }
 
 /// Simple model size parser without regex (for WASM compatibility)
 pub fn parse_model_size_simple(model_name: &str) -> Option<ModelSize> {
     let name_lower = model_name.to_lowercase();
-    
+
     // Look for patterns like "7b", "3.8b", "1.5b", "70b"
     let chars: Vec<char> = name_lower.chars().collect();
     let mut i = 0;
-    
+
     while i < chars.len() {
         // Find start of a number
         if chars[i].is_ascii_digit() {
             let start = i;
             let mut has_decimal = false;
-            
+
             // Consume digits and optional decimal
-            while i < chars.len() && (chars[i].is_ascii_digit() || (chars[i] == '.' && !has_decimal)) {
+            while i < chars.len()
+                && (chars[i].is_ascii_digit() || (chars[i] == '.' && !has_decimal))
+            {
                 if chars[i] == '.' {
                     has_decimal = true;
                 }
                 i += 1;
             }
-            
+
             // Check if followed by 'b'
             if i < chars.len() && chars[i] == 'b' {
                 let num_str: String = chars[start..i].iter().collect();
@@ -220,7 +222,7 @@ pub fn parse_model_size_simple(model_name: &str) -> Option<ModelSize> {
         }
         i += 1;
     }
-    
+
     // Fallback for known models
     if name_lower.contains("phi") && (name_lower.contains("mini") || name_lower.contains("3")) {
         return Some(ModelSize {
@@ -240,22 +242,42 @@ pub fn parse_model_size_simple(model_name: &str) -> Option<ModelSize> {
             size_string: "2B".to_string(),
         });
     }
-    
+
     None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_model_size() {
-        assert_eq!(parse_model_size_simple("llama3:7b").unwrap().params_billions, 7.0);
-        assert_eq!(parse_model_size_simple("phi3:3.8b").unwrap().params_billions, 3.8);
-        assert_eq!(parse_model_size_simple("qwen2:1.5b").unwrap().params_billions, 1.5);
-        assert_eq!(parse_model_size_simple("mistral:7b-instruct-q4_k_m").unwrap().params_billions, 7.0);
+        assert_eq!(
+            parse_model_size_simple("llama3:7b")
+                .unwrap()
+                .params_billions,
+            7.0
+        );
+        assert_eq!(
+            parse_model_size_simple("phi3:3.8b")
+                .unwrap()
+                .params_billions,
+            3.8
+        );
+        assert_eq!(
+            parse_model_size_simple("qwen2:1.5b")
+                .unwrap()
+                .params_billions,
+            1.5
+        );
+        assert_eq!(
+            parse_model_size_simple("mistral:7b-instruct-q4_k_m")
+                .unwrap()
+                .params_billions,
+            7.0
+        );
     }
-    
+
     #[test]
     fn test_memory_calculation() {
         let q4 = &QUANTIZATION_LEVELS[0]; // q4_0

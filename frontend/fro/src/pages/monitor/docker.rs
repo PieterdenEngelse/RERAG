@@ -5,7 +5,9 @@ use crate::{
     api,
     app::{PageErrors, Route},
     components::monitor::*,
-    pages::hardware::constants::{INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE},
+    pages::hardware::constants::{
+        INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+    },
 };
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
@@ -21,7 +23,7 @@ struct DockerState {
 }
 
 // Styling constants matching other monitor pages
-const BOARD_CLASS: &str = "rounded border border-gray-600 p-4 bg-gray-800/50";
+const BOARD_CLASS: &str = "relative rounded border border-gray-600 p-4 pb-12 bg-gray-800/50";
 const LABEL_CLASS: &str = "text-gray-400 text-xs";
 
 #[component]
@@ -165,10 +167,20 @@ pub fn MonitorDocker() -> Element {
                             code { class: "bg-gray-900 px-2 py-1 rounded", "docker compose up -d" }
                         }
                     } else {
-                        div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4",
-                            for container in &snapshot.containers {
-                                ContainerCard { container: container.clone() }
+                        {
+                            let mut containers = snapshot.containers.clone();
+                            // Swap Neo4j and OTel container cards if both exist
+                            let neo_idx = containers.iter().position(|c| c.name == "ag-neo4j");
+                            let otel_idx = containers.iter().position(|c| c.name == "ag-otel");
+                            if let (Some(i), Some(j)) = (neo_idx, otel_idx) {
+                                containers.swap(i, j);
                             }
+
+                            rsx! {
+                                div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4",
+                                    for (idx, container) in containers.iter().enumerate() {
+                                        ContainerCard { container: container.clone(), grid_index: idx }
+                                    }
                             // Quick Actions card - appears as last item in grid
                             div { class: "bg-gray-800/50 rounded-lg border border-gray-700 p-4",
                                 h3 { class: "text-sm font-semibold text-gray-300 mb-3", "Quick Actions" }
@@ -189,6 +201,8 @@ pub fn MonitorDocker() -> Element {
                                         action: "up",
                                     }
                                 }
+                            }
+                        }
                             }
                         }
                     }
@@ -257,13 +271,13 @@ pub fn MonitorDocker() -> Element {
 
 /// Container status card component
 #[component]
-fn ContainerCard(container: api::DockerContainer) -> Element {
+fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element {
     // State display - rust color for active, red for inactive
     let (state_text, state_style) = match container.state.as_str() {
         "running" => ("active process", "color: #7C2A02;"), // Rust color
-        "restarting" => ("restarting", "color: #facc15;"), // yellow
+        "restarting" => ("restarting", "color: #facc15;"),  // yellow
         "exited" | "dead" => ("no active process", "color: #ef4444;"), // red
-        _ => ("unknown", "color: #9ca3af;"), // gray
+        _ => ("unknown", "color: #9ca3af;"),                // gray
     };
 
     // Health badge - shows 'healthy' or 'not healthy' text
@@ -285,55 +299,142 @@ fn ContainerCard(container: api::DockerContainer) -> Element {
         .image
         .split(':')
         .last()
-        .map(|v| if v.starts_with('v') { v.to_string() } else { format!("v{}", v) })
+        .map(|v| {
+            if v.starts_with('v') {
+                v.to_string()
+            } else {
+                format!("v{}", v)
+            }
+        })
         .unwrap_or_else(|| "latest".to_string());
 
-    // Extract unique external port numbers only
-    // Formats: "0.0.0.0:7474->7474/tcp", "[::]:7474->7474/tcp", "7474/tcp"
+    // Extract ports for display.
+    // We prefer host/external ports when present ("0.0.0.0:7474->7474/tcp"),
+    // but fall back to container port specs ("7474/tcp") so ports remain visible even
+    // when the container is stopped and there are no published mappings.
     let mut port_set = std::collections::BTreeSet::new();
     for p in &container.ports {
-        // Try to extract external port from "host:port->" pattern
         if let Some(arrow) = p.find("->") {
+            // host mapping: "...:7474->7474/tcp"
             let before_arrow = &p[..arrow];
-            // Find the port after the last ':'
             if let Some(colon) = before_arrow.rfind(':') {
                 let port = &before_arrow[colon + 1..];
                 if let Ok(num) = port.parse::<u16>() {
-                    port_set.insert(num);
+                    port_set.insert(num.to_string());
                 }
+            }
+        } else {
+            // container-only: "7474/tcp"
+            let port_part = p.split('/').next().unwrap_or("");
+            if !port_part.is_empty() {
+                port_set.insert(port_part.to_string());
             }
         }
     }
-    let ports_simple: Vec<String> = port_set.iter().map(|p| p.to_string()).collect();
-    let ports_detail = container.ports.join("\n");
-    let has_ports = !ports_simple.is_empty();
+    let mut ports_simple: Vec<String> = port_set.into_iter().collect();
+    let mut ports_detail = container.ports.join("\n");
+    let mut has_ports = !container.ports.is_empty();
+
+    // When the container is stopped, docker sometimes reports an empty ports list.
+    // For Neo4j we still want to show the well-known ports for operator clarity.
+    if container.name.eq_ignore_ascii_case("ag-neo4j") || display_name.eq_ignore_ascii_case("neo4j")
+    {
+        if !has_ports {
+            ports_simple = vec!["7474".into(), "7687".into()];
+            ports_detail = "7474/tcp\n7687/tcp".to_string();
+            has_ports = true;
+        }
+    }
 
     rsx! {
         div { class: BOARD_CLASS,
-            div { class: "flex items-start justify-between mb-2",
-                div {
+            div { class: "relative mb-2",
+                // Header row (title left, badge right, Neo4j note centered on same top line)
+                div { class: "relative",
                     h3 { class: "text-gray-200 font-semibold text-sm", "{display_name}" }
-                    p { class: "text-gray-500 text-xs",
-                        "Docker image: "
-                        span { "{version}" }
+
+                    if display_name.eq_ignore_ascii_case("neo4j") {
+                        p {
+                            class: "text-cyan-400 text-xs text-center absolute top-0 left-1/2 -translate-x-1/2 w-full",
+                            "Only for ingestion"
+                        }
+                    }
+
+                    if let Some((icon, class)) = health_badge {
+                        span { class: "absolute top-0 right-0 px-2 py-0.5 rounded text-xs {class}", "{icon}" }
                     }
                 }
-                if let Some((icon, class)) = health_badge {
-                    span { class: "px-2 py-0.5 rounded text-xs {class}", "{icon}" }
+
+                // Neo4j quick link (positioned so it doesn't affect card layout)
+                if display_name.eq_ignore_ascii_case("neo4j") {
+                    a {
+                        href: "/config/neo4j",
+                        class: "btn btn-sm absolute left-1/2 -translate-x-1/2 z-10",
+                        // ~1.5cm + 5mm lower than the top of the card (~76px at 96dpi)
+                        style: "top: 76px; background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                        "Config"
+                    }
+                }
+
+                p { class: "text-gray-500 text-xs",
+                    "Docker image: "
+                    span { "{version}" }
+                }
+            }
+
+            // Start/Stop button (container-scoped)
+            {
+                let is_running = container.state == "running";
+                let action_label = if is_running { "Stop" } else { "Start" };
+                let action = if is_running { "stop" } else { "start" };
+                let container_name = container.name.clone();
+
+                let bottom_px = if grid_index < 4 {
+                    // First visual row (4 cards)
+                    64
+                } else if grid_index < 7 {
+                    // Second visual row (next 3 cards)
+                    120
+                } else {
+                    // Remaining cards
+                    92
+                };
+
+                rsx! {
+                    div {
+                        class: "absolute left-1/2 -translate-x-1/2 z-20",
+                        style: "bottom: {bottom_px}px;",
+                        button {
+                            class: "btn btn-sm",
+                            style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                        onclick: move |_| {
+                            let container_name = container_name.clone();
+                            let action = action.to_string();
+                            spawn(async move {
+                                let _ = api::docker_action(&action, Some(&container_name)).await;
+                            });
+                        },
+                            "{action_label}"
+                        }
+                    }
                 }
             }
 
             div { class: "space-y-1",
                 div { class: "flex justify-between",
-                    span { class: LABEL_CLASS, "State" }
+                    span { class: LABEL_CLASS, "State:" }
                     span { class: "text-xs font-medium", style: "{state_style}", "{state_text}" }
                 }
                 if has_ports {
                     PortsRow { ports_simple: ports_simple.clone(), ports_detail: ports_detail.clone() }
                 }
-                div { class: "flex justify-between",
-                    span { class: LABEL_CLASS, "Status" }
-                    span { class: "text-gray-400 text-xs truncate max-w-[120px]", title: "{container.status}", "{container.status}" }
+                div { class: "flex justify-between gap-2",
+                    span { class: LABEL_CLASS, "Status:" }
+                    span {
+                        class: "text-gray-400 text-xs text-right whitespace-normal break-words",
+                        title: "{container.status}",
+                        "{container.status}"
+                    }
                 }
             }
         }
@@ -349,7 +450,7 @@ fn PortsRow(ports_simple: Vec<String>, ports_detail: String) -> Element {
         div { class: "flex justify-between items-center",
             // Label with info button
             div { class: "flex items-center gap-1",
-                span { class: LABEL_CLASS, "Ports" }
+                span { class: LABEL_CLASS, "Ports:" }
                 // Small info button after "Ports"
                 button {
                     class: PARAM_ICON_BUTTON_CLASS,
@@ -418,7 +519,7 @@ fn ActionButton(label: &'static str, icon: &'static str, action: &'static str) -
         let action_str = action.to_string();
         status.set("loading".to_string());
         error_msg.set(None);
-        
+
         spawn(async move {
             match api::docker_action(&action_str, None).await {
                 Ok(resp) => {

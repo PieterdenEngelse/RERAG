@@ -328,7 +328,7 @@ async fn main() -> std::io::Result<()> {
         let upload_dir = ag::api::UPLOAD_DIR.to_string();
 
         // Spawn as background task - doesn't block server startup
-            tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let indexing_start = Instant::now();
             debug!("Background indexing task started");
 

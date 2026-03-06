@@ -54,7 +54,10 @@ pub fn index_all_documents(
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
             if existing_files.contains(filename) {
-                debug!("index_all_documents: skipping already-indexed file='{}'", filename);
+                debug!(
+                    "index_all_documents: skipping already-indexed file='{}'",
+                    filename
+                );
                 skipped_count += 1;
                 continue;
             }

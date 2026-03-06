@@ -816,10 +816,7 @@ pub async fn rebuild_graph_from_index() -> GraphBuildResult {
         docs_processed += 1;
     }
 
-    info!(
-        docs = docs_processed,
-        "Knowledge graph rebuild completed"
-    );
+    info!(docs = docs_processed, "Knowledge graph rebuild completed");
 
     GraphBuildResult {
         status: "completed".to_string(),

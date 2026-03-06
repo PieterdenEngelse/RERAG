@@ -1976,6 +1976,76 @@ async fn get_docker_stats() -> Vec<DockerStats> {
 }
 
 // ============================================================================
+// RUNTIME ACTIONS (LLM runtime control)
+// ============================================================================
+
+#[derive(Debug, serde::Deserialize)]
+struct RuntimeActionRequest {
+    action: String,
+}
+
+/// POST /monitoring/runtime/action
+/// Stop/start the LLM runtime (currently Ollama via systemd).
+///
+/// Notes:
+/// - This requires the backend process user to have permission to run `systemctl` for ollama
+///   without an interactive password prompt.
+async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let action = body.action.as_str();
+
+    let args: Vec<&str> = match action {
+        "stop" => vec!["stop", "ollama.service"],
+        "start" => vec!["start", "ollama.service"],
+        _ => {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "error": format!("Unknown runtime action: {}", action),
+            })));
+        }
+    };
+
+    // Use the user systemd manager so we can control user-level runtimes without sudo.
+    let output = tokio::process::Command::new("systemctl")
+        .arg("--user")
+        .args(&args)
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+            if out.status.success() {
+                Ok(HttpResponse::Ok().json(json!({
+                    "status": "ok",
+                    "request_id": request_id,
+                    "action": action,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })))
+            } else {
+                Ok(HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "request_id": request_id,
+                    "action": action,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })))
+            }
+        }
+        Err(err) => Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "action": action,
+            "error": format!("Failed to execute systemctl: {}", err),
+        }))),
+    }
+}
+
+// ============================================================================
 // DOCKER ACTIONS
 // ============================================================================
 
@@ -7952,6 +8022,8 @@ pub fn start_api_server(
                     // Docker monitoring
                     .route("/docker", web::get().to(get_docker_status))
                     .route("/docker/action", web::post().to(docker_action))
+                    // LLM runtime control (Ollama)
+                    .route("/runtime/action", web::post().to(runtime_action))
                     .route("/ollama", web::get().to(get_ollama_status)),
             )
             // ============================================================================

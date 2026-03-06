@@ -15,6 +15,9 @@ pub fn DocuIndex() -> Element {
     let mut show_lora_export_modal = use_signal(|| false);
     let mut show_neo4j_modal = use_signal(|| false);
     let mut show_pipeline_modal = use_signal(|| false);
+    let mut show_tantivy_modal = use_signal(|| false);
+    let mut show_bm25_modal = use_signal(|| false);
+
     rsx! {
         div { class: "min-h-screen bg-base-200 p-6",
 
@@ -95,7 +98,13 @@ pub fn DocuIndex() -> Element {
                         onclick: move |_| show_neo4j_modal.set(true),
                         "Neo4j"
                     }
-                
+
+                    button {
+                        class: "text-primary hover:underline text-lg font-semibold text-left block",
+                        onclick: move |_| show_tantivy_modal.set(true),
+                        "Tantivy"
+                    }
+
                 }
             }
         }
@@ -2596,6 +2605,117 @@ let embedding = task::spawn_blocking(move || {{
                             onclick: move |_| show_neo4j_modal.set(false),
                             "Got it!"
                         }
+                    }
+                }
+            }
+        }
+        // Tantivy Modal - Full info, compact layout
+        if show_tantivy_modal() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1110;",
+                onclick: move |_| show_tantivy_modal.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-7xl p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-blue-300", "Tantivy in AG" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_tantivy_modal.set(false),
+                            "\u{00d7}"
+                        }
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Tantivy is a full-text search engine library written in Rust (think Lucene but native Rust). In this system it serves as the structured retrieval layer\u{2014}the \"symbolic memory\" side of the hybrid search."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "How data gets in" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "When a file lands in ~/ag/documents/, the indexing pipeline runs: file \u{2192} extract_text \u{2192} chunker splits into chunks \u{2192} each chunk gets a chunk_id (filename#0, filename#1, etc.) \u{2192} add_document stores it as a Tantivy document with three fields: doc_id, title, and content. Simultaneously, the chunk gets embedded into a vector and stored in the in-memory vector store."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "The inverted index" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Tantivy doesn\u{2019}t store documents as-is. It builds an inverted index\u{2014}for every term (word), it maintains a list of which documents contain that term. So searching \"error\" doesn\u{2019}t scan all documents; it jumps directly to the matching ones. This is what makes "
+                        a {
+                            class: "text-blue-300 underline decoration-dotted cursor-pointer",
+                            onclick: move |evt| {
+                                evt.prevent_default();
+                                evt.stop_propagation();
+                                show_bm25_modal.set(true);
+                            },
+                            "BM25"
+                        }
+                        " keyword search fast even at scale."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "Segments" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Every time you commit new documents, Tantivy writes them into a segment (a self-contained mini-index with .term, .store, .fast, .idx, .fieldnorm, .pos files). Over time, segments accumulate. The LogMergePolicy auto-compacts small segments into larger ones to prevent segment bloat."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "How search works" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Retriever.search() creates a QueryParser over the title and content fields, parses the query string, and uses TopDocs::with_limit(10) to get the top 10 BM25-ranked results. Results go through L1 (in-retriever query cache) \u{2192} L2 (LRU memory) \u{2192} L3 (Redis) caching layers."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "The hybrid part" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "In optimized_search, Tantivy\u{2019}s BM25 keyword results get combined with vector cosine similarity results via the hybrid_searcher, giving both exact keyword matching and semantic similarity in one query."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "On your hardware" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Tantivy is CPU-efficient and the index lives on disk at ~/.local/share/ag/index/tantivy/. The in-memory footprint is mainly the segment readers, not the full index."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full mt-2",
+                        onclick: move |_| show_tantivy_modal.set(false),
+                        "Close"
+                    }
+                }
+            }
+        }
+
+        // BM25 Modal
+        if show_bm25_modal() {
+            div {
+                class: "fixed inset-0 flex items-center justify-center bg-black/70",
+                style: "z-index: 1120;",
+                onclick: move |_| show_bm25_modal.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-2",
+                        h3 { class: "text-lg font-semibold text-blue-300", "BM25 (Best Matching 25)" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_bm25_modal.set(false),
+                            "\u{00d7}"
+                        }
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "BM25 is the ranking algorithm Tantivy uses to score how relevant a document is to a search query. It combines three factors:"
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "Term Frequency (TF)" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "How often the search term appears in a document. More occurrences means more relevant, but with diminishing returns. The 10th mention of \"error\" adds less score than the 2nd."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2",
+                        "Inverse Document Frequency (IDF)"
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "How rare the term is across all documents. A word like \"the\" appears everywhere so it\u{2019}s nearly worthless. A word like \"segfault\" appears in few documents so it\u{2019}s highly discriminating."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2",
+                        "Document Length Normalization"
+                    }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Shorter documents that contain the term get boosted over longer ones. If a 50-word chunk mentions \"error\" twice, that\u{2019}s more significant than a 5000-word document mentioning it twice."
+                    }
+                    h4 { class: "text-sm font-semibold text-green-300 pt-2", "In AG" }
+                    p { class: "text-gray-200 leading-relaxed",
+                        "Tantivy computes BM25 across all segments and returns documents sorted by score. In optimized_search, BM25 scores get converted to reciprocal rank scores (1.0 / (60.0 + rank + 1.0)) before being fused with vector similarity scores by the hybrid searcher."
+                    }
+                    button {
+                        class: "btn btn-primary btn-sm w-full mt-2",
+                        onclick: move |_| show_bm25_modal.set(false),
+                        "Close"
                     }
                 }
             }

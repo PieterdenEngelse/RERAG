@@ -1528,6 +1528,23 @@ pub async fn fetch_recent_logs(limit: usize) -> Result<LogsResponse, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+pub async fn fetch_systemd_logs(unit: &str, limit: usize) -> Result<LogsResponse, String> {
+    let url = format!(
+        "{}/monitoring/systemd/logs?unit={}&limit={}",
+        resolve_api_base_url(),
+        urlencoding::encode(unit),
+        limit
+    );
+
+    gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IndexedFile {
     pub file: String,
@@ -2544,6 +2561,7 @@ pub async fn docker_action(
     action: &str,
     container: Option<&str>,
 ) -> Result<DockerActionResponse, String> {
+
     let url = api_url("/monitoring/docker/action");
     let body = serde_json::json!({
         "action": action,
@@ -2558,6 +2576,35 @@ pub async fn docker_action(
         .await
         .map_err(|e| e.to_string())?
         .json::<DockerActionResponse>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Runtime action response
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RuntimeActionResponse {
+    pub status: String,
+    pub action: Option<String>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Execute a runtime action (stop/start) for the LLM runtime.
+pub async fn runtime_action(action: &str) -> Result<RuntimeActionResponse, String> {
+    let url = api_url("/monitoring/runtime/action");
+    let body = serde_json::json!({
+        "action": action,
+    });
+
+    gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<RuntimeActionResponse>()
         .await
         .map_err(|e| e.to_string())
 }
@@ -2668,5 +2715,9 @@ pub struct ContainerInspectResponse {
 }
 
 pub async fn fetch_container_inspect(name: &str) -> Result<ContainerInspectResponse, String> {
-    fetch_json(&format!("/monitoring/docker/inspect?name={}", urlencoding::encode(name))).await
+    fetch_json(&format!(
+        "/monitoring/docker/inspect?name={}",
+        urlencoding::encode(name)
+    ))
+    .await
 }

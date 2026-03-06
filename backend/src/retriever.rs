@@ -1907,9 +1907,10 @@ impl Retriever {
     }
     /// Returns all doc_ids currently in the Tantivy index
     pub fn get_all_doc_ids(&self) -> Result<Vec<String>, RetrieverError> {
-        let reader = self.index.reader().map_err(|e| {
-            RetrieverError::IndexError(format!("Failed to get reader: {}", e))
-        })?;
+        let reader = self
+            .index
+            .reader()
+            .map_err(|e| RetrieverError::IndexError(format!("Failed to get reader: {}", e)))?;
         let searcher = reader.searcher();
         let mut doc_ids = Vec::new();
         for segment_reader in searcher.segment_readers() {
