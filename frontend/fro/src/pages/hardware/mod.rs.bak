@@ -451,7 +451,6 @@ pub fn ConfigHardware() -> Element {
     let supports_memory = backend_enum.supports_memory_options();
     let is_cloud_backend = backend_enum.is_cloud_backend();
     let is_ollama_backend = matches!(backend_enum, api::BackendType::Ollama);
-    let is_llama_cpp_backend = matches!(backend_enum, api::BackendType::LlamaCpp);
 
     // Some backends arrive with vendor-specific casing (e.g., "Ollama 0.12"), so
     // normalize the raw string before comparing for the llama logo wrapper.
@@ -772,32 +771,6 @@ pub fn ConfigHardware() -> Element {
                                     }
                                 } else {
                                     div { class: "text-xs text-green-300", "Model list loaded." }
-                                }
-                            }
-                            // llama-server URL (only shown for LlamaCpp backend)
-                            if is_llama_cpp_backend {
-                                div { class: PARAM_BLOCK_CLASS,
-                                    div { class: "flex items-center gap-2",
-                                        label { class: "text-gray-300 font-medium", "llama-server URL" }
-                                    }
-                                    div { class: "flex flex-col gap-1",
-                                        span { class: "text-[0.7rem] text-gray-400",
-                                            "URL of the running llama-server process"
-                                        }
-                                        input {
-                                            r#type: "text",
-                                            class: PARAM_TEXT_INPUT_CLASS,
-                                            placeholder: "http://127.0.0.1:8080",
-                                            value: hardware_values.llama_server_url.clone(),
-                                            oninput: move |evt| {
-                                                let value = evt.value();
-                                                hardware_config.with_mut(|cfg| cfg.llama_server_url = value);
-                                            },
-                                        }
-                                        span { class: "text-[0.7rem] text-gray-400",
-                                            "Start: ~/llama.cpp/build/bin/llama-server -m /path/to/model.gguf --port 8080"
-                                        }
-                                    }
                                 }
                             }
                             // Quantization recommendations based on model name

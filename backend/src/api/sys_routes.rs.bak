@@ -331,36 +331,8 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
             ];
             HttpResponse::Ok().json(models)
         }
-        "llama_cpp" => {
-            // Scan ~/llama.cpp/models/ for .gguf files
-            let models_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join("llama.cpp/models");
-            let mut models: Vec<ModelInfo> = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&models_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            let size = path.metadata().ok().map(|m| m.len());
-                            models.push(ModelInfo {
-                                name: name.to_string(),
-                                size,
-                                modified_at: None,
-                                family: Some("llama.cpp".to_string()),
-                                description: None,
-                                is_custom: false,
-                                is_active: false,
-                            });
-                        }
-                    }
-                }
-            }
-            models.sort_by(|a, b| a.name.cmp(&b.name));
-            HttpResponse::Ok().json(models)
-        }
-        "vllm" | "custom" => {
-            // For other local backends, return empty list - user enters model path manually
+        "llama_cpp" | "vllm" | "custom" => {
+            // For local backends, return empty list - user enters model path manually
             HttpResponse::Ok().json(Vec::<ModelInfo>::new())
         }
         _ => HttpResponse::Ok().json(Vec::<ModelInfo>::new()),

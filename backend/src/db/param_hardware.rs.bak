@@ -297,16 +297,7 @@ pub fn global_config() -> HardwareParams {
 }
 
 pub fn load_active_config(conn: &Connection) {
-    let cfg = match param_store::load::<HardwareParams>(conn, CONFIG_TYPE) {
-        Ok(Some(cfg)) => cfg,
-        Ok(None) => {
-            // No config saved yet — persist defaults so they're visible in the DB
-            let defaults = HardwareParams::default();
-            let _ = param_store::save(conn, CONFIG_TYPE, &defaults);
-            defaults
-        }
-        Err(_) => HardwareParams::default(),
-    };
+    let cfg = load(conn).unwrap_or_default();
     *config_lock().write().unwrap() = cfg;
 }
 

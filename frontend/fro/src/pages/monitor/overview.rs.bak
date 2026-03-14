@@ -294,7 +294,7 @@ pub fn MonitorOverview() -> Element {
                                 (Some(true), Some(false)) => "Disconnected".to_string(),
                                 _ => "Checking...".to_string(),
                             }.into()),
-                            info: Some("Redis serves as L3 cache for search results. L1 (in-memory) and L2 (disk) caches are checked first. Redis provides shared caching across restarts. Runs on port 6379.".into()),
+                            info: Some("Redis serves as L3 cache for search results. L1 (in-memory) and L2 (disk) caches are checked first. Redis provides shared caching across restarts. Runs on port 6379. Set REDIS_ENABLED=true to enable.".into()),
                         }
                         // Docker
                         HealthCard {

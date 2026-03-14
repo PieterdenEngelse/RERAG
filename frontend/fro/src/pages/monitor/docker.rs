@@ -269,9 +269,24 @@ pub fn MonitorDocker() -> Element {
     }
 }
 
+/// Per-container info descriptions
+fn container_info(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "grafana"    => ("Grafana", "Dashboard and visualization platform. Displays Prometheus metrics, Loki logs, and Tempo traces. Access at port 3001."),
+        "redis"      => ("Redis", "Redis serves as L3 cache for search results. L1 (in-memory) and L2 (disk) caches are checked first. Redis provides shared caching across restarts. Runs on port 6379. Requires REDIS_ENABLED=true and REDIS_URL in .env to connect."),
+        "prometheus" => ("Prometheus", "Metrics collection and storage. Scrapes backend metrics and feeds them to Grafana. Port 9090."),
+        "loki"       => ("Loki", "Log aggregation service. Receives logs from Vector and makes them queryable in Grafana. Port 3100."),
+        "tempo"      => ("Tempo", "Distributed tracing backend. Receives traces from the OTel Collector and displays them in Grafana. Port 4317."),
+        "otel"       => ("OTel Collector", "OpenTelemetry Collector. Receives traces from the backend (port 4318) and forwards them to Tempo (port 4317)."),
+        "neo4j"      => ("Neo4j", "Knowledge graph database. Used only during document ingestion to extract entities. Not used at runtime — petgraph handles runtime graph queries. Ports 7474 (HTTP) and 7687 (Bolt)."),
+        _            => ("Container", "Infrastructure container for the ag observability stack."),
+    }
+}
+
 /// Container status card component
 #[component]
 fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element {
+    let mut show_info = use_signal(|| false);
     // State display - rust color for active, red for inactive
     let (state_text, state_style) = match container.state.as_str() {
         "running" => ("active process", "color: #7C2A02;"), // Rust color
@@ -351,7 +366,47 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
             div { class: "relative mb-2",
                 // Header row (title left, badge right, Neo4j note centered on same top line)
                 div { class: "relative",
-                    h3 { class: "text-gray-200 font-semibold text-sm", "{display_name}" }
+                    div { class: "flex items-end gap-1",
+                        h3 { class: "text-gray-200 font-semibold text-sm", "{display_name}" }
+                        button {
+                            class: PARAM_ICON_BUTTON_CLASS,
+                            style: PARAM_ICON_BUTTON_STYLE,
+                            title: "Info",
+                            onclick: move |_| show_info.set(true),
+                            svg {
+                                class: INFO_ICON_SVG_CLASS,
+                                view_box: "0 0 20 20",
+                                fill: "none",
+                                stroke: "currentColor",
+                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                            }
+                        }
+                    }
+                    if show_info() {
+                        div {
+                            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                            onclick: move |_| show_info.set(false),
+                            div {
+                                class: "bg-gray-800 border border-gray-600 rounded-lg p-5 w-[90vw] max-w-lg max-h-[90vh] overflow-y-auto shadow-xl",
+                                onclick: move |evt| evt.stop_propagation(),
+                                div { class: "flex items-center justify-between mb-3",
+                                    h2 { class: "text-base font-semibold text-gray-100",
+                                        { container_info(display_name).0 }
+                                    }
+                                    button {
+                                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                        onclick: move |_| show_info.set(false),
+                                        "\u{00d7}"
+                                    }
+                                }
+                                div { class: "text-sm text-gray-300",
+                                    p { { container_info(display_name).1 } }
+                                }
+                            }
+                        }
+                    }
 
                     if display_name.eq_ignore_ascii_case("neo4j") {
                         p {

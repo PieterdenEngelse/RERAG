@@ -211,6 +211,8 @@ pub fn Home() -> Element {
     let mut show_api_behavior = use_signal(|| false);
     let mut show_kv_details = use_signal(|| false);
     let mut show_attention_details = use_signal(|| false);
+    let mut show_matrix_info = use_signal(|| false);
+    let mut show_notation_info = use_signal(|| false);
 
     // Backend type state for home page board
     let mut current_backend = use_signal(|| String::from("ollama"));
@@ -1846,7 +1848,16 @@ pub fn Home() -> Element {
                                             strong { "K (Key)" }
                                             " and "
                                             strong { "V (Value)" }
-                                            " are two of the three matrices computed during self-attention (the third being "
+                                            " are two of the three "
+                                            a {
+                                                class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
+                                                onclick: move |_| {
+                                                    show_matrix_info.set(true);
+                                                    show_cache_info.set(false);
+                                                },
+                                                "matrices"
+                                            }
+                                            " computed during self-attention (the third being "
                                             strong { "Q - Query" }
                                             ")"
                                         }
@@ -1927,16 +1938,7 @@ pub fn Home() -> Element {
                                 }
                                 p {
                                     class: "text-[11px] text-base-content/60 mt-1",
-                                    "KV cache is just an attention shortcut—see the "
-                                    a {
-                                        class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
-                                        onclick: move |_| {
-                                            show_attention_details.set(true);
-                                            show_cache_info.set(false);
-                                        },
-                                        "attention explainer"
-                                    }
-                                    " for the math."
+                                    "KV cache is just an attention shortcut."
                                 }
                             }
 
@@ -2177,6 +2179,313 @@ pub fn Home() -> Element {
                 }
             }
 
+            // Matrix explainer modal
+            if show_matrix_info() {
+                div {
+                    class: "fixed inset-0 bg-black/70 flex items-center justify-center overflow-y-auto pointer-events-auto",
+                    style: "z-index: 1600;",
+                    onclick: move |_| show_matrix_info.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-5 max-w-lg my-6 pointer-events-auto",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "What is a matrix?" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_matrix_info.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div {
+                            class: "text-sm space-y-2",
+                            p { "A matrix is a mathematical object with strict structure and purpose." }
+                            p { class: "text-xs text-base-content/70", "It must have:" }
+                            ul {
+                                class: "text-xs list-disc list-inside space-y-1",
+                                li { "Only numbers (no words, categories, or mixed data types)" }
+                                li { "Rectangular shape (every row has the same number of columns)" }
+                                li { "Defined dimensions (e.g., \"3×4 matrix\")" }
+                                li {
+                                    "Operations you can perform on it, such as:"
+                                    ul {
+                                        class: "mt-1 ml-4 list-disc space-y-1",
+                                        li { "Matrix multiplication" }
+                                        li { "Determinants" }
+                                        li { "Inverses" }
+                                        li { "Eigenvalues" }
+                                        li { "Linear transformations" }
+                                    }
+                                }
+                            }
+                            p {
+                                class: "text-xs text-base-content/70",
+                                "Because of these rules, matrices behave predictably in algebra and geometry."
+                            }
+
+                            div {
+                                class: "bg-base-200 p-2 rounded border border-base-300",
+                                p { class: "text-xs font-semibold text-base-content/70", "What makes a table different" }
+                                ul {
+                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "A table is a general way to organize information." }
+                                    li { "It can contain numbers, text, dates, categories, images, etc." }
+                                    li { "No requirement for mathematical operations" }
+                                }
+                            }
+
+                            div {
+                                class: "overflow-x-auto",
+                                table {
+                                    class: "table table-xs mt-2",
+                                    thead {
+                                        tr {
+                                            th { "Feature" }
+                                            th { "Matrix" }
+                                            th { "Table" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr {
+                                            td { "Must be rectangular" }
+                                            td { "Yes" }
+                                            td { "Not always" }
+                                        }
+                                        tr {
+                                            td { "Must contain only numbers" }
+                                            td { "Yes" }
+                                            td { "No" }
+                                        }
+                                        tr {
+                                            td { "Has mathematical operations" }
+                                            td { "Yes" }
+                                            td { "No" }
+                                        }
+                                        tr {
+                                            td { "Used for data display" }
+                                            td { "Sometimes" }
+                                            td { "Yes" }
+                                        }
+                                        tr {
+                                            td { "Used in linear algebra" }
+                                            td { "Always" }
+                                            td { "No" }
+                                        }
+                                    }
+                                }
+                            }
+
+                            div {
+                                class: "bg-base-200 p-2 rounded border border-base-300 mt-2",
+                                p {
+                                    class: "text-xs font-semibold text-base-content/70",
+                                    "Row vs column ("
+                                    a {
+                                        class: "text-blue-400 underline hover:text-blue-300 cursor-pointer font-semibold",
+                                        onclick: move |_| {
+                                            show_notation_info.set(true);
+                                        },
+                                        "notation"
+                                    }
+                                    ")"
+                                }
+                                p {
+                                    class: "text-xs mt-1",
+                                    "If A is meant to be a row, it should be written:"
+                                }
+                                pre {
+                                    class: "text-[11px] mt-1 whitespace-pre-wrap",
+                                    "A = [1 2 3 4]"
+                                }
+                                p {
+                                    class: "text-xs mt-2",
+                                    "If B is meant to be a column, it should be written:"
+                                }
+                                pre {
+                                    class: "text-[11px] mt-1 whitespace-pre-wrap",
+                                    "B = [5\n6\n7\n8]"
+                                }
+                                p { class: "text-[11px] text-base-content/70 mt-1", "(Column vectors are written vertically.)" }
+                            }
+
+                            div {
+                                class: "bg-base-200 p-2 rounded border border-base-300 mt-2",
+                                p { class: "text-xs font-semibold text-base-content/70", "Intuition" }
+                                ul { class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "Think of a matrix as a very strict table designed for math." }
+                                    li { "Think of a table as a flexible container for any kind of information." }
+                                }
+                            }
+
+                            p {
+                                class: "text-xs text-base-content/70",
+                                "In transformers, matrices are used to apply the same linear transform to many tokens at once (e.g., computing Q/K/V via learned weight matrices)."
+                            }
+                        }
+
+                        div {
+                            class: "flex gap-2 mt-3",
+                            button {
+                                class: "btn btn-primary btn-xs flex-1",
+                                onclick: move |_| {
+                                    show_matrix_info.set(false);
+                                    show_cache_info.set(true);
+                                },
+                                "← Back to KV Cache"
+                            }
+                            button {
+                                class: "btn btn-ghost btn-xs flex-1",
+                                onclick: move |_| show_matrix_info.set(false),
+                                "Close"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Notation explainer modal
+            if show_notation_info() {
+                div {
+                    class: "fixed inset-0 bg-black/70 flex items-center justify-center overflow-y-auto pointer-events-auto",
+                    style: "z-index: 1700;",
+                    onclick: move |_| show_notation_info.set(false),
+
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-5 w-[95vw] max-w-none my-6 pointer-events-auto",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "Matrix notation" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_notation_info.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div {
+                            class: "grid grid-cols-1 lg:grid-cols-2 gap-4 text-sm",
+
+                            // Left column
+                            div {
+                                class: "space-y-3",
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    p { class: "text-xs font-semibold text-base-content/70", "Standard matrix notation" }
+                                    ul {
+                                        class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                        li { "Rows are horizontal" }
+                                        li { "Columns are vertical" }
+                                    }
+                                    p { class: "text-xs mt-2", "But…" }
+                                    p { class: "text-xs text-yellow-300", "⚠ Non-standard notations do exist" }
+                                    p {
+                                        class: "text-xs text-base-content/70",
+                                        "They’re used in specific fields, shortcuts, or informal writing — and they can be confusing if you don’t know what they mean."
+                                    }
+                                }
+
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    h4 { class: "text-sm font-semibold", "1. Compressed / inline notation" }
+                                    pre { class: "text-[11px] whitespace-pre-wrap mt-1", "A = [1234]" }
+                                    p { class: "text-xs mt-1", "This is ambiguous because it doesn’t show rows vs columns." }
+                                    p { class: "text-xs", "People sometimes use it informally to mean:" }
+                                    ul { class: "text-xs list-disc list-inside space-y-1",
+                                        li { "a row vector: [1 2 3 4]" }
+                                        li { "or a column vector: [1 2 3 4]^T" }
+                                    }
+                                    p { class: "text-xs text-base-content/70", "It’s not standard — it hides the shape." }
+                                }
+
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    h4 { class: "text-sm font-semibold", "2. Transpose notation" }
+                                    pre { class: "text-[11px] whitespace-pre-wrap mt-1", "[1 2 3 4]^T" }
+                                    p { class: "text-xs mt-1", "Often used in physics/engineering/ML to indicate a column vector." }
+                                }
+
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    h4 { class: "text-sm font-semibold", "3. Semicolon notation (MATLAB/Octave)" }
+                                    p { class: "text-xs mt-1", "Spaces → columns, semicolons → new rows." }
+                                    pre { class: "text-[11px] whitespace-pre-wrap mt-1", "A = [1 2 3 4]\nB = [5; 6; 7; 8]" }
+                                    p { class: "text-xs text-base-content/70 mt-1", "Widely used in code, but not standard textbook notation." }
+                                }
+                            }
+
+                            // Right column
+                            div {
+                                class: "space-y-3",
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    h4 { class: "text-sm font-semibold", "4. Comma notation" }
+                                    p {
+                                        class: "text-xs mt-1",
+                                        "Languages like Python and Rust do not have a built-in \"matrix\" datatype in the language itself. But they do have powerful libraries that provide matrix types."
+                                    }
+
+                                    p { class: "text-xs font-semibold mt-2", "Most common in Python: numpy.ndarray" }
+                                    ul {
+                                        class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                        li { "Supports matrix multiplication, linear algebra, broadcasting, etc." }
+                                    }
+                                    pre {
+                                        class: "text-[11px] whitespace-pre-wrap mt-2",
+                                        "import numpy as np\n\nA = np.array([[1, 2, 3, 4]])  # row matrix\nB = np.array([[5], [6], [7], [8]])  # column matrix (each element is wrapped in its own list [])\n\nC = A @ B  # inner product"
+                                    }
+
+                                    p { class: "text-xs font-semibold mt-3", "Most common in Rust: nalgebra" }
+                                    p { class: "text-xs", "(A linear algebra crate.)" }
+                                    pre {
+                                        class: "text-[11px] whitespace-pre-wrap mt-2",
+                                        "use nalgebra::{{Matrix1x4, Matrix4x1}};\n\nlet a = Matrix1x4::new(1.0, 2.0, 3.0, 4.0);  // 1-row, 4-column matrix\nlet b = Matrix4x1::new(5.0, 6.0, 7.0, 8.0);  // 4-row, 1-column matrix\nlet c = a * b;  // inner product"
+                                    }
+                                }
+
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    h4 { class: "text-sm font-semibold", "5. Block / symbolic index notation" }
+                                    p { class: "text-xs mt-1", "Sometimes you’ll see A=(aᵢⱼ) or A=[aᵢⱼ]. Shape is implied by context." }
+                                }
+
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    h4 { class: "text-sm font-semibold", "6. Bra–ket notation (quantum mechanics)" }
+                                    ul { class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                        li { "Row vector (bra): ⟨v|" }
+                                        li { "Column vector (ket): |v⟩" }
+                                        li { "Dot product: ⟨v|w⟩" }
+                                    }
+                                }
+
+                                div {
+                                    class: "bg-base-200 p-3 rounded border border-base-300",
+                                    p { class: "text-xs font-semibold text-base-content/70", "Big picture" }
+                                    ul { class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                        li { "Standard textbooks: horizontal rows, vertical columns." }
+                                        li { "Many fields use shortcuts (inline lists, transpose, programming syntax, bra–ket, symbolic)." }
+                                    }
+                                }
+                            }
+                        }
+
+                        div {
+                            class: "flex gap-2 mt-3",
+                            button {
+                                class: "btn btn-primary btn-xs flex-1",
+                                onclick: move |_| show_notation_info.set(false),
+                                "Close"
+                            }
+                        }
+                    }
+                }
+            }
+
             // KV Fundamentals Modal
             if show_kv_details() {
                 div {
@@ -2242,13 +2551,13 @@ pub fn Home() -> Element {
                     onclick: move |_| show_attention_details.set(false),
 
                     div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-5 max-w-3xl my-6 pointer-events-auto",
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-5 w-full max-w-6xl my-6 pointer-events-auto",
                         style: "z-index: 2147483647;",
                         onclick: move |evt| evt.stop_propagation(),
 
                         div {
                             class: "flex justify-between items-center mb-3",
-                            h3 { class: "text-base font-bold", "Attention 101" }
+                            h3 { class: "text-base font-bold", "Attention" }
                             button {
                                 class: "btn btn-ghost btn-xs",
                                 onclick: move |_| show_attention_details.set(false),
@@ -2259,8 +2568,28 @@ pub fn Home() -> Element {
                         div {
                             class: "text-sm space-y-3",
                             p {
-                                "The attention mechanism lets a model dynamically weigh how much each token in a sequence should influence the representation of every other token."
+                                "The attention mechanism lets a model dynamically (The weights are not fixed — they are calculated fresh, on the fly, based on the actual input each time) weigh how much each token in a sequence should influence the representation of every other token."
                             }
+
+                            p {
+                                "The attention mechanism has multiple components, and an attention head is just one of them."
+                            }
+                            p { "The main components are:" }
+                            ul {
+                                class: "list-disc list-inside",
+                                li { "Projection matrices (Q, K, V)" }
+                                li { "Attention score computation (dot-products + scaling)" }
+                                li { "Softmax (turns scores into weights)" }
+                                li { "Weighted sum of values" }
+                                li { "Multiple heads in parallel" }
+                                li { "Concatenation of head outputs" }
+                                li { "Final output projection" }
+                            }
+                            p {
+                                class: "text-sm",
+                                "An attention head is specifically the part that uses its own Q/K/V projections to compute attention in its own subspace."
+                            }
+
                             h4 { class: "font-semibold text-base-content", "Core idea" }
                             p {
                                 "For each token, you compute three vectors from its embedding: a query (what am I looking for?), a key (what do I contain?), and a value (what information do I carry?)."

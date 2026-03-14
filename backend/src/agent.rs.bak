@@ -21,8 +21,7 @@ pub struct AgentResponse {
 }
 
 /// Chat mode for agent queries
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum AgentMode {
     /// Only search documents (RAG)
     Rag,
@@ -790,153 +789,90 @@ impl<'a> Agent<'a> {
         // Build the full prompt with goal context
         let prompt = self.build_prompt(query, context, &system_prompt, goal_context);
 
-        // Extract prompt/system before backend dispatch
+        let url = format!("{}/api/generate", ollama_url);
+
+        #[derive(serde::Serialize)]
+        struct OllamaOptions {
+            temperature: f32,
+            top_p: f32,
+            top_k: usize,
+            num_predict: usize,
+            repeat_penalty: f32,
+        }
+
+        #[derive(serde::Serialize)]
+        struct OllamaRequest {
+            model: String,
+            prompt: String,
+            stream: bool,
+            options: OllamaOptions,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            system: Option<String>,
+        }
+
+        #[derive(serde::Deserialize, Debug)]
+        struct OllamaResponse {
+            response: String,
+            #[serde(default)]
+            #[allow(dead_code)]
+            done: bool,
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+        // Use system field if we have settings, otherwise embed in prompt
         let (final_prompt, system_field) = if !system_prompt.is_empty() {
             (prompt, Some(system_prompt))
         } else {
             (prompt, None)
         };
 
-        // Dispatch to correct backend
-        let hw = crate::db::param_hardware::global_config();
-        let use_llama = matches!(
-            hw.backend_type,
-            crate::db::param_hardware::BackendType::LlamaCpp
-        );
+        let request_body = OllamaRequest {
+            model,
+            prompt: final_prompt,
+            stream: false,
+            options: OllamaOptions {
+                temperature: config.temperature,
+                top_p: config.top_p,
+                top_k: config.top_k,
+                num_predict: config.max_tokens,
+                repeat_penalty: config.repeat_penalty,
+            },
+            system: system_field,
+        };
 
+        // Mark LLM call as started for health status
         crate::monitoring::mark_llm_started();
         let llm_start = std::time::Instant::now();
 
-        let (result, success) = if use_llama {
-            // llama-server: OpenAI-compatible /v1/chat/completions
-            let url = format!("{}/v1/chat/completions", hw.llama_server_url);
-
-            #[derive(serde::Serialize)]
-            struct LlamaMsg { role: String, content: String }
-            #[derive(serde::Serialize)]
-            struct LlamaReq {
-                model: String,
-                messages: Vec<LlamaMsg>,
-                temperature: f32,
-                max_tokens: usize,
-                stream: bool,
-            }
-            #[derive(serde::Deserialize)]
-            struct LlamaChoice { message: LlamaMsgResp }
-            #[derive(serde::Deserialize)]
-            struct LlamaMsgResp { content: String }
-            #[derive(serde::Deserialize)]
-            struct LlamaResp { choices: Vec<LlamaChoice> }
-
-            let mut messages: Vec<LlamaMsg> = Vec::new();
-            if let Some(sys) = system_field {
-                messages.push(LlamaMsg { role: "system".into(), content: sys });
-            }
-            messages.push(LlamaMsg { role: "user".into(), content: final_prompt });
-
-            let req_body = LlamaReq {
-                model,
-                messages,
-                temperature: config.temperature,
-                max_tokens: config.max_tokens,
-                stream: false,
-            };
-
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client.post(&url).json(&req_body).send() {
-                Ok(resp) => match resp.text() {
-                    Ok(text) => match serde_json::from_str::<LlamaResp>(&text) {
-                        Ok(data) => {
-                            let content = data.choices.into_iter()
-                                .next()
-                                .map(|c| c.message.content.trim().to_string())
-                                .unwrap_or_default();
-                            (content, true)
-                        }
-                        Err(e) => (
-                            format!("llama-server parse error: {} - Raw: {}", e, &text[..text.len().min(200)]),
-                            false,
-                        ),
-                    },
-                    Err(e) => (format!("llama-server read error: {}", e), false),
-                },
-                Err(e) => (
-                    format!("llama-server error: {}. Is llama-server running at {}?", e, hw.llama_server_url),
-                    false,
-                ),
-            }
-        } else {
-            // Ollama: /api/generate
-            let url = format!("{}/api/generate", ollama_url);
-
-            #[derive(serde::Serialize)]
-            struct OllamaOptions {
-                temperature: f32,
-                top_p: f32,
-                top_k: usize,
-                num_predict: usize,
-                repeat_penalty: f32,
-            }
-            #[derive(serde::Serialize)]
-            struct OllamaRequest {
-                model: String,
-                prompt: String,
-                stream: bool,
-                options: OllamaOptions,
-                #[serde(skip_serializing_if = "Option::is_none")]
-                system: Option<String>,
-            }
-            #[derive(serde::Deserialize, Debug)]
-            struct OllamaResponse {
-                response: String,
-                #[serde(default)]
-                #[allow(dead_code)]
-                done: bool,
-            }
-
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            let request_body = OllamaRequest {
-                model,
-                prompt: final_prompt,
-                stream: false,
-                options: OllamaOptions {
-                    temperature: config.temperature,
-                    top_p: config.top_p,
-                    top_k: config.top_k,
-                    num_predict: config.max_tokens,
-                    repeat_penalty: config.repeat_penalty,
-                },
-                system: system_field,
-            };
-
-            match client.post(&url).json(&request_body).send() {
-                Ok(response) => match response.text() {
-                    Ok(text) => match serde_json::from_str::<OllamaResponse>(&text) {
-                        Ok(data) => (data.response.trim().to_string(), true),
-                        Err(e) => (
-                            format!(
-                                "Failed to parse LLM response: {} - Raw: {}",
-                                e,
-                                &text[..text.len().min(200)]
+        let (result, success) = match client.post(&url).json(&request_body).send() {
+            Ok(response) => {
+                // Get the response text first
+                match response.text() {
+                    Ok(text) => {
+                        // Try to parse as JSON
+                        match serde_json::from_str::<OllamaResponse>(&text) {
+                            Ok(data) => (data.response.trim().to_string(), true),
+                            Err(e) => (
+                                format!(
+                                    "Failed to parse LLM response: {} - Raw: {}",
+                                    e,
+                                    &text[..text.len().min(200)]
+                                ),
+                                false,
                             ),
-                            false,
-                        ),
-                    },
+                        }
+                    }
                     Err(e) => (format!("Failed to read LLM response: {}", e), false),
-                },
-                Err(e) => (
-                    format!("LLM error: {}. Make sure Ollama is running.", e),
-                    false,
-                ),
+                }
             }
+            Err(e) => (
+                format!("LLM error: {}. Make sure Ollama is running.", e),
+                false,
+            ),
         };
 
         let llm_time = llm_start.elapsed().as_millis() as u64;
@@ -956,7 +892,7 @@ impl<'a> Agent<'a> {
             },
             llm_time,
             if success { 0.9 } else { 0.0 },
-            Some(if use_llama { "llama_cpp" } else { "ollama" }),
+            Some("ollama"),
         );
 
         result
@@ -1040,134 +976,68 @@ impl<'a> Agent<'a> {
             knowledge base to answer this question.\" Be concise and accurate."
                 .to_string();
 
-        // Dispatch to correct backend
-        let hw = crate::db::param_hardware::global_config();
-        let use_llama = matches!(
-            hw.backend_type,
-            crate::db::param_hardware::BackendType::LlamaCpp
-        );
+        let url = format!("{}/api/generate", ollama_url);
+
+        #[derive(serde::Serialize)]
+        struct OllamaOptions {
+            temperature: f32,
+            top_p: f32,
+            top_k: usize,
+            num_predict: usize,
+            repeat_penalty: f32,
+        }
+
+        #[derive(serde::Serialize)]
+        struct OllamaRequest {
+            model: String,
+            prompt: String,
+            stream: bool,
+            options: OllamaOptions,
+            system: String,
+        }
+
+        #[derive(serde::Deserialize, Debug)]
+        struct OllamaResponse {
+            response: String,
+            #[serde(default)]
+            #[allow(dead_code)]
+            done: bool,
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+        let request_body = OllamaRequest {
+            model,
+            prompt,
+            stream: false,
+            options: OllamaOptions {
+                temperature: config.temperature,
+                top_p: config.top_p,
+                top_k: config.top_k,
+                num_predict: config.max_tokens,
+                repeat_penalty: config.repeat_penalty,
+            },
+            system,
+        };
 
         crate::monitoring::mark_llm_started();
         let llm_start = std::time::Instant::now();
 
-        let (result, success) = if use_llama {
-            // llama-server: OpenAI-compatible /v1/chat/completions
-            let url = format!("{}/v1/chat/completions", hw.llama_server_url);
-
-            #[derive(serde::Serialize)]
-            struct StrictMsg { role: String, content: String }
-            #[derive(serde::Serialize)]
-            struct StrictReq {
-                model: String,
-                messages: Vec<StrictMsg>,
-                temperature: f32,
-                max_tokens: usize,
-                stream: bool,
-            }
-            #[derive(serde::Deserialize)]
-            struct StrictChoice { message: StrictMsgResp }
-            #[derive(serde::Deserialize)]
-            struct StrictMsgResp { content: String }
-            #[derive(serde::Deserialize)]
-            struct StrictResp { choices: Vec<StrictChoice> }
-
-            let messages = vec![
-                StrictMsg { role: "system".into(), content: system.clone() },
-                StrictMsg { role: "user".into(), content: prompt },
-            ];
-
-            let req_body = StrictReq {
-                model,
-                messages,
-                temperature: config.temperature,
-                max_tokens: config.max_tokens,
-                stream: false,
-            };
-
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client.post(&url).json(&req_body).send() {
-                Ok(resp) => match resp.text() {
-                    Ok(text) => match serde_json::from_str::<StrictResp>(&text) {
-                        Ok(data) => {
-                            let content = data.choices.into_iter()
-                                .next()
-                                .map(|c| c.message.content.trim().to_string())
-                                .unwrap_or_default();
-                            (content, true)
-                        }
-                        Err(e) => (format!("llama-server parse error: {}", e), false),
-                    },
-                    Err(e) => (format!("llama-server read error: {}", e), false),
+        let (result, success) = match client.post(&url).json(&request_body).send() {
+            Ok(response) => match response.text() {
+                Ok(text) => match serde_json::from_str::<OllamaResponse>(&text) {
+                    Ok(data) => (data.response.trim().to_string(), true),
+                    Err(e) => (format!("Failed to parse LLM response: {}", e), false),
                 },
-                Err(e) => (
-                    format!("llama-server error: {}. Is llama-server running at {}?", e, hw.llama_server_url),
-                    false,
-                ),
-            }
-        } else {
-            // Ollama: /api/generate
-            let url = format!("{}/api/generate", ollama_url);
-
-            #[derive(serde::Serialize)]
-            struct OllamaOptions {
-                temperature: f32,
-                top_p: f32,
-                top_k: usize,
-                num_predict: usize,
-                repeat_penalty: f32,
-            }
-            #[derive(serde::Serialize)]
-            struct OllamaRequest {
-                model: String,
-                prompt: String,
-                stream: bool,
-                options: OllamaOptions,
-                system: String,
-            }
-            #[derive(serde::Deserialize, Debug)]
-            struct OllamaResponse {
-                response: String,
-                #[serde(default)]
-                #[allow(dead_code)]
-                done: bool,
-            }
-
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            let request_body = OllamaRequest {
-                model,
-                prompt,
-                stream: false,
-                options: OllamaOptions {
-                    temperature: config.temperature,
-                    top_p: config.top_p,
-                    top_k: config.top_k,
-                    num_predict: config.max_tokens,
-                    repeat_penalty: config.repeat_penalty,
-                },
-                system,
-            };
-
-            match client.post(&url).json(&request_body).send() {
-                Ok(response) => match response.text() {
-                    Ok(text) => match serde_json::from_str::<OllamaResponse>(&text) {
-                        Ok(data) => (data.response.trim().to_string(), true),
-                        Err(e) => (format!("Failed to parse LLM response: {}", e), false),
-                    },
-                    Err(e) => (format!("Failed to read LLM response: {}", e), false),
-                },
-                Err(e) => (
-                    format!("LLM error: {}. Make sure Ollama is running.", e),
-                    false,
-                ),
-            }
+                Err(e) => (format!("Failed to read LLM response: {}", e), false),
+            },
+            Err(e) => (
+                format!("LLM error: {}. Make sure Ollama is running.", e),
+                false,
+            ),
         };
 
         let llm_time = llm_start.elapsed().as_millis() as u64;
@@ -1184,7 +1054,7 @@ impl<'a> Agent<'a> {
             },
             llm_time,
             if success { 1.0 } else { 0.0 },
-            Some(if use_llama { "llama_cpp" } else { "ollama" }),
+            Some("ollama"),
         );
 
         result

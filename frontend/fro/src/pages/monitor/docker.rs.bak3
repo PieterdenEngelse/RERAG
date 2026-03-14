@@ -369,10 +369,19 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
                     div { class: "flex items-end gap-1",
                         h3 { class: "text-gray-200 font-semibold text-sm", "{display_name}" }
                         button {
-                            class: "text-gray-500 hover:text-gray-300 text-xs leading-none mb-px",
+                            class: PARAM_ICON_BUTTON_CLASS,
+                            style: PARAM_ICON_BUTTON_STYLE,
                             title: "Info",
                             onclick: move |_| show_info.set(true),
-                            "\u{2139}"
+                            svg {
+                                class: INFO_ICON_SVG_CLASS,
+                                view_box: "0 0 20 20",
+                                fill: "none",
+                                stroke: "currentColor",
+                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                            }
                         }
                     }
                     if show_info() {

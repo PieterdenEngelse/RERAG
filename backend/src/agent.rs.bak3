@@ -21,8 +21,7 @@ pub struct AgentResponse {
 }
 
 /// Chat mode for agent queries
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum AgentMode {
     /// Only search documents (RAG)
     Rag,

@@ -775,6 +775,7 @@ struct HardwareConfigRequest {
 
     // Legacy/custom
     num_gpu: usize,
+    llama_server_url: String,
 }
 
 impl Default for HardwareConfigRequest {
@@ -839,6 +840,7 @@ impl From<crate::db::param_hardware::HardwareParams> for HardwareConfigRequest {
 
             // Legacy/custom
             num_gpu: params.num_gpu,
+            llama_server_url: params.llama_server_url,
         }
     }
 }
@@ -899,6 +901,7 @@ impl From<HardwareConfigRequest> for crate::db::param_hardware::HardwareParams {
 
             // Legacy/custom
             num_gpu: req.num_gpu,
+            llama_server_url: req.llama_server_url,
         }
     }
 }
@@ -1338,6 +1341,41 @@ fn log_status_change(new_status: &str, reason: &str) {
 }
 
 /// Get status log file content
+pub async fn get_systemd_logs(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> Result<HttpResponse, Error> {
+    let unit = query.get("unit").cloned().unwrap_or_else(|| "ag-full-stack.service".to_string());
+    let limit = query.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(100);
+
+    // Validate unit name to prevent injection
+    if unit.contains("..") || unit.contains('/') || unit.contains(';') {
+        return Ok(HttpResponse::BadRequest().json(json!({"error": "Invalid unit name"})));
+    }
+
+    let output = tokio::process::Command::new("journalctl")
+        .args(["--user", "-u", &unit, "-n", &limit.to_string(), "--no-pager", "--output=short-iso"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let content = if stdout.is_empty() { stderr } else { stdout };
+            let lines: Vec<&str> = content.lines().collect();
+            Ok(HttpResponse::Ok().json(json!({
+                "unit": unit,
+                "limit": limit,
+                "total_lines": lines.len(),
+                "content": content,
+            })))
+        }
+        Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+            "error": format!("Failed to run journalctl: {}", e)
+        }))),
+    }
+}
+
 pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let status = path.into_inner();
 
@@ -7623,6 +7661,23 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                 .await;
             }
         }
+        crate::db::param_hardware::BackendType::LlamaCpp => {
+            // llama-server: OpenAI-compatible streaming
+            let llama_url = hardware_config.llama_server_url.clone();
+            let mut messages = Vec::new();
+            if !system_prompt.is_empty() {
+                messages.push(serde_json::json!({"role": "system", "content": system_prompt}));
+            }
+            messages.push(serde_json::json!({"role": "user", "content": prompt}));
+            let body = serde_json::json!({
+                "model": final_model,
+                "messages": messages,
+                "stream": true,
+                "temperature": config.temperature,
+                "max_tokens": config.max_tokens
+            });
+            (format!("{}/v1/chat/completions", llama_url), body)
+        }
         _ => {
             // Default to Ollama /api/generate for other backends
             let body = serde_json::json!({
@@ -7643,11 +7698,11 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
         }
     };
 
-    tracing::debug!(
+    tracing::warn!(
         backend = ?backend_type,
         caching = prompt_caching,
         url = %url,
-        "Sending LLM request"
+        "DEBUG Sending LLM request"
     );
 
     match client.post(&url).json(&request_body).send().await {
@@ -7664,12 +7719,35 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
                             if line.is_empty() {
                                 continue;
                             }
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                                // Try /api/generate format first ("response" field)
+                            // Handle OpenAI SSE format: "data: {...}" or "data: [DONE]"
+                            let json_str = if line.starts_with("data: ") {
+                                let payload = &line[6..];
+                                if payload == "[DONE]" {
+                                    let event = serde_json::json!({
+                                        "type": "done",
+                                        "chunks_used": chunks_count
+                                    });
+                                    output.push_str(&format!("data: {}\n\n", event));
+                                    continue;
+                                }
+                                payload
+                            } else {
+                                line
+                            };
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                // Try OpenAI streaming format (choices[0].delta.content)
                                 let response_text = json
-                                    .get("response")
+                                    .get("choices")
+                                    .and_then(|c| c.as_array())
+                                    .and_then(|c| c.first())
+                                    .and_then(|c| c.get("delta"))
+                                    .and_then(|d| d.get("content"))
                                     .and_then(|v| v.as_str())
-                                    // Then try /api/chat format ("message.content" field)
+                                    // Try /api/generate format ("response" field)
+                                    .or_else(|| {
+                                        json.get("response").and_then(|v| v.as_str())
+                                    })
+                                    // Try /api/chat format ("message.content" field)
                                     .or_else(|| {
                                         json.get("message")
                                             .and_then(|m| m.get("content"))
@@ -7990,6 +8068,7 @@ pub fn start_api_server(
                     .route("/health", web::get().to(health_check))
                     .route("/ready", web::get().to(ready_check))
                     .route("/status-log/{status}", web::get().to(get_status_log))
+                    .route("/systemd/logs", web::get().to(get_systemd_logs))
                     .route("/metrics", web::get().to(get_metrics)) // ← Prometheus format
                     .route("/optimizations", web::get().to(get_optimization_stats)) // ← Performance optimization stats
                     .route("/io-uring", web::get().to(get_io_uring_stats)) // ← io_uring async I/O stats

@@ -775,6 +775,7 @@ struct HardwareConfigRequest {
 
     // Legacy/custom
     num_gpu: usize,
+    llama_server_url: String,
 }
 
 impl Default for HardwareConfigRequest {
@@ -839,7 +840,7 @@ impl From<crate::db::param_hardware::HardwareParams> for HardwareConfigRequest {
 
             // Legacy/custom
             num_gpu: params.num_gpu,
-            llama_server_url: params.llama_server_url.clone(),
+            llama_server_url: params.llama_server_url,
         }
     }
 }
@@ -900,7 +901,7 @@ impl From<HardwareConfigRequest> for crate::db::param_hardware::HardwareParams {
 
             // Legacy/custom
             num_gpu: req.num_gpu,
-            llama_server_url: req.llama_server_url.clone(),
+            llama_server_url: req.llama_server_url,
         }
     }
 }

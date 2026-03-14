@@ -21,8 +21,7 @@ pub struct AgentResponse {
 }
 
 /// Chat mode for agent queries
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum AgentMode {
     /// Only search documents (RAG)
     Rag,
@@ -798,10 +797,10 @@ impl<'a> Agent<'a> {
         };
 
         // Dispatch to correct backend
-        let hw = crate::db::param_hardware::global_config();
+        let hw = crate::config::hardware_params::global_config();
         let use_llama = matches!(
             hw.backend_type,
-            crate::db::param_hardware::BackendType::LlamaCpp
+            crate::config::hardware_params::BackendType::LlamaCpp
         );
 
         crate::monitoring::mark_llm_started();
@@ -1041,10 +1040,10 @@ impl<'a> Agent<'a> {
                 .to_string();
 
         // Dispatch to correct backend
-        let hw = crate::db::param_hardware::global_config();
+        let hw = crate::config::hardware_params::global_config();
         let use_llama = matches!(
             hw.backend_type,
-            crate::db::param_hardware::BackendType::LlamaCpp
+            crate::config::hardware_params::BackendType::LlamaCpp
         );
 
         crate::monitoring::mark_llm_started();

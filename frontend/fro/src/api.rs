@@ -700,6 +700,8 @@ pub struct HardwareConfig {
 
     // Legacy/custom
     pub num_gpu: usize,
+    /// URL of the llama-server HTTP process (only when backend_type = llama_cpp)
+    pub llama_server_url: String,
 }
 
 impl Default for HardwareConfig {
@@ -758,6 +760,7 @@ impl Default for HardwareConfig {
 
             // Legacy
             num_gpu: 0,
+            llama_server_url: "http://127.0.0.1:8080".to_string(),
         }
     }
 }
