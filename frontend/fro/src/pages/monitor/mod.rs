@@ -1,4 +1,5 @@
 pub mod ag_systemd;
+pub mod grafana_services;
 pub mod agentic;
 pub mod cache;
 pub mod docker;
@@ -13,11 +14,16 @@ pub mod requests;
 pub mod tools;
 
 pub use ag_systemd::MonitorAgSystemd;
+pub use grafana_services::MonitorGrafanaServices;
 pub use agentic::MonitorAgentic;
 pub use cache::MonitorCache;
 pub use docker::MonitorDocker;
 pub use index_page::MonitorIndex;
 pub use knowledge_graph::MonitorKnowledgeGraph;
+mod onnx;
+pub use onnx::MonitorOnnx;
+mod onnx_status;
+pub use onnx_status::MonitorOnnxStatus;
 pub use logs::MonitorLogs;
 pub use observations::MonitorObservations;
 pub use overview::MonitorOverview;

@@ -82,17 +82,7 @@ pub fn MonitorAgSystemd() -> Element {
             Panel { title: "Systemd (journalctl)",
                 div { class: "flex items-start justify-between gap-6",
                     div { class: "text-sm text-gray-300",
-                        div { class: "font-mono flex items-center gap-4",
-                            span { "Unit: {SYSTEMD_UNIT}" }
-                            if !show_output() {
-                                span {
-                                    class: "text-xs cursor-pointer hover:underline",
-                                    style: "color:#00BCD4;",
-                                    onclick: move |_| { show_output.set(true); fetch_logs(); },
-                                    "Click to view logs ▼"
-                                }
-                            }
-                        }
+                        div { class: "font-mono", "Unit: {SYSTEMD_UNIT}" }
                         div { class: "text-xs text-gray-400",
                             "Showing last {DEFAULT_LIMIT} lines ({total_lines} total)"
                         }

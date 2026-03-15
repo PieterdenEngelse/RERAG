@@ -3,8 +3,8 @@ use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx,
-    ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd,
-    MonitorAgentic, MonitorCache, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs,
+    ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd, MonitorGrafanaServices,
+    MonitorAgentic, MonitorCache, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorOnnx, MonitorOnnxStatus,
     MonitorObservations, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests,
     MonitorTools, PageNotFound, Parameters, Train,
 };
@@ -57,6 +57,8 @@ pub enum Route {
         MonitorRateLimits {},
         #[route("/monitor/logs")]
         MonitorLogs {},
+        #[route("/monitor/grafana-services")]
+        MonitorGrafanaServices {},
         #[route("/monitor/ag-systemd")]
         MonitorAgSystemd {},
         #[route("/monitor/tools")]
@@ -65,6 +67,10 @@ pub enum Route {
         MonitorDocker {},
         #[route("/monitor/knowledge-graph")]
         MonitorKnowledgeGraph {},
+        #[route("/monitor/onnx")]
+        MonitorOnnx {},
+        #[route("/monitor/onnx/status")]
+        MonitorOnnxStatus {},
         #[route("/train")]
         Train {},
         #[route("/docu")]

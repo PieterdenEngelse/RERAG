@@ -13,7 +13,6 @@ pub fn MonitorAgSystemd() -> Element {
     let mut logs = use_signal(|| Option::<api::SystemdLogsResponse>::None);
     let mut is_loading = use_signal(|| false);
     let mut level_filter = use_signal(|| "all".to_string());
-    let mut show_output = use_signal(|| true);
 
     let mut fetch_logs = move || {
         is_loading.set(true);
@@ -82,17 +81,7 @@ pub fn MonitorAgSystemd() -> Element {
             Panel { title: "Systemd (journalctl)",
                 div { class: "flex items-start justify-between gap-6",
                     div { class: "text-sm text-gray-300",
-                        div { class: "font-mono flex items-center gap-4",
-                            span { "Unit: {SYSTEMD_UNIT}" }
-                            if !show_output() {
-                                span {
-                                    class: "text-xs cursor-pointer hover:underline",
-                                    style: "color:#00BCD4;",
-                                    onclick: move |_| { show_output.set(true); fetch_logs(); },
-                                    "Click to view logs ▼"
-                                }
-                            }
-                        }
+                        div { class: "font-mono", "Unit: {SYSTEMD_UNIT}" }
                         div { class: "text-xs text-gray-400",
                             "Showing last {DEFAULT_LIMIT} lines ({total_lines} total)"
                         }
@@ -116,27 +105,19 @@ pub fn MonitorAgSystemd() -> Element {
                                 class: "px-3 py-1.5 rounded text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
                                 style: "background:#2563eb;color:#fff;",
                                 disabled: is_loading(),
-                                onclick: move |_| { show_output.set(true); fetch_logs(); },
+                                onclick: move |_| fetch_logs(),
                                 if is_loading() { "Loading…" } else { "Refresh" }
-                            }
-                            button {
-                                class: "px-3 py-1.5 rounded text-sm font-medium",
-                                style: "background:#374151;color:#fff;",
-                                onclick: move |_| show_output.set(false),
-                                "Close"
                             }
                         }
                     }
                 }
 
-                if show_output() {
-                    pre {
-                        class: "mt-3 whitespace-pre-wrap text-xs bg-gray-950 text-gray-200 rounded p-3 overflow-x-auto border border-gray-800",
-                        if filtered_content.is_empty() {
-                            "No journal entries returned for current filter."
-                        } else {
-                            "{filtered_content}"
-                        }
+                pre {
+                    class: "mt-3 whitespace-pre-wrap text-xs bg-gray-950 text-gray-200 rounded p-3 overflow-x-auto border border-gray-800",
+                    if filtered_content.is_empty() {
+                        "No journal entries returned for current filter."
+                    } else {
+                        "{filtered_content}"
                     }
                 }
             }

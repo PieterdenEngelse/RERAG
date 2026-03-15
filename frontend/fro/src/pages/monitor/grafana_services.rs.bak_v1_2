@@ -1,0 +1,106 @@
+use crate::app::Route;
+use crate::components::monitor::{Breadcrumb, BreadcrumbItem, NavTabs, Panel};
+use crate::pages::hardware::constants::{
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+};
+use dioxus::prelude::*;
+
+#[component]
+pub fn MonitorGrafanaServices() -> Element {
+    let mut show_info = use_signal(|| false);
+
+    rsx! {
+        div { class: "p-4 space-y-4",
+            NavTabs { active: Route::MonitorGrafanaServices {} }
+
+            Breadcrumb {
+                items: vec![
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Grafana Services", None),
+                ]
+            }
+
+            Panel { title: None,
+                div { class: "flex items-center gap-2 mb-3",
+                    h3 { class: "text-sm font-semibold text-gray-200", "Grafana — Required Services" }
+                    button {
+                        class: PARAM_ICON_BUTTON_CLASS,
+                        style: PARAM_ICON_BUTTON_STYLE,
+                        title: "What are these services?",
+                        onclick: move |_| show_info.set(!show_info()),
+                        svg {
+                            class: INFO_ICON_SVG_CLASS,
+                            view_box: "0 0 20 20",
+                            fill: "none",
+                            stroke: "currentColor",
+                            stroke_width: "1.5",
+                            circle { cx: "10", cy: "10", r: "9" }
+                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                        }
+                    }
+                }
+
+                if show_info() {
+                    div { class: "bg-gray-700 rounded p-3 text-xs text-gray-300 mb-3 space-y-3",
+                        div { class: "flex items-center justify-between mb-1",
+                            p { class: "font-semibold text-gray-100", "Why these services run native, not in Docker" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-lg font-bold leading-none",
+                                onclick: move |_| show_info.set(false),
+                                "×"
+                            }
+                        }
+                        p { "Grafana itself runs as a Docker container. To function fully it needs data from multiple sources, each running differently." }
+                        p { class: "font-semibold", style: "color: #00BCD4;", "Native binaries (managed by systemd)" }
+                        p { "These run directly on the host and are the data sources Grafana depends on." }
+                        p { class: "font-semibold text-gray-200", "prometheus-node-exporter" }
+                        p { "Exposes host system metrics — CPU, memory, disk, network — by reading directly from /proc and /sys. Running it in a container requires mounting large parts of the host filesystem and results in less accurate metrics. The standard approach everywhere is to run it as a native binary." }
+                        p { class: "font-semibold text-gray-200", "vector" }
+                        p { "Ships logs from the systemd journal to Loki. It reads from /run/log/journal directly. Containerizing it requires privileged access and journal socket mounts. Running it as a user service with direct journal access is simpler and more reliable." }
+                        p { class: "font-semibold text-gray-200", "alertmanager" }
+                        p { "Handles alert routing from Prometheus. Runs as a native binary on the host." }
+                        p { class: "font-semibold pt-1", style: "color: #00BCD4;", "Docker containers (managed by docker compose)" }
+                        p { "ag-grafana, ag-prometheus, ag-loki, ag-tempo, and ag-otel all run as Docker containers. They are self-contained network services that communicate over HTTP and gRPC. Docker manages their startup order and inter-dependencies. They have restart: unless-stopped, meaning they auto-restart on failure without any systemd help." }
+                        p { class: "font-semibold text-gray-100 pt-1", "The rule of thumb" }
+                        p { "If something needs deep host access — filesystem, journal, kernel interfaces — run it native with systemd. If it is a self-contained service that communicates over the network, run it in Docker." }
+                        button {
+                            class: "w-full mt-2 py-1.5 rounded text-xs font-medium text-white",
+                            style: "background-color: #2563eb;",
+                            onclick: move |_| show_info.set(false),
+                            "Got it"
+                        }
+                    }
+                }
+
+                div { class: "space-y-2 text-sm",
+                    div { class: "grid grid-cols-3 gap-2 bg-gray-800 rounded px-2 py-2 items-center",
+                        span { class: "font-mono text-gray-200 text-xs", "prometheus-node-exporter.service" }
+                        span { class: "text-gray-400 text-xs", "Host system metrics" }
+                        span { class: "font-mono text-xs text-gray-500", "sudo systemctl status prometheus-node-exporter" }
+                    }
+                    div { class: "grid grid-cols-3 gap-2 bg-gray-800 rounded px-2 py-2 items-center",
+                        span { class: "font-mono text-gray-200 text-xs", "vector.service" }
+                        span { class: "text-gray-400 text-xs", "Log shipper → Loki" }
+                        span { class: "font-mono text-xs text-gray-500", "systemctl --user status vector" }
+                    }
+                    div { class: "grid grid-cols-3 gap-2 bg-gray-800 rounded px-2 py-2 items-center",
+                        span { class: "font-mono text-gray-200 text-xs", "alertmanager" }
+                        span { class: "text-gray-400 text-xs", "Alert routing" }
+                        span { class: "font-mono text-xs text-gray-500", "systemctl status alertmanager" }
+                    }
+                }
+            }
+
+            Panel { title: "Boot Order",
+                div { class: "space-y-1 text-sm text-gray-300 font-mono",
+                    div { "1. docker.service" }
+                    div { "2. ag.service" }
+                    div { "3. prometheus-node-exporter.service" }
+                    div { "4. vector.service  (user — starts on login)" }
+                    div { "5. docker compose up -d  →  all containers" }
+                }
+            }
+        }
+    }
+}

@@ -23,6 +23,7 @@ pub fn NavTabs(props: NavTabsProps) -> Element {
         ("Systemd", Route::MonitorAgSystemd {}),
         ("Docker", Route::MonitorDocker {}),
         ("Knowledge Graph", Route::MonitorKnowledgeGraph {}),
+        ("ONNX", Route::MonitorOnnx {}),
     ];
 
     rsx! {
