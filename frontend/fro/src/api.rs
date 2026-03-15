@@ -760,7 +760,7 @@ impl Default for HardwareConfig {
 
             // Legacy
             num_gpu: 0,
-            llama_server_url: "http://127.0.0.1:8080".to_string(),
+            llama_server_url: "http://127.0.0.1:11435".to_string(),
         }
     }
 }
@@ -902,6 +902,7 @@ pub struct LogEntry {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LogsResponse {
+    #[serde(default)]
     pub request_id: String,
     pub file: Option<String>,
     pub entries: Vec<LogEntry>,
@@ -1531,7 +1532,19 @@ pub async fn fetch_recent_logs(limit: usize) -> Result<LogsResponse, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
-pub async fn fetch_systemd_logs(unit: &str, limit: usize) -> Result<LogsResponse, String> {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemdLogsResponse {
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub limit: usize,
+    #[serde(default)]
+    pub total_lines: usize,
+    #[serde(default)]
+    pub content: String,
+}
+
+pub async fn fetch_systemd_logs(unit: &str, limit: usize) -> Result<SystemdLogsResponse, String> {
     let url = format!(
         "{}/monitoring/systemd/logs?unit={}&limit={}",
         resolve_api_base_url(),

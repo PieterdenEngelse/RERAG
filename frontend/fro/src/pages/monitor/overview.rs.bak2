@@ -262,7 +262,57 @@ pub fn MonitorOverview() -> Element {
                             }.into()),
                             info: Some("Async file I/O backend. 'io_uring' (Linux 5.1+) provides 2-3x faster reads. Falls back to 'tokio::fs' on older systems. Configure in Settings → io_uring.".into()),
                         }
-
+                        // Neo4j
+                        HealthCard {
+                            name: "Neo4j".into(),
+                            status: match (snapshot.neo4j_enabled, snapshot.neo4j_connected) {
+                                (Some(true), Some(true)) => "Healthy".into(),
+                                (Some(true), Some(false)) => "Unhealthy".into(),
+                                (Some(false), _) => "Disabled".into(),
+                                _ => "Unknown".into(),
+                            },
+                            detail: Some(match (snapshot.neo4j_enabled, snapshot.neo4j_connected) {
+                                (Some(true), Some(true)) => "Connected".to_string(),
+                                (Some(true), Some(false)) => "Not connected".to_string(),
+                                (Some(false), _) => "Not enabled".to_string(),
+                                _ => "Checking...".to_string(),
+                            }.into()),
+                            info: Some("Neo4j knowledge graph database for GraphRAG. Stores entities and relationships extracted from documents. Enable in Settings → Neo4j. Runs on port 7474 (browser) and 7687 (bolt).".into()),
+                        }
+                        // Redis
+                        HealthCard {
+                            name: "Redis".into(),
+                            status: match (snapshot.redis_enabled, snapshot.redis_connected) {
+                                (Some(false), _) => "Disabled".into(),
+                                (Some(true), Some(true)) => "Healthy".into(),
+                                (Some(true), Some(false)) => "Unhealthy".into(),
+                                _ => "Unknown".into(),
+                            },
+                            detail: Some(match (snapshot.redis_enabled, snapshot.redis_connected) {
+                                (Some(false), _) => "Not configured".to_string(),
+                                (Some(true), Some(true)) => "L3 Cache".to_string(),
+                                (Some(true), Some(false)) => "Disconnected".to_string(),
+                                _ => "Checking...".to_string(),
+                            }.into()),
+                            info: Some("Redis serves as L3 cache for search results. L1 (in-memory) and L2 (disk) caches are checked first. Redis provides shared caching across restarts. Runs on port 6379.".into()),
+                        }
+                        // Docker
+                        HealthCard {
+                            name: "Docker".into(),
+                            status: match (snapshot.docker_available, snapshot.docker_containers_running, snapshot.docker_containers_total) {
+                                (Some(true), Some(r), Some(t)) if r == t && t > 0 => "Healthy".into(),
+                                (Some(true), Some(r), Some(t)) if r < t => "Degraded".into(),
+                                (Some(true), Some(0), _) => "Unhealthy".into(),
+                                (Some(false), _, _) => "Unavailable".into(),
+                                _ => "Unknown".into(),
+                            },
+                            detail: Some(match (snapshot.docker_available, snapshot.docker_containers_running, snapshot.docker_containers_total) {
+                                (Some(true), Some(r), Some(t)) => format!("{}/{} running", r, t),
+                                (Some(false), _, _) => "Not accessible".to_string(),
+                                _ => "Checking...".to_string(),
+                            }.into()),
+                            info: Some("Docker containers running ag infrastructure: Neo4j, Redis, Prometheus, Grafana, Loki, Tempo, OTel Collector. Start with 'docker compose up -d'. See Monitor → Docker for details.".into()),
+                        }
                     }
                 }
             }

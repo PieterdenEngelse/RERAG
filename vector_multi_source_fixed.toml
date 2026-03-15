@@ -75,12 +75,6 @@ labels.systemd_unit = "{{ systemd_unit }}"
 labels.hostname = "{{ hostname }}"
 labels.priority = "{{ priority }}"
 labels.syslog_identifier = "{{ syslog_identifier }}"
-labels.trace_id = "{{ trace_id }}"
-labels.level = "{{ level }}"
-labels.http_status = "{{ http_status }}"
-labels.http_method = "{{ http_method }}"
-labels.is_error = "{{ is_error }}"
-labels.is_warning = "{{ is_warning }}"
 healthcheck.enabled = true
 
 # ============================================================================
@@ -118,7 +112,6 @@ labels.systemd_unit = "{{ systemd_unit }}"
 labels.hostname = "{{ hostname }}"
 labels.priority = "{{ priority }}"
 labels.syslog_identifier = "{{ syslog_identifier }}"
-labels.is_error = "{{ is_error }}"
 healthcheck.enabled = true
 
 # ============================================================================
@@ -152,8 +145,6 @@ endpoint = "http://127.0.0.1:3100"
 encoding.codec = "json"
 labels.job = "kernel"
 labels.host = "localhost"
-labels.is_error = "{{ is_error }}"
-labels.is_warning = "{{ is_warning }}"
 healthcheck.enabled = true
 
 # ============================================================================
@@ -204,8 +195,6 @@ endpoint = "http://127.0.0.1:3100"
 encoding.codec = "json"
 labels.job = "auth"
 labels.host = "localhost"
-labels.auth_event = "{{ auth_event }}"
-labels.is_error = "{{ is_error }}"
 healthcheck.enabled = true
 
 # ============================================================================
@@ -217,4 +206,4 @@ type = "internal_metrics"
 [sinks.prometheus]
 type = "prometheus_exporter"
 inputs = ["internal_metrics"]
-address = "127.0.0.1:8686"
+address = "0.0.0.0:8686"

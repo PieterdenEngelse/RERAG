@@ -4,7 +4,7 @@ use crate::{
     components::monitor::*,
     pages::hardware::components::InfoIcon,
     pages::hardware::constants::{
-        PARAM_ICON_BUTTON_STYLE, QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
+        PARAM_ICON_BUTTON_STYLE, QUICK_ACTION_INFO_BUTTON_CLASS,
     },
 };
 use chrono::{DateTime, Utc};
@@ -166,12 +166,12 @@ pub fn MonitorIndex() -> Element {
     let state = use_signal(IndexState::default);
     let index_info = use_signal(IndexInfoSnapshot::default);
     let jobs = use_signal(Vec::<ReindexJobRow>::new);
-    let show_more_actions = use_signal(|| false);
+    let _show_more_actions = use_signal(|| false);
     let chunk_info_open = use_signal(|| false);
     let mut reindex_control_info_open = use_signal(|| false);
     let show_lora_info = use_signal(|| false);
     let mut show_chunking_logging_info = use_signal(|| false);
-    let mut show_synthetic_qa_examples = use_signal(|| false);
+    let show_synthetic_qa_examples = use_signal(|| false);
     let mut show_synthetic_qa_info = use_signal(|| false);
 
     {

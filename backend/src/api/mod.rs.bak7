@@ -1513,16 +1513,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     _ => false,
                 };
 
-                // Check if Redis is enabled but backend not connected
-                // We check the env config directly because if connection failed at startup,
-                // l3_cache is None and summary() returns enabled=false, masking the issue.
-                let redis_configured = std::env::var("REDIS_ENABLED")
-                    .map(|v| v == "true" || v == "1")
-                    .unwrap_or(false);
-                let redis_summary = retriever.get_l3_cache_summary();
-                let redis_issue = redis_configured && !redis_summary.connected;
-
-                let status = if neo4j_issue || redis_issue {
+                let status = if neo4j_issue {
                     "degraded"
                 } else if is_busy {
                     "busy"
@@ -1532,8 +1523,6 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
 
                 let reason = if neo4j_issue {
                     "Neo4j enabled but not connected".to_string()
-                } else if redis_issue {
-                    "Redis enabled but backend not connected".to_string()
                 } else if is_busy {
                     message.clone().unwrap_or_else(|| "System busy".to_string())
                 } else {
@@ -1564,10 +1553,8 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     });
                 }
 
-                // Add message if busy or degraded
-                if neo4j_issue || redis_issue {
-                    response["message"] = json!(reason);
-                } else if let Some(msg) = message {
+                // Add message if busy
+                if let Some(msg) = message {
                     response["message"] = json!(msg);
                 }
 

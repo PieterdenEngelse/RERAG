@@ -1,6 +1,6 @@
 use crate::api::{self, RagMemoryItem};
 use crate::app::{ClearChat, Route, ShowRagInfo};
-use crate::components::{BackendSelector, HomeSettingsBoards};
+use crate::components::HomeSettingsBoards;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -155,7 +155,7 @@ pub fn Home() -> Element {
     let mut delete_docs_status = use_signal(|| Option::<String>::None);
 
     // Chat mode: "rag", "llm", or "hybrid"
-    let mut chat_mode = use_signal(|| "auto".to_string());
+    let chat_mode = use_signal(|| "auto".to_string());
 
     let mut show_delete_memories_modal = use_signal(|| false);
     let mut rag_memories = use_signal(|| Vec::<RagMemoryItem>::new());
@@ -206,7 +206,7 @@ pub fn Home() -> Element {
     let mut feedback_status = use_signal(|| Option::<String>::None);
 
     // Prompt caching toggle (uses /api/chat instead of /api/generate for KV cache reuse)
-    let mut prompt_caching_enabled = use_signal(|| false);
+    let prompt_caching_enabled = use_signal(|| false);
     let mut show_cache_info = use_signal(|| false);
     let mut show_api_behavior = use_signal(|| false);
     let mut show_kv_details = use_signal(|| false);
@@ -215,7 +215,7 @@ pub fn Home() -> Element {
     let mut show_notation_info = use_signal(|| false);
 
     // Backend type state for home page board
-    let mut current_backend = use_signal(|| String::from("ollama"));
+    let current_backend = use_signal(|| String::from("ollama"));
     let mut show_backend_info = use_signal(|| false);
 
     // Load documents on mount

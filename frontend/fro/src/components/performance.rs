@@ -7,7 +7,6 @@
 //! - Memoization helpers
 
 use dioxus::prelude::*;
-use std::time::Duration;
 
 /// Configuration for virtual scrolling
 #[derive(Clone, Debug)]
@@ -140,7 +139,7 @@ impl PaginationState {
 /// Debounce helper for search inputs
 /// Returns a closure that will only execute after the specified delay
 pub fn use_debounce<T: Clone + 'static>(
-    delay_ms: u64,
+    _delay_ms: u64,
     callback: impl Fn(T) + 'static,
 ) -> impl Fn(T) {
     // In a real implementation, this would use a timer

@@ -3,10 +3,7 @@ use crate::app::RuntimeSuspended;
 use crate::app::{ClearChat, PageErrors, Route, ShowHelpCommands, ShowRagInfo};
 use crate::components::dark_mode_toggle::DarkModeToggle;
 use crate::components::nav_dropdown::{DropdownActionItem, DropdownItem, NavDropdown};
-use crate::pages::hardware::constants::{
-    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
-    QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
-};
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
 
@@ -206,7 +203,7 @@ pub fn Header() -> Element {
         }
     };
 
-    let modal_target = if has_page_errors {
+    let _modal_target = if has_page_errors {
         "page_errors".to_string()
     } else {
         status.clone()
@@ -255,74 +252,67 @@ pub fn Header() -> Element {
                 }
             }
 
-            // Title and status centered together
-            div { class: "absolute inset-x-0 flex justify-center pointer-events-none",
-                div { class: "flex items-center gap-2 pointer-events-auto",
-                    h1 {
-                        class: "font-medium text-center",
-                        style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem; color: #026B7C;",
-                        "Rust Agentic Retrieval Augumented Generation"
-                    }
-                    div { class: "flex items-center gap-1",
-                        div {
-                            class: "w-4 h-4 rounded-full border-2 border-gray-900 {bg_color} {extra_class} cursor-pointer hover:ring-2 hover:ring-white hover:ring-opacity-50 transition-all",
-                            style: style_override.unwrap_or(""),
-                            title: format!("Status: {} (click for details)", tooltip_text),
-                            onmouseenter: move |_| status_hover_refcount.with_mut(|count| *count += 1),
-                            onmouseleave: move |_| {
-                                status_hover_refcount
-                                    .with_mut(|count| {
-                                        if *count > 0 {
-                                            *count -= 1;
-                                        }
-                                    })
-                            },
-                            onclick: move |_| {
-                                let has_pe = !page_errors.read().errors.is_empty();
-                                if has_pe {
-                                    show_red_details.set(true);
-                                } else {
-                                    match health_status().as_str() {
-                                        "healthy" | "ok" => show_green_details.set(true),
-                                        "degraded" => show_yellow_details.set(true),
-                                        "offline" | "unhealthy" => show_red_details.set(true),
-                                        "busy" => show_busy_details.set(true),
-                                        "checking" => show_checking_details.set(true),
-                                        _ => show_orange_details.set(true),
+            // Title and status — flex-1 center column, truncates on small screens
+            div { class: "flex-1 min-w-0 flex justify-center items-center gap-2",
+                h1 {
+                    class: "font-medium truncate",
+                    style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem; color: #026B7C;",
+                    "Rust Agentic Retrieval Augumented Generation"
+                }
+                div { class: "flex items-center gap-1 flex-shrink-0",
+                    div {
+                        class: "w-4 h-4 rounded-full border-2 border-gray-900 {bg_color} {extra_class} cursor-pointer hover:ring-2 hover:ring-white hover:ring-opacity-50 transition-all",
+                        style: style_override.unwrap_or(""),
+                        title: format!("Status: {} (click for details)", tooltip_text),
+                        onmouseenter: move |_| status_hover_refcount.with_mut(|count| *count += 1),
+                        onmouseleave: move |_| {
+                            status_hover_refcount
+                                .with_mut(|count| {
+                                    if *count > 0 {
+                                        *count -= 1;
                                     }
-                                }
-                            },
-                        }
-                        button {
-                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                            style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                            onclick: move |_| show_status_info.set(true),
-                            title: "Status info",
-                            svg {
-                                class: INFO_ICON_SVG_CLASS,
-                                view_box: "0 0 20 20",
-                                fill: "none",
-                                stroke: "#026B7C",
-                                circle {
-                                    cx: "10",
-                                    cy: "10",
-                                    r: "9",
-                                    stroke_width: "1.5",
-                                }
-                                line {
-                                    x1: "10",
-                                    y1: "8",
-                                    x2: "10",
-                                    y2: "14",
-                                    stroke_width: "1.5",
-                                }
-                                circle {
-                                    cx: "10",
-                                    cy: "6.3",
-                                    r: "1",
-                                    fill: "#026B7C",
-                                    stroke: "none",
-                                }
+                                })
+                        },
+                        onclick: move |_| {
+                            match status_for_click.as_str() {
+                                "healthy" | "ok" => show_green_details.set(true),
+                                "degraded" => show_yellow_details.set(true),
+                                "offline" | "unhealthy" => show_red_details.set(true),
+                                "busy" => show_busy_details.set(true),
+                                "checking" => show_checking_details.set(true),
+                                _ => show_orange_details.set(true),
+                            }
+                        },
+                    }
+                    button {
+                        class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                        onclick: move |_| show_status_info.set(true),
+                        title: "Status info",
+                        svg {
+                            class: INFO_ICON_SVG_CLASS,
+                            view_box: "0 0 20 20",
+                            fill: "none",
+                            stroke: "#026B7C",
+                            circle {
+                                cx: "10",
+                                cy: "10",
+                                r: "9",
+                                stroke_width: "1.5",
+                            }
+                            line {
+                                x1: "10",
+                                y1: "8",
+                                x2: "10",
+                                y2: "14",
+                                stroke_width: "1.5",
+                            }
+                            circle {
+                                cx: "10",
+                                cy: "6.3",
+                                r: "1",
+                                fill: "#026B7C",
+                                stroke: "none",
                             }
                         }
                     }
@@ -347,9 +337,7 @@ pub fn Header() -> Element {
                 }
             }
 
-            div { class: "flex-1" }
-
-            div { class: "flex justify-end items-center",
+            div { class: "flex-shrink-0 flex justify-end items-center",
 
                 nav {
                     class: "hidden md:flex items-center gap-[0.1875rem] text-sm",

@@ -1,5 +1,5 @@
 use crate::pages::hardware::constants::{
-    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS,
 };
 use crate::{
     api,

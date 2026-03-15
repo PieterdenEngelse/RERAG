@@ -787,7 +787,7 @@ pub fn ConfigHardware() -> Element {
                                         input {
                                             r#type: "text",
                                             class: PARAM_TEXT_INPUT_CLASS,
-                                            placeholder: "http://127.0.0.1:8080",
+                                            placeholder: "http://127.0.0.1:11435",
                                             value: hardware_values.llama_server_url.clone(),
                                             oninput: move |evt| {
                                                 let value = evt.value();
@@ -795,7 +795,7 @@ pub fn ConfigHardware() -> Element {
                                             },
                                         }
                                         span { class: "text-[0.7rem] text-gray-400",
-                                            "Start: ~/llama.cpp/build/bin/llama-server -m /path/to/model.gguf --port 8080"
+                                            "Start: ~/llama.cpp/build/bin/llama-server -m /path/to/model.gguf --port 11435"
                                         }
                                     }
                                 }
