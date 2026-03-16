@@ -75,6 +75,17 @@ fn get_jobs_map() -> Arc<Mutex<HashMap<String, AsyncJob>>> {
 // Global retriever handle
 static RETRIEVER: OnceLock<Arc<Mutex<Retriever>>> = OnceLock::new();
 
+// Global EmbeddingService handle for cached query embedding
+static EMBEDDING_SERVICE: OnceLock<Arc<crate::embedder::EmbeddingService>> = OnceLock::new();
+
+pub fn set_embedding_service(svc: Arc<crate::embedder::EmbeddingService>) {
+    let _ = EMBEDDING_SERVICE.set(svc);
+}
+
+pub fn get_embedding_service() -> Option<Arc<crate::embedder::EmbeddingService>> {
+    EMBEDDING_SERVICE.get().map(|s| Arc::clone(s))
+}
+
 pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
     let _ = RETRIEVER.set(handle);
 }
@@ -5205,8 +5216,15 @@ async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpRe
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
     if let Some(retriever) = RETRIEVER.get() {
+        let query_vector = if let Some(svc) = get_embedding_service() {
+            svc.embed_query(&query.q).await
+        } else {
+            crate::embedder::embed(&query.q)
+        };
         let mut retriever = retriever.lock().unwrap();
-        let results = retriever.search(&query.q).unwrap_or_default();
+        let results = retriever
+            .hybrid_search(&query.q, Some(&query_vector))
+            .unwrap_or_default();
         let elapsed = start.elapsed().as_millis() as u64;
 
         // Record tool execution
@@ -8181,7 +8199,8 @@ pub fn start_api_server(
                     .route("/docker/action", web::post().to(docker_action))
                     // LLM runtime control (Ollama)
                     .route("/runtime/action", web::post().to(runtime_action))
-                    .route("/ollama", web::get().to(get_ollama_status)),
+                    .route("/ollama", web::get().to(get_ollama_status))
+                    .route("/onnx", web::get().to(get_onnx_status)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES
@@ -8357,6 +8376,13 @@ pub fn start_api_server(
         .bind(bind_addr.clone())
         .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", bind_addr, e))
         .run()
+}
+
+/// GET /monitoring/onnx
+/// Returns ONNX embedding runtime statistics.
+async fn get_onnx_status() -> Result<HttpResponse, Error> {
+    let snap = crate::monitoring::onnx_metrics::snapshot();
+    Ok(HttpResponse::Ok().json(snap))
 }
 
 /// GET /monitoring/ollama

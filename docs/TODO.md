@@ -787,4 +787,44 @@ Als je wilt, kan ik dit verder uitwerken naar:
 - een **Rust‑implementatie van de input‑sanitizer**  
 - of een **threat‑model specifiek voor moltbot’s metamorfose‑mechanisme**
 
-Laat maar weten welke richting je kiest, Pieter.
+Currently your retrieval pipeline in `search_documents_inner` does:
+
+```
+query → embed → hybrid_search(BM25 + vector) → top-10 chunks → LLM
+```
+
+**What needs to be added:**
+
+**Step 1 — Entity extraction from query**
+Extract named entities from the incoming query using your existing `EntityExtractorTool`. "What does the embedder do?" → entity: `embedder`.
+
+**Step 2 — Graph traversal**
+Take those entities, look them up in petgraph, traverse 1-2 hops to find connected entities and their source chunk IDs. "embedder" → connected to → "ONNX", "BGE-small", "EmbeddingService", "cache" → all have chunk IDs.
+
+**Step 3 — Fetch those chunks**
+Retrieve the actual text chunks those graph nodes point to from Tantivy by chunk ID.
+
+**Step 4 — Merge with RRF**
+You now have three result lists:
+- BM25 results
+- Vector results  
+- Graph traversal results
+
+Feed all three into RRF scoring. Chunks appearing in multiple lists rank highest.
+
+**Step 5 — Pass merged context to LLM**
+LLM gets richer, structurally connected context instead of just the 10 most similar chunks.
+
+**Concrete changes needed:**
+- `retriever.rs` — add `graph_search(entities: &[String]) -> Vec<String>` method that queries petgraph
+- `api/mod.rs` — call `EntityExtractorTool` before `hybrid_search`, pass graph results into a 3-way RRF merge
+- The petgraph snapshot already has the entity→chunk mappings from your Neo4j ingestion pipeline
+
+This is essentially what Microsoft's GraphRAG paper describes, but you already have all the pieces — they just aren't connected at query time.
+
+---------------
+
+implement prio in hybrid rag between added docu's and llm.
+---------------
+screenresolution impl in frontend
+--------------------------

@@ -305,6 +305,11 @@ async fn main() -> std::io::Result<()> {
 
     let retriever = Arc::new(Mutex::new(retriever));
     ag::api::set_retriever_handle(Arc::clone(&retriever));
+    // Initialize shared EmbeddingService for cached query embedding
+    let embedding_svc = std::sync::Arc::new(ag::embedder::EmbeddingService::new(
+        ag::embedder::EmbeddingConfig::from_env(),
+    ));
+    ag::api::set_embedding_service(embedding_svc);
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 6.5: Initialize Optimized Search Engine (all perf optimizations)

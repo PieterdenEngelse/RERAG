@@ -2736,3 +2736,27 @@ pub async fn fetch_container_inspect(name: &str) -> Result<ContainerInspectRespo
     ))
     .await
 }
+
+
+// ============================================================================
+// ONNX MONITORING API
+// ============================================================================
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct OnnxMonitorStats {
+    pub status:            String,
+    pub model_name:        String,
+    pub model_dims:        usize,
+    pub batch_size:        usize,
+    pub cache_hits:        u64,
+    pub cache_misses:      u64,
+    pub cache_hit_rate:    f64,
+    pub total_embeddings:  u64,
+    pub total_batches:     u64,
+    pub total_batch_texts: u64,
+    pub avg_embed_ms:      f64,
+    pub last_embed_ms:     f64,
+}
+
+pub async fn fetch_onnx_monitor_stats() -> Result<OnnxMonitorStats, String> {
+    fetch_json("/monitoring/onnx").await
+}

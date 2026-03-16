@@ -4,6 +4,8 @@ use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx,
     ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd, MonitorGrafanaServices,
+    DocuAgPipeline, DocuBias, DocuBm25, DocuEmbeddings, DocuEntitiesProduction, DocuIoUring,
+    DocuKnowledgeGraphs, DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuTantivy, DocuThreads,
     MonitorAgentic, MonitorCache, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorOnnx, MonitorOnnxStatus,
     MonitorObservations, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests,
     MonitorTools, PageNotFound, Parameters, Train,
@@ -77,6 +79,32 @@ pub enum Route {
         Docu {},
         #[route("/docu/index")]
         DocuIndex {},
+        #[route("/docu/index/embeddings")]
+        DocuEmbeddings {},
+        #[route("/docu/index/knowledge-graphs")]
+        DocuKnowledgeGraphs {},
+        #[route("/docu/index/onnx")]
+        DocuOnnx {},
+        #[route("/docu/index/onnx-params")]
+        DocuOnnxParams {},
+        #[route("/docu/index/io-uring")]
+        DocuIoUring {},
+        #[route("/docu/index/bias")]
+        DocuBias {},
+        #[route("/docu/index/threads")]
+        DocuThreads {},
+        #[route("/docu/index/entities-production")]
+        DocuEntitiesProduction {},
+        #[route("/docu/index/ag-pipeline")]
+        DocuAgPipeline {},
+        #[route("/docu/index/lora-export")]
+        DocuLoraExport {},
+        #[route("/docu/index/neo4j")]
+        DocuNeo4j {},
+        #[route("/docu/index/tantivy")]
+        DocuTantivy {},
+        #[route("/docu/index/bm25")]
+        DocuBm25 {},
     #[end_layout]
     #[route("/:..segments")]
     PageNotFound { segments: Vec<String> },

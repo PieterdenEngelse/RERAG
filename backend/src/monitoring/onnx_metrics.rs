@@ -1,5 +1,5 @@
-//! Global atomic counters for ONNX embedding runtime monitoring.
-//! Updated by embedder.rs; read by the /monitoring/onnx endpoint.
+//! ONNX embedding runtime monitoring counters. v1.0.0
+//! Updated by embedder.rs; read by GET /monitoring/onnx.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -10,11 +10,10 @@ static CACHE_MISSES:      AtomicU64 = AtomicU64::new(0);
 static TOTAL_EMBEDDINGS:  AtomicU64 = AtomicU64::new(0);
 static TOTAL_BATCHES:     AtomicU64 = AtomicU64::new(0);
 static TOTAL_BATCH_TEXTS: AtomicU64 = AtomicU64::new(0);
-/// Stored as microseconds to avoid float atomics.
 static TOTAL_EMBED_US:    AtomicU64 = AtomicU64::new(0);
 static LAST_EMBED_US:     AtomicU64 = AtomicU64::new(0);
 
-// ── Static model metadata (set once at embedder init) ─────────────────────────
+// ── Static model metadata ─────────────────────────────────────────────────────
 struct ModelMeta {
     name:       String,
     dims:       usize,
@@ -23,7 +22,6 @@ struct ModelMeta {
 
 static MODEL_META: OnceLock<ModelMeta> = OnceLock::new();
 
-/// Call once from EmbeddingRuntime::new (or global_runtime initialisation).
 pub fn register_model(name: &str, dims: usize, batch_size: usize) {
     let _ = MODEL_META.set(ModelMeta {
         name: name.to_owned(),
@@ -32,7 +30,7 @@ pub fn register_model(name: &str, dims: usize, batch_size: usize) {
     });
 }
 
-// ── Recording helpers (called from embedder.rs) ───────────────────────────────
+// ── Recording helpers ─────────────────────────────────────────────────────────
 pub fn record_cache_hit() {
     CACHE_HITS.fetch_add(1, Ordering::Relaxed);
 }
@@ -41,7 +39,6 @@ pub fn record_cache_miss() {
     CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
 }
 
-/// `duration_ms` is the wall-clock time for a single embed_text call (cache miss).
 pub fn record_single_embed(duration_ms: f64) {
     TOTAL_EMBEDDINGS.fetch_add(1, Ordering::Relaxed);
     let us = (duration_ms * 1_000.0) as u64;
@@ -49,13 +46,12 @@ pub fn record_single_embed(duration_ms: f64) {
     LAST_EMBED_US.store(us, Ordering::Relaxed);
 }
 
-/// Called once per embed_batch call with the number of texts in that batch.
 pub fn record_batch(text_count: usize) {
     TOTAL_BATCHES.fetch_add(1, Ordering::Relaxed);
     TOTAL_BATCH_TEXTS.fetch_add(text_count as u64, Ordering::Relaxed);
 }
 
-// ── Snapshot ─────────────────────────────────────────────────────────────────
+// ── Snapshot ──────────────────────────────────────────────────────────────────
 #[derive(serde::Serialize)]
 pub struct OnnxSnapshot {
     pub status:            &'static str,
@@ -73,9 +69,9 @@ pub struct OnnxSnapshot {
 }
 
 pub fn snapshot() -> OnnxSnapshot {
-    let hits    = CACHE_HITS.load(Ordering::Relaxed);
-    let misses  = CACHE_MISSES.load(Ordering::Relaxed);
-    let total   = TOTAL_EMBEDDINGS.load(Ordering::Relaxed);
+    let hits     = CACHE_HITS.load(Ordering::Relaxed);
+    let misses   = CACHE_MISSES.load(Ordering::Relaxed);
+    let total    = TOTAL_EMBEDDINGS.load(Ordering::Relaxed);
     let total_us = TOTAL_EMBED_US.load(Ordering::Relaxed);
     let last_us  = LAST_EMBED_US.load(Ordering::Relaxed);
     let batches  = TOTAL_BATCHES.load(Ordering::Relaxed);

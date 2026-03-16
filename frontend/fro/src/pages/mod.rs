@@ -24,6 +24,11 @@ pub use config::Config;
 pub use config_io_uring::ConfigIoUring;
 pub use docu::Docu;
 pub use docu_index::DocuIndex;
+pub use docu_index::{
+    DocuEmbeddings, DocuKnowledgeGraphs, DocuOnnx, DocuOnnxParams, DocuIoUring,
+    DocuBias, DocuThreads, DocuEntitiesProduction, DocuAgPipeline, DocuLoraExport,
+    DocuNeo4j, DocuTantivy, DocuBm25,
+};
 pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use memories::ConfigMemories;

@@ -34,6 +34,7 @@ pub mod trace_alerting;
 pub mod trace_context;
 pub mod trace_middleware;
 pub mod tracing_config;
+pub mod onnx_metrics;
 pub mod ui_metrics;
 
 pub use crate::monitoring::metrics::{

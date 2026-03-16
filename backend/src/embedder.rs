@@ -201,7 +201,13 @@ fn global_runtime() -> &'static Arc<EmbeddingRuntime> {
     static GLOBAL: OnceCell<Arc<EmbeddingRuntime>> = OnceCell::new();
     GLOBAL.get_or_init(|| {
         let cfg = EmbeddingConfig::from_env();
-        Arc::new(EmbeddingRuntime::new(&cfg))
+        let rt = Arc::new(EmbeddingRuntime::new(&cfg));
+        crate::monitoring::onnx_metrics::register_model(
+            cfg.model.as_str(),
+            cfg.model.dimension(),
+            cfg.batch_size,
+        );
+        rt
     })
 }
 
@@ -242,12 +248,14 @@ impl EmbeddingService {
                 if let Some(embedding) = cache.get(&key) {
                     debug!(cache_key = %key, "Embedding cache hit");
                     crate::monitoring::metrics::record_embedding_cache_hit();
+                    crate::monitoring::onnx_metrics::record_cache_hit();
                     return embedding.clone();
                 }
             }
 
             debug!(text_len = text.len(), "Generating embedding (cache miss)");
             crate::monitoring::metrics::record_embedding_cache_miss();
+            crate::monitoring::onnx_metrics::record_cache_miss();
 
             let start = std::time::Instant::now();
             let runtime = self.runtime.clone();
@@ -261,6 +269,7 @@ impl EmbeddingService {
                 }
             };
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            crate::monitoring::onnx_metrics::record_single_embed(duration_ms);
             debug!(duration_ms = duration_ms, "Single embedding generated");
 
             {
@@ -288,6 +297,7 @@ impl EmbeddingService {
                 "Starting batch embedding"
             );
 
+            crate::monitoring::onnx_metrics::record_batch(texts.len());
             let start = std::time::Instant::now();
             let mut results = Vec::new();
 
@@ -469,7 +479,12 @@ pub mod similarity {
 
 /// Convenience helper for synchronous contexts (chunking/indexing)
 pub fn embed(text: &str) -> EmbeddingVector {
-    global_runtime().embed_owned(text.to_owned())
+    let start = std::time::Instant::now();
+    crate::monitoring::onnx_metrics::record_cache_miss();
+    let result = global_runtime().embed_owned(text.to_owned());
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    crate::monitoring::onnx_metrics::record_single_embed(duration_ms);
+    result
 }
 
 /// Batch helper for synchronous indexers
