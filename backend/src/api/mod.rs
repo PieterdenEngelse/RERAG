@@ -96,16 +96,17 @@ pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
 
 // Global Neo4j client handle (Phase 27)
 #[cfg(feature = "neo4j")]
-static NEO4J_CLIENT: OnceLock<crate::graph::Neo4jClient> = OnceLock::new();
+static NEO4J_CLIENT: std::sync::RwLock<Option<crate::graph::Neo4jClient>> = std::sync::RwLock::new(None);
 
 #[cfg(feature = "neo4j")]
 pub fn set_neo4j_client(client: crate::graph::Neo4jClient) {
-    let _ = NEO4J_CLIENT.set(client);
+    let mut lock = NEO4J_CLIENT.write().expect("NEO4J_CLIENT lock poisoned");
+    *lock = Some(client);
 }
 
 #[cfg(feature = "neo4j")]
-pub fn get_neo4j_client() -> Option<&'static crate::graph::Neo4jClient> {
-    NEO4J_CLIENT.get()
+pub fn get_neo4j_client() -> Option<std::sync::Arc<crate::graph::Neo4jClient>> {
+    NEO4J_CLIENT.read().ok()?.as_ref().map(|c| std::sync::Arc::new(c.clone()))
 }
 
 #[cfg(not(feature = "neo4j"))]
@@ -120,17 +121,18 @@ pub fn get_neo4j_client() -> Option<()> {
 
 // Global KnowledgeBuilder for graph integration during indexing
 #[cfg(feature = "neo4j")]
-static KNOWLEDGE_BUILDER: OnceLock<std::sync::Arc<crate::graph::KnowledgeBuilder>> =
-    OnceLock::new();
+static KNOWLEDGE_BUILDER: std::sync::RwLock<Option<std::sync::Arc<crate::graph::KnowledgeBuilder>>> =
+    std::sync::RwLock::new(None);
 
 #[cfg(feature = "neo4j")]
 pub fn set_knowledge_builder(builder: std::sync::Arc<crate::graph::KnowledgeBuilder>) {
-    let _ = KNOWLEDGE_BUILDER.set(builder);
+    let mut lock = KNOWLEDGE_BUILDER.write().expect("KNOWLEDGE_BUILDER lock poisoned");
+    *lock = Some(builder);
 }
 
 #[cfg(feature = "neo4j")]
-pub fn get_knowledge_builder() -> Option<&'static std::sync::Arc<crate::graph::KnowledgeBuilder>> {
-    KNOWLEDGE_BUILDER.get()
+pub fn get_knowledge_builder() -> Option<std::sync::Arc<crate::graph::KnowledgeBuilder>> {
+    KNOWLEDGE_BUILDER.read().ok()?.clone()
 }
 
 #[cfg(not(feature = "neo4j"))]
@@ -187,6 +189,9 @@ pub async fn index_to_knowledge_graph(
     let confidence_threshold = config.entity_extraction.confidence_threshold;
 
     for (chunk_id, chunk_content) in chunks {
+        // B1-v1: Yield between chunks to prevent CPU starvation
+        tokio::task::yield_now().await;
+
         // Add chunk to graph
         let chunk_meta = ChunkMeta {
             id: chunk_id.clone(),
@@ -206,11 +211,23 @@ pub async fn index_to_knowledge_graph(
             continue;
         }
 
-        // Extract entities from chunk
+        // Extract entities - try ONNX NER first, fall back to regex
+        let ner_entities = crate::tools::ner_extractor::extract_entities(chunk_content);
+        let use_ner = !ner_entities.is_empty();
+        if use_ner {
+            for ner_entity in &ner_entities {
+                if let Err(e) = kb.add_entity_mention(
+                    chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score,
+                ).await {
+                    debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
+                }
+            }
+        }
+        // Fallback regex extraction
         let extraction = extractor.extract(chunk_content);
 
         for entity in &extraction.entities {
-            if entity.confidence >= confidence_threshold {
+            if !use_ner && entity.confidence >= confidence_threshold {
                 if let Err(e) = kb
                     .add_entity_mention(
                         chunk_id,
@@ -1355,7 +1372,7 @@ fn log_status_change(new_status: &str, reason: &str) {
 pub async fn get_systemd_logs(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, Error> {
-    let unit = query.get("unit").cloned().unwrap_or_else(|| "ag-full-stack.service".to_string());
+    let unit = query.get("unit").cloned().unwrap_or_else(|| "ag.service".to_string());
     let limit = query.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(100);
 
     // Validate unit name to prevent injection
@@ -4361,6 +4378,26 @@ async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
 // API KEYS CONFIG
 // ============================================================================
 
+
+// ── Entity Terms API types (Step 1 v1.0) ─────────────────────────────
+#[derive(Debug, Serialize, Deserialize)]
+struct EntityTermEntry {
+    category: String,
+    term: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EntityTermsResponse {
+    status: String,
+    terms: Vec<EntityTermEntry>,
+    file_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SaveEntityTermsRequest {
+    terms: Vec<EntityTermEntry>,
+}
+
 #[derive(Debug, Serialize)]
 struct ApiKeysResponse {
     status: String,
@@ -4936,6 +4973,167 @@ pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Er
     }
 }
 
+// ── POST /extract_entities — standalone NER test endpoint (v1.0) ─────
+async fn extract_entities_handler(
+    payload: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, Error> {
+    let text = payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if text.trim().is_empty() {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "Provide a 'text' field with content to extract entities from"
+        })));
+    }
+
+    let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
+    let result = extractor.extract(&text);
+
+    let entities: Vec<serde_json::Value> = result
+        .entities
+        .iter()
+        .map(|e| {
+            json!({
+                "text": e.text,
+                "type": e.entity_type.label(),
+                "start": e.start,
+                "end": e.end,
+                "confidence": e.confidence
+            })
+        })
+        .collect();
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "entity_count": entities.len(),
+        "entities": entities,
+        "counts": result.entity_counts
+    })))
+}
+
+// ── GET /config/entity_terms (Step 1 v1.0) ───────────────────────────
+async fn get_entity_terms() -> Result<HttpResponse, Error> {
+    let terms_path = std::env::var("AG_ENTITY_TERMS_FILE").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pde".to_string());
+        format!("{}/.config/ag/entity_terms.txt", home)
+    });
+
+    let mut terms = Vec::new();
+
+    if let Ok(content) = std::fs::read_to_string(&terms_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((prefix, term)) = line.split_once(':') {
+                let cat = prefix.trim().to_uppercase();
+                let term = term.trim().to_string();
+                if !term.is_empty() {
+                    terms.push(EntityTermEntry {
+                        category: cat,
+                        term,
+                    });
+                }
+            } else {
+                terms.push(EntityTermEntry {
+                    category: "TECH".to_string(),
+                    term: line.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(EntityTermsResponse {
+        status: "ok".into(),
+        terms,
+        file_path: terms_path,
+    }))
+}
+
+// ── POST /config/entity_terms (Step 1 v1.0) ─────────────────────────
+async fn save_entity_terms(
+    payload: web::Json<SaveEntityTermsRequest>,
+) -> Result<HttpResponse, Error> {
+    let terms_path = std::env::var("AG_ENTITY_TERMS_FILE").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pde".to_string());
+        format!("{}/.config/ag/entity_terms.txt", home)
+    });
+
+    if let Some(parent) = std::path::Path::new(&terms_path).parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Cannot create config dir: {}", e)
+            })));
+        }
+    }
+
+    let body = payload.into_inner();
+    let valid_categories = ["MED", "TECH", "ORG", "LOC", "PERSON", "PRODUCT", "EVENT"];
+
+    let mut lines = Vec::new();
+    lines.push("# AG Entity Terms — managed via UI".to_string());
+    lines.push(format!(
+        "# Last saved: {}",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    ));
+    lines.push("# Format: CATEGORY:term".to_string());
+    lines.push(String::new());
+
+    let mut by_cat: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for entry in &body.terms {
+        let cat = entry.category.trim().to_uppercase();
+        let cat = if valid_categories.contains(&cat.as_str()) {
+            cat
+        } else {
+            "TECH".to_string()
+        };
+        let term = entry.term.trim().to_string();
+        if !term.is_empty() {
+            by_cat.entry(cat).or_default().push(term);
+        }
+    }
+
+    for (cat, terms) in &by_cat {
+        lines.push(format!("# ── {} ──", cat));
+        for term in terms {
+            lines.push(format!("{}:{}", cat, term));
+        }
+        lines.push(String::new());
+    }
+
+    let content = lines.join("\n");
+
+    match std::fs::write(&terms_path, &content) {
+        Ok(_) => {
+            let count: usize = by_cat.values().map(|v| v.len()).sum();
+            tracing::info!(
+                path = %terms_path,
+                count = count,
+                "Entity terms saved"
+            );
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "ok",
+                "message": format!("Saved {} terms to {}", count, terms_path),
+                "count": count
+            })))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to save entity terms");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to write {}: {}", terms_path, e)
+            })))
+        }
+    }
+}
+
 pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
@@ -4986,6 +5184,12 @@ pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpRespons
             crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
         });
 
+        if res.is_ok() {
+            tokio::spawn(async move {
+                crate::api::graph_routes::rebuild_graph_from_index().await;
+                crate::api::graph_routes::export_and_reload_graph().await;
+            });
+        }
         match res {
             Ok(_) => Ok(HttpResponse::Ok().json(json!({
                 "status": "success",
@@ -5112,6 +5316,10 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
                     "Post-reindex graph rebuild: {} docs, {} chunks",
                     graph_result.documents_processed, graph_result.chunks_processed
                 );
+                // Auto-export petgraph after graph rebuild
+                tokio::spawn(async move {
+                    crate::api::graph_routes::export_and_reload_graph().await;
+                });
             }
         } else {
             let mut job = jobs_map
@@ -5221,10 +5429,34 @@ async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpRe
         } else {
             crate::embedder::embed(&query.q)
         };
+        // Entity extraction for graph search
+        let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
+        let extraction = extractor.extract(&query.q);
+        let entity_texts: Vec<String> = extraction
+            .entities
+            .iter()
+            .filter(|e| e.confidence >= 0.5)
+            .map(|e| e.text.clone())
+            .collect();
         let mut retriever = retriever.lock().unwrap();
-        let results = retriever
+        // Graph search (petgraph)
+        let graph_results = retriever.graph_search(&entity_texts);
+        // Hybrid BM25 + vector search
+        let hybrid_results = retriever
             .hybrid_search(&query.q, Some(&query_vector))
             .unwrap_or_default();
+        // 3-way RRF merge
+        let k = 60.0_f32;
+        let mut score_map: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+        for (rank, content) in hybrid_results.iter().enumerate() {
+            *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
+        for (rank, content) in graph_results.iter().enumerate() {
+            *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
+        let mut merged: Vec<(String, f32)> = score_map.into_iter().collect();
+        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let results: Vec<String> = merged.into_iter().take(10).map(|(c, _)| c).collect();
         let elapsed = start.elapsed().as_millis() as u64;
 
         // Record tool execution
@@ -8231,6 +8463,10 @@ pub fn start_api_server(
                 "/config/api_keys/{provider}",
                 web::delete().to(delete_api_key),
             )
+                        .route("/extract_entities", web::post().to(extract_entities_handler))
+            // Entity Terms config (Step 1 v1.0)
+            .route("/config/entity_terms", web::get().to(get_entity_terms))
+            .route("/config/entity_terms", web::post().to(save_entity_terms))
             .route("/reindex", web::post().to(reindex_handler))
             .route("/reindex/async", web::post().to(reindex_async_handler))
             .route(

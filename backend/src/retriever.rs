@@ -225,6 +225,8 @@ pub struct Retriever {
     connection_pool: crate::perf::connection_pool::ConnectionPool,
     // Phase 22: Use io_uring for async file I/O (Linux)
     use_io_uring: bool,
+    /// Content lookup: doc_id -> content for O(1) vector result resolution
+    doc_id_to_content: HashMap<String, String>,
 }
 
 /// SIMD-accelerated cosine similarity (4-8x faster than scalar)
@@ -526,6 +528,7 @@ impl Retriever {
             ),
             // Phase 22: io_uring availability
             use_io_uring: crate::perf::io_uring::is_available(),
+            doc_id_to_content: HashMap::new(),
         };
 
         // Now load from the CORRECT path - use auto-detection for rkyv/JSON
@@ -541,7 +544,25 @@ impl Retriever {
         }
 
         if let Ok(reader) = retriever.index.reader() {
-            retriever.metrics.total_documents_indexed = reader.searcher().num_docs() as usize;
+            let searcher = reader.searcher();
+            retriever.metrics.total_documents_indexed = searcher.num_docs() as usize;
+            for segment_reader in searcher.segment_readers() {
+                if let Ok(store_reader) = segment_reader.get_store_reader(1) {
+                    for doc_num in 0..segment_reader.max_doc() {
+                        if segment_reader.is_deleted(doc_num) { continue; }
+                        if let Ok(doc) = store_reader.get::<tantivy::TantivyDocument>(doc_num) {
+                            let did = doc.get_first(retriever.doc_id_field)
+                                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let cnt = doc.get_first(retriever.content_field)
+                                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            if !did.is_empty() && !cnt.is_empty() {
+                                retriever.doc_id_to_content.insert(did, cnt);
+                            }
+                        }
+                    }
+                }
+            }
+            info!("Built doc_id->content map: {} entries", retriever.doc_id_to_content.len());
         }
 
         Ok(retriever)
@@ -777,6 +798,7 @@ impl Retriever {
         doc.add_text(self.doc_id_field, doc_id);
         doc.add_text(self.title_field, title);
         doc.add_text(self.content_field, content);
+        self.doc_id_to_content.insert(doc_id.to_string(), content.to_string());
         if let Some(writer) = &mut self.index_writer {
             writer.add_document(doc)?;
             Ok(())
@@ -1002,13 +1024,59 @@ impl Retriever {
             .collect())
     }
 
-    pub fn get_content_by_vector_idx(&self, idx: usize) -> Option<String> {
-        for (doc_id, &vec_idx) in &self.doc_id_to_vector_idx {
-            if vec_idx == idx {
-                return Some(doc_id.clone());
+    /// Search the petgraph runtime by entity names, return matching chunk content strings.
+    /// Finds all nodes whose entity list contains any of the provided entity texts,
+    /// then traverses 1 hop to collect connected chunk content as well.
+    pub fn graph_search(&self, entities: &[String]) -> Vec<String> {
+        let runtime = match crate::graph::petgraph_runtime::RUNTIME_GRAPH.read().ok().and_then(|g| g.clone()) {
+            Some(r) => r,
+            None => return vec![],
+        };
+        if entities.is_empty() {
+            return vec![];
+        }
+        let entity_set: std::collections::HashSet<String> = entities
+            .iter()
+            .map(|e| e.to_lowercase())
+            .collect();
+        let mut results: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Find seed nodes whose entity list overlaps with query entities
+        for node in runtime.graph.node_weights() {
+            let matches = node.entities.iter().any(|e| {
+                let el = e.to_lowercase();
+                entity_set.iter().any(|q| el.contains(q.as_str()) || q.contains(el.as_str()))
+            });
+            if matches {
+                if !node.content.is_empty() {
+                    results.insert(node.content.clone());
+                }
+                // 1-hop neighbors
+                if let Some(&idx) = runtime.node_index_by_id.get(&node.id) {
+                    for neighbor in runtime.graph.neighbors(idx) {
+                        if let Some(neighbor_node) = runtime.graph.node_weight(neighbor) {
+                            if !neighbor_node.content.is_empty() {
+                                results.insert(neighbor_node.content.clone());
+                            }
+                        }
+                    }
+                }
             }
         }
-        None
+        results.into_iter().collect()
+    }
+
+    pub fn get_content_by_vector_idx(&self, idx: usize) -> Option<String> {
+        // Find the doc_id for this vector index
+        let doc_id = self.doc_id_to_vector_idx.iter()
+            .find(|(_, &vi)| vi == idx)
+            .map(|(id, _)| id.clone())?;
+        // Resolve doc_id to content via Tantivy
+        self.get_content_by_doc_id(&doc_id).or(Some(doc_id))
+    }
+
+    /// O(1) chunk content lookup by doc_id
+    fn get_content_by_doc_id(&self, doc_id: &str) -> Option<String> {
+        self.doc_id_to_content.get(doc_id).cloned()
     }
 
     pub fn rerank_by_similarity(&self, _query: &str, candidates: &Vec<String>) -> Vec<String> {

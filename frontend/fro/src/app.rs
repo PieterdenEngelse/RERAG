@@ -2,7 +2,7 @@ use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx,
+    About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx, ConfigTerms,
     ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd, MonitorGrafanaServices,
     DocuAgPipeline, DocuBias, DocuBm25, DocuEmbeddings, DocuEntitiesProduction, DocuIoUring,
     DocuKnowledgeGraphs, DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuTantivy, DocuThreads,
@@ -45,6 +45,8 @@ pub enum Route {
         ConfigOnnx {},
         #[route("/config/neo4j")]
         ConfigNeo4j {},
+        #[route("/config/terms")]
+        ConfigTerms {},
         #[route("/monitor/requests")]
         MonitorRequests {},
         #[route("/monitor/cache")]

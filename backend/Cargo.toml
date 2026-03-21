@@ -131,6 +131,7 @@ deadpool = { version = "0.10", optional = true }
 # Neo4j compiles ONCE at startup → petgraph serves ALL queries in RAM
 petgraph = { version = "0.6", features = ["serde-1"] }
 bincode = "1.3"  # Fast graph persistence to disk
+tokenizers = { version = "0.22.2", default-features = false, features = ["http"] }
 
 
 [features]

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 /// Neo4j client wrapper with connection management
+#[derive(Clone)]
 pub struct Neo4jClient {
     graph: Arc<Graph>,
     #[allow(dead_code)]

@@ -24,6 +24,7 @@ pub enum EntityType {
     Product,
     Event,
     Technology,
+    Medical,
 }
 
 impl EntityType {
@@ -42,6 +43,7 @@ impl EntityType {
             EntityType::Product => "PRODUCT",
             EntityType::Event => "EVENT",
             EntityType::Technology => "TECH",
+            EntityType::Medical => "MED",
         }
     }
 }
@@ -70,6 +72,7 @@ pub struct EntityExtractorTool {
     known_locations: HashSet<String>,
     known_tech: HashSet<String>,
     title_prefixes: HashSet<String>,
+    custom_terms: HashMap<EntityType, HashSet<String>>,
 }
 
 impl EntityExtractorTool {
@@ -171,7 +174,7 @@ impl EntityExtractorTool {
         .map(|s| s.to_string())
         .collect();
 
-        let known_tech: HashSet<String> = [
+        let mut known_tech: HashSet<String> = [
             "rust",
             "python",
             "javascript",
@@ -225,10 +228,108 @@ impl EntityExtractorTool {
             "llama",
             "bert",
             "transformer",
+            // AG system terms
+            "tantivy",
+            "petgraph",
+            "actix",
+            "dioxus",
+            "tokio",
+            "rayon",
+            "onnx",
+            "onnxruntime",
+            "ollama",
+            "neo4j",
+            "loki",
+            "grafana",
+            "prometheus",
+            "tempo",
+            "opentelemetry",
+            "sqlite",
+            "lancedb",
+            "faiss",
+            "wasm",
+            "webassembly",
+            // AG codebase terms
+            "embeddingservice",
+            "embeddingruntime",
+            "knowledgebuilder",
+            "knowledgegraph",
+            "retriever",
+            "chunker",
+            "dispatcher",
+            "agentmemory",
+            "runtimegraph",
+            "chunknode",
+            "graphrag",
+            "bm25",
+            "hnsw",
+            "rrf",
+            "lru",
+            // Rust ecosystem
+            "serde",
+            "axum",
+            "hyper",
+            "reqwest",
+            "sqlx",
+            "diesel",
+            "clap",
+            "tracing",
+            "anyhow",
+            "thiserror",
+            "fastembed",
+            "ndarray",
+            "arrow",
+            "polars",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
+
+        // ── Load custom entity terms from file (v2: category prefixes) ───
+        let mut custom_terms: HashMap<EntityType, HashSet<String>> = HashMap::new();
+        let terms_path = std::env::var("AG_ENTITY_TERMS_FILE").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pde".to_string());
+            format!("{}/.config/ag/entity_terms.txt", home)
+        });
+
+        if let Ok(content) = std::fs::read_to_string(&terms_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((prefix, term)) = line.split_once(':') {
+                    let term = term.trim().to_lowercase();
+                    if term.is_empty() {
+                        continue;
+                    }
+                    let entity_type = match prefix.trim().to_uppercase().as_str() {
+                        "MED" | "MEDICAL" => EntityType::Medical,
+                        "ORG"             => EntityType::Organization,
+                        "LOC"             => EntityType::Location,
+                        "TECH"            => EntityType::Technology,
+                        "PERSON"          => EntityType::Person,
+                        "PRODUCT"         => EntityType::Product,
+                        "EVENT"           => EntityType::Event,
+                        _                 => EntityType::Technology,
+                    };
+                    custom_terms.entry(entity_type).or_default().insert(term);
+                } else {
+                    // No prefix = TECH (backward compatible)
+                    custom_terms
+                        .entry(EntityType::Technology)
+                        .or_default()
+                        .insert(line.to_lowercase());
+                }
+            }
+        }
+
+        // Merge file-based TECH terms into hardcoded set
+        if let Some(extra_tech) = custom_terms.remove(&EntityType::Technology) {
+            for t in extra_tech {
+                known_tech.insert(t);
+            }
+        }
 
         let title_prefixes: HashSet<String> = [
             "mr",
@@ -262,6 +363,7 @@ impl EntityExtractorTool {
             known_locations,
             known_tech,
             title_prefixes,
+            custom_terms,
         }
     }
 
@@ -328,6 +430,32 @@ impl EntityExtractorTool {
                     end: pos + tech.len(),
                     confidence: 0.9,
                 });
+            }
+        }
+
+        // Extract custom domain terms (MED, extra ORG/LOC, etc.)
+        for (entity_type, terms) in &self.custom_terms {
+            for term in terms {
+                let mut search_start = 0;
+                while let Some(rel_pos) = lower_text[search_start..].find(term.as_str()) {
+                    let pos = search_start + rel_pos;
+                    let before_ok =
+                        pos == 0 || !text.as_bytes()[pos - 1].is_ascii_alphanumeric();
+                    let after_pos = pos + term.len();
+                    let after_ok =
+                        after_pos >= text.len() || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
+                    if before_ok && after_ok {
+                        let original = &text[pos..pos + term.len()];
+                        entities.push(Entity {
+                            text: original.to_string(),
+                            entity_type: entity_type.clone(),
+                            start: pos,
+                            end: pos + term.len(),
+                            confidence: 0.85,
+                        });
+                    }
+                    search_start = pos + term.len();
+                }
             }
         }
 

@@ -77,7 +77,7 @@ fn info_modal(title: &str, toggle: Signal<bool>, paragraphs: Vec<&str>) -> Eleme
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| toggle.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-xl max-h-[80vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-lg max-h-[80vh] overflow-y-auto shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-4",
                     h2 { class: "text-lg font-semibold text-gray-100", "{title}" }

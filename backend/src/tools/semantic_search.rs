@@ -100,24 +100,44 @@ impl Tool for SemanticSearchTool {
             }
         };
 
-        // Perform the search
+        // Triple-fusion search: BM25 + vector + graph (same as /search endpoint)
+        let query_vector = if let Some(svc) = crate::api::get_embedding_service() {
+            svc.embed_query(query).await
+        } else {
+            crate::embedder::embed(query)
+        };
+        let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
+        let extraction = extractor.extract(query);
+        let entity_texts: Vec<String> = extraction
+            .entities
+            .iter()
+            .filter(|e| e.confidence >= 0.5)
+            .map(|e| e.text.clone())
+            .collect();
         let search_results = match retriever_handle.lock() {
-            Ok(mut retriever) => match retriever.search(query) {
-                Ok(results) => results,
-                Err(e) => {
-                    return Ok(ToolResult {
-                        tool: ToolType::SemanticSearch,
-                        success: false,
-                        result: format!("Search failed: {}", e),
-                        metadata: ToolMetadata {
-                            execution_time_ms: start.elapsed().as_millis() as u64,
-                            confidence: 0.0,
-                            source: Some("SemanticSearch".to_string()),
-                            cost: Some(0.0),
-                        },
-                    });
+            Ok(mut retriever) => {
+                let graph_results = retriever.graph_search(&entity_texts);
+                let hybrid_results = retriever
+                    .hybrid_search(query, Some(&query_vector))
+                    .unwrap_or_default();
+                // 3-way RRF merge
+                let k = 60.0_f32;
+                let mut score_map: std::collections::HashMap<String, f32> =
+                    std::collections::HashMap::new();
+                for (rank, content) in hybrid_results.iter().enumerate() {
+                    *score_map.entry(content.clone()).or_insert(0.0) +=
+                        1.0 / (k + rank as f32 + 1.0);
                 }
-            },
+                for (rank, content) in graph_results.iter().enumerate() {
+                    *score_map.entry(content.clone()).or_insert(0.0) +=
+                        1.0 / (k + rank as f32 + 1.0);
+                }
+                let mut merged: Vec<(String, f32)> = score_map.into_iter().collect();
+                merged.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                merged.into_iter().take(10).map(|(c, _)| c).collect::<Vec<String>>()
+            }
             Err(e) => {
                 return Ok(ToolResult {
                     tool: ToolType::SemanticSearch,

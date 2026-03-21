@@ -85,13 +85,33 @@ impl Default for RuntimeGraph {
 // Global Runtime Graph (Thread-Safe Singleton)
 // ─────────────────────────────────────────────────────────────
 
-pub static RUNTIME_GRAPH: OnceCell<Arc<RuntimeGraph>> = OnceCell::const_new();
+pub static RUNTIME_GRAPH: std::sync::RwLock<Option<Arc<RuntimeGraph>>> = std::sync::RwLock::new(None);
 
 pub fn get_runtime_graph() -> Arc<RuntimeGraph> {
     RUNTIME_GRAPH
-        .get()
-        .cloned()
+        .read()
+        .expect("Runtime graph lock poisoned")
+        .clone()
         .unwrap_or_else(|| Arc::new(RuntimeGraph::new()))
+}
+
+pub fn set_runtime_graph(graph: Arc<RuntimeGraph>) {
+    let mut lock = RUNTIME_GRAPH.write().expect("Runtime graph lock poisoned");
+    *lock = Some(graph);
+}
+
+pub async fn reload_from_json_path(path: &str) {
+    let dir = std::path::Path::new(path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let bin_cache = dir.join("runtime_graph.bin");
+    if bin_cache.exists() {
+        let _ = std::fs::remove_file(&bin_cache);
+    }
+    let compiler = GraphCompiler::new_standalone_from_path(path);
+    let runtime_graph = Arc::new(compiler.compile().await);
+    set_runtime_graph(runtime_graph);
+    tracing::info!(path = %path, "Petgraph runtime reloaded from JSON");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -108,6 +128,20 @@ pub struct GraphCompiler {
 
 impl GraphCompiler {
     /// Create compiler WITHOUT Neo4j (file-only mode)
+    pub fn new_standalone_from_path(json_path: &str) -> Self {
+        let dir = std::path::Path::new(json_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_string_lossy()
+            .to_string();
+        Self {
+            #[cfg(feature = "neo4j")]
+            neo4j_client: None,
+            neo4j_enabled: false,
+            data_dir: dir,
+        }
+    }
+
     pub fn new_standalone(data_dir: &str) -> Self {
         Self {
             #[cfg(feature = "neo4j")]
@@ -462,20 +496,19 @@ impl<'a> GraphQuery<'a> {
 
 #[cfg(feature = "neo4j")]
 pub async fn initialize_from_neo4j(neo4j_client: Neo4jClient) {
-    if RUNTIME_GRAPH.get().is_none() {
-        let compiler = GraphCompiler::new_with_neo4j(neo4j_client, "data");
-        let runtime_graph = Arc::new(compiler.compile().await);
-        let _ = RUNTIME_GRAPH.set(runtime_graph);
-    }
+    let compiler = GraphCompiler::new_with_neo4j(neo4j_client, "data");
+    let runtime_graph = Arc::new(compiler.compile().await);
+    set_runtime_graph(runtime_graph);
 }
 
 pub async fn initialize_standalone(data_dir: &str) {
-    if RUNTIME_GRAPH.get().is_none() {
-        let compiler = GraphCompiler::new_standalone(data_dir);
-        let runtime_graph = Arc::new(compiler.compile().await);
-        let _ = RUNTIME_GRAPH.set(runtime_graph);
-    }
+    let compiler = GraphCompiler::new_standalone(data_dir);
+    let runtime_graph = Arc::new(compiler.compile().await);
+    set_runtime_graph(runtime_graph);
 }
+
+/// Force-reload the petgraph runtime from a specific JSON file path.
+
 
 pub fn export_to_json(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = get_runtime_graph();

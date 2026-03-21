@@ -29,7 +29,7 @@ pub mod schema;
 
 // Re-exports: Petgraph (always available)
 pub use petgraph_runtime::{
-    export_to_json, get_runtime_graph, initialize_standalone, ChunkNode, GraphQuery, Relationship,
+    export_to_json, get_runtime_graph, set_runtime_graph, initialize_standalone, reload_from_json_path, ChunkNode, GraphQuery, Relationship,
     RuntimeGraph,
 };
 

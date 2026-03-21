@@ -191,6 +191,48 @@ pub async fn get_petgraph_neighbors(path: web::Path<String>) -> HttpResponse {
 // Export for Petgraph (Option C: Neo4j design-time → Petgraph runtime)
 // ============================================================================
 
+/// Helper: export Neo4j graph to JSON and reload petgraph runtime.
+/// Called automatically after async reindex completes.
+pub async fn export_and_reload_graph() {
+    // Trigger the existing export endpoint logic by calling it as a function
+    // We simulate by calling the HTTP handler and discarding the response
+    let response = export_graph_to_json().await;
+    if response.status().is_success() {
+        tracing::info!("Auto-export after reindex: success");
+    } else {
+        tracing::warn!("Auto-export after reindex: failed");
+    }
+}
+
+/// POST /graph/reconnect - Reconnect to Neo4j (useful after container restart)
+pub async fn reconnect_neo4j() -> HttpResponse {
+    let config = crate::graph::config::GraphConfig::from_env();
+    if !config.enabled {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "Neo4j not enabled"
+        }));
+    }
+    match crate::graph::Neo4jClient::new(config.clone()).await {
+        Ok(client) => {
+            if let Err(e) = client.init_schema().await {
+                tracing::warn!(error = %e, "Schema init failed during reconnect");
+            }
+            let kb_config = crate::graph::config::GraphConfig::from_env();
+            let knowledge_builder = crate::graph::KnowledgeBuilder::new(client.graph(), kb_config);
+            crate::api::set_knowledge_builder(std::sync::Arc::new(knowledge_builder));
+            crate::api::set_neo4j_client(client);
+            tracing::info!("Neo4j reconnected successfully");
+            HttpResponse::Ok().json(serde_json::json!({"status": "connected"}))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Neo4j reconnect failed");
+            HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": format!("Reconnect failed: {}", e)
+            }))
+        }
+    }
+}
+
 /// POST /graph/export - Export Neo4j graph to JSON for petgraph runtime
 #[cfg(feature = "neo4j")]
 pub async fn export_graph_to_json() -> HttpResponse {
@@ -226,8 +268,9 @@ pub async fn export_graph_to_json() -> HttpResponse {
     // Fetch all Chunk nodes
     let nodes_query = neo4rs::query(
         "MATCH (n:Chunk)
-         RETURN n.id AS id, n.content AS content, 
-                coalesce(n.entities, []) AS entities,
+         OPTIONAL MATCH (n)-[:MENTIONS]->(e:Entity)
+         RETURN n.id AS id, n.content AS content,
+                coalesce(collect(e.normalized_name), []) AS entities,
                 coalesce(n.source, 'unknown') AS source",
     );
 
@@ -255,12 +298,14 @@ pub async fn export_graph_to_json() -> HttpResponse {
         }
     }
 
-    // Fetch all relationships between Chunks
+    // Fetch chunk-to-chunk relationships via shared entity mentions
     let rels_query = neo4rs::query(
-        "MATCH (n:Chunk)-[r]->(m:Chunk)
-         RETURN n.id AS from_id, m.id AS to_id, type(r) AS rel_type,
-                coalesce(r.confidence, 0.8) AS confidence,
-                coalesce(r.metadata, {}) AS meta",
+        "MATCH (n:Chunk)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m:Chunk)
+         WHERE n.id <> m.id
+         RETURN n.id AS from_id, m.id AS to_id,
+                'RELATED_VIA_ENTITY' AS rel_type,
+                0.8 AS confidence,
+                e.normalized_name AS entity_name",
     );
 
     match graph.execute(rels_query).await {
@@ -270,7 +315,8 @@ pub async fn export_graph_to_json() -> HttpResponse {
                 let to_id: String = row.get("to_id").unwrap_or_default();
                 let rel_type: String = row.get("rel_type").unwrap_or_default();
                 let confidence: f32 = row.get("confidence").unwrap_or(0.8);
-                let meta: serde_json::Value = row.get("meta").unwrap_or(serde_json::json!({}));
+                let entity_name: String = row.get("entity_name").unwrap_or_default();
+                let meta = serde_json::json!({"entity": entity_name});
 
                 export.relationships.push(ExportRelationship {
                     from_id,
@@ -313,6 +359,11 @@ pub async fn export_graph_to_json() -> HttpResponse {
                 path = %json_path,
                 "Exported graph to JSON"
             );
+            // Reload petgraph runtime with fresh data
+            let json_path_clone = json_path.clone();
+            tokio::spawn(async move {
+                crate::graph::petgraph_runtime::reload_from_json_path(&json_path_clone).await;
+            });
 
             HttpResponse::Ok().json(serde_json::json!({
                 "status": "exported",
@@ -635,55 +686,147 @@ pub async fn search_entities(_query: web::Query<SearchQuery>) -> HttpResponse {
     }))
 }
 
-/// GET /graph/search/enhanced - Graph-enhanced search
+/// GET /graph/search/enhanced - Graph-enhanced search with RRF fusion
+/// A1-v2: Uses global RETRIEVER static (no app_data needed)
 #[cfg(feature = "neo4j")]
 pub async fn graph_enhanced_search(
     query: web::Query<SearchQuery>,
-    retriever: web::Data<std::sync::Arc<std::sync::Mutex<crate::retriever::Retriever>>>,
 ) -> HttpResponse {
     let search_term = &query.q;
-    let _limit = query.limit.unwrap_or(10).min(50);
+    let limit = query.limit.unwrap_or(10).min(50) as usize;
+    let rrf_k: f32 = 60.0;
 
-    let vector_results = match retriever.lock() {
-        Ok(mut r) => match r.search(search_term) {
-            Ok(results) => results,
+    // ── 1. BM25 search → (content, score) ──
+    let bm25_results: Vec<(String, f32)> = match crate::api::get_retriever_handle() {
+        Some(handle) => match handle.lock() {
+            Ok(mut r) => match r.search(search_term) {
+            Ok(results) => results
+                .into_iter()
+                .enumerate()
+                .map(|(rank, content)| {
+                    let score = 1.0 / (rrf_k + rank as f32 + 1.0);
+                    (content, score)
+                })
+                .collect(),
             Err(e) => {
-                warn!(error = %e, "Vector search failed");
-                return HttpResponse::InternalServerError().json(serde_json::json!({
-                    "error": format!("Vector search failed: {}", e)
-                }));
+                warn!(error = %e, "BM25 search failed in enhanced search");
+                vec![]
             }
         },
-        Err(_) => {
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": "Failed to lock retriever"
-            }));
+            Err(_) => {
+                warn!("Failed to lock retriever in enhanced search");
+                vec![]
+            }
+        },
+        None => {
+            warn!("Retriever not initialized");
+            vec![]
         }
     };
 
-    let results: Vec<GraphSearchResult> = vector_results
-        .into_iter()
-        .enumerate()
-        .map(|(i, content)| GraphSearchResult {
-            chunk_id: format!("chunk_{}", i),
-            content,
-            score: 1.0 - (i as f32 * 0.1),
-            entities: vec![],
-            related_chunks: vec![],
-        })
-        .collect();
+    // ── 2. Graph search → entity→chunk content resolution ──
+    let graph_results: Vec<(String, f32, Vec<String>)> = match get_neo4j_client() {
+        Some(client) => {
+            let graph = client.graph();
+            // Find entities matching query, traverse to source chunks, return chunk content
+            let cypher = neo4rs::query(
+                "MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
+                 WHERE toLower(e.name) CONTAINS toLower($term)
+                 RETURN c.content AS content, c.id AS chunk_id,
+                        collect(DISTINCT e.name) AS entities,
+                        sum(e.mention_count) AS relevance
+                 ORDER BY relevance DESC
+                 LIMIT $limit",
+            )
+            .param("term", search_term.clone())
+            .param("limit", (limit * 2) as i64);
+
+            match graph.execute(cypher).await {
+                Ok(mut result) => {
+                    let mut items = Vec::new();
+                    let mut rank = 0usize;
+                    while let Ok(Some(row)) = result.next().await {
+                        let content = row.get::<String>("content").unwrap_or_default();
+                        let entities: Vec<String> = row
+                            .get::<Vec<String>>("entities")
+                            .unwrap_or_default();
+                        if !content.is_empty() {
+                            let score = 1.0 / (rrf_k + rank as f32 + 1.0);
+                            items.push((content, score, entities));
+                            rank += 1;
+                        }
+                    }
+                    items
+                }
+                Err(e) => {
+                    warn!(error = %e, "Graph search failed, continuing with BM25 only");
+                    vec![]
+                }
+            }
+        }
+        None => {
+            info!("Neo4j not connected, using BM25 only");
+            vec![]
+        }
+    };
+
+    // ── 3. RRF fusion by content string ──
+    let mut fusion_map: std::collections::HashMap<String, GraphSearchResult> =
+        std::collections::HashMap::new();
+
+    // Add BM25 results
+    for (content, score) in &bm25_results {
+        fusion_map
+            .entry(content.clone())
+            .and_modify(|r| r.score += score)
+            .or_insert(GraphSearchResult {
+                chunk_id: String::new(),
+                content: content.clone(),
+                score: *score,
+                entities: vec![],
+                related_chunks: vec![],
+            });
+    }
+
+    // Add graph results (entities included)
+    for (content, score, entities) in &graph_results {
+        fusion_map
+            .entry(content.clone())
+            .and_modify(|r| {
+                r.score += score;
+                // Merge entities, dedup
+                for e in entities {
+                    if !r.entities.contains(e) {
+                        r.entities.push(e.clone());
+                    }
+                }
+            })
+            .or_insert(GraphSearchResult {
+                chunk_id: String::new(),
+                content: content.clone(),
+                score: *score,
+                entities: entities.clone(),
+                related_chunks: vec![],
+            });
+    }
+
+    // ── 4. Sort by fused score, truncate ──
+    let mut results: Vec<GraphSearchResult> = fusion_map.into_values().collect();
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+
+    let graph_enhanced = !graph_results.is_empty();
 
     HttpResponse::Ok().json(GraphSearchResponse {
         total_results: results.len(),
         results,
-        graph_enhanced: false,
+        graph_enhanced,
     })
 }
 
 #[cfg(not(feature = "neo4j"))]
 pub async fn graph_enhanced_search(
     _query: web::Query<SearchQuery>,
-    _retriever: web::Data<std::sync::Arc<std::sync::Mutex<crate::retriever::Retriever>>>,
 ) -> HttpResponse {
     HttpResponse::ServiceUnavailable().json(serde_json::json!({
         "error": "Neo4j feature not enabled"
@@ -811,9 +954,25 @@ pub async fn rebuild_graph_from_index() -> GraphBuildResult {
     // Use the existing index_to_knowledge_graph pipeline
     // which handles KnowledgeBuilder + EntityExtractorTool + entity linking
     let mut docs_processed = 0usize;
+    let throttle_ms: u64 = std::env::var("GRAPH_REBUILD_THROTTLE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
     for (filename, chunks) in &docs_map {
         crate::api::index_to_knowledge_graph(filename, filename, filename, chunks).await;
         docs_processed += 1;
+        // B1-v1: Yield to prevent CPU starvation + configurable throttle
+        tokio::task::yield_now().await;
+        if throttle_ms > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(throttle_ms)).await;
+        }
+        if docs_processed % 5 == 0 {
+            info!(
+                progress = docs_processed,
+                total = docs_map.len(),
+                "Graph rebuild progress"
+            );
+        }
     }
 
     info!(docs = docs_processed, "Knowledge graph rebuild completed");
@@ -879,6 +1038,7 @@ pub fn configure_graph_routes(cfg: &mut web::ServiceConfig) {
             .route("/search", web::get().to(search_entities))
             .route("/search/enhanced", web::get().to(graph_enhanced_search))
             .route("/rebuild", web::post().to(rebuild_knowledge_graph))
+            .route("/reconnect", web::post().to(reconnect_neo4j))
             .route("/export", web::post().to(export_graph_to_json))
             // Petgraph runtime endpoints (NO Neo4j required)
             .route("/rt/stats", web::get().to(get_petgraph_stats))

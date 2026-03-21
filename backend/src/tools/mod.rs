@@ -10,6 +10,7 @@ pub mod classifier;
 pub mod code_execution;
 pub mod database_query;
 pub mod entity_extractor;
+pub mod ner_extractor;
 pub mod file_analyzer;
 pub mod image_generation;
 pub mod memory_tool;

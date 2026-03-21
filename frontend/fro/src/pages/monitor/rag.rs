@@ -451,7 +451,7 @@ pub fn MonitorRag() -> Element {
                 class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                 onclick: move |_| show_issues_info.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-md shadow-xl",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-lg shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-4",
                         h2 { class: "text-lg font-semibold text-gray-100", "Issue Detection Criteria" }

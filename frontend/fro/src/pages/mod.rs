@@ -16,6 +16,7 @@ pub mod other;
 pub mod parameters;
 pub mod prompt;
 pub mod sampling;
+pub mod terms;
 pub mod train;
 
 // Re-export so they can be used as `pages::Home`
@@ -44,4 +45,5 @@ pub use other::ConfigOther;
 pub use parameters::Parameters;
 pub use prompt::ConfigPrompt;
 pub use sampling::ConfigSampling;
+pub use terms::ConfigTerms;
 pub use train::Train;

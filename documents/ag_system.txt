@@ -1,0 +1,1 @@
+The AG system uses Tantivy for full-text search, petgraph for graph traversal, and Actix for the HTTP backend. The EmbeddingService uses ONNX Runtime via the ort crate. Redis serves as L3 cache. The Retriever implements hybrid search combining BM25 with vector cosine similarity using RRF.

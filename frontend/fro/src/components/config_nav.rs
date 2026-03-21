@@ -12,6 +12,7 @@ pub enum ConfigTab {
     IoUring,
     Onnx,
     Neo4j,
+    Terms,
     Other,
 }
 
@@ -35,6 +36,7 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
         ("io_uring", Route::ConfigIoUring {}, ConfigTab::IoUring),
         ("ONNX", Route::ConfigOnnx {}, ConfigTab::Onnx),
         ("Neo4j", Route::ConfigNeo4j {}, ConfigTab::Neo4j),
+        ("Terms", Route::ConfigTerms {}, ConfigTab::Terms),
         ("Other", Route::ConfigOther {}, ConfigTab::Other),
     ];
 

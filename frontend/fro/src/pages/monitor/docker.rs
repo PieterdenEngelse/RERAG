@@ -649,7 +649,7 @@ fn PortsRow(ports_simple: Vec<String>, ports_detail: String) -> Element {
                 class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                 onclick: move |_| show_detail.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg p-4 max-w-md shadow-xl",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-4 max-w-lg shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-3",
                         h3 { class: "text-sm font-semibold text-gray-100", "Port Mappings" }
@@ -770,7 +770,7 @@ fn ActionButton(label: &'static str, icon: &'static str, action: &'static str) -
                 class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                 onclick: move |_| show_info.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-md shadow-xl",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-lg shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-4",
                         h2 { class: "text-lg font-semibold text-gray-100", "{icon} {label}" }

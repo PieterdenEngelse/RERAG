@@ -225,3 +225,5 @@ The 6x speedup from adding padding isn't magic — it's just giving each core un
 ---
 
 Did you find the technical explanation in the article useful for your work on `ag`? I could see cache-aware design being relevant for any concurrent indexing or vector operations you're doing.
+
+Noted — the Neo4j config page should poll for status automatically instead of requiring a manual refresh. 
