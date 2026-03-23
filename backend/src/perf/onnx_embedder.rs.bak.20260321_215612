@@ -1,6 +1,5 @@
 //! ONNX Runtime Embedder
 
-use serde::Serialize;
 use std::path::Path;
 use tracing::info;
 
@@ -14,8 +13,7 @@ use ort::value::Tensor;
 pub type EmbeddingVector = Vec<f32>;
 
 /// Graph optimization level for ONNX Runtime
-#[derive(Debug, Clone, Copy, Default, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum OnnxOptimizationLevel {
     /// Disable all optimizations
     Disable,
@@ -29,8 +27,7 @@ pub enum OnnxOptimizationLevel {
 }
 
 /// Execution mode for ONNX Runtime
-#[derive(Debug, Clone, Copy, Default, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum OnnxExecutionMode {
     /// Execute operators sequentially (default, lower memory usage)
     #[default]
@@ -40,8 +37,7 @@ pub enum OnnxExecutionMode {
 }
 
 /// Log level wrapper so we do not leak the ort type into API structs
-#[derive(Debug, Clone, Copy, Default, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum OnnxLogLevel {
     /// Verbose logging (most chatty)
     Verbose,
@@ -69,7 +65,7 @@ impl From<OnnxLogLevel> for OrtLogLevel {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct OnnxConfig {
     pub model_path: String,
     pub max_length: usize,

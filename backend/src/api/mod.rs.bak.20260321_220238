@@ -43,16 +43,12 @@ use tracing::{error, info, info_span, warn};
 use uuid::Uuid;
 
 pub const UPLOAD_DIR: &str = "documents";
-
-// Phase 15: Global reindex concurrency guard
 static REINDEX_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// Check if reindex is currently in progress
 pub fn is_reindex_in_progress() -> bool {
     REINDEX_IN_PROGRESS.load(Ordering::SeqCst)
 }
-
-// Phase 15: Async job tracking
 #[derive(Clone, Debug, serde::Serialize)]
 struct AsyncJob {
     job_id: String,
@@ -75,6 +71,17 @@ fn get_jobs_map() -> Arc<Mutex<HashMap<String, AsyncJob>>> {
 // Global retriever handle
 static RETRIEVER: OnceLock<Arc<Mutex<Retriever>>> = OnceLock::new();
 
+// Global EmbeddingService handle for cached query embedding
+static EMBEDDING_SERVICE: OnceLock<Arc<crate::embedder::EmbeddingService>> = OnceLock::new();
+
+pub fn set_embedding_service(svc: Arc<crate::embedder::EmbeddingService>) {
+    let _ = EMBEDDING_SERVICE.set(svc);
+}
+
+pub fn get_embedding_service() -> Option<Arc<crate::embedder::EmbeddingService>> {
+    EMBEDDING_SERVICE.get().map(|s| Arc::clone(s))
+}
+
 pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
     let _ = RETRIEVER.set(handle);
 }
@@ -83,18 +90,19 @@ pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
     RETRIEVER.get().map(|h| Arc::clone(h))
 }
 
-// Global Neo4j client handle (Phase 27)
+// Global Neo4j client handle
 #[cfg(feature = "neo4j")]
-static NEO4J_CLIENT: OnceLock<crate::graph::Neo4jClient> = OnceLock::new();
+static NEO4J_CLIENT: std::sync::RwLock<Option<crate::graph::Neo4jClient>> = std::sync::RwLock::new(None);
 
 #[cfg(feature = "neo4j")]
 pub fn set_neo4j_client(client: crate::graph::Neo4jClient) {
-    let _ = NEO4J_CLIENT.set(client);
+    let mut lock = NEO4J_CLIENT.write().expect("NEO4J_CLIENT lock poisoned");
+    *lock = Some(client);
 }
 
 #[cfg(feature = "neo4j")]
-pub fn get_neo4j_client() -> Option<&'static crate::graph::Neo4jClient> {
-    NEO4J_CLIENT.get()
+pub fn get_neo4j_client() -> Option<std::sync::Arc<crate::graph::Neo4jClient>> {
+    NEO4J_CLIENT.read().ok()?.as_ref().map(|c| std::sync::Arc::new(c.clone()))
 }
 
 #[cfg(not(feature = "neo4j"))]
@@ -109,17 +117,18 @@ pub fn get_neo4j_client() -> Option<()> {
 
 // Global KnowledgeBuilder for graph integration during indexing
 #[cfg(feature = "neo4j")]
-static KNOWLEDGE_BUILDER: OnceLock<std::sync::Arc<crate::graph::KnowledgeBuilder>> =
-    OnceLock::new();
+static KNOWLEDGE_BUILDER: std::sync::RwLock<Option<std::sync::Arc<crate::graph::KnowledgeBuilder>>> =
+    std::sync::RwLock::new(None);
 
 #[cfg(feature = "neo4j")]
 pub fn set_knowledge_builder(builder: std::sync::Arc<crate::graph::KnowledgeBuilder>) {
-    let _ = KNOWLEDGE_BUILDER.set(builder);
+    let mut lock = KNOWLEDGE_BUILDER.write().expect("KNOWLEDGE_BUILDER lock poisoned");
+    *lock = Some(builder);
 }
 
 #[cfg(feature = "neo4j")]
-pub fn get_knowledge_builder() -> Option<&'static std::sync::Arc<crate::graph::KnowledgeBuilder>> {
-    KNOWLEDGE_BUILDER.get()
+pub fn get_knowledge_builder() -> Option<std::sync::Arc<crate::graph::KnowledgeBuilder>> {
+    KNOWLEDGE_BUILDER.read().ok()?.clone()
 }
 
 #[cfg(not(feature = "neo4j"))]
@@ -176,6 +185,9 @@ pub async fn index_to_knowledge_graph(
     let confidence_threshold = config.entity_extraction.confidence_threshold;
 
     for (chunk_id, chunk_content) in chunks {
+        // B1-v1: Yield between chunks to prevent CPU starvation
+        tokio::task::yield_now().await;
+
         // Add chunk to graph
         let chunk_meta = ChunkMeta {
             id: chunk_id.clone(),
@@ -195,11 +207,23 @@ pub async fn index_to_knowledge_graph(
             continue;
         }
 
-        // Extract entities from chunk
+        // Extract entities - try ONNX NER first, fall back to regex
+        let ner_entities = crate::tools::ner_extractor::extract_entities(chunk_content);
+        let use_ner = !ner_entities.is_empty();
+        if use_ner {
+            for ner_entity in &ner_entities {
+                if let Err(e) = kb.add_entity_mention(
+                    chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score,
+                ).await {
+                    debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
+                }
+            }
+        }
+        // Fallback regex extraction
         let extraction = extractor.extract(chunk_content);
 
         for entity in &extraction.entities {
-            if entity.confidence >= confidence_threshold {
+            if !use_ner && entity.confidence >= confidence_threshold {
                 if let Err(e) = kb
                     .add_entity_mention(
                         chunk_id,
@@ -719,232 +743,12 @@ fn default_xtc_threshold() -> f32 {
     llm_settings::DEFAULT_XTC_THRESHOLD
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-struct HardwareConfigRequest {
-    backend_type: String,
-    model: String,
-
-    // Model params
-    gpu_layers: usize,
-    main_gpu: usize,
-    split_mode: String,
-    tensor_split: Vec<f32>,
-    use_mmap: bool,
-    use_mlock: bool,
-    vocab_only: bool,
-    devices: Vec<crate::db::param_hardware::DeviceTarget>,
-    kv_overrides: Vec<crate::db::param_hardware::KvOverride>,
-    swa_full: bool,
-    no_perf: bool,
-
-    // Context params
-    num_ctx: usize,
-    num_batch: usize,
-    num_ubatch: usize,
-    num_seq_max: usize,
-    rope_scaling_type: crate::db::param_hardware::RopeScalingType,
-    rope_frequency_base: f32,
-    rope_frequency_scale: f32,
-    yarn_ext_factor: f32,
-    yarn_attn_factor: f32,
-    yarn_beta_fast: f32,
-    yarn_beta_slow: f32,
-    yarn_orig_ctx: usize,
-    pooling_type: String,
-    attention_type: String,
-    flash_attn: bool,
-    type_k: crate::db::param_hardware::KvDataType,
-    type_v: crate::db::param_hardware::KvDataType,
-    embeddings: bool,
-    offload_kqv: bool,
-    defrag_thold: f32,
-    logits_all: bool,
-    f16_kv: bool,
-    low_vram: bool,
-
-    // CPU params
-    num_thread: usize,
-    num_thread_batch: usize,
-    numa: bool,
-    cpu_strict: bool,
-    cpumask: crate::db::param_hardware::CpuMask,
-    mask_valid: bool,
-    poll: usize,
-    priority: String,
-
-    // Legacy/custom
-    num_gpu: usize,
-    llama_server_url: String,
-}
-
-impl Default for HardwareConfigRequest {
-    fn default() -> Self {
-        crate::db::param_hardware::HardwareParams::default().into()
-    }
-}
-
-impl From<crate::db::param_hardware::HardwareParams> for HardwareConfigRequest {
-    fn from(params: crate::db::param_hardware::HardwareParams) -> Self {
-        Self {
-            backend_type: backend_type_to_string(&params.backend_type),
-            model: params.model,
-
-            // Model params
-            gpu_layers: params.gpu_layers,
-            main_gpu: params.main_gpu,
-            split_mode: params.split_mode,
-            tensor_split: params.tensor_split,
-            use_mmap: params.use_mmap,
-            use_mlock: params.use_mlock,
-            vocab_only: params.vocab_only,
-            devices: params.devices,
-            kv_overrides: params.kv_overrides,
-            swa_full: params.swa_full,
-            no_perf: params.no_perf,
-
-            // Context params
-            num_ctx: params.num_ctx,
-            num_batch: params.num_batch,
-            num_ubatch: params.num_ubatch,
-            num_seq_max: params.num_seq_max,
-            rope_scaling_type: params.rope_scaling_type,
-            rope_frequency_base: params.rope_frequency_base,
-            rope_frequency_scale: params.rope_frequency_scale,
-            yarn_ext_factor: params.yarn_ext_factor,
-            yarn_attn_factor: params.yarn_attn_factor,
-            yarn_beta_fast: params.yarn_beta_fast,
-            yarn_beta_slow: params.yarn_beta_slow,
-            yarn_orig_ctx: params.yarn_orig_ctx,
-            pooling_type: params.pooling_type,
-            attention_type: params.attention_type,
-            flash_attn: params.flash_attn,
-            type_k: params.type_k,
-            type_v: params.type_v,
-            embeddings: params.embeddings,
-            offload_kqv: params.offload_kqv,
-            defrag_thold: params.defrag_thold,
-            logits_all: params.logits_all,
-            f16_kv: params.f16_kv,
-            low_vram: params.low_vram,
-
-            // CPU params
-            num_thread: params.num_thread,
-            num_thread_batch: params.num_thread_batch,
-            numa: params.numa,
-            cpu_strict: params.cpu_strict,
-            cpumask: params.cpumask,
-            mask_valid: params.mask_valid,
-            poll: params.poll,
-            priority: params.priority,
-
-            // Legacy/custom
-            num_gpu: params.num_gpu,
-            llama_server_url: params.llama_server_url,
-        }
-    }
-}
-
-impl From<HardwareConfigRequest> for crate::db::param_hardware::HardwareParams {
-    fn from(req: HardwareConfigRequest) -> Self {
-        Self {
-            backend_type: string_to_backend_type(&req.backend_type),
-            model: req.model,
-
-            // Model params
-            gpu_layers: req.gpu_layers,
-            main_gpu: req.main_gpu,
-            split_mode: req.split_mode,
-            tensor_split: req.tensor_split,
-            use_mmap: req.use_mmap,
-            use_mlock: req.use_mlock,
-            vocab_only: req.vocab_only,
-            devices: req.devices,
-            kv_overrides: req.kv_overrides,
-            swa_full: req.swa_full,
-            no_perf: req.no_perf,
-
-            // Context params
-            num_ctx: req.num_ctx,
-            num_batch: req.num_batch,
-            num_ubatch: req.num_ubatch,
-            num_seq_max: req.num_seq_max,
-            rope_scaling_type: req.rope_scaling_type,
-            rope_frequency_base: req.rope_frequency_base,
-            rope_frequency_scale: req.rope_frequency_scale,
-            yarn_ext_factor: req.yarn_ext_factor,
-            yarn_attn_factor: req.yarn_attn_factor,
-            yarn_beta_fast: req.yarn_beta_fast,
-            yarn_beta_slow: req.yarn_beta_slow,
-            yarn_orig_ctx: req.yarn_orig_ctx,
-            pooling_type: req.pooling_type,
-            attention_type: req.attention_type,
-            flash_attn: req.flash_attn,
-            type_k: req.type_k,
-            type_v: req.type_v,
-            embeddings: req.embeddings,
-            offload_kqv: req.offload_kqv,
-            defrag_thold: req.defrag_thold,
-            logits_all: req.logits_all,
-            f16_kv: req.f16_kv,
-            low_vram: req.low_vram,
-
-            // CPU params
-            num_thread: req.num_thread,
-            num_thread_batch: req.num_thread_batch,
-            numa: req.numa,
-            cpu_strict: req.cpu_strict,
-            cpumask: req.cpumask,
-            mask_valid: req.mask_valid,
-            poll: req.poll,
-            priority: req.priority,
-
-            // Legacy/custom
-            num_gpu: req.num_gpu,
-            llama_server_url: req.llama_server_url,
-        }
-    }
-}
-
-fn backend_type_to_string(bt: &crate::db::param_hardware::BackendType) -> String {
-    use crate::db::param_hardware::BackendType;
-    match bt {
-        BackendType::Ollama => "ollama".to_string(),
-        BackendType::LlamaCpp => "llama_cpp".to_string(),
-        BackendType::OpenAi => "openai".to_string(),
-        BackendType::Anthropic => "anthropic".to_string(),
-        BackendType::Vllm => "vllm".to_string(),
-        BackendType::Custom => "custom".to_string(),
-    }
-}
-
-fn string_to_backend_type(s: &str) -> crate::db::param_hardware::BackendType {
-    use crate::db::param_hardware::BackendType;
-    match s {
-        "ollama" => BackendType::Ollama,
-        "llama_cpp" => BackendType::LlamaCpp,
-        "openai" => BackendType::OpenAi,
-        "anthropic" => BackendType::Anthropic,
-        "vllm" => BackendType::Vllm,
-        "custom" => BackendType::Custom,
-        _ => BackendType::Ollama, // default fallback
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct LlmConfigResponse {
     status: String,
     message: String,
     request_id: String,
     config: LlmConfig,
-}
-
-#[derive(Debug, Serialize)]
-struct HardwareConfigResponse {
-    status: String,
-    message: String,
-    request_id: String,
-    config: HardwareConfigRequest,
 }
 
 /// ONNX Runtime configuration request/response
@@ -1042,48 +846,6 @@ pub struct OnnxConfigRequest {
     pub no_env_execution_providers: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
-struct OnnxConfigResponse {
-    status: String,
-    message: String,
-    request_id: String,
-    config: OnnxConfigInfo,
-}
-
-#[derive(Debug, Serialize)]
-struct OnnxConfigInfo {
-    model_path: String,
-    max_length: usize,
-    embedding_dim: usize,
-    num_threads: usize,
-    inter_op_num_threads: usize,
-    optimization_level: String,
-    execution_mode: String,
-    enable_mem_pattern: bool,
-    enable_cpu_mem_arena: bool,
-    deterministic_compute: bool,
-    optimized_model_path: Option<String>,
-    enable_profiling: bool,
-    profiling_output_path: Option<String>,
-    log_id: Option<String>,
-    log_level: String,
-    log_verbosity: i32,
-    use_env_allocators: bool,
-    denormal_as_zero: bool,
-    enable_quant_qdq: bool,
-    enable_double_qdq_remover: bool,
-    enable_qdq_cleanup: bool,
-    approximate_gelu: bool,
-    enable_aot_inlining: bool,
-    disabled_optimizers: Vec<String>,
-    use_device_allocator_for_initializers: bool,
-    allow_inter_op_spinning: bool,
-    allow_intra_op_spinning: bool,
-    use_prepacking: bool,
-    independent_thread_pool: bool,
-    no_env_execution_providers: bool,
-}
-
 #[derive(Serialize)]
 struct LogEntry {
     timestamp: Option<String>,
@@ -1178,94 +940,6 @@ fn validate_llm_request(req: &LlmConfigRequest) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> {
-    // Thread validation
-    if req.num_thread == 0 {
-        return Err("num_thread must be greater than 0".into());
-    }
-    if req.num_thread_batch == 0 {
-        return Err("num_thread_batch must be greater than 0".into());
-    }
-
-    // GPU validation
-    if req.num_gpu > 64 {
-        return Err("num_gpu must be 64 or less".into());
-    }
-    if req.main_gpu > 64 {
-        return Err("main_gpu index must be 64 or less".into());
-    }
-    if req.gpu_layers > 1000 {
-        return Err("gpu_layers must be 1000 or less".into());
-    }
-
-    // RoPE validation
-    if req.rope_frequency_base <= 0.0 {
-        return Err("rope_frequency_base must be positive".into());
-    }
-    if req.rope_frequency_scale <= 0.0 {
-        return Err("rope_frequency_scale must be positive".into());
-    }
-
-    // Context/batch validation
-    if req.num_ctx == 0 {
-        return Err("num_ctx must be greater than 0".into());
-    }
-    if req.num_batch == 0 {
-        return Err("num_batch must be greater than 0".into());
-    }
-    if req.num_ubatch == 0 {
-        return Err("num_ubatch must be greater than 0".into());
-    }
-    if req.num_ubatch > req.num_batch {
-        return Err("num_ubatch must be <= num_batch".into());
-    }
-    if req.num_seq_max == 0 {
-        return Err("num_seq_max must be greater than 0".into());
-    }
-
-    // CPU mask validation
-    if req.mask_valid && req.cpumask.is_empty() {
-        return Err("cpumask cannot be empty when mask_valid is true".into());
-    }
-
-    // Defrag threshold validation
-    if req.defrag_thold < 0.0 || req.defrag_thold > 1.0 {
-        return Err("defrag_thold must be between 0.0 and 1.0".into());
-    }
-
-    // Tensor split validation
-    if !req.tensor_split.is_empty() {
-        let sum: f32 = req.tensor_split.iter().sum();
-        if (sum - 1.0).abs() > 0.01 && sum > 0.0 {
-            // Allow sum != 1.0 only if all zeros (auto-split)
-            let all_positive = req.tensor_split.iter().all(|&x| x > 0.0);
-            if all_positive {
-                return Err("tensor_split values should sum to approximately 1.0".into());
-            }
-        }
-    }
-
-    // Split mode validation
-    let valid_split_modes = ["none", "layer", "row"];
-    if !valid_split_modes.contains(&req.split_mode.as_str()) {
-        return Err(format!(
-            "split_mode must be one of: {}",
-            valid_split_modes.join(", ")
-        ));
-    }
-
-    // Priority validation
-    let valid_priorities = ["low", "normal", "high", "realtime"];
-    if !valid_priorities.contains(&req.priority.as_str()) {
-        return Err(format!(
-            "priority must be one of: {}",
-            valid_priorities.join(", ")
-        ));
-    }
-
-    Ok(())
-}
-
 // Track previous health status for change detection
 static LAST_HEALTH_STATUS: std::sync::OnceLock<std::sync::Mutex<String>> =
     std::sync::OnceLock::new();
@@ -1341,6 +1015,48 @@ fn log_status_change(new_status: &str, reason: &str) {
 }
 
 /// Get status log file content
+pub async fn get_systemd_logs(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> Result<HttpResponse, Error> {
+    let unit = query.get("unit").cloned().unwrap_or_else(|| "ag.service".to_string());
+    let limit = query.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(100);
+
+    // Validate unit name to prevent injection
+    if unit.contains("..") || unit.contains('/') || unit.contains(';') {
+        return Ok(HttpResponse::BadRequest().json(json!({"error": "Invalid unit name"})));
+    }
+
+    let scope = query.get("scope").cloned().unwrap_or_else(|| "system".to_string());
+    let mut args: Vec<String> = Vec::new();
+    if scope == "user" {
+        args.push("--user".to_string());
+    }
+    args.extend(["-u".to_string(), unit.clone(), "-n".to_string(), limit.to_string(), "--no-pager".to_string(), "--output=short-iso".to_string()]);
+
+    let output = tokio::process::Command::new("journalctl")
+        .args(&args)
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let content = if stdout.is_empty() { stderr } else { stdout };
+            let lines: Vec<&str> = content.lines().collect();
+            Ok(HttpResponse::Ok().json(json!({
+                "unit": unit,
+                "limit": limit,
+                "total_lines": lines.len(),
+                "content": content,
+            })))
+        }
+        Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+            "error": format!("Failed to run journalctl: {}", e)
+        }))),
+    }
+}
+
 pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let status = path.into_inner();
 
@@ -1478,7 +1194,16 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     _ => false,
                 };
 
-                let status = if neo4j_issue {
+                // Check if Redis is enabled but backend not connected
+                // We check the env config directly because if connection failed at startup,
+                // l3_cache is None and summary() returns enabled=false, masking the issue.
+                let redis_configured = std::env::var("REDIS_ENABLED")
+                    .map(|v| v == "true" || v == "1")
+                    .unwrap_or(false);
+                let redis_summary = retriever.get_l3_cache_summary();
+                let redis_issue = redis_configured && !redis_summary.connected;
+
+                let status = if neo4j_issue || redis_issue {
                     "degraded"
                 } else if is_busy {
                     "busy"
@@ -1488,6 +1213,8 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
 
                 let reason = if neo4j_issue {
                     "Neo4j enabled but not connected".to_string()
+                } else if redis_issue {
+                    "Redis enabled but backend not connected".to_string()
                 } else if is_busy {
                     message.clone().unwrap_or_else(|| "System busy".to_string())
                 } else {
@@ -1518,8 +1245,10 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     });
                 }
 
-                // Add message if busy
-                if let Some(msg) = message {
+                // Add message if busy or degraded
+                if neo4j_issue || redis_issue {
+                    response["message"] = json!(reason);
+                } else if let Some(msg) = message {
                     response["message"] = json!(msg);
                 }
 
@@ -1596,12 +1325,11 @@ async fn ready_check() -> Result<HttpResponse, Error> {
     }
 }
 
-/// Phase 16: Export metrics in Prometheus text format
+/// Export metrics in Prometheus text format
 /// GET /monitoring/metrics
 /// Returns: Prometheus-compliant text format metrics
 async fn get_metrics() -> Result<HttpResponse, Error> {
     // Export metrics in Prometheus text format (not JSON)
-    // Phase 16 Step 3: OTLP Exporting - Prometheus format compliance
     let prometheus_text = crate::monitoring::metrics::export_prometheus();
 
     Ok(HttpResponse::Ok()
@@ -2809,7 +2537,7 @@ async fn set_prompt_caching(
 }
 
 // ============================================================================
-// TRAINING DATA COLLECTION ENDPOINTS (Phase 20)
+// TRAINING DATA COLLECTION ENDPOINTS
 // ============================================================================
 
 use crate::training::{TrainingDataCollector, TrainingExample, TrainingStats};
@@ -3660,30 +3388,27 @@ async fn clear_training_data() -> Result<HttpResponse, Error> {
 
 async fn get_hardware_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    let config = crate::db::param_hardware::global_config().into();
-    Ok(HttpResponse::Ok().json(HardwareConfigResponse {
-        status: "ok".into(),
-        message: "".into(),
-        request_id,
-        config,
-    }))
+    let config = crate::db::param_hardware::global_config();
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "message": "",
+        "request_id": request_id,
+        "config": config
+    })))
 }
 
 async fn commit_hardware_config(
-    payload: web::Json<HardwareConfigRequest>,
+    payload: web::Json<crate::db::param_hardware::HardwareParams>,
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    let body = payload.into_inner();
-
-    if let Err(msg) = validate_hardware_request(&body) {
+    let params = payload.into_inner();
+    if let Err(err) = params.validate() {
         return Ok(HttpResponse::BadRequest().json(json!({
             "status": "invalid",
-            "message": msg,
+            "message": err.to_string(),
             "request_id": request_id
         })));
     }
-
-    let params = crate::db::param_hardware::HardwareParams::from(body.clone());
     match crate::db::param_hardware::save_default_db(&params) {
         Ok(_) => {
             tracing::info!(
@@ -3698,12 +3423,12 @@ async fn commit_hardware_config(
                 rope_frequency_scale = params.rope_frequency_scale,
                 "Hardware config committed"
             );
-            Ok(HttpResponse::Ok().json(HardwareConfigResponse {
-                status: "ok".into(),
-                message: "Hardware settings saved".into(),
-                request_id,
-                config: body,
-            }))
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "ok",
+                "message": "Hardware settings saved",
+                "request_id": request_id,
+                "config": params
+            })))
         }
         Err(err) => {
             tracing::error!(
@@ -3727,32 +3452,6 @@ async fn commit_hardware_config(
 use crate::perf::onnx_embedder::{
     OnnxConfig, OnnxExecutionMode, OnnxLogLevel, OnnxOptimizationLevel,
 };
-
-fn onnx_opt_level_to_str(level: OnnxOptimizationLevel) -> &'static str {
-    match level {
-        OnnxOptimizationLevel::Disable => "disable",
-        OnnxOptimizationLevel::Basic => "basic",
-        OnnxOptimizationLevel::Extended => "extended",
-        OnnxOptimizationLevel::All => "all",
-    }
-}
-
-fn onnx_exec_mode_to_str(mode: OnnxExecutionMode) -> &'static str {
-    match mode {
-        OnnxExecutionMode::Sequential => "sequential",
-        OnnxExecutionMode::Parallel => "parallel",
-    }
-}
-
-fn onnx_log_level_to_str(level: OnnxLogLevel) -> &'static str {
-    match level {
-        OnnxLogLevel::Verbose => "verbose",
-        OnnxLogLevel::Info => "info",
-        OnnxLogLevel::Warning => "warning",
-        OnnxLogLevel::Error => "error",
-        OnnxLogLevel::Fatal => "fatal",
-    }
-}
 
 fn parse_log_level(input: &str) -> Option<OnnxLogLevel> {
     match input.to_lowercase().as_str() {
@@ -3801,48 +3500,12 @@ fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig> {
 async fn get_onnx_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let config = get_onnx_config_storage().read().unwrap();
-
-    let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
-    let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
-    let log_level_str = onnx_log_level_to_str(config.log_level);
-
-    Ok(HttpResponse::Ok().json(OnnxConfigResponse {
-        status: "ok".into(),
-        message: "".into(),
-        request_id,
-        config: OnnxConfigInfo {
-            model_path: config.model_path.clone(),
-            max_length: config.max_length,
-            embedding_dim: config.embedding_dim,
-            num_threads: config.num_threads,
-            inter_op_num_threads: config.inter_op_num_threads,
-            optimization_level: opt_level_str.to_string(),
-            execution_mode: exec_mode_str.to_string(),
-            enable_mem_pattern: config.enable_mem_pattern,
-            enable_cpu_mem_arena: config.enable_cpu_mem_arena,
-            deterministic_compute: config.deterministic_compute,
-            optimized_model_path: config.optimized_model_path.clone(),
-            enable_profiling: config.enable_profiling,
-            profiling_output_path: config.profiling_output_path.clone(),
-            log_id: config.log_id.clone(),
-            log_level: log_level_str.to_string(),
-            log_verbosity: config.log_verbosity,
-            use_env_allocators: config.use_env_allocators,
-            denormal_as_zero: config.denormal_as_zero,
-            enable_quant_qdq: config.enable_quant_qdq,
-            enable_double_qdq_remover: config.enable_double_qdq_remover,
-            enable_qdq_cleanup: config.enable_qdq_cleanup,
-            approximate_gelu: config.approximate_gelu,
-            enable_aot_inlining: config.enable_aot_inlining,
-            disabled_optimizers: config.disabled_optimizers.clone(),
-            use_device_allocator_for_initializers: config.use_device_allocator_for_initializers,
-            allow_inter_op_spinning: config.allow_inter_op_spinning,
-            allow_intra_op_spinning: config.allow_intra_op_spinning,
-            use_prepacking: config.use_prepacking,
-            independent_thread_pool: config.independent_thread_pool,
-            no_env_execution_providers: config.no_env_execution_providers,
-        },
-    }))
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "message": "",
+        "request_id": request_id,
+        "config": *config
+    })))
 }
 
 /// Update ONNX configuration (requires restart to take effect for embedder)
@@ -3986,59 +3649,21 @@ async fn set_onnx_config(payload: web::Json<OnnxConfigRequest>) -> Result<HttpRe
         config.no_env_execution_providers = flag;
     }
 
-    let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
-    let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
-    let log_level_str = onnx_log_level_to_str(config.log_level);
-
     tracing::info!(
         request_id = %request_id,
         num_threads = config.num_threads,
         inter_op_threads = config.inter_op_num_threads,
-        optimization_level = opt_level_str,
-        execution_mode = exec_mode_str,
         deterministic_compute = config.deterministic_compute,
         enable_profiling = config.enable_profiling,
-        log_level = log_level_str,
         "ONNX config updated (restart required to apply)"
     );
 
-    Ok(HttpResponse::Ok().json(OnnxConfigResponse {
-        status: "ok".into(),
-        message: "ONNX config updated. Restart backend to apply changes to embedder.".into(),
-        request_id,
-        config: OnnxConfigInfo {
-            model_path: config.model_path.clone(),
-            max_length: config.max_length,
-            embedding_dim: config.embedding_dim,
-            num_threads: config.num_threads,
-            inter_op_num_threads: config.inter_op_num_threads,
-            optimization_level: opt_level_str.to_string(),
-            execution_mode: exec_mode_str.to_string(),
-            enable_mem_pattern: config.enable_mem_pattern,
-            enable_cpu_mem_arena: config.enable_cpu_mem_arena,
-            deterministic_compute: config.deterministic_compute,
-            optimized_model_path: config.optimized_model_path.clone(),
-            enable_profiling: config.enable_profiling,
-            profiling_output_path: config.profiling_output_path.clone(),
-            log_id: config.log_id.clone(),
-            log_level: log_level_str.to_string(),
-            log_verbosity: config.log_verbosity,
-            use_env_allocators: config.use_env_allocators,
-            denormal_as_zero: config.denormal_as_zero,
-            enable_quant_qdq: config.enable_quant_qdq,
-            enable_double_qdq_remover: config.enable_double_qdq_remover,
-            enable_qdq_cleanup: config.enable_qdq_cleanup,
-            approximate_gelu: config.approximate_gelu,
-            enable_aot_inlining: config.enable_aot_inlining,
-            disabled_optimizers: config.disabled_optimizers.clone(),
-            use_device_allocator_for_initializers: config.use_device_allocator_for_initializers,
-            allow_inter_op_spinning: config.allow_inter_op_spinning,
-            allow_intra_op_spinning: config.allow_intra_op_spinning,
-            use_prepacking: config.use_prepacking,
-            independent_thread_pool: config.independent_thread_pool,
-            no_env_execution_providers: config.no_env_execution_providers,
-        },
-    }))
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "message": "ONNX config updated. Restart backend to apply changes to embedder.",
+        "request_id": request_id,
+        "config": *config
+    })))
 }
 
 /// Get the current ONNX config for use by embedder initialization
@@ -4059,7 +3684,7 @@ struct ApiKeysRequest {
 }
 
 // ============================================================================
-// NEO4J KNOWLEDGE GRAPH CONFIG (Phase 27)
+// NEO4J KNOWLEDGE GRAPH CONFIG
 // ============================================================================
 
 #[derive(Debug, Serialize)]
@@ -4294,6 +3919,26 @@ async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
 // ============================================================================
 // API KEYS CONFIG
 // ============================================================================
+
+
+// ── Entity Terms API types (Step 1 v1.0) ─────────────────────────────
+#[derive(Debug, Serialize, Deserialize)]
+struct EntityTermEntry {
+    category: String,
+    term: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EntityTermsResponse {
+    status: String,
+    terms: Vec<EntityTermEntry>,
+    file_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SaveEntityTermsRequest {
+    terms: Vec<EntityTermEntry>,
+}
 
 #[derive(Debug, Serialize)]
 struct ApiKeysResponse {
@@ -4714,7 +4359,6 @@ async fn upload_document_inner(
                 "error": "Reindex already in progress; automatic indexing skipped",
             }));
         } else if let Some(handle) = RETRIEVER.get() {
-            // Phase 1: Read all files asynchronously using io_uring (outside mutex)
             // This is where io_uring provides 2-3x speedup on Linux
             let mut file_contents: Vec<(String, std::path::PathBuf, Option<String>)> = Vec::new();
 
@@ -4724,8 +4368,6 @@ async fn upload_document_inner(
                 let content = index::extract_text_async(&path).await;
                 file_contents.push((filename.clone(), path, content));
             }
-
-            // Phase 2: Index with mutex (brief lock, no I/O)
             // Collect chunks for graph indexing (done outside mutex)
             let mut graph_index_tasks: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
 
@@ -4788,8 +4430,6 @@ async fn upload_document_inner(
                     }));
                 }
             }
-
-            // Phase 3: Index to knowledge graph (outside mutex, async)
             for (filename, source, chunks) in graph_index_tasks {
                 index_to_knowledge_graph(&filename, &filename, &source, &chunks).await;
             }
@@ -4870,11 +4510,170 @@ pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Er
     }
 }
 
+// ── POST /extract_entities — standalone NER test endpoint (v1.0) ─────
+async fn extract_entities_handler(
+    payload: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, Error> {
+    let text = payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if text.trim().is_empty() {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "Provide a 'text' field with content to extract entities from"
+        })));
+    }
+
+    let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
+    let result = extractor.extract(&text);
+
+    let entities: Vec<serde_json::Value> = result
+        .entities
+        .iter()
+        .map(|e| {
+            json!({
+                "text": e.text,
+                "type": e.entity_type.label(),
+                "start": e.start,
+                "end": e.end,
+                "confidence": e.confidence
+            })
+        })
+        .collect();
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "entity_count": entities.len(),
+        "entities": entities,
+        "counts": result.entity_counts
+    })))
+}
+
+// ── GET /config/entity_terms (Step 1 v1.0) ───────────────────────────
+async fn get_entity_terms() -> Result<HttpResponse, Error> {
+    let terms_path = std::env::var("AG_ENTITY_TERMS_FILE").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pde".to_string());
+        format!("{}/.config/ag/entity_terms.txt", home)
+    });
+
+    let mut terms = Vec::new();
+
+    if let Ok(content) = std::fs::read_to_string(&terms_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((prefix, term)) = line.split_once(':') {
+                let cat = prefix.trim().to_uppercase();
+                let term = term.trim().to_string();
+                if !term.is_empty() {
+                    terms.push(EntityTermEntry {
+                        category: cat,
+                        term,
+                    });
+                }
+            } else {
+                terms.push(EntityTermEntry {
+                    category: "TECH".to_string(),
+                    term: line.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(EntityTermsResponse {
+        status: "ok".into(),
+        terms,
+        file_path: terms_path,
+    }))
+}
+
+// ── POST /config/entity_terms (Step 1 v1.0) ─────────────────────────
+async fn save_entity_terms(
+    payload: web::Json<SaveEntityTermsRequest>,
+) -> Result<HttpResponse, Error> {
+    let terms_path = std::env::var("AG_ENTITY_TERMS_FILE").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pde".to_string());
+        format!("{}/.config/ag/entity_terms.txt", home)
+    });
+
+    if let Some(parent) = std::path::Path::new(&terms_path).parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Cannot create config dir: {}", e)
+            })));
+        }
+    }
+
+    let body = payload.into_inner();
+    let valid_categories = ["MED", "TECH", "ORG", "LOC", "PERSON", "PRODUCT", "EVENT"];
+
+    let mut lines = Vec::new();
+    lines.push("# AG Entity Terms — managed via UI".to_string());
+    lines.push(format!(
+        "# Last saved: {}",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    ));
+    lines.push("# Format: CATEGORY:term".to_string());
+    lines.push(String::new());
+
+    let mut by_cat: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for entry in &body.terms {
+        let cat = entry.category.trim().to_uppercase();
+        let cat = if valid_categories.contains(&cat.as_str()) {
+            cat
+        } else {
+            "TECH".to_string()
+        };
+        let term = entry.term.trim().to_string();
+        if !term.is_empty() {
+            by_cat.entry(cat).or_default().push(term);
+        }
+    }
+
+    for (cat, terms) in &by_cat {
+        lines.push(format!("# ── {} ──", cat));
+        for term in terms {
+            lines.push(format!("{}:{}", cat, term));
+        }
+        lines.push(String::new());
+    }
+
+    let content = lines.join("\n");
+
+    match std::fs::write(&terms_path, &content) {
+        Ok(_) => {
+            let count: usize = by_cat.values().map(|v| v.len()).sum();
+            tracing::info!(
+                path = %terms_path,
+                count = count,
+                "Entity terms saved"
+            );
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "ok",
+                "message": format!("Saved {} terms to {}", count, terms_path),
+                "count": count
+            })))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to save entity terms");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to write {}: {}", terms_path, e)
+            })))
+        }
+    }
+}
+
 pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
-
-    // Phase 15: Check concurrency
     if REINDEX_IN_PROGRESS
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -4920,6 +4719,12 @@ pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpRespons
             crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
         });
 
+        if res.is_ok() {
+            tokio::spawn(async move {
+                crate::api::graph_routes::rebuild_graph_from_index().await;
+                crate::api::graph_routes::export_and_reload_graph().await;
+            });
+        }
         match res {
             Ok(_) => Ok(HttpResponse::Ok().json(json!({
                 "status": "success",
@@ -5046,6 +4851,10 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
                     "Post-reindex graph rebuild: {} docs, {} chunks",
                     graph_result.documents_processed, graph_result.chunks_processed
                 );
+                // Auto-export petgraph after graph rebuild
+                tokio::spawn(async move {
+                    crate::api::graph_routes::export_and_reload_graph().await;
+                });
             }
         } else {
             let mut job = jobs_map
@@ -5070,7 +4879,7 @@ fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (Sta
     Ok(job_id)
 }
 
-/// Phase 15: Async reindex endpoint
+/// Async reindex endpoint
 pub async fn reindex_async_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
@@ -5088,7 +4897,7 @@ pub async fn reindex_async_handler(config: web::Data<ApiConfig>) -> Result<HttpR
     }
 }
 
-/// Phase 15: Check async job status
+/// Check async job status
 pub async fn reindex_status_handler(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let job_id = path.into_inner();
@@ -5116,7 +4925,7 @@ pub async fn reindex_status_handler(path: web::Path<String>) -> Result<HttpRespo
     }
 }
 
-/// Phase 15: Index info endpoint
+/// Index info endpoint
 pub async fn index_info_handler() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let in_ram = std::env::var("INDEX_IN_RAM")
@@ -5150,8 +4959,39 @@ async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpRe
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
     if let Some(retriever) = RETRIEVER.get() {
+        let query_vector = if let Some(svc) = get_embedding_service() {
+            svc.embed_query(&query.q).await
+        } else {
+            crate::embedder::embed(&query.q)
+        };
+        // Entity extraction for graph search
+        let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
+        let extraction = extractor.extract(&query.q);
+        let entity_texts: Vec<String> = extraction
+            .entities
+            .iter()
+            .filter(|e| e.confidence >= 0.5)
+            .map(|e| e.text.clone())
+            .collect();
         let mut retriever = retriever.lock().unwrap();
-        let results = retriever.search(&query.q).unwrap_or_default();
+        // Graph search (petgraph)
+        let graph_results = retriever.graph_search(&entity_texts);
+        // Hybrid BM25 + vector search
+        let hybrid_results = retriever
+            .hybrid_search(&query.q, Some(&query_vector))
+            .unwrap_or_default();
+        // 3-way RRF merge
+        let k = 60.0_f32;
+        let mut score_map: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+        for (rank, content) in hybrid_results.iter().enumerate() {
+            *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
+        for (rank, content) in graph_results.iter().enumerate() {
+            *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
+        let mut merged: Vec<(String, f32)> = score_map.into_iter().collect();
+        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let results: Vec<String> = merged.into_iter().take(10).map(|(c, _)| c).collect();
         let elapsed = start.elapsed().as_millis() as u64;
 
         // Record tool execution
@@ -5286,6 +5126,18 @@ fn default_top_k() -> usize {
 }
 fn default_limit() -> usize {
     20
+}
+
+impl From<ChatMode> for crate::agent::AgentMode {
+    fn from(mode: ChatMode) -> Self {
+        match mode {
+            ChatMode::Rag => Self::Rag,
+            ChatMode::Llm => Self::Llm,
+            ChatMode::Hybrid => Self::Hybrid,
+            ChatMode::Auto => Self::Auto,
+            ChatMode::RagStrict => Self::RagStrict,
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -6637,148 +6489,148 @@ async fn preview_url_content(url: &str) -> Result<String, String> {
     }
 }
 
+/// Execute a parsed chat command and return (answer, optional_extra_data)
+async fn execute_chat_command(cmd: ChatCommand, top_k: usize) -> (String, Option<Value>) {
+    match cmd {
+        ChatCommand::Goal(goal_text) => match create_goal_from_command(&goal_text) {
+            Ok(goal) => (
+                format!("✓ Goal created: {}", goal_text),
+                Some(json!({ "goal": goal })),
+            ),
+            Err(e) => (format!("✗ Failed to create goal: {}", e), None),
+        },
+        ChatCommand::Goals => match get_goals_list() {
+            Ok(list) => (list, None),
+            Err(e) => (format!("✗ Failed to get goals: {}", e), None),
+        },
+        ChatCommand::Status => (get_system_status(), None),
+        ChatCommand::Help => (get_help_text(), None),
+        ChatCommand::Models => (get_models_list(), None),
+        ChatCommand::Clear => (
+            "Chat cleared. (This is handled by the frontend)".to_string(),
+            None,
+        ),
+        ChatCommand::Forget(topic) => match forget_topic(&topic) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::History => match list_recent_history(5) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Sources => (last_sources_summary(), None),
+        ChatCommand::Learn(url) => match preview_url_content(&url).await {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Note(text) => match record_note(&text) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Subgoal(text) => match add_subgoal(&text) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::PauseGoal => match update_goal_status_cmd(GoalStatus::Paused) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::ResumeGoal => match update_goal_status_cmd(GoalStatus::Active) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::AbandonGoal => match update_goal_status_cmd(GoalStatus::Abandoned) {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Reflect => match summarize_reflection() {
+            Ok(msg) => (msg, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Why => (explain_last_reasoning(), None),
+        ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
+        ChatCommand::Unfocus => (apply_focus(None), None),
+        ChatCommand::Persona(name) => {
+            let persona_value =
+                if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
+                    None
+                } else {
+                    Some(name)
+                };
+            (apply_persona(persona_value), None)
+        }
+        ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
+        ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
+        ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
+            Ok(result) => (result, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Chain(first, second) => match run_chain_command((first, second)).await {
+            Ok(result) => (result, None),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Retry => match retry_last_query(top_k) {
+            Ok(agent_response) => (
+                agent_response.answer.clone(),
+                Some(json!({ "retry": agent_response })),
+            ),
+            Err(err) => (format!("✗ {}", err), None),
+        },
+        ChatCommand::Undo => (apply_undo(), None),
+        ChatCommand::DryRun(plan) => (render_dry_run_plan(&plan), None),
+        ChatCommand::Model(name) => {
+            let model_value = if name.eq_ignore_ascii_case("default") {
+                None
+            } else {
+                Some(name)
+            };
+            (apply_model(model_value), None)
+        }
+        ChatCommand::Temperature(value) => {
+            let parsed = value.parse::<f32>().ok();
+            (apply_temperature(parsed), None)
+        }
+        ChatCommand::Export => (export_state(), None),
+        ChatCommand::Import(payload) => {
+            let body = payload.unwrap_or_else(|| "{}".to_string());
+            (import_state(&body), None)
+        }
+        ChatCommand::Debug => (debug_state_snapshot(), None),
+        ChatCommand::Tokens => (tokens_usage_snapshot(), None),
+    }
+}
+
+/// Build a standard JSON response for a chat command result
+fn build_command_response(answer: String, extra: Option<Value>, request_id: &str) -> HttpResponse {
+    let mut response = json!({
+        "response": {
+            "answer": answer,
+            "chunks_used": 0,
+            "sources": []
+        },
+        "request_id": request_id
+    });
+    if let Some(extra_data) = extra {
+        if let Some(obj) = response.as_object_mut() {
+            for (k, v) in extra_data.as_object().unwrap() {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    HttpResponse::Ok().json(response)
+}
+
 async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
     // Check for chat commands
     if let Some(cmd) = parse_chat_command(&req.query) {
-        let (answer, extra) = match cmd {
-            ChatCommand::Goal(goal_text) => match create_goal_from_command(&goal_text) {
-                Ok(goal) => (
-                    format!("✓ Goal created: {}", goal_text),
-                    Some(json!({ "goal": goal })),
-                ),
-                Err(e) => (format!("✗ Failed to create goal: {}", e), None),
-            },
-            ChatCommand::Goals => match get_goals_list() {
-                Ok(list) => (list, None),
-                Err(e) => (format!("✗ Failed to get goals: {}", e), None),
-            },
-            ChatCommand::Status => (get_system_status(), None),
-            ChatCommand::Help => (get_help_text(), None),
-            ChatCommand::Models => (get_models_list(), None),
-            ChatCommand::Clear => (
-                "Chat cleared. (This is handled by the frontend)".to_string(),
-                None,
-            ),
-            ChatCommand::Forget(topic) => match forget_topic(&topic) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::History => match list_recent_history(5) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Sources => (last_sources_summary(), None),
-            ChatCommand::Learn(url) => match preview_url_content(&url).await {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Note(text) => match record_note(&text) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Subgoal(text) => match add_subgoal(&text) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::PauseGoal => match update_goal_status_cmd(GoalStatus::Paused) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::ResumeGoal => match update_goal_status_cmd(GoalStatus::Active) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::AbandonGoal => match update_goal_status_cmd(GoalStatus::Abandoned) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Reflect => match summarize_reflection() {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Why => (explain_last_reasoning(), None),
-            ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
-            ChatCommand::Unfocus => (apply_focus(None), None),
-            ChatCommand::Persona(name) => {
-                let persona_value =
-                    if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
-                        None
-                    } else {
-                        Some(name)
-                    };
-                (apply_persona(persona_value), None)
-            }
-            ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
-            ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
-            ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
-                Ok(result) => (result, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Chain(first, second) => match run_chain_command((first, second)).await {
-                Ok(result) => (result, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Retry => match retry_last_query(req.top_k) {
-                Ok(agent_response) => (
-                    agent_response.answer.clone(),
-                    Some(json!({ "retry": agent_response })),
-                ),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Undo => (apply_undo(), None),
-            ChatCommand::DryRun(plan) => (render_dry_run_plan(&plan), None),
-            ChatCommand::Model(name) => {
-                let model_value = if name.eq_ignore_ascii_case("default") {
-                    None
-                } else {
-                    Some(name)
-                };
-                (apply_model(model_value), None)
-            }
-            ChatCommand::Temperature(value) => {
-                let parsed = value.parse::<f32>().ok();
-                (apply_temperature(parsed), None)
-            }
-            ChatCommand::Export => (export_state(), None),
-            ChatCommand::Import(payload) => {
-                let body = payload.unwrap_or_else(|| "{}".to_string());
-                (import_state(&body), None)
-            }
-            ChatCommand::Debug => (debug_state_snapshot(), None),
-            ChatCommand::Tokens => (tokens_usage_snapshot(), None),
-        };
-
-        let mut response = json!({
-            "response": {
-                "answer": answer,
-                "chunks_used": 0,
-                "sources": []
-            },
-            "request_id": request_id
-        });
-
-        if let Some(extra_data) = extra {
-            if let Some(obj) = response.as_object_mut() {
-                for (k, v) in extra_data.as_object().unwrap() {
-                    obj.insert(k.clone(), v.clone());
-                }
-            }
-        }
-
-        return Ok(HttpResponse::Ok().json(response));
+        let (answer, extra) = execute_chat_command(cmd, req.top_k).await;
+        return Ok(build_command_response(answer, extra, &request_id));
     }
 
     if let Some(retriever) = RETRIEVER.get() {
-        // Convert ChatMode to AgentMode
-        let agent_mode = match req.mode {
-            ChatMode::Rag => crate::agent::AgentMode::Rag,
-            ChatMode::Llm => crate::agent::AgentMode::Llm,
-            ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
-            ChatMode::Auto => crate::agent::AgentMode::Auto,
-            ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
-        };
+        let agent_mode: crate::agent::AgentMode = req.mode.into();
         let query_clone = req.query.clone();
         let top_k = req.top_k;
         let retriever_clone = Arc::clone(retriever);
@@ -6819,143 +6671,12 @@ async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpRespon
 
     // Check for chat commands
     if let Some(cmd) = parse_chat_command(&query.query) {
-        let (answer, extra) = match cmd {
-            ChatCommand::Goal(goal_text) => match create_goal_from_command(&goal_text) {
-                Ok(goal) => (
-                    format!("✓ Goal created: {}", goal_text),
-                    Some(json!({ "goal": goal })),
-                ),
-                Err(e) => (format!("✗ Failed to create goal: {}", e), None),
-            },
-            ChatCommand::Goals => match get_goals_list() {
-                Ok(list) => (list, None),
-                Err(e) => (format!("✗ Failed to get goals: {}", e), None),
-            },
-            ChatCommand::Status => (get_system_status(), None),
-            ChatCommand::Help => (get_help_text(), None),
-            ChatCommand::Models => (get_models_list(), None),
-            ChatCommand::Clear => (
-                "Chat cleared. (This is handled by the frontend)".to_string(),
-                None,
-            ),
-            ChatCommand::Forget(topic) => match forget_topic(&topic) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::History => match list_recent_history(5) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Sources => (last_sources_summary(), None),
-            ChatCommand::Learn(url) => match preview_url_content(&url).await {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Note(text) => match record_note(&text) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Subgoal(text) => match add_subgoal(&text) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::PauseGoal => match update_goal_status_cmd(GoalStatus::Paused) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::ResumeGoal => match update_goal_status_cmd(GoalStatus::Active) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::AbandonGoal => match update_goal_status_cmd(GoalStatus::Abandoned) {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Reflect => match summarize_reflection() {
-                Ok(msg) => (msg, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Why => (explain_last_reasoning(), None),
-            ChatCommand::Focus(topic) => (apply_focus(Some(topic)), None),
-            ChatCommand::Unfocus => (apply_focus(None), None),
-            ChatCommand::Persona(name) => {
-                let persona_value =
-                    if name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("reset") {
-                        None
-                    } else {
-                        Some(name)
-                    };
-                (apply_persona(persona_value), None)
-            }
-            ChatCommand::Verbose => (apply_verbosity(Verbosity::Verbose), None),
-            ChatCommand::Brief => (apply_verbosity(Verbosity::Brief), None),
-            ChatCommand::RunTool(spec) => match run_tool_command(&spec).await {
-                Ok(result) => (result, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Chain(first, second) => match run_chain_command((first, second)).await {
-                Ok(result) => (result, None),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Retry => match retry_last_query(query.top_k) {
-                Ok(agent_response) => (
-                    agent_response.answer.clone(),
-                    Some(json!({ "retry": agent_response })),
-                ),
-                Err(err) => (format!("✗ {}", err), None),
-            },
-            ChatCommand::Undo => (apply_undo(), None),
-            ChatCommand::DryRun(plan) => (render_dry_run_plan(&plan), None),
-            ChatCommand::Model(name) => {
-                let model_value = if name.eq_ignore_ascii_case("default") {
-                    None
-                } else {
-                    Some(name)
-                };
-                (apply_model(model_value), None)
-            }
-            ChatCommand::Temperature(value) => {
-                let parsed = value.parse::<f32>().ok();
-                (apply_temperature(parsed), None)
-            }
-            ChatCommand::Export => (export_state(), None),
-            ChatCommand::Import(payload) => {
-                let body = payload.unwrap_or_else(|| "{}".to_string());
-                (import_state(&body), None)
-            }
-            ChatCommand::Debug => (debug_state_snapshot(), None),
-            ChatCommand::Tokens => (tokens_usage_snapshot(), None),
-        };
-
-        let mut response = json!({
-            "response": {
-                "answer": answer,
-                "chunks_used": 0,
-                "sources": []
-            },
-            "request_id": request_id
-        });
-
-        if let Some(extra_data) = extra {
-            if let Some(obj) = response.as_object_mut() {
-                for (k, v) in extra_data.as_object().unwrap() {
-                    obj.insert(k.clone(), v.clone());
-                }
-            }
-        }
-
-        return Ok(HttpResponse::Ok().json(response));
+        let (answer, extra) = execute_chat_command(cmd, query.top_k).await;
+        return Ok(build_command_response(answer, extra, &request_id));
     }
 
     if let Some(retriever) = RETRIEVER.get() {
-        // Convert ChatMode to AgentMode
-        let agent_mode = match query.mode {
-            ChatMode::Rag => crate::agent::AgentMode::Rag,
-            ChatMode::Llm => crate::agent::AgentMode::Llm,
-            ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
-            ChatMode::Auto => crate::agent::AgentMode::Auto,
-            ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
-        };
+        let agent_mode: crate::agent::AgentMode = query.mode.into();
         let query_str = query.query.clone();
         let top_k = query.top_k;
         let retriever_clone = Arc::clone(retriever);
@@ -7327,13 +7048,7 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     };
 
     // Determine mode and build context
-    let agent_mode = match req.mode {
-        ChatMode::Rag => crate::agent::AgentMode::Rag,
-        ChatMode::Llm => crate::agent::AgentMode::Llm,
-        ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
-        ChatMode::Auto => crate::agent::AgentMode::Auto,
-        ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
-    };
+    let agent_mode: crate::agent::AgentMode = req.mode.into();
 
     // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
     if matches!(
@@ -7415,24 +7130,6 @@ async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, 
     // Get chat settings for prompt building
     let chat_settings = get_current_chat_settings();
     let system_prompt = chat_settings.build_system_prompt();
-
-    // Debug: log what's in the system prompt
-    tracing::warn!(
-        request_id = %request_id,
-        system_prompt_len = system_prompt.len(),
-        system_prompt_full = %system_prompt,
-        memories_count = chat_settings.memories.len(),
-        "DEBUG: Full system prompt being sent"
-    );
-    for (i, mem) in chat_settings.memories.iter().enumerate() {
-        tracing::warn!(
-            request_id = %request_id,
-            memory_index = i,
-            memory_type = %mem.memory_type,
-            memory_content = %mem.content,
-            "DEBUG: Memory item"
-        );
-    }
 
     // Build prompt with settings
     // Note: System prompt/instructions are sent via the 'system' field, not in the prompt
@@ -8025,7 +7722,7 @@ pub fn start_api_server(
                 ),
             )
             // ============================================================================
-            // MONITORING ROUTES (Phase 16 Step 3 - OTLP Exporting)
+            // MONITORING ROUTES
             // Exports metrics in Prometheus text format for Prometheus scraping
             // ============================================================================
             .service(
@@ -8033,6 +7730,7 @@ pub fn start_api_server(
                     .route("/health", web::get().to(health_check))
                     .route("/ready", web::get().to(ready_check))
                     .route("/status-log/{status}", web::get().to(get_status_log))
+                    .route("/systemd/logs", web::get().to(get_systemd_logs))
                     .route("/metrics", web::get().to(get_metrics)) // ← Prometheus format
                     .route("/optimizations", web::get().to(get_optimization_stats)) // ← Performance optimization stats
                     .route("/io-uring", web::get().to(get_io_uring_stats)) // ← io_uring async I/O stats
@@ -8125,7 +7823,8 @@ pub fn start_api_server(
                     .route("/docker/action", web::post().to(docker_action))
                     // LLM runtime control (Ollama)
                     .route("/runtime/action", web::post().to(runtime_action))
-                    .route("/ollama", web::get().to(get_ollama_status)),
+                    .route("/ollama", web::get().to(get_ollama_status))
+                    .route("/onnx", web::get().to(get_onnx_status)),
             )
             // ============================================================================
             // ROOT & CORE ROUTES
@@ -8146,7 +7845,7 @@ pub fn start_api_server(
             .route("/config/hardware", web::post().to(commit_hardware_config))
             .route("/config/onnx", web::get().to(get_onnx_config))
             .route("/config/onnx", web::post().to(set_onnx_config))
-            // Neo4j Knowledge Graph config (Phase 27)
+            // Neo4j Knowledge Graph config
             .route("/config/neo4j", web::get().to(get_neo4j_config))
             .route("/config/neo4j", web::post().to(save_neo4j_config))
             .route("/config/neo4j/test", web::post().to(test_neo4j_connection))
@@ -8156,6 +7855,10 @@ pub fn start_api_server(
                 "/config/api_keys/{provider}",
                 web::delete().to(delete_api_key),
             )
+                        .route("/extract_entities", web::post().to(extract_entities_handler))
+            // Entity Terms config (Step 1 v1.0)
+            .route("/config/entity_terms", web::get().to(get_entity_terms))
+            .route("/config/entity_terms", web::post().to(save_entity_terms))
             .route("/reindex", web::post().to(reindex_handler))
             .route("/reindex/async", web::post().to(reindex_async_handler))
             .route(
@@ -8224,7 +7927,7 @@ pub fn start_api_server(
                 web::delete().to(delete_manual_observation),
             )
             // ============================================================================
-            // TRAINING DATA COLLECTION ROUTES (Phase 20)
+            // TRAINING DATA COLLECTION ROUTES
             // ============================================================================
             .route(
                 "/training/feedback",
@@ -8301,6 +8004,13 @@ pub fn start_api_server(
         .bind(bind_addr.clone())
         .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", bind_addr, e))
         .run()
+}
+
+/// GET /monitoring/onnx
+/// Returns ONNX embedding runtime statistics.
+async fn get_onnx_status() -> Result<HttpResponse, Error> {
+    let snap = crate::monitoring::onnx_metrics::snapshot();
+    Ok(HttpResponse::Ok().json(snap))
 }
 
 /// GET /monitoring/ollama

@@ -253,36 +253,11 @@ impl Default for HardwareParams {
 
 impl HardwareParams {
     pub fn validate(&self) -> Result<()> {
-        // Thread validation
         if self.num_thread == 0 {
             return Err(HardwareParamError::Validation(
                 "num_thread must be greater than 0".into(),
             ));
         }
-        if self.num_thread_batch == 0 {
-            return Err(HardwareParamError::Validation(
-                "num_thread_batch must be greater than 0".into(),
-            ));
-        }
-
-        // GPU validation
-        if self.num_gpu > 64 {
-            return Err(HardwareParamError::Validation(
-                "num_gpu must be 64 or less".into(),
-            ));
-        }
-        if self.main_gpu > 64 {
-            return Err(HardwareParamError::Validation(
-                "main_gpu index must be 64 or less".into(),
-            ));
-        }
-        if self.gpu_layers > 1000 {
-            return Err(HardwareParamError::Validation(
-                "gpu_layers must be 1000 or less".into(),
-            ));
-        }
-
-        // RoPE validation
         if self.rope_frequency_base <= 0.0 {
             return Err(HardwareParamError::Validation(
                 "rope_frequency_base must be positive".into(),
@@ -293,8 +268,6 @@ impl HardwareParams {
                 "rope_frequency_scale must be positive".into(),
             ));
         }
-
-        // Context/batch validation
         if self.num_ctx == 0 {
             return Err(HardwareParamError::Validation(
                 "num_ctx must be greater than 0".into(),
@@ -310,60 +283,11 @@ impl HardwareParams {
                 "num_ubatch must be greater than 0".into(),
             ));
         }
-        if self.num_ubatch > self.num_batch {
-            return Err(HardwareParamError::Validation(
-                "num_ubatch must be <= num_batch".into(),
-            ));
-        }
-        if self.num_seq_max == 0 {
-            return Err(HardwareParamError::Validation(
-                "num_seq_max must be greater than 0".into(),
-            ));
-        }
-
-        // CPU mask validation
         if self.mask_valid && self.cpumask.is_empty() {
             return Err(HardwareParamError::Validation(
                 "cpumask cannot be empty when mask_valid is true".into(),
             ));
         }
-
-        // Defrag threshold validation
-        if self.defrag_thold < 0.0 || self.defrag_thold > 1.0 {
-            return Err(HardwareParamError::Validation(
-                "defrag_thold must be between 0.0 and 1.0".into(),
-            ));
-        }
-
-        // Tensor split validation
-        if !self.tensor_split.is_empty() {
-            let sum: f32 = self.tensor_split.iter().sum();
-            if (sum - 1.0).abs() > 0.01 && sum > 0.0 {
-                let all_positive = self.tensor_split.iter().all(|&x| x > 0.0);
-                if all_positive {
-                    return Err(HardwareParamError::Validation(
-                        "tensor_split values should sum to approximately 1.0".into(),
-                    ));
-                }
-            }
-        }
-
-        // Split mode validation
-        let valid_split_modes = ["none", "layer", "row"];
-        if !valid_split_modes.contains(&self.split_mode.as_str()) {
-            return Err(HardwareParamError::Validation(
-                format!("split_mode must be one of: {}", valid_split_modes.join(", ")),
-            ));
-        }
-
-        // Priority validation
-        let valid_priorities = ["low", "normal", "high", "realtime"];
-        if !valid_priorities.contains(&self.priority.as_str()) {
-            return Err(HardwareParamError::Validation(
-                format!("priority must be one of: {}", valid_priorities.join(", ")),
-            ));
-        }
-
         Ok(())
     }
 }

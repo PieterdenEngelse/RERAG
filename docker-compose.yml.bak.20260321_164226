@@ -160,10 +160,6 @@ services:
       - ./ops/observability/tempo/config.yml:/etc/tempo/config.yml:ro
       - tempo-data:/tmp/tempo
     command: -config.file=/etc/tempo/config.yml
-    deploy:
-      resources:
-        limits:
-          memory: 256M
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3200/ready"]
       interval: 30s

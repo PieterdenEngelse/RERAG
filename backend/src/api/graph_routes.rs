@@ -959,7 +959,10 @@ pub async fn rebuild_graph_from_index() -> GraphBuildResult {
         .and_then(|v| v.parse().ok())
         .unwrap_or(50);
     for (filename, chunks) in &docs_map {
-        crate::api::index_to_knowledge_graph(filename, filename, filename, chunks).await;
+        #[cfg(feature = "neo4j")]
+        if let Some(kb) = crate::api::get_knowledge_builder() {
+            crate::graph::index_to_knowledge_graph(&kb, filename, filename, filename, chunks).await;
+        }
         docs_processed += 1;
         // B1-v1: Yield to prevent CPU starvation + configurable throttle
         tokio::task::yield_now().await;

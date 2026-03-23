@@ -1,3 +1,6 @@
+# Tempo Configuration - Memory-optimized for 8GB dev machine
+# v1.1.0 - Added memory bounds, disabled metrics_generator
+
 server:
   http_listen_port: 3200
 
@@ -12,21 +15,25 @@ distributor:
 
 ingester:
   max_block_duration: 5m
+  max_block_bytes: 52428800  # 50MB max per block, prevents unbounded growth
 
 compactor:
   compaction:
     block_retention: 48h
 
-metrics_generator:
-  registry:
-    external_labels:
-      source: tempo
-      cluster: docker-compose
-  storage:
-    path: /tmp/tempo/generator/wal
-    remote_write:
-      - url: http://prometheus:9090/api/v1/write
-        send_exemplars: true
+# metrics_generator DISABLED - was the primary cause of 2.9GB RAM usage.
+# It keeps service-graphs and span-metrics in memory with unbounded WAL growth.
+# Re-enable only when actively debugging trace-derived metrics.
+# metrics_generator:
+#   registry:
+#     external_labels:
+#       source: tempo
+#       cluster: docker-compose
+#   storage:
+#     path: /tmp/tempo/generator/wal
+#     remote_write:
+#       - url: http://prometheus:9090/api/v1/write
+#         send_exemplars: true
 
 storage:
   trace:
@@ -35,8 +42,10 @@ storage:
       path: /tmp/tempo/wal
     local:
       path: /tmp/tempo/blocks
+    pool:
+      max_workers: 10
+      queue_depth: 100
 
+# overrides with metrics_generator disabled
 overrides:
-  defaults:
-    metrics_generator:
-      processors: [service-graphs, span-metrics]
+  defaults: {}

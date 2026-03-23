@@ -1,336 +1,588 @@
-// src/api/memory_routes.rs
-// Phase 4: Memory API Layer - RAG Vector Store Endpoints
+// ~/ag/backend/src/api/memory_routes.rs  v1.0
+// RAG memory and manual observation endpoints
 
-use actix_web::{web, HttpResponse, Result as ActixResult};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::info;
+use super::*;
 
-use crate::embedder::EmbeddingService;
-use crate::memory::{VectorStore, VectorRecord};
 
-// Shared state for vector store and embedding service
-pub type SharedVectorStore = Arc<RwLock<VectorStore>>;
-pub type SharedEmbeddingService = Arc<EmbeddingService>;
-
-// ============ Request/Response Types ============
-
-#[derive(Debug, Deserialize)]
-pub struct AddChunkRequest {
-    pub chunk_id: String,
-    pub document_id: String,
+#[derive(serde::Deserialize)]
+pub struct StoreRagRequest {
+    pub agent_id: String,
+    pub memory_type: String,
     pub content: String,
-    pub chunk_index: usize,
-    pub token_count: usize,
-    pub source: String,
-    #[serde(default)]
-    pub embedding: Option<Vec<f32>>,
+    pub timestamp: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct BatchAddRequest {
-    pub chunks: Vec<AddChunkRequest>,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct SearchRequest {
+
+#[derive(serde::Deserialize)]
+pub struct SearchRagRequest {
+    pub agent_id: String,
     pub query: String,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct DeleteRequest {
-    pub chunk_id: Option<String>,
-    pub document_id: Option<String>,
+
+
+#[derive(serde::Deserialize)]
+pub struct RecallRagRequest {
+    pub agent_id: String,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchResponse {
-    pub results: Vec<SearchResultItem>,
-    pub total_found: usize,
+
+
+#[derive(serde::Deserialize)]
+pub struct DeleteRagRequest {
+    pub agent_id: String,
+    pub ids: Vec<i64>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchResultItem {
-    pub chunk_id: String,
-    pub document_id: String,
-    pub content: String,
-    pub similarity_score: f32,
-    pub chunk_index: usize,
+
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationRequest {
+    pub entry_type: String,
+    pub title: String,
+    pub narrative: String,
+    #[serde(default)]
+    pub facts: Vec<String>,
+    #[serde(default)]
+    pub concepts: Vec<String>,
+    #[serde(default)]
+    pub files_read: Vec<String>,
+    #[serde(default)]
+    pub files_modified: Vec<String>,
+    pub author: Option<String>,
+    pub project: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct StatsResponse {
-    pub total_records: usize,
-    pub total_documents: usize,
-    pub db_path: String,
+
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationSearchRequest {
+    pub query: String,
+    pub entry_type: Option<String>,
+    pub project: Option<String>,
+    pub date_start: Option<String>,
+    pub date_end: Option<String>,
+    #[serde(default)]
+    pub order: ManualObservationOrder,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
 }
 
-#[derive(Debug, Serialize)]
-pub struct MessageResponse {
-    pub status: String,
-    pub message: String,
+
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationListQuery {
+    pub entry_type: Option<String>,
+    pub project: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub status: String,
-    pub error: String,
+
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationTimelineRequest {
+    pub anchor_id: Option<String>,
+    pub query: Option<String>,
+    #[serde(default = "default_limit")]
+    pub depth_before: usize,
+    #[serde(default = "default_limit")]
+    pub depth_after: usize,
+    pub entry_type: Option<String>,
+    pub project: Option<String>,
 }
 
-fn default_top_k() -> usize {
-    10
+
+
+#[derive(serde::Deserialize)]
+pub struct ManualObservationFetchRequest {
+    pub ids: Vec<String>,
 }
 
-// ============ Handlers ============
 
-/// Add a single chunk with embedding
-pub async fn add_chunk(
-    vector_store: web::Data<SharedVectorStore>,
-    embedding_service: web::Data<SharedEmbeddingService>,
-    req: web::Json<AddChunkRequest>,
-) -> ActixResult<HttpResponse> {
-    info!(chunk_id = %req.chunk_id, "Adding chunk to vector store");
 
-    // Generate embedding if not provided
-    let embedding = if let Some(emb) = &req.embedding {
-        emb.clone()
+pub(crate) fn validate_memory_type(memory_type: &str) -> Result<(), Error> {
+    if VALID_MEMORY_TYPES.contains(&memory_type) {
+        Ok(())
     } else {
-        embedding_service.embed_text(&req.content).await
-    };
-
-    let record = VectorRecord::new(
-        req.chunk_id.clone(),
-        req.document_id.clone(),
-        req.content.clone(),
-        embedding,
-        req.chunk_index,
-        req.token_count,
-        req.source.clone(),
-        chrono::Utc::now().timestamp(),
-    );
-
-    let mut store = vector_store.write().await;
-    match store.add_record(record).await {
-        Ok(()) => Ok(HttpResponse::Ok().json(MessageResponse {
-            status: "success".to_string(),
-            message: format!("Chunk {} added", req.chunk_id),
-        })),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-            status: "error".to_string(),
-            error: e.to_string(),
-        })),
+        Err(actix_web::error::ErrorBadRequest(format!(
+            "Invalid memory_type '{}'. Valid types are: {}",
+            memory_type,
+            VALID_MEMORY_TYPES.join(", ")
+        )))
     }
 }
 
-/// Add multiple chunks in batch
-pub async fn add_chunks_batch(
-    vector_store: web::Data<SharedVectorStore>,
-    embedding_service: web::Data<SharedEmbeddingService>,
-    req: web::Json<BatchAddRequest>,
-) -> ActixResult<HttpResponse> {
-    info!(count = req.chunks.len(), "Adding batch of chunks");
 
-    let mut records = Vec::new();
 
-    for chunk_req in &req.chunks {
-        // Generate embedding if not provided
-        let embedding = if let Some(emb) = &chunk_req.embedding {
-            emb.clone()
-        } else {
-            embedding_service.embed_text(&chunk_req.content).await
-        };
-
-        let record = VectorRecord::new(
-            chunk_req.chunk_id.clone(),
-            chunk_req.document_id.clone(),
-            chunk_req.content.clone(),
-            embedding,
-            chunk_req.chunk_index,
-            chunk_req.token_count,
-            chunk_req.source.clone(),
-            chrono::Utc::now().timestamp(),
-        );
-
-        records.push(record);
-    }
-
-    let mut store = vector_store.write().await;
-    match store.add_records(records).await {
-        Ok(()) => Ok(HttpResponse::Ok().json(MessageResponse {
-            status: "success".to_string(),
-            message: format!("Added {} chunks", req.chunks.len()),
-        })),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-            status: "error".to_string(),
-            error: e.to_string(),
-        })),
-    }
-}
-
-/// Search for similar chunks
-pub async fn search_chunks(
-    vector_store: web::Data<SharedVectorStore>,
-    embedding_service: web::Data<SharedEmbeddingService>,
-    req: web::Json<SearchRequest>,
-) -> ActixResult<HttpResponse> {
-    info!(query = %req.query, top_k = req.top_k, "Searching chunks");
-
-    // Embed the query
-    let query_embedding = embedding_service.embed_query(&req.query).await;
-
-    // Search vector store - FIXED: use write() for mutable search
-    let mut store = vector_store.write().await;
-    match store.search(&query_embedding, req.top_k).await {
-        Ok(results) => {
-            let items: Vec<SearchResultItem> = results
-                .into_iter()
-                .map(|r| SearchResultItem {
-                    chunk_id: r.chunk_id,
-                    document_id: r.document_id,
-                    content: r.content,
-                    similarity_score: r.similarity_score,
-                    chunk_index: r.chunk_index,
-                })
-                .collect();
-
-            let total_found = items.len();
-
-            Ok(HttpResponse::Ok().json(SearchResponse {
-                results: items,
-                total_found,
-            }))
-        }
-        Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-            status: "error".to_string(),
-            error: e.to_string(),
-        })),
-    }
-}
-
-/// Get chunks by document ID
-pub async fn get_document_chunks(
-    vector_store: web::Data<SharedVectorStore>,
-    document_id: web::Path<String>,
-) -> ActixResult<HttpResponse> {
-    info!(document_id = %document_id, "Retrieving document chunks");
-
-    // FIXED: use write() for mutable search_by_document
-    let mut store = vector_store.write().await;
-    match store.search_by_document(&document_id, 1000).await {
-        Ok(records) => {
-            let items: Vec<SearchResultItem> = records
-                .into_iter()
-                .map(|r| SearchResultItem {
-                    chunk_id: r.chunk_id,
-                    document_id: r.document_id,
-                    content: r.content,
-                    similarity_score: 1.0,
-                    chunk_index: r.chunk_index,
-                })
-                .collect();
-
-            let total_found = items.len();
-
-            Ok(HttpResponse::Ok().json(SearchResponse {
-                results: items,
-                total_found,
-            }))
-        }
-        Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-            status: "error".to_string(),
-            error: e.to_string(),
-        })),
-    }
-}
-
-/// Delete a chunk or document
-pub async fn delete_chunk(
-    vector_store: web::Data<SharedVectorStore>,
-    req: web::Json<DeleteRequest>,
-) -> ActixResult<HttpResponse> {
-    let mut store = vector_store.write().await;
-
-    if let Some(chunk_id) = &req.chunk_id {
-        info!(chunk_id = %chunk_id, "Deleting chunk");
-        match store.delete_record(chunk_id).await {
-            Ok(()) => Ok(HttpResponse::Ok().json(MessageResponse {
-                status: "success".to_string(),
-                message: format!("Deleted chunk {}", chunk_id),
-            })),
-            Err(e) => Ok(HttpResponse::NotFound().json(ErrorResponse {
-                status: "error".to_string(),
-                error: e.to_string(),
-            })),
-        }
-    } else if let Some(document_id) = &req.document_id {
-        info!(document_id = %document_id, "Deleting document");
-        match store.delete_document(document_id).await {
-            Ok(count) => Ok(HttpResponse::Ok().json(MessageResponse {
-                status: "success".to_string(),
-                message: format!("Deleted {} chunks from document {}", count, document_id),
-            })),
-            Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                status: "error".to_string(),
-                error: e.to_string(),
-            })),
-        }
-    } else {
-        Ok(HttpResponse::BadRequest().json(ErrorResponse {
-            status: "error".to_string(),
-            error: "Must provide chunk_id or document_id".to_string(),
-        }))
-    }
-}
-
-/// Get vector store statistics
-pub async fn get_stats(
-    vector_store: web::Data<SharedVectorStore>,
-) -> ActixResult<HttpResponse> {
-    info!("Retrieving vector store stats");
-
-    let store = vector_store.read().await;
-    let stats = store.stats().await;
-
-    Ok(HttpResponse::Ok().json(StatsResponse {
-        total_records: stats.total_records,
-        total_documents: stats.total_documents,
-        db_path: stats.db_path.to_string_lossy().to_string(),
-    }))
-}
-
-/// Clear all records (use with caution!)
-pub async fn clear_store(
-    vector_store: web::Data<SharedVectorStore>,
-) -> ActixResult<HttpResponse> {
-    info!("⚠️  Clearing vector store");
-
-    let mut store = vector_store.write().await;
-    match store.clear().await {
-        Ok(()) => Ok(HttpResponse::Ok().json(MessageResponse {
-            status: "success".to_string(),
-            message: "Vector store cleared".to_string(),
-        })),
-        Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-            status: "error".to_string(),
-            error: e.to_string(),
-        })),
-    }
-}
-
-/// Health check for memory service
-pub async fn memory_health(
-    vector_store: web::Data<SharedVectorStore>,
-) -> ActixResult<HttpResponse> {
-    let store = vector_store.read().await;
-    let stats = store.stats().await;
-
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy",
-        "total_records": stats.total_records,
-        "total_documents": stats.total_documents,
-        "timestamp": chrono::Utc::now().to_rfc3339()
+pub(crate) async fn list_memory_types() -> Result<HttpResponse, Error> {
+    Ok(HttpResponse::Ok().json(json!({
+        "core": ["fact", "preference", "instruction", "context", "summary", "task"],
+        "extended": ["conversation", "decision", "correction", "feedback", "persona", "note"],
+        "all": VALID_MEMORY_TYPES,
+        "request_id": generate_request_id()
     })))
 }
+
+
+
+pub(crate) async fn store_rag_memory(req: web::Json<StoreRagRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    validate_memory_type(&req.memory_type)?;
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let ts = req
+        .timestamp
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    mem.store_rag(&req.agent_id, &req.memory_type, &req.content, &ts)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "request_id": request_id
+    })))
+}
+
+
+
+pub(crate) async fn search_rag_memory(req: web::Json<SearchRagRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let results: Vec<MemorySearchResult> = mem
+        .search_rag(&req.agent_id, &req.query, req.top_k)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "results": results,
+        "request_id": request_id
+    })))
+}
+
+
+
+pub(crate) async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let items: Vec<MemoryItem> = mem
+        .recall_rag(&req.agent_id, req.limit)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "items": items,
+        "request_id": request_id
+    })))
+}
+
+
+
+pub(crate) async fn delete_rag_memory(req: web::Json<DeleteRagRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let mut mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let deleted = mem
+        .delete_rag_by_ids(&req.agent_id, &req.ids)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "deleted": deleted,
+        "request_id": request_id
+    })))
+}
+
+
+
+pub(crate) fn validate_manual_observation(req: &ManualObservationRequest) -> Result<(), Error> {
+    if req.title.trim().is_empty() || req.title.len() > 200 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "title must be 1-200 characters",
+        ));
+    }
+    if req.entry_type.trim().is_empty() || req.entry_type.len() > 100 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "entry_type must be 1-100 characters",
+        ));
+    }
+    if req.narrative.trim().is_empty() || req.narrative.len() > 10_000 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "narrative must be 1-10000 characters",
+        ));
+    }
+    if req.facts.len() > 32 || req.concepts.len() > 32 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "facts/concepts limit is 32 items",
+        ));
+    }
+    if req.files_read.len() > 32 || req.files_modified.len() > 32 {
+        return Err(actix_web::error::ErrorBadRequest(
+            "files_read/files_modified limit is 32 items",
+        ));
+    }
+    Ok(())
+}
+
+
+
+pub(crate) async fn create_manual_observation(
+    req: web::Json<ManualObservationRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    validate_manual_observation(&req)?;
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    let start = std::time::Instant::now();
+    let result = (|| {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let id = mem
+            .create_manual_observation(
+                &req.entry_type,
+                &req.title,
+                &req.narrative,
+                &req.facts,
+                &req.concepts,
+                &req.files_read,
+                &req.files_modified,
+                req.author.as_deref(),
+                req.project.as_deref(),
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "id": id,
+            "request_id": request_id
+        })))
+    })();
+    crate::monitoring::metrics::record_manual_observation(
+        "create",
+        result.is_ok(),
+        start.elapsed().as_secs_f64() * 1000.0,
+    );
+    result
+}
+
+
+
+pub(crate) async fn list_manual_observations(
+    query: web::Query<ManualObservationListQuery>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("list", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let results = mem
+            .list_manual_observations(
+                query.entry_type.as_deref(),
+                query.project.as_deref(),
+                query.limit,
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "observations": results,
+            "request_id": request_id
+        })))
+    })
+}
+
+
+
+pub(crate) async fn get_manual_observation(
+    path: web::Path<String>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("get", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        match mem
+            .get_manual_observation(&path)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?
+        {
+            Some(obs) => Ok(HttpResponse::Ok().json(json!({
+                "observation": obs,
+                "request_id": request_id
+            }))),
+            None => Ok(HttpResponse::NotFound().json(json!({
+                "error": "not_found",
+                "request_id": request_id
+            }))),
+        }
+    })
+}
+
+
+
+pub(crate) async fn update_manual_observation(
+    path: web::Path<String>,
+    req: web::Json<ManualObservationRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    validate_manual_observation(&req)?;
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("update", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let updated = mem
+            .update_manual_observation(
+                &path,
+                &req.entry_type,
+                &req.title,
+                &req.narrative,
+                &req.facts,
+                &req.concepts,
+                &req.files_read,
+                &req.files_modified,
+                req.author.as_deref(),
+                req.project.as_deref(),
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        if updated {
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "updated",
+                "request_id": request_id
+            })))
+        } else {
+            Ok(HttpResponse::NotFound().json(json!({
+                "error": "not_found",
+                "request_id": request_id
+            })))
+        }
+    })
+}
+
+
+
+pub(crate) async fn delete_manual_observation(
+    path: web::Path<String>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_manual_endpoint("delete", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let deleted = mem
+            .delete_manual_observation(&path)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        if deleted {
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "deleted",
+                "request_id": request_id
+            })))
+        } else {
+            Ok(HttpResponse::NotFound().json(json!({
+                "error": "not_found",
+                "request_id": request_id
+            })))
+        }
+    })
+}
+
+
+
+pub(crate) async fn manual_observation_timeline(
+    req: web::Json<ManualObservationTimelineRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_memory_search_layer("timeline", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let results = mem
+            .timeline_manual_observations(
+                req.anchor_id.as_deref(),
+                req.query.as_deref(),
+                req.entry_type.as_deref(),
+                req.project.as_deref(),
+                req.depth_before,
+                req.depth_after,
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "timeline": results,
+            "request_id": request_id
+        })))
+    })
+}
+
+
+
+pub(crate) async fn fetch_manual_observations(
+    req: web::Json<ManualObservationFetchRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    if req.ids.is_empty() {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "error": "empty_ids",
+            "request_id": request_id
+        })));
+    }
+    if req.ids.len() > 20 {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "error": "too_many_ids",
+            "request_id": request_id
+        })));
+    }
+    observe_memory_search_layer("fetch", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let observations = mem
+            .fetch_manual_observations(&req.ids)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "observations": observations,
+            "request_id": request_id
+        })))
+    })
+}
+
+
+
+pub(crate) async fn search_manual_observations(
+    req: web::Json<ManualObservationSearchRequest>,
+    http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = http_req
+        .app_data::<web::Data<ApiConfig>>()
+        .map(|c| c.get_ref())
+        .ok_or_else(|| actix_web::error::ErrorInternalServerError("missing config"))?;
+    require_admin(&http_req, config)?;
+    observe_memory_search_layer("search", || {
+        let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        let hits = mem
+            .search_manual_observations(
+                req.query.as_str(),
+                req.entry_type.as_deref(),
+                req.project.as_deref(),
+                req.date_start.as_deref(),
+                req.date_end.as_deref(),
+                req.order,
+                req.limit,
+                req.offset,
+            )
+            .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(json!({
+            "results": hits,
+            "offset": req.offset,
+            "limit": req.limit,
+            "request_id": request_id
+        })))
+    })
+}
+
+
+
+pub(crate) async fn get_manual_observation_metrics(_http_req: HttpRequest) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let snapshot = metrics::manual_observation_metrics_snapshot();
+    Ok(HttpResponse::Ok().json(json!({
+        "metrics": snapshot,
+        "request_id": generate_request_id()
+    })))
+}
+
+
+
+/// GET /monitoring/memory/search/stats - 3-layer memory search metrics (SEARCH.md)
+pub(crate) async fn get_memory_search_layer_stats(_http_req: HttpRequest) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let layer_stats = metrics::memory_search_layer_stats();
+    let tokens_saved = metrics::memory_search_tokens_saved_total();
+    Ok(HttpResponse::Ok().json(json!({
+        "layers": layer_stats,
+        "tokens_saved_total": tokens_saved,
+        "request_id": generate_request_id()
+    })))
+}
+
+
+
+pub(crate) async fn get_recent_observations(
+    query: web::Query<ManualObservationListQuery>,
+) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let results = mem
+        .list_manual_observations(
+            query.entry_type.as_deref(),
+            query.project.as_deref(),
+            query.limit,
+        )
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "observations": results,
+        "request_id": generate_request_id()
+    })))
+}
+
+
+
+#[derive(serde::Deserialize)]
+pub(crate) struct RagMemoriesQuery {
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    pub agent_id: Option<String>,
+}
+
+
+
+pub(crate) async fn get_recent_rag_memories(
+    query: web::Query<RagMemoriesQuery>,
+) -> Result<HttpResponse, Error> {
+    // No admin auth required - this is read-only monitoring data
+    let mem = AgentMemory::new(path_resolver::agent_db_path_str())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let agent_id = query.agent_id.as_deref().unwrap_or("default");
+    let items: Vec<MemoryItem> = mem
+        .recall_rag(agent_id, query.limit)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    Ok(HttpResponse::Ok().json(json!({
+        "memories": items,
+        "request_id": generate_request_id()
+    })))
+}
+
+

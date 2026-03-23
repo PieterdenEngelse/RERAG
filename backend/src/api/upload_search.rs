@@ -1,0 +1,685 @@
+// ~/ag/backend/src/api/upload_search.rs  v1.0
+// Upload, reindex, search, rerank, summarize endpoints
+
+use super::*;
+
+
+// Rate limiting is enforced by middleware (see monitoring/rate_limit_middleware.rs).
+// The per-handler token-bucket implementation was removed to avoid double-limiting.
+
+#[derive(serde::Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+}
+
+
+
+#[derive(serde::Deserialize)]
+pub struct RerankRequest {
+    pub query: String,
+    pub candidates: Vec<String>,
+}
+
+
+
+#[derive(serde::Deserialize)]
+pub struct SummarizeRequest {
+    pub query: String,
+    pub candidates: Vec<String>,
+}
+
+
+
+pub(crate) async fn upload_document_inner(
+    mut payload: Multipart,
+    config: web::Data<ApiConfig>,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    fs::create_dir_all(UPLOAD_DIR).ok();
+    let mut uploaded_files = Vec::new();
+
+    while let Some(item) = payload.next().await {
+        let mut field = item?;
+        let filename = field
+            .content_disposition()
+            .as_ref()
+            .and_then(|cd| cd.get_filename())
+            .ok_or_else(|| actix_web::error::ErrorBadRequest("No filename"))?
+            .to_string();
+
+        let ext = Path::new(&filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // Allow documents and code files that mime_detect.rs supports
+        let allowed_extensions = [
+            // Documents
+            "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "xml", "json",
+            // Code files
+            "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs", "cpp", "cc",
+            "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh", "sql", "yaml", "yml", "toml",
+        ];
+
+        if !allowed_extensions.contains(&ext.as_str()) {
+            return Ok(HttpResponse::BadRequest().body(format!(
+                "File type '{}' not supported. Allowed: documents (pdf, txt, md, html, xml, json) and code files (rs, py, js, ts, go, java, etc.)",
+                ext
+            )));
+        }
+
+        let filepath = format!("{}/{}", UPLOAD_DIR, filename);
+        let mut f = web::block(move || std::fs::File::create(&filepath)).await??;
+        while let Some(chunk) = field.next().await {
+            let data = chunk?;
+            f = web::block(move || f.write_all(&data).map(|_| f)).await??;
+        }
+
+        uploaded_files.push(filename);
+    }
+
+    let mut indexed_files = Vec::new();
+    let mut index_errors = Vec::new();
+    let io_backend = crate::perf::io_uring::backend_name();
+
+    if !uploaded_files.is_empty() {
+        if is_reindex_in_progress() {
+            index_errors.push(json!({
+                "file": null,
+                "error": "Reindex already in progress; automatic indexing skipped",
+            }));
+        } else if let Some(handle) = RETRIEVER.get() {
+            // Phase 1: Read all files asynchronously using io_uring (outside mutex)
+            // This is where io_uring provides 2-3x speedup on Linux
+            let mut file_contents: Vec<(String, std::path::PathBuf, Option<String>)> = Vec::new();
+
+            for filename in &uploaded_files {
+                let path = Path::new(UPLOAD_DIR).join(filename);
+                // Use io_uring async read
+                let content = index::extract_text_async(&path).await;
+                file_contents.push((filename.clone(), path, content));
+            }
+
+            // Phase 2: Index with mutex (brief lock, no I/O)
+            // Collect chunks for graph indexing (done outside mutex)
+            let mut graph_index_tasks: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+
+            match handle.lock() {
+                Ok(mut retriever) => {
+                    let chunker = crate::index::default_chunker(config.chunker_mode);
+
+                    for (filename, path, content_opt) in file_contents {
+                        match content_opt {
+                            Some(content) => {
+                                // Index the pre-read content and get chunks for graph
+                                match index::index_content_with_graph(
+                                    &mut *retriever,
+                                    &path,
+                                    &content,
+                                    config.chunker_mode,
+                                    chunker.as_ref(),
+                                ) {
+                                    Ok((chunk_count, graph_chunks)) => {
+                                        indexed_files.push(json!({
+                                            "file": filename.clone(),
+                                            "chunks_indexed": chunk_count,
+                                            "io_backend": io_backend,
+                                        }));
+                                        // Queue for graph indexing (outside mutex)
+                                        if !graph_chunks.is_empty() {
+                                            graph_index_tasks.push((
+                                                filename.clone(),
+                                                path.to_string_lossy().to_string(),
+                                                graph_chunks,
+                                            ));
+                                        }
+                                    }
+                                    Err(err) => index_errors.push(json!({
+                                        "file": filename,
+                                        "error": err,
+                                    })),
+                                }
+                            }
+                            None => {
+                                index_errors.push(json!({
+                                    "file": filename,
+                                    "error": "Failed to extract text from file",
+                                }));
+                            }
+                        }
+                    }
+
+                    if let Err(err) = retriever.commit() {
+                        index_errors.push(json!({
+                            "file": null,
+                            "error": format!("commit failed: {}", err),
+                        }));
+                    }
+                }
+                Err(_) => {
+                    index_errors.push(json!({
+                        "file": null,
+                        "error": "Failed to lock retriever for indexing",
+                    }));
+                }
+            }
+
+            // Phase 3: Index to knowledge graph (outside mutex, async)
+            for (filename, source, chunks) in graph_index_tasks {
+                index_to_knowledge_graph(&filename, &filename, &source, &chunks).await;
+            }
+        } else {
+            index_errors.push(json!({
+                "file": null,
+                "error": "Retriever not initialized; run /reindex manually",
+            }));
+        }
+    }
+
+    trigger_auto_export_after_upload(uploaded_files.len());
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "uploaded_files": uploaded_files,
+        "indexed_files": indexed_files,
+        "index_errors": index_errors,
+        "request_id": request_id
+    })))
+}
+
+
+
+pub async fn list_documents() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir(UPLOAD_DIR) {
+        for entry in entries.flatten() {
+            if entry.path().is_file() {
+                if let Some(filename) = entry.file_name().to_str() {
+                    files.push(filename.to_string());
+                }
+            }
+        }
+    }
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "documents": files,
+        "count": files.len(),
+        "request_id": request_id
+    })))
+}
+
+
+
+pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let filename = path.into_inner();
+    let filepath = format!("{}/{}", UPLOAD_DIR, filename);
+
+    match fs::remove_file(&filepath) {
+        Ok(_) => {
+            // Incrementally delete from the live index so the deleted document
+            // does not keep showing up in search results.
+            let mut deleted_chunks: Option<usize> = None;
+            if let Some(retriever) = RETRIEVER.get() {
+                if let Ok(mut retriever) = retriever.lock() {
+                    match retriever.delete_document_by_filename(&filename) {
+                        Ok(count) => {
+                            deleted_chunks = Some(count);
+                        }
+                        Err(e) => {
+                            warn!(error = %e, filename, "Failed to delete document chunks from index");
+                        }
+                    }
+                }
+            }
+
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": format!("Deleted {}", filename),
+                "deleted_chunks": deleted_chunks,
+                "request_id": request_id
+            })))
+        }
+        Err(_) => Ok(HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "message": "File not found",
+            "request_id": request_id
+        }))),
+    }
+}
+
+
+
+pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let start = std::time::Instant::now();
+
+    // Phase 15: Check concurrency
+    if REINDEX_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(HttpResponse::TooManyRequests().json(json!({
+            "status": "busy",
+            "message": "Reindex already in progress",
+            "request_id": request_id
+        })));
+    }
+
+    // Alerting config
+    let hooks = crate::monitoring::alerting_hooks::AlertingHooksConfig::from_env();
+
+    if let Some(retriever) = RETRIEVER.get() {
+        let mut retriever = retriever.lock().unwrap();
+        let chunker = crate::index::default_chunker(config.chunker_mode);
+        let res = index::index_all_documents(
+            &mut *retriever,
+            UPLOAD_DIR,
+            config.chunker_mode,
+            chunker.as_ref(),
+        );
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let vectors = retriever.metrics.total_vectors as u64;
+        let mappings = retriever.metrics.total_documents_indexed as u64;
+        REINDEX_IN_PROGRESS.store(false, Ordering::SeqCst);
+
+        // Fire webhook (non-blocking)
+        let event = match res {
+            Ok(_) => crate::monitoring::alerting_hooks::ReindexCompletionEvent::success(
+                duration_ms,
+                vectors,
+                mappings,
+            ),
+            Err(_) => crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(
+                duration_ms,
+                vectors,
+                mappings,
+            ),
+        };
+        actix_web::rt::spawn(async move {
+            crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+        });
+
+        if res.is_ok() {
+            tokio::spawn(async move {
+                crate::api::graph_routes::rebuild_graph_from_index().await;
+                crate::api::graph_routes::export_and_reload_graph().await;
+            });
+        }
+        match res {
+            Ok(_) => Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": "Reindexing complete",
+                "request_id": request_id
+            }))),
+            Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Reindex failed: {}", e),
+                "request_id": request_id
+            }))),
+        }
+    } else {
+        REINDEX_IN_PROGRESS.store(false, Ordering::SeqCst);
+        // Fire error webhook for missing retriever
+        let hooks2 = crate::monitoring::alerting_hooks::AlertingHooksConfig::from_env();
+        let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(0, 0, 0);
+        actix_web::rt::spawn(async move {
+            crate::monitoring::alerting_hooks::send_alert(&hooks2, event).await;
+        });
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+
+
+pub(crate) fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (StatusCode, String)> {
+    if REINDEX_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Reindex already in progress".to_string(),
+        ));
+    }
+
+    let job_id = Uuid::new_v4().to_string();
+    let job = AsyncJob {
+        job_id: job_id.clone(),
+        status: "pending".to_string(),
+        started_at: Utc::now().to_rfc3339(),
+        completed_at: None,
+        vectors_indexed: None,
+        mappings_indexed: None,
+        error: None,
+    };
+
+    let jobs = get_jobs_map();
+    jobs.lock().unwrap().insert(job_id.clone(), job);
+
+    let job_id_clone = job_id.clone();
+    let jobs_map = jobs.clone();
+    let retriever_handle = RETRIEVER.get().map(|h| Arc::clone(h));
+    let config_clone = config.clone();
+
+    actix_web::rt::spawn(async move {
+        let start = std::time::Instant::now();
+        let hooks = crate::monitoring::alerting_hooks::AlertingHooksConfig::from_env();
+        if let Some(retriever) = retriever_handle {
+            let mut retriever = retriever.lock().unwrap();
+            {
+                let mut job = jobs_map
+                    .lock()
+                    .unwrap()
+                    .get(&job_id_clone)
+                    .cloned()
+                    .unwrap();
+                job.status = "running".to_string();
+                jobs_map.lock().unwrap().insert(job_id_clone.clone(), job);
+            }
+
+            let chunker = crate::index::default_chunker(config_clone.chunker_mode);
+            let res = index::index_all_documents(
+                &mut *retriever,
+                UPLOAD_DIR,
+                config_clone.chunker_mode,
+                chunker.as_ref(),
+            );
+
+            let mut job = jobs_map
+                .lock()
+                .unwrap()
+                .get(&job_id_clone)
+                .cloned()
+                .unwrap();
+            let duration_ms = start.elapsed().as_millis() as u64;
+            let vectors = retriever.metrics.total_vectors as u64;
+            let mappings = retriever.metrics.total_documents_indexed as u64;
+            drop(retriever); // Release lock before async graph rebuild
+
+            match res {
+                Ok(_) => {
+                    job.status = "completed".to_string();
+                    job.completed_at = Some(Utc::now().to_rfc3339());
+                    job.vectors_indexed = Some(vectors as usize);
+                    job.mappings_indexed = Some(mappings as usize);
+                    let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::success(
+                        duration_ms,
+                        vectors,
+                        mappings,
+                    );
+                    crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+                }
+                Err(ref e) => {
+                    job.status = "failed".to_string();
+                    job.completed_at = Some(Utc::now().to_rfc3339());
+                    job.error = Some(e.to_string());
+                    let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(
+                        duration_ms,
+                        vectors,
+                        mappings,
+                    );
+                    crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+                }
+            }
+            jobs_map.lock().unwrap().insert(job_id_clone.clone(), job);
+            // v1.3.0: Rebuild knowledge graph after successful reindex
+            if res.is_ok() {
+                let graph_result = crate::api::graph_routes::rebuild_graph_from_index().await;
+                info!(
+                    "Post-reindex graph rebuild: {} docs, {} chunks",
+                    graph_result.documents_processed, graph_result.chunks_processed
+                );
+                // Auto-export petgraph after graph rebuild
+                tokio::spawn(async move {
+                    crate::api::graph_routes::export_and_reload_graph().await;
+                });
+            }
+        } else {
+            let mut job = jobs_map
+                .lock()
+                .unwrap()
+                .get(&job_id_clone)
+                .cloned()
+                .unwrap();
+            job.status = "failed".to_string();
+            job.completed_at = Some(Utc::now().to_rfc3339());
+            job.error = Some("Retriever not initialized".to_string());
+            jobs_map
+                .lock()
+                .unwrap()
+                .insert(job_id_clone.clone(), job.clone());
+            let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(0, 0, 0);
+            crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+        }
+        REINDEX_IN_PROGRESS.store(false, Ordering::SeqCst);
+    });
+
+    Ok(job_id)
+}
+
+
+
+/// Phase 15: Async reindex endpoint
+pub async fn reindex_async_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    match launch_async_reindex_job(config) {
+        Ok(job_id) => Ok(HttpResponse::Accepted().json(json!({
+            "status": "accepted",
+            "job_id": job_id,
+            "request_id": request_id
+        }))),
+        Err((status, message)) => Ok(HttpResponse::build(status).json(json!({
+            "status": "busy",
+            "message": message,
+            "request_id": request_id
+        }))),
+    }
+}
+
+
+
+/// Phase 15: Check async job status
+pub async fn reindex_status_handler(path: web::Path<String>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let job_id = path.into_inner();
+
+    let jobs = get_jobs_map();
+    let jobs_lock = jobs.lock().unwrap();
+
+    if let Some(job) = jobs_lock.get(&job_id) {
+        Ok(HttpResponse::Ok().json(json!({
+            "status": job.status,
+            "job_id": job.job_id,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+            "vectors_indexed": job.vectors_indexed,
+            "mappings_indexed": job.mappings_indexed,
+            "error": job.error,
+            "request_id": request_id
+        })))
+    } else {
+        Ok(HttpResponse::NotFound().json(json!({
+            "status": "not_found",
+            "message": format!("Job {} not found", job_id),
+            "request_id": request_id
+        })))
+    }
+}
+
+
+
+/// Phase 15: Index info endpoint
+pub async fn index_info_handler() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let in_ram = std::env::var("INDEX_IN_RAM")
+        .map(|v| v.to_lowercase() == "true" || v == "1")
+        .unwrap_or(false);
+
+    if let Some(retriever) = RETRIEVER.get() {
+        let retriever = retriever.lock().unwrap();
+        Ok(HttpResponse::Ok().json(json!({
+            "index_in_ram": in_ram,
+            "mode": if in_ram { "RAM (fast)" } else { "Disk (standard)" },
+            "warning": if in_ram {
+                json!("INDEX_IN_RAM enabled: High memory usage for large datasets. Recommended for <100 docs only.")
+            } else {
+                json!(null)
+            },
+            "total_documents": retriever.metrics.total_documents_indexed,
+            "total_vectors": retriever.metrics.total_vectors,
+            "request_id": request_id
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+
+
+pub(crate) async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let start = std::time::Instant::now();
+    if let Some(retriever) = RETRIEVER.get() {
+        let query_vector = if let Some(svc) = get_embedding_service() {
+            svc.embed_query(&query.q).await
+        } else {
+            crate::embedder::embed(&query.q)
+        };
+        // Entity extraction for graph search
+        let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
+        let extraction = extractor.extract(&query.q);
+        let entity_texts: Vec<String> = extraction
+            .entities
+            .iter()
+            .filter(|e| e.confidence >= 0.5)
+            .map(|e| e.text.clone())
+            .collect();
+        let mut retriever = retriever.lock().unwrap();
+        // Graph search (petgraph)
+        let graph_results = retriever.graph_search(&entity_texts);
+        // Hybrid BM25 + vector search
+        let hybrid_results = retriever
+            .hybrid_search(&query.q, Some(&query_vector))
+            .unwrap_or_default();
+        // 3-way RRF merge
+        let k = 60.0_f32;
+        let mut score_map: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+        for (rank, content) in hybrid_results.iter().enumerate() {
+            *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
+        for (rank, content) in graph_results.iter().enumerate() {
+            *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
+        let mut merged: Vec<(String, f32)> = score_map.into_iter().collect();
+        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let results: Vec<String> = merged.into_iter().take(10).map(|(c, _)| c).collect();
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        // Record tool execution
+        crate::monitoring::record_tool_execution(
+            "SemanticSearch",
+            &query.q,
+            true,
+            &format!("{} results", results.len()),
+            elapsed,
+            1.0,
+            Some("api/search"),
+        );
+
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "results": results,
+            "request_id": request_id
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+
+
+pub async fn rerank(request: web::Json<RerankRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    if let Some(retriever) = RETRIEVER.get() {
+        let retriever = retriever.lock().unwrap();
+        let reranked = retriever.rerank_by_similarity(&request.query, &request.candidates);
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "results": reranked,
+            "request_id": request_id
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+
+
+pub async fn summarize(request: web::Json<SummarizeRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    if let Some(retriever) = RETRIEVER.get() {
+        let retriever = retriever.lock().unwrap();
+        let summary = retriever.summarize_chunks(&request.query, &request.candidates);
+        Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "summary": summary,
+            "request_id": request_id
+        })))
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+
+
+pub async fn save_vectors_handler() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    if let Some(retriever) = RETRIEVER.get() {
+        let mut retriever = retriever.lock().unwrap();
+        match retriever.force_save() {
+            Ok(_) => Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": "Vectors saved successfully",
+                "vector_count": retriever.vectors.len(),
+                "request_id": request_id
+            }))),
+            Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to save vectors: {}", e),
+                "request_id": request_id
+            }))),
+        }
+    } else {
+        Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
+
