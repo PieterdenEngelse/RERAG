@@ -312,11 +312,8 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
         let retriever = retriever.lock().unwrap();
         match retriever.health_check() {
             Ok(()) => {
-                // Check if Neo4j is enabled but not connected
-                let neo4j_issue = match neo4j_status {
-                    Some((true, false)) => true, // Enabled but not connected
-                    _ => false,
-                };
+                // Neo4j is ingestion-only — not running is normal.
+                // Still report its status in the response, but never downgrade health.
 
                 // Check if Redis is enabled but backend not connected
                 // We check the env config directly because if connection failed at startup,
@@ -327,7 +324,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                 let redis_summary = retriever.get_l3_cache_summary();
                 let redis_issue = redis_configured && !redis_summary.connected;
 
-                let status = if neo4j_issue || redis_issue {
+                let status = if redis_issue {
                     "degraded"
                 } else if is_busy {
                     "busy"
@@ -335,9 +332,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     "healthy"
                 };
 
-                let reason = if neo4j_issue {
-                    "Neo4j enabled but not connected".to_string()
-                } else if redis_issue {
+                let reason = if redis_issue {
                     "Redis enabled but backend not connected".to_string()
                 } else if is_busy {
                     message.clone().unwrap_or_else(|| "System busy".to_string())
@@ -370,7 +365,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                 }
 
                 // Add message if busy or degraded
-                if neo4j_issue || redis_issue {
+                if redis_issue {
                     response["message"] = json!(reason);
                 } else if let Some(msg) = message {
                     response["message"] = json!(msg);

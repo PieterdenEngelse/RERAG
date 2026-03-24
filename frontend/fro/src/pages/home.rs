@@ -156,6 +156,9 @@ pub fn Home() -> Element {
 
     // Chat mode: "rag", "llm", or "hybrid"
     let chat_mode = use_signal(|| "auto".to_string());
+    let mut show_tune_panel = use_signal(|| false);
+    let mut show_tune_info = use_signal(|| false);
+    let mut rag_priority_override = use_signal(|| Option::<f64>::None);
 
     let mut show_delete_memories_modal = use_signal(|| false);
     let mut rag_memories = use_signal(|| Vec::<RagMemoryItem>::new());
@@ -344,7 +347,11 @@ pub fn Home() -> Element {
         spawn(async move {
             // Check if this is a chat command - route to backend
             if is_chat_command(&user_input) {
-                let body = serde_json::json!({ "query": user_input, "mode": mode });
+                let body = if let Some(p) = rag_priority_override() {
+                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                } else {
+                    serde_json::json!({ "query": user_input, "mode": mode })
+                };
                 let request = gloo_net::http::Request::post(&backend_agent_url())
                     .header("Content-Type", "application/json")
                     .body(body.to_string())
@@ -404,7 +411,11 @@ pub fn Home() -> Element {
             let msg_index = messages().len() - 1;
 
             // Use streaming endpoint
-            let body = serde_json::json!({ "query": user_input, "mode": mode });
+            let body = if let Some(p) = rag_priority_override() {
+                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                } else {
+                    serde_json::json!({ "query": user_input, "mode": mode })
+                };
 
             // Create fetch request with streaming
             let window = web_sys::window().unwrap();
@@ -602,7 +613,11 @@ pub fn Home() -> Element {
 
             spawn(async move {
                 if is_chat_command(&user_input) {
-                    let body = serde_json::json!({ "query": user_input, "mode": mode });
+                    let body = if let Some(p) = rag_priority_override() {
+                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                } else {
+                    serde_json::json!({ "query": user_input, "mode": mode })
+                };
                     let request = gloo_net::http::Request::post(&backend_agent_url())
                         .header("Content-Type", "application/json")
                         .body(body.to_string())
@@ -663,7 +678,11 @@ pub fn Home() -> Element {
                 });
                 let msg_index = messages().len() - 1;
 
-                let body = serde_json::json!({ "query": user_input, "mode": mode });
+                let body = if let Some(p) = rag_priority_override() {
+                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                } else {
+                    serde_json::json!({ "query": user_input, "mode": mode })
+                };
 
                 let window = web_sys::window().unwrap();
                 let opts = RequestInit::new();
@@ -896,6 +915,9 @@ pub fn Home() -> Element {
             show_info: show_info,
             prompt_caching_enabled: prompt_caching_enabled,
             show_cache_info: show_cache_info,
+            show_tune_panel: show_tune_panel,
+            show_tune_info: show_tune_info,
+            rag_priority_override: rag_priority_override,
         }
 
 
@@ -1674,6 +1696,60 @@ pub fn Home() -> Element {
                 }
             }
 
+            // Tune Info Modal
+            if show_tune_info() {
+                div {
+                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
+                    onclick: move |_| show_tune_info.set(false),
+                    div {
+                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-md",
+                        style: "margin-top: -3cm;",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div {
+                            class: "flex justify-between items-center mb-3",
+                            h3 { class: "text-base font-bold", "\u{1F39A} Tune" }
+                            button {
+                                class: "btn btn-ghost btn-xs",
+                                onclick: move |_| show_tune_info.set(false),
+                                "\u{2715}"
+                            }
+                        }
+                        div {
+                            class: "text-sm space-y-2",
+                            p { class: "font-semibold text-orange-400", "RAG Priority Fine-Tuning" }
+                            p { "Adjusts the balance between retrieved documents and the LLM's own knowledge for the current query." }
+                            div {
+                                class: "bg-base-200 p-2 rounded mt-2",
+                                p { class: "font-medium", "Priority scale:" }
+                                ul {
+                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "0.0 \u{2014} Pure LLM: skips document retrieval entirely" }
+                                    li { "0.01\u{2013}0.29 \u{2014} LLM-leaning: documents are supplementary context only" }
+                                    li { "0.30\u{2013}0.69 \u{2014} Balanced: equal weight to documents and LLM knowledge" }
+                                    li { "0.70\u{2013}0.99 \u{2014} Doc-leaning: answer primarily from documents, LLM fills gaps" }
+                                    li { "1.0 \u{2014} Strict: answer only from documents, refuses if none found" }
+                                }
+                            }
+                            div {
+                                class: "bg-base-200 p-2 rounded mt-2",
+                                p { class: "font-medium", "How it works:" }
+                                ul {
+                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                    li { "The slider overrides the active mode's default priority for one query" }
+                                    li { "After the query, the slider resets to the mode's default value" }
+                                    li { "Click Reset to clear your override at any time" }
+                                }
+                            }
+                            p { class: "text-xs text-base-content/60 mt-2", "Best for: Quickly adjusting how much you trust your documents for a specific question" }
+                        }
+                        button {
+                            class: "btn btn-primary btn-xs w-full mt-3",
+                            onclick: move |_| show_tune_info.set(false),
+                            "Close"
+                        }
+                    }
+                }
+            }
             // Auto Mode Info Modal
             if show_auto_info() {
                 div {
@@ -1704,7 +1780,7 @@ pub fn Home() -> Element {
                                 p { class: "font-medium", "How it works:" }
                                 ul {
                                     class: "text-xs list-disc list-inside mt-1 space-y-1",
-                                    li { "High confidence (\u{2265}3 chunks, \u{2265}800 chars): Uses strict grounded RAG \u{2014} answers only from documents" }
+                                    li { "High confidence (\u{2265}3 chunks, \u{2265}1536 tokens): Uses strict grounded RAG \u{2014} answers only from documents" }
                                     li { "Low confidence: Falls back to Hybrid mode \u{2014} LLM enhanced with whatever context was found" }
                                     li { "No documents found: Falls back to pure LLM" }
                                 }

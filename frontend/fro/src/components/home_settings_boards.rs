@@ -27,6 +27,9 @@ pub fn HomeSettingsBoards(
     show_info: Signal<ShowRagInfo>,
     prompt_caching_enabled: Signal<bool>,
     show_cache_info: Signal<bool>,
+    show_tune_panel: Signal<bool>,
+    show_tune_info: Signal<bool>,
+    rag_priority_override: Signal<Option<f64>>,
 ) -> Element {
     rsx! {
         div {
@@ -250,6 +253,114 @@ pub fn HomeSettingsBoards(
                                                 circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
                                             }
                                         }
+                                    }
+                                    // Tune button
+                                    div {
+                                        class: "flex items-center gap-1",
+                                        button {
+                                            class: "btn btn-sm rounded-lg px-3",
+                                            style: if show_tune_panel() {
+                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
+                                            } else {
+                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
+                                            },
+                                            onclick: move |_| show_tune_panel.set(!show_tune_panel()),
+                                            title: "Fine-tune RAG priority for this query",
+                                            "\u{1F39A} Tune"
+                                        }
+                                        button {
+                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                                            onclick: move |_| show_tune_info.set(true),
+                                            title: "Info about Tune",
+                                            svg {
+                                                class: INFO_ICON_SVG_CLASS,
+                                                view_box: "0 0 20 20",
+                                                fill: "none",
+                                                stroke: "#026B7C",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Tune slider panel
+                            if show_tune_panel() {
+                                div {
+                                    class: "flex items-center gap-2 mt-2 px-2 py-2 rounded-lg",
+                                    style: "background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);",
+                                    span {
+                                        class: "text-xs font-medium shrink-0",
+                                        style: "color: #9ca3af;",
+                                        "LLM"
+                                    }
+                                    input {
+                                        r#type: "range",
+                                        min: "0",
+                                        max: "100",
+                                        step: "5",
+                                        value: if let Some(v) = rag_priority_override() {
+                                            format!("{}", (v * 100.0) as i32)
+                                        } else {
+                                            match chat_mode().as_str() {
+                                                "llm" => "0".to_string(),
+                                                "hybrid" => "50".to_string(),
+                                                "rag" => "75".to_string(),
+                                                "ragstrict" => "100".to_string(),
+                                                _ => "50".to_string(),
+                                            }
+                                        },
+                                        class: "flex-1",
+                                        style: "accent-color: #7C2A02; height: 6px;",
+                                        oninput: move |evt| {
+                                            if let Ok(v) = evt.value().parse::<f64>() {
+                                                rag_priority_override.set(Some(v / 100.0));
+                                            }
+                                        },
+                                    }
+                                    span {
+                                        class: "text-xs font-medium shrink-0",
+                                        style: "color: #9ca3af;",
+                                        "Strict"
+                                    }
+                                    span {
+                                        class: "text-xs font-medium shrink-0",
+                                        style: "color: #e5e7eb; min-width: 5rem; text-align: right;",
+                                        if let Some(v) = rag_priority_override() {
+                                            {
+                                                let label = if v <= 0.0 {
+                                                    "LLM Only"
+                                                } else if v < 0.3 {
+                                                    "LLM-lean"
+                                                } else if v < 0.7 {
+                                                    "Balanced"
+                                                } else if v < 1.0 {
+                                                    "Doc-lean"
+                                                } else {
+                                                    "Docs Only"
+                                                };
+                                                format!("{label} ({:.2})", v)
+                                            }
+                                        } else {
+                                            {
+                                                match chat_mode().as_str() {
+                                                    "llm" => "LLM Only (0.00)".to_string(),
+                                                    "hybrid" => "Balanced (0.50)".to_string(),
+                                                    "rag" => "Doc-lean (0.75)".to_string(),
+                                                    "ragstrict" => "Docs Only (1.00)".to_string(),
+                                                    "auto" => "Auto (0.50)".to_string(),
+                                                    _ => "Balanced (0.50)".to_string(),
+                                                }
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: "btn btn-ghost btn-xs",
+                                        style: "color: #9ca3af;",
+                                        onclick: move |_| rag_priority_override.set(None),
+                                        "Reset"
                                     }
                                 }
                             }

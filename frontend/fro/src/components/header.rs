@@ -75,20 +75,13 @@ pub fn Header() -> Element {
                     match api::fetch_docker_status().await {
                         Ok(docker_info) => {
                             if docker_info.docker_available {
-                                // Treat Neo4j + visual-cypher as optional when Neo4j is disabled.
-                                // This avoids a persistent "Docker degraded" warning when the operator
-                                // intentionally runs without the KG stack.
-                                let neo4j_required =
-                                    resp.neo4j.as_ref().map(|s| s.enabled).unwrap_or(false);
+                                // Neo4j is ingestion-only (manual start) — always
+                                // exclude it and visual-cypher from the health count.
                                 let required_containers: Vec<_> = docker_info
                                     .containers
                                     .iter()
                                     .filter(|c| {
-                                        if neo4j_required {
-                                            true
-                                        } else {
-                                            c.name != "ag-neo4j" && c.name != "visual-cypher"
-                                        }
+                                        c.name != "ag-neo4j" && c.name != "visual-cypher"
                                     })
                                     .collect();
 

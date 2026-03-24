@@ -270,6 +270,7 @@ impl EmbeddingService {
             };
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
             crate::monitoring::onnx_metrics::record_single_embed(duration_ms);
+            crate::monitoring::metrics::observe_embedding_latency_ms(duration_ms);
             debug!(duration_ms = duration_ms, "Single embedding generated");
 
             {
@@ -298,6 +299,7 @@ impl EmbeddingService {
             );
 
             crate::monitoring::onnx_metrics::record_batch(texts.len());
+            crate::monitoring::metrics::observe_embedding_batch_size(texts.len());
             let start = std::time::Instant::now();
             let mut results = Vec::new();
 
@@ -484,6 +486,7 @@ pub fn embed(text: &str) -> EmbeddingVector {
     let result = global_runtime().embed_owned(text.to_owned());
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     crate::monitoring::onnx_metrics::record_single_embed(duration_ms);
+    crate::monitoring::metrics::observe_embedding_latency_ms(duration_ms);
     result
 }
 
@@ -492,8 +495,13 @@ pub fn embed_batch(texts: &[String]) -> Vec<EmbeddingVector> {
     if texts.is_empty() {
         return Vec::new();
     }
+    crate::monitoring::metrics::observe_embedding_batch_size(texts.len());
+    let start = std::time::Instant::now();
     let runtime = global_runtime();
-    runtime.embed_batch_owned(texts.iter().map(|s| s.to_string()).collect())
+    let result = runtime.embed_batch_owned(texts.iter().map(|s| s.to_string()).collect());
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    crate::monitoring::metrics::observe_embedding_latency_ms(duration_ms);
+    result
 }
 
 #[cfg(test)]

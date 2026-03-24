@@ -696,14 +696,14 @@ impl<'a> Agent<'a> {
             AgentMode::Auto => {
                 // Auto: check retrieval confidence to decide strict RAG vs Hybrid
                 let context = used_chunks.join("\n\n");
-                let high_confidence = used_chunks.len() >= 3 && context.len() >= 800;
+                let high_confidence = used_chunks.len() >= 3 && (context.len() / 4) >= 1536;
                 if high_confidence {
                     steps.push(AgentStep {
                         kind: "llm".into(),
                         message: format!(
-                            "Auto mode: high confidence ({} chunks, {} chars) → strict grounded RAG",
+                            "Auto mode: high confidence ({} chunks, ~{} tokens) → strict grounded RAG",
                             used_chunks.len(),
-                            context.len()
+                            context.len() / 4
                         ),
                     });
                     crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
@@ -713,9 +713,9 @@ impl<'a> Agent<'a> {
                     steps.push(AgentStep {
                         kind: "llm".into(),
                         message: format!(
-                            "Auto mode: low confidence ({} chunks, {} chars) → Hybrid",
+                            "Auto mode: low confidence ({} chunks, ~{} tokens) → Hybrid",
                             used_chunks.len(),
-                            context.len()
+                            context.len() / 4
                         ),
                     });
                     crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
