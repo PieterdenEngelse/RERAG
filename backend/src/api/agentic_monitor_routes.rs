@@ -95,6 +95,7 @@ pub struct ToolStatsResponse {
     pub avg_confidence: f64,
     pub fallback_rate: f64,
     pub tool_distribution: Vec<ToolUsageEntry>,
+    pub llm_latency: crate::monitoring::LlmLatencyStats,
     pub timestamp: String,
 }
 
@@ -752,6 +753,7 @@ pub async fn get_tool_stats() -> ActixResult<HttpResponse> {
         avg_confidence: avg_confidence as f64,
         fallback_rate,
         tool_distribution,
+        llm_latency: crate::monitoring::get_llm_latency_stats(),
         timestamp: Utc::now().to_rfc3339(),
     }))
 }

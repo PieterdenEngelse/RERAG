@@ -13,6 +13,7 @@ mod lora_export;
 mod neo4j;
 mod tantivy;
 mod bm25;
+mod rkyv;
 
 pub use embeddings::DocuEmbeddings;
 pub use knowledge_graphs::DocuKnowledgeGraphs;
@@ -27,6 +28,7 @@ pub use lora_export::DocuLoraExport;
 pub use neo4j::DocuNeo4j;
 pub use tantivy::DocuTantivy;
 pub use bm25::DocuBm25;
+pub use rkyv::DocuRkyv;
 // Documentation - Index page
 
 use crate::app::Route;
@@ -112,6 +114,11 @@ pub fn DocuIndex() -> Element {
                         to: Route::DocuBm25 {},
                         class: "text-primary hover:underline text-lg font-semibold block",
                         "BM25"
+                    }
+                    Link {
+                        to: Route::DocuRkyv {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "rkyv"
                     }
                 }
             }

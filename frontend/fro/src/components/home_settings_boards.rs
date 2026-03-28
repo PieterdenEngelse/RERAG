@@ -9,11 +9,10 @@ use dioxus::prelude::*;
 #[component]
 pub fn HomeSettingsBoards(
     current_backend: Signal<String>,
+    #[props(default)] on_backend_changed: Option<EventHandler<String>>,
     show_backend_info: Signal<bool>,
     chat_mode: Signal<String>,
-    show_rag_info: Signal<bool>,
     show_llm_info: Signal<bool>,
-    show_hybrid_info: Signal<bool>,
     show_auto_info: Signal<bool>,
     show_strict_info: Signal<bool>,
     show_upload_panel: Signal<bool>,
@@ -83,6 +82,7 @@ pub fn HomeSettingsBoards(
                                 clear_model_on_change: true,
                                 show_save_button: true,
                                 show_info_button: false,
+                                on_backend_changed: on_backend_changed,
                             }
                         }
 
@@ -130,37 +130,7 @@ pub fn HomeSettingsBoards(
                                             }
                                         }
                                     }
-                                    // RAG mode button with info
-                                    div {
-                                        class: "flex items-center gap-1",
-                                        button {
-                                            class: "btn btn-sm rounded-lg px-3",
-                                            style: if chat_mode() == "rag" {
-                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
-                                            } else {
-                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
-                                            },
-                                            onclick: move |_| chat_mode.set("rag".to_string()),
-                                            title: "Search documents only",
-                                            span { style: "font-size: 0.75em;", "\u{1F4DA}" }
-                                            " RAG"
-                                        }
-                                        button {
-                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                            onclick: move |_| show_rag_info.set(true),
-                                            title: "Info about RAG mode",
-                                            svg {
-                                                class: INFO_ICON_SVG_CLASS,
-                                                view_box: "0 0 20 20",
-                                                fill: "none",
-                                                stroke: "#026B7C",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                            }
-                                        }
-                                    }
+
                                     // RAG Strict mode button with info
                                     div {
                                         class: "flex items-center gap-1",
@@ -223,37 +193,7 @@ pub fn HomeSettingsBoards(
                                             }
                                         }
                                     }
-                                    // Hybrid mode button with info
-                                    div {
-                                        class: "flex items-center gap-1",
-                                        button {
-                                            class: "btn btn-sm rounded-lg px-3",
-                                            style: if chat_mode() == "hybrid" {
-                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
-                                            } else {
-                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
-                                            },
-                                            onclick: move |_| chat_mode.set("hybrid".to_string()),
-                                            title: "Search documents + LLM enhancement",
-                                            span { style: "font-size: 0.75em;", "\u{26A1}" }
-                                            " Hybrid"
-                                        }
-                                        button {
-                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
-                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
-                                            onclick: move |_| show_hybrid_info.set(true),
-                                            title: "Info about Hybrid mode",
-                                            svg {
-                                                class: INFO_ICON_SVG_CLASS,
-                                                view_box: "0 0 20 20",
-                                                fill: "none",
-                                                stroke: "#026B7C",
-                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
-                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
-                                            }
-                                        }
-                                    }
+
                                     // Tune button
                                     div {
                                         class: "flex items-center gap-1",
@@ -306,8 +246,6 @@ pub fn HomeSettingsBoards(
                                         } else {
                                             match chat_mode().as_str() {
                                                 "llm" => "0".to_string(),
-                                                "hybrid" => "50".to_string(),
-                                                "rag" => "75".to_string(),
                                                 "ragstrict" => "100".to_string(),
                                                 _ => "50".to_string(),
                                             }
@@ -347,8 +285,6 @@ pub fn HomeSettingsBoards(
                                             {
                                                 match chat_mode().as_str() {
                                                     "llm" => "LLM Only (0.00)".to_string(),
-                                                    "hybrid" => "Balanced (0.50)".to_string(),
-                                                    "rag" => "Doc-lean (0.75)".to_string(),
                                                     "ragstrict" => "Docs Only (1.00)".to_string(),
                                                     "auto" => "Auto (0.50)".to_string(),
                                                     _ => "Balanced (0.50)".to_string(),
@@ -369,10 +305,8 @@ pub fn HomeSettingsBoards(
                                 style: "color: white;",
                                 match chat_mode().as_str() {
                                     "auto" => "Auto mode - prefers RAG, falls back to Hybrid",
-                                    "rag" => "RAG mode - searches your documents only",
                                     "ragstrict" => "Strict RAG - answers only from documents",
                                     "llm" => "LLM mode - uses AI without document search",
-                                    "hybrid" => "Hybrid mode - documents + AI fallback",
                                     _ => "Select a mode"
                                 }
                             }

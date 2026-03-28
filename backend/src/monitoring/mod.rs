@@ -64,7 +64,7 @@ pub use tool_dependencies::{
     ToolDependencyEdge, ToolDependencyGraph, ToolDependencyNode,
 };
 pub use tool_stats::{
-    clear_history as clear_tool_history, get_recent_executions, get_tool_stat, get_tool_stats,
+    clear_history as clear_tool_history, get_recent_executions, get_tool_stat, get_llm_latency_stats, get_tool_stats, LlmLatencyStats,
     record_tool_execution, ToolAggregateStats, ToolExecution, ToolExecutionResponse,
     ToolStatsResponse,
 };

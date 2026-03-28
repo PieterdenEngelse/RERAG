@@ -195,9 +195,7 @@ pub fn Home() -> Element {
     let mut help_content = use_signal(|| String::new());
 
     // Mode info modal states
-    let mut show_rag_info = use_signal(|| false);
     let mut show_llm_info = use_signal(|| false);
-    let mut show_hybrid_info = use_signal(|| false);
     let mut show_auto_info = use_signal(|| false);
     let mut show_strict_info = use_signal(|| false);
 
@@ -301,10 +299,15 @@ pub fn Home() -> Element {
                 return;
             }
 
-            // Load available models for the backend
-            if !backend_type.is_empty() {
+            // Load available models for the ACTIVE backend (not just configured)
+            let active_type = match api::fetch_runtime_health().await {
+                Ok(h) => h.active_backend.unwrap_or(backend_type.clone()),
+                Err(_) => backend_type.clone(),
+            };
+            if !active_type.is_empty() {
+                current_backend.set(active_type.clone());
                 models_loading.set(true);
-                match api::fetch_models(&backend_type).await {
+                match api::fetch_models(&active_type).await {
                     Ok(models) => {
                         available_models.set(models);
                     }
@@ -897,11 +900,24 @@ pub fn Home() -> Element {
         // Settings boards — always visible
         HomeSettingsBoards {
             current_backend: current_backend,
+            on_backend_changed: {
+                let mut available_models = available_models.clone();
+                let mut models_loading = models_loading.clone();
+                move |backend: String| {
+                    let mut available_models = available_models.clone();
+                    let mut models_loading = models_loading.clone();
+                    spawn(async move {
+                        models_loading.set(true);
+                        if let Ok(models) = api::fetch_models(&backend).await {
+                            available_models.set(models);
+                        }
+                        models_loading.set(false);
+                    });
+                }
+            },
             show_backend_info: show_backend_info,
             chat_mode: chat_mode,
-            show_rag_info: show_rag_info,
             show_llm_info: show_llm_info,
-            show_hybrid_info: show_hybrid_info,
             show_auto_info: show_auto_info,
             show_strict_info: show_strict_info,
             show_upload_panel: show_upload_panel,
@@ -1555,53 +1571,6 @@ pub fn Home() -> Element {
                 }
             }
 
-            // RAG Mode Info Modal
-            if show_rag_info() {
-                div {
-                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
-                    onclick: move |_| show_rag_info.set(false),
-
-                    div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-md",
-                        style: "margin-top: -3cm;",
-                        onclick: move |evt| evt.stop_propagation(),
-
-                        div {
-                            class: "flex justify-between items-center mb-3",
-                            h3 { class: "text-base font-bold", "📚 RAG Mode" }
-                            button {
-                                class: "btn btn-ghost btn-xs",
-                                onclick: move |_| show_rag_info.set(false),
-                                "✕"
-                            }
-                        }
-
-                        div {
-                            class: "text-sm space-y-2",
-                            p { class: "font-semibold text-blue-400", "Retrieval-Augmented Generation" }
-                            p { "Searches your uploaded documents and returns relevant information directly from them." }
-                            div {
-                                class: "bg-base-200 p-2 rounded mt-2",
-                                p { class: "font-medium", "Settings:" }
-                                ul {
-                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
-                                    li { "Temperature: 0.2 (factual)" }
-                                    li { "Top-K: 15 (focused)" }
-                                    li { "Max tokens: 512" }
-                                }
-                            }
-                            p { class: "text-xs text-base-content/60 mt-2", "Best for: Factual Q&A from your documents" }
-                        }
-
-                        button {
-                            class: "btn btn-primary btn-xs w-full mt-3",
-                            onclick: move |_| show_rag_info.set(false),
-                            "Close"
-                        }
-                    }
-                }
-            }
-
             // LLM Mode Info Modal
             if show_llm_info() {
                 div {
@@ -1643,53 +1612,6 @@ pub fn Home() -> Element {
                         button {
                             class: "btn btn-primary btn-xs w-full mt-3",
                             onclick: move |_| show_llm_info.set(false),
-                            "Close"
-                        }
-                    }
-                }
-            }
-
-            // Hybrid Mode Info Modal
-            if show_hybrid_info() {
-                div {
-                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
-                    onclick: move |_| show_hybrid_info.set(false),
-
-                    div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-md",
-                        style: "margin-top: -3cm;",
-                        onclick: move |evt| evt.stop_propagation(),
-
-                        div {
-                            class: "flex justify-between items-center mb-3",
-                            h3 { class: "text-base font-bold", "⚡ Hybrid Mode" }
-                            button {
-                                class: "btn btn-ghost btn-xs",
-                                onclick: move |_| show_hybrid_info.set(false),
-                                "✕"
-                            }
-                        }
-
-                        div {
-                            class: "text-sm space-y-2",
-                            p { class: "font-semibold text-purple-400", "Best of Both Worlds" }
-                            p { "First searches your documents. If relevant content is found, uses it as context for the LLM. Falls back to pure LLM if no documents match." }
-                            div {
-                                class: "bg-base-200 p-2 rounded mt-2",
-                                p { class: "font-medium", "Settings:" }
-                                ul {
-                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
-                                    li { "Temperature: 0.4 (balanced)" }
-                                    li { "Top-K: 30 (moderate)" }
-                                    li { "Max tokens: 768" }
-                                }
-                            }
-                            p { class: "text-xs text-base-content/60 mt-2", "Best for: Most use cases - grounded answers with AI enhancement" }
-                        }
-
-                        button {
-                            class: "btn btn-primary btn-xs w-full mt-3",
-                            onclick: move |_| show_hybrid_info.set(false),
                             "Close"
                         }
                     }

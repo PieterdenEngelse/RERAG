@@ -12,6 +12,8 @@ pub struct HealthCardProps {
     pub detail: Option<Cow<'static, str>>,
     #[props(default)]
     pub info: Option<Cow<'static, str>>,
+    #[props(default)]
+    pub link: Option<Cow<'static, str>>,
 }
 
 #[component]
@@ -27,8 +29,16 @@ pub fn HealthCard(props: HealthCardProps) -> Element {
 
     rsx! {
         div { class: "rounded p-4 bg-gray-800 border border-gray-700 relative",
-            // Info button (if info text provided)
-            if props.info.is_some() {
+            // Info button: link navigates, otherwise toggles modal
+            if let Some(ref link) = props.link {
+                a {
+                    class: "absolute top-2 right-2 {PARAM_ICON_BUTTON_CLASS}",
+                    style: PARAM_ICON_BUTTON_STYLE,
+                    title: "More info",
+                    href: "{link}",
+                    InfoIcon {}
+                }
+            } else if props.info.is_some() {
                 button {
                     class: "absolute top-2 right-2 {PARAM_ICON_BUTTON_CLASS}",
                     style: PARAM_ICON_BUTTON_STYLE,

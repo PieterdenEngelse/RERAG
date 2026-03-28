@@ -235,7 +235,7 @@ pub async fn create_llm_provider(config: LLMConfig) -> Result<Box<dyn LLMProvide
             info!("Initializing Phi 3.5 via Ollama at {}", ollama_url);
             let provider = OllamaProvider::new(ollama_url, model);
             provider.health_check().await.map_err(|e| {
-                warn!("Failed to connect to Ollama. Make sure it's running: ollama serve");
+                warn!("Failed to connect to LLM backend. Make sure it's running: ollama serve");
                 e
             })?;
             Ok(Box::new(provider))

@@ -1,3 +1,95 @@
+**LLM Latency Calculation:**
+
+```
+User message → /agent endpoint
+                    │
+              ┌─────┴─────┐
+              │ START     │  ← Instant::now()
+              │ TIMER     │
+              └─────┬─────┘
+                    │
+              ┌─────┴─────┐
+              │ HTTP call │  ← POST to llama-server:11435
+              │ to LLM    │     or Ollama:11434
+              │ (stream)  │
+              └─────┬─────┘
+                    │
+              ┌─────┴─────┐
+              │ STOP      │  ← elapsed().as_millis()
+              │ TIMER     │
+              └─────┬─────┘
+                    │
+              ┌─────┴─────┐
+              │ Store in  │  ← VecDeque (last 20 calls)
+              │ buffer    │
+              └─────┬─────┘
+                    │
+         Dashboard request
+                    │
+              ┌─────┴─────┐
+              │ Compute   │  ← avg, p95, min, max
+              │ from      │     from buffer
+              │ buffer    │
+              └───────────┘
+```
+
+**What's measured:** Full round-trip from "send prompt" to "last token received"
+
+**What's NOT measured:** RAG retrieval, prompt construction, response parsing
+
+-----------
+Use cases for vocab files:
+
+Testing tokenization without loading full model
+Converting models (HuggingFace → GGUF)
+Development/debugging tokenizers
+CI tests in llama.cpp repo-
+
+------------------
+Petgraph persistence — Do you rebuild entity graph on restart? If yes, rkyv cache would help.
+Embedding results cache — Are embeddings recomputed or stored? If stored per-document, rkyv could help
+
+Yes. Current state:
+
+| Metric | Status | Effort |
+|--------|--------|--------|
+| **LLM queue depth** | Not tracked | Small - count concurrent calls |
+| **Per-phase breakdown** | Tracked but not exposed | Medium - already have `recall_time`, `search_time`, `llm_time` in agent.rs |
+| **RSS/heap** | Prometheus has it | Zero - `process_resident_memory_bytes` already scraped |
+
+**Already in agent.rs:**
+```rust
+recall_time   // memory recall (line 443)
+search_time   // RAG retrieval (line 526)
+llm_time      // LLM generation (line 942)
+```
+
+But they go to `record_tool_execution` separately, not as a single request breakdown.
+
+**Quick wins:**
+
+1. **LLM queue depth** - Add atomic counter, increment before LLM call, decrement after
+2. **Phase breakdown** - Return timings in `/agent` response or emit to a new endpoint
+3. **Memory** - Already in Prometheus, just add to overview dashboard
+
+Which one first? LLM queue depth is ~10 lines. Phase breakdown is ~30 lines but more useful for debugging..
+
+Useful Redis metrics for your system:
+MetricWhy usefulCache hit rateIs caching actually helping? 90% hits = good, 10% = wasted memoryMemory usageOn 8GB system, Redis shouldn't hog RAMKey countGrowing unbounded? Memory leak?
+Missing/useful additions:
+
+LLM latency histogram (not just request latency)
+"Agent busy" indicator on chat UI
+Embedding throughput (docs/sec during ingestion)
+
+
+[200~Potential Redis uses in AG:
+UseHowBenefit for youSession stateStore conversation contextMulti-instance support (future)Rate limitingCount requests per windowAlready have rate limiting in Rust, probably not neededJob queueReindex jobs, embedding jobsCurrently using async tasks?Pub/subNotify frontend of eventsReal-time updates without pollingDistributed locksPrevent concurrent reindexSingle user, not neededLLM response cacheCache identical promptsSave inference time on repeated queries
+Most useful for you:
+
+LLM response cache — Same question twice = instant response instead of 10s inference
+Pub/sub — Backend pushes "reindex done" instead of frontend polling
+
 # TODO: External Infrastructure Requirements
 
 These 5 optimizations require external infrastructure to implement:

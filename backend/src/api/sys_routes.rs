@@ -224,7 +224,7 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
                     }
                 },
                 Err(e) => {
-                    tracing::warn!("Failed to connect to Ollama: {}", e);
+                    tracing::warn!("Failed to connect to LLM backend: {}", e);
                     HttpResponse::Ok().json(Vec::<ModelInfo>::new())
                 }
             }
@@ -486,6 +486,125 @@ async fn get_custom_models() -> impl Responder {
     }
 }
 
+/// Runtime health check response
+#[derive(serde::Serialize)]
+pub struct RuntimeHealth {
+    pub ollama_available: bool,
+    pub llama_cpp_available: bool,
+    pub active_backend: Option<String>,
+}
+
+/// GET /system/runtime-health
+pub async fn runtime_health() -> impl Responder {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+    
+    // Probe Ollama (11434)
+    let ollama_available = client
+        .get("http://127.0.0.1:11434/api/tags")
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    
+    // Probe llama-server (11435)
+    let llama_cpp_available = client
+        .get("http://127.0.0.1:11435/health")
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    
+    // Determine active backend (prefer configured, fallback to available)
+    let active_backend = if llama_cpp_available {
+        Some("llama_cpp".to_string())
+    } else if ollama_available {
+        Some("ollama".to_string())
+    } else {
+        None
+    };
+    
+    HttpResponse::Ok().json(RuntimeHealth {
+        ollama_available,
+        llama_cpp_available,
+        active_backend,
+    })
+}
+
+/// Request body for runtime actions
+#[derive(serde::Deserialize)]
+pub struct RuntimeActionRequest {
+    pub action: String,
+}
+
+/// POST /sys/runtime/action
+/// Switch between LLM backends (ollama, llama_cpp)
+pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Responder {
+    let action = body.action.as_str();
+
+    // Handle backend switching: stop one, start the other
+    let commands: Vec<(&str, &str)> = match action {
+        "stop" => vec![("stop", "ollama.service")],
+        "start" => vec![("start", "ollama.service")],
+        "switch_ollama" => vec![("stop", "llama-server.service"), ("start", "ollama.service")],
+        "switch_llama_cpp" => vec![("stop", "ollama.service"), ("start", "llama-server.service")],
+        _ => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "error": format!("Unknown runtime action: {}", action),
+            }));
+        }
+    };
+
+    // Execute commands sequentially
+    for (cmd, service) in &commands {
+        let output = tokio::process::Command::new("systemctl")
+            .arg("--user")
+            .args(&[*cmd, *service])
+            .output()
+            .await;
+        
+        if let Err(e) = output {
+            tracing::warn!("Failed to {} {}: {}", cmd, service, e);
+        }
+    }
+
+    // Give service time to start
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Return current status
+    let ollama_running = tokio::process::Command::new("systemctl")
+        .args(&["--user", "is-active", "ollama.service"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    
+    let llama_running = tokio::process::Command::new("systemctl")
+        .args(&["--user", "is-active", "llama-server.service"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let active_backend = if llama_running {
+        "llama_cpp"
+    } else if ollama_running {
+        "ollama"
+    } else {
+        "none"
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "active_backend": active_backend,
+        "ollama_running": ollama_running,
+        "llama_cpp_running": llama_running,
+    }))
+}
+
 pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/cores").route(web::get().to(get_physical_cores)));
     cfg.service(web::resource("/memory").route(web::get().to(get_memory)));
@@ -494,4 +613,6 @@ pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/info").route(web::get().to(get_system_info)));
     cfg.service(web::resource("/models").route(web::get().to(get_models)));
     cfg.service(web::resource("/models/custom").route(web::get().to(get_custom_models)));
+    cfg.service(web::resource("/runtime-health").route(web::get().to(runtime_health)));
+    cfg.service(web::resource("/runtime/action").route(web::post().to(runtime_action)));
 }

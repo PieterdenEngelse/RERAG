@@ -1784,11 +1784,31 @@ pub struct ToolUsageEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RuntimeHealth {
+    pub ollama_available: bool,
+    pub llama_cpp_available: bool,
+    pub active_backend: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct LlmLatencyStats {
+    pub call_count: usize,
+    pub avg_ms: f64,
+    pub p95_ms: f64,
+    pub min_ms: u64,
+    pub max_ms: u64,
+    pub last_ms: Option<u64>,
+    pub calls_last_hour: usize,
+    pub last_backend: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ToolStatsResponse {
     pub tool_executions: usize,
     pub avg_confidence: f64,
     pub fallback_rate: f64,
     pub tool_distribution: Vec<ToolUsageEntry>,
+    pub llm_latency: LlmLatencyStats,
     pub timestamp: String,
 }
 
@@ -1938,6 +1958,35 @@ pub async fn fetch_memory_stats() -> Result<MemoryStatsResponse, String> {
 /// Fetch tool statistics
 pub async fn fetch_tool_stats() -> Result<ToolStatsResponse, String> {
     fetch_json("/monitoring/tools/stats").await
+}
+
+
+pub async fn fetch_runtime_health() -> Result<RuntimeHealth, String> {
+    fetch_json("/sys/runtime-health").await
+}
+
+pub async fn switch_runtime(backend: &str) -> Result<RuntimeHealth, String> {
+    let action = match backend {
+        "ollama" => "switch_ollama",
+        "llama_cpp" => "switch_llama_cpp",
+        _ => return Err(format!("Unknown backend: {}", backend)),
+    };
+    
+    let url = api_url("/sys/runtime/action");
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({"action": action}))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    
+    if !resp.status().is_success() {
+        return Err(format!("Failed to switch runtime: {}", resp.status()));
+    }
+    
+    // Return updated health
+    fetch_runtime_health().await
 }
 
 /// Fetch available tools list

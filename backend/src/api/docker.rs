@@ -263,6 +263,74 @@ pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Res
     let request_id = generate_request_id();
     let action = body.action.as_str();
 
+    // Handle backend switching: stop one, start the other
+    let commands: Vec<(&str, &str)> = match action {
+        "stop" => vec![("stop", "ollama.service")],
+        "start" => vec![("start", "ollama.service")],
+        "switch_ollama" => vec![("stop", "llama-server.service"), ("start", "ollama.service")],
+        "switch_llama_cpp" => vec![("stop", "ollama.service"), ("start", "llama-server.service")],
+        _ => {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "error": format!("Unknown runtime action: {}", action),
+            })));
+        }
+    };
+
+    // Execute commands sequentially
+    for (cmd, service) in &commands {
+        let output = tokio::process::Command::new("systemctl")
+            .arg("--user")
+            .args(&[*cmd, *service])
+            .output()
+            .await;
+        
+        if let Err(e) = output {
+            tracing::warn!("Failed to {} {}: {}", cmd, service, e);
+        }
+    }
+
+    // Give service time to start
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Return current status
+    let ollama_running = tokio::process::Command::new("systemctl")
+        .args(&["--user", "is-active", "ollama.service"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    
+    let llama_running = tokio::process::Command::new("systemctl")
+        .args(&["--user", "is-active", "llama-server.service"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let active_backend = if llama_running {
+        "llama_cpp"
+    } else if ollama_running {
+        "ollama"
+    } else {
+        "none"
+    };
+
+    return Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "request_id": request_id,
+        "active_backend": active_backend,
+        "ollama_running": ollama_running,
+        "llama_cpp_running": llama_running,
+    })));
+}
+
+#[allow(dead_code)]
+async fn runtime_action_legacy(body: web::Json<RuntimeActionRequest>) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let action = body.action.as_str();
+
     let args: Vec<&str> = match action {
         "stop" => vec!["stop", "ollama.service"],
         "start" => vec!["start", "ollama.service"],
@@ -275,7 +343,6 @@ pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Res
         }
     };
 
-    // Use the user systemd manager so we can control user-level runtimes without sudo.
     let output = tokio::process::Command::new("systemctl")
         .arg("--user")
         .args(&args)

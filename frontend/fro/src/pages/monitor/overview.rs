@@ -48,6 +48,10 @@ struct OverviewState {
     docker_available: Option<bool>,
     docker_containers_running: Option<usize>,
     docker_containers_total: Option<usize>,
+    // LLM latency
+    llm_avg_ms: Option<f64>,
+    llm_last_ms: Option<u64>,
+    llm_calls_hour: Option<usize>,
 }
 
 #[component]
@@ -76,6 +80,7 @@ pub fn MonitorOverview() -> Element {
             let neo4j = api::fetch_neo4j_config().await;
             let docker = api::fetch_docker_status().await;
             let cache = api::fetch_cache_info().await;
+            let tool_stats = api::fetch_tool_stats().await;
 
             match (health, requests) {
                 (Ok(h), Ok(r)) => {
@@ -110,6 +115,14 @@ pub fn MonitorOverview() -> Element {
                         Ok(c) => (Some(c.redis.enabled), Some(c.redis.connected)),
                         Err(_) => (None, None),
                     };
+                    let (llm_avg, llm_last, llm_calls) = match &tool_stats {
+                        Ok(t) => (
+                            Some(t.llm_latency.avg_ms),
+                            t.llm_latency.last_ms,
+                            Some(t.llm_latency.calls_last_hour),
+                        ),
+                        Err(_) => (None, None, None),
+                    };
 
                     state.set(OverviewState {
                         loading: false,
@@ -130,6 +143,9 @@ pub fn MonitorOverview() -> Element {
                         docker_available,
                         docker_containers_running: docker_running,
                         docker_containers_total: docker_total,
+                        llm_avg_ms: llm_avg,
+                        llm_last_ms: llm_last,
+                        llm_calls_hour: llm_calls,
                     });
                     page_errors.with_mut(|e| e.clear_error("overview"));
                 }
@@ -260,7 +276,23 @@ pub fn MonitorOverview() -> Element {
                                     )
                                 }
                             }.into()),
-                            info: Some("Async file I/O backend. 'io_uring' (Linux 5.1+) provides 2-3x faster reads. Falls back to 'tokio::fs' on older systems. Configure in Settings → io_uring.".into()),
+                            info: Some("Async file I/O backend. 'io_uring' (Linux 5.1+) provides 2-3x faster reads. Falls back to 'tokio::fs' on older systems. Configure in Config → io-uring.".into()),
+                            link: Some("/docu/index/io-uring".into()),
+                        }
+                        // LLM Latency
+                        HealthCard {
+                            name: "LLM".into(),
+                            status: snapshot.llm_avg_ms
+                                .map(|v| if v > 0.0 { format!("{:.1}s", v / 1000.0) } else { "--".into() })
+                                .unwrap_or_else(|| "--".into())
+                                .into(),
+                            detail: Some(
+                                snapshot.llm_calls_hour
+                                    .map(|c| format!("{} calls/hr", c))
+                                    .unwrap_or_else(|| "No calls".into())
+                                    .into()
+                            ),
+                            info: Some("LLM inference latency. Shows average response time from selected backend/runtime. 'calls/hr' tracks recent activity. Latency depends on prompt size and max_tokens.".into()),
                         }
 
                     }

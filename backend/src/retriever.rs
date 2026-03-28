@@ -461,6 +461,30 @@ pub async fn reindex_atomic(
         RetrieverError::IoError(format!("manifest next->live rename failed: {}", e))
     })?;
 
+    // Clean up backups after successful swap
+    if index_bak.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&index_bak) {
+            info!("Reindex: failed to remove index backup (non-fatal): {}", e);
+        } else {
+            info!("Reindex: cleaned up index backup: {:?}", index_bak);
+        }
+    }
+    if vectors_bak.exists() {
+        if let Err(e) = std::fs::remove_file(&vectors_bak) {
+            info!("Reindex: failed to remove vectors backup (non-fatal): {}", e);
+        } else {
+            info!("Reindex: cleaned up vectors backup: {:?}", vectors_bak);
+        }
+    }
+    let manifest_bak = manifest_dir.join(format!("manifest.json.bak-{}", ts));
+    if manifest_bak.exists() {
+        if let Err(e) = std::fs::remove_file(&manifest_bak) {
+            info!("Reindex: failed to remove manifest backup (non-fatal): {}", e);
+        } else {
+            info!("Reindex: cleaned up manifest backup: {:?}", manifest_bak);
+        }
+    }
+
     Ok((vectors_count, mappings_count))
 }
 
@@ -621,8 +645,9 @@ impl Retriever {
 
         if repaired > 0 {
             debug!("Repaired {} unmapped vectors", repaired);
-            if let Err(e) = self.save_vectors(&self.vector_file_path.clone()) {
-                error!("Failed to save repaired mappings: {}", e);
+            let rkyv_path = self.vector_file_path.replace(".json", ".rkyv");
+            if let Err(e) = self.save_vectors_rkyv(&rkyv_path) {
+                error!("Failed to save repaired mappings (rkyv): {}", e);
             }
         }
 
@@ -925,10 +950,11 @@ impl Retriever {
         }
         let count = self.documents_since_save.fetch_add(1, Ordering::SeqCst) + 1;
         if count >= self.auto_save_threshold {
-            if let Err(e) = self.save_vectors(&self.vector_file_path.clone()) {
-                error!("Auto-save failed: {}", e);
+            let rkyv_path = self.vector_file_path.replace(".json", ".rkyv");
+            if let Err(e) = self.save_vectors_rkyv(&rkyv_path) {
+                error!("Auto-save rkyv failed: {}", e);
             } else {
-                debug!("Auto-saved vectors after {} documents", count);
+                debug!("Auto-saved vectors (rkyv) after {} documents", count);
                 self.documents_since_save.store(0, Ordering::SeqCst);
             }
         }
@@ -1147,7 +1173,8 @@ impl Retriever {
         if self.batch_mode {
             self.end_batch()?;
         }
-        self.save_vectors(&self.vector_file_path.clone())?;
+        let rkyv_path = self.vector_file_path.replace(".json", ".rkyv");
+        self.save_vectors_rkyv(&rkyv_path)?;
         Ok(())
     }
 
@@ -1314,9 +1341,10 @@ impl Retriever {
         }
     }
 
-    /// Load vectors using memory-mapped file (zero-copy, fastest possible)
-    /// This maps the file directly into memory without copying, providing
-    /// near-instant startup and reduced memory pressure.
+    /// Load vectors using memory-mapped file (fallback for when io_uring is unavailable)
+    /// Maps the file into virtual memory then copies vectors out. Page faults occur
+    /// on first access to each 4KB page, making this slower than bulk io_uring reads
+    /// for cold starts. Still useful as a fallback on systems without io_uring.
     ///
     /// # Safety
     /// The mmap is safe as long as the file isn't modified while mapped.
@@ -1618,22 +1646,22 @@ impl Retriever {
         };
 
         if use_rkyv {
-            // Try mmap first (fastest - zero-copy access)
-            match self.load_vectors_mmap(&rkyv_path) {
+            // Try bulk sync read first (one sequential read, no page-fault overhead)
+            match self.load_vectors_rkyv(&rkyv_path) {
                 Ok(()) => {
-                    info!("Loaded vectors via mmap: {}", rkyv_path);
+                    info!("Loaded vectors from rkyv bulk read: {}", rkyv_path);
                     return Ok(());
                 }
                 Err(e) => {
-                    info!("mmap load failed, trying rkyv read: {}", e);
-                    // Fall back to regular rkyv read
-                    match self.load_vectors_rkyv(&rkyv_path) {
+                    info!("rkyv bulk read failed, trying mmap fallback: {}", e);
+                    // Fall back to mmap (page-fault overhead on cold reads)
+                    match self.load_vectors_mmap(&rkyv_path) {
                         Ok(()) => {
-                            info!("Loaded vectors from rkyv: {}", rkyv_path);
+                            info!("Loaded vectors via mmap fallback: {}", rkyv_path);
                             return Ok(());
                         }
                         Err(e2) => {
-                            info!("rkyv load also failed, trying JSON: {}", e2);
+                            info!("mmap fallback also failed, trying JSON: {}", e2);
                         }
                     }
                 }
@@ -1663,8 +1691,8 @@ impl Retriever {
         Ok(())
     }
 
-    /// Async version of load_vectors_auto using io_uring for 2-3x faster file reads
-    /// Compares modification times and loads the NEWER file to prevent stale data
+    /// Async version of load_vectors_auto: io_uring bulk read first (no page faults),
+    /// mmap fallback, then JSON. Compares modification times to prevent stale data.
     /// Prefers rkyv for speed, but only if it's not older than JSON
     pub async fn load_vectors_auto_async(&mut self, base_path: &str) -> Result<(), RetrieverError> {
         let rkyv_path = base_path.replace(".json", ".rkyv");
@@ -1712,26 +1740,26 @@ impl Retriever {
         };
 
         if use_rkyv {
-            // Try mmap first (fastest - zero-copy access)
-            match self.load_vectors_mmap(&rkyv_path) {
+            // Try io_uring first (bulk sequential read, no page-fault overhead)
+            match self.load_vectors_rkyv_async(&rkyv_path).await {
                 Ok(()) => {
-                    info!("Loaded vectors via mmap: {}", rkyv_path);
+                    info!(
+                        "Loaded vectors via {}: {}",
+                        async_io::backend_name(),
+                        rkyv_path
+                    );
                     return Ok(());
                 }
                 Err(e) => {
-                    info!("mmap load failed, trying io_uring async read: {}", e);
-                    // Fall back to io_uring async read (2-3x faster than sync on Linux)
-                    match self.load_vectors_rkyv_async(&rkyv_path).await {
+                    info!("{} load failed, trying mmap fallback: {}", async_io::backend_name(), e);
+                    // Fall back to mmap (still fast, just has page-fault overhead on cold reads)
+                    match self.load_vectors_mmap(&rkyv_path) {
                         Ok(()) => {
-                            info!(
-                                "Loaded vectors via {}: {}",
-                                async_io::backend_name(),
-                                rkyv_path
-                            );
+                            info!("Loaded vectors via mmap fallback: {}", rkyv_path);
                             return Ok(());
                         }
                         Err(e2) => {
-                            info!("io_uring load also failed, trying JSON: {}", e2);
+                            info!("mmap fallback also failed, trying JSON: {}", e2);
                         }
                     }
                 }
@@ -1789,6 +1817,11 @@ impl Retriever {
         info!("Manual save triggered");
         let path = self.vector_file_path.clone();
         self.save_vectors(&path)?;
+        // Keep rkyv in sync (saved last so it's always newer)
+        let rkyv_path = path.replace(".json", ".rkyv");
+        if let Err(e) = self.save_vectors_rkyv(&rkyv_path) {
+            error!("force_save rkyv failed: {}", e);
+        }
         self.documents_since_save.store(0, Ordering::SeqCst);
         Ok(())
     }
@@ -2152,19 +2185,19 @@ impl Drop for Retriever {
         {
             debug!("Temp retriever shutdown detected; skipping save on drop");
         } else {
-            debug!("Retriever shutting down, saving vectors in rkyv format...");
-            // Save in rkyv format (primary - fast)
+            debug!("Retriever shutting down, saving vectors...");
+            // Save JSON first (backup/debug, slower)
+            if let Err(e) = self.save_vectors(&self.vector_file_path.clone()) {
+                error!("Failed to save vectors (JSON) on shutdown: {}", e);
+            } else {
+                debug!("Vectors saved successfully (JSON) on shutdown");
+            }
+            // Save rkyv LAST so its timestamp is always newer (primary format)
             let rkyv_path = self.vector_file_path.replace(".json", ".rkyv");
             if let Err(e) = self.save_vectors_rkyv(&rkyv_path) {
                 error!("Failed to save vectors (rkyv) on shutdown: {}", e);
             } else {
                 debug!("Vectors saved successfully (rkyv) on shutdown");
-            }
-            // Also save JSON for backward compatibility and debugging
-            if let Err(e) = self.save_vectors(&self.vector_file_path.clone()) {
-                error!("Failed to save vectors (JSON) on shutdown: {}", e);
-            } else {
-                debug!("Vectors saved successfully (JSON) on shutdown");
             }
         }
     }

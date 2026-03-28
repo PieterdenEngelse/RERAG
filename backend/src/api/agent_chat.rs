@@ -2256,7 +2256,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         Err(e) => {
             let error_response = serde_json::json!({
                 "type": "error",
-                "message": format!("Failed to connect to Ollama: {}", e),
+                "message": format!("Failed to connect to LLM backend: {}", e),
                 "request_id": request_id
             });
             Ok(HttpResponse::Ok()

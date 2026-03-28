@@ -28,7 +28,7 @@ pub use docu_index::DocuIndex;
 pub use docu_index::{
     DocuEmbeddings, DocuKnowledgeGraphs, DocuOnnx, DocuOnnxParams, DocuIoUring,
     DocuBias, DocuThreads, DocuEntitiesProduction, DocuAgPipeline, DocuLoraExport,
-    DocuNeo4j, DocuTantivy, DocuBm25,
+    DocuNeo4j, DocuTantivy, DocuBm25, DocuRkyv,
 };
 pub use hardware::ConfigHardware;
 pub use home::Home;

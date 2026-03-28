@@ -164,6 +164,8 @@ pub fn ConfigIoUring() -> Element {
     let mut show_r_disabled_info = use_signal(|| false);
     let mut show_attach_wq_fd_info = use_signal(|| false);
     let mut show_dontfork_info = use_signal(|| false);
+    // Info modal - main Configuration header
+    let mut show_config_info = use_signal(|| false);
 
     // Load io_uring config on mount
     {
@@ -341,7 +343,16 @@ pub fn ConfigIoUring() -> Element {
                 div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 shadow",
                     // Header with title on left, save button on right
                     div { class: "flex items-start justify-between mb-3",
-                        h3 { class: "text-sm font-semibold text-gray-200", "Configuration" }
+                        div { class: "flex items-center gap-2",
+                            h3 { class: "text-sm font-semibold text-gray-200", "Configuration" }
+                            button {
+                                class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
+                                onclick: move |_| show_config_info.set(true),
+                                title: "About io_uring",
+                                InfoIcon {}
+                            }
+                        }
                         div { class: "flex items-center gap-3",
                             if let Some(msg) = save_status() {
                                 span { class: "text-green-400 text-xs", "{msg}" }
@@ -973,5 +984,102 @@ pub fn ConfigIoUring() -> Element {
                 }
             }
         }
+        // io_uring info modal
+        if show_config_info() {
+            div {
+                class: "fixed inset-0 bg-gray-800",
+                style: "top: 2.5rem; z-index: 50; overflow-y: auto; overscroll-behavior: contain;",
+
+                div { class: "px-4 py-4 w-full pb-20",
+                    div { class: "flex justify-between items-start mb-2",
+                        h2 { class: "text-xl font-bold text-white",
+                            "io_uring: A Unified Async I/O API for Linux"
+                        }
+                        button {
+                            class: "text-white text-xl hover:text-gray-300",
+                            onclick: move |_| show_config_info.set(false),
+                            "\u{2715}"
+                        }
+                    }
+
+                    div { class: "grid grid-cols-1 lg:grid-cols-3 gap-2 mb-2",
+                        div { class: "bg-gray-900 rounded p-3",
+                            h3 { class: "text-lg font-bold text-white mb-2", "What is io_uring?" }
+                            p { class: "text-xs text-gray-300 mb-2",
+                                "Linux kernel interface (5.1+) for async I/O:"
+                            }
+                            ul { class: "text-xs text-gray-300 list-disc ml-4 space-y-0.5",
+                                li { "One API for all I/O types" }
+                                li { "Zero/minimal syscalls" }
+                                li { "True async (not thread pools)" }
+                                li { "Batching of operations" }
+                            }
+                            p { class: "text-xs text-yellow-300 mt-2",
+                                "\u{2b50} File I/O (doc ingestion, index loading) is where io_uring helps most!"
+                            }
+                        }
+
+                        div { class: "bg-gray-900 rounded p-3",
+                            h3 { class: "text-lg font-bold text-white mb-2", "Before (Fragmented)" }
+                            pre { class: "text-[10px] text-gray-300 font-mono leading-tight",
+                                "Files:   AIO         - Limited\nSockets: epoll       - Different API\nTimers:  timerfd     - Yet another\nSignals: signalfd    - And another\n\n\u{274c} Each I/O = different API\n\u{274c} Can\u{2019}t batch mixed ops"
+                            }
+                        }
+
+                        div { class: "bg-gray-900 rounded p-3",
+                            h3 { class: "text-lg font-bold text-white mb-2", "With io_uring (Unified)" }
+                            pre { class: "text-[10px] text-gray-300 font-mono leading-tight",
+                                "Files \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}\nSockets \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2524} io_uring \u{2500}\u{25ba} CQ\nTimers \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2524} (One API)\nSignals \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}\n\n\u{2705} One API for everything\n\u{2705} Batch N ops in 1 syscall\n\u{2705} True kernel-level async"
+                            }
+                        }
+                    }
+
+                    div { class: "grid grid-cols-1 lg:grid-cols-2 gap-2 mb-2",
+                        div { class: "bg-gray-900 rounded p-3",
+                            h3 { class: "text-lg font-bold text-white mb-2", "Architecture" }
+                            pre { class: "text-[10px] text-gray-300 font-mono leading-tight",
+                                "USER SPACE              KERNEL SPACE\n\n\u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}        \u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}\n\u{2502} Submission Q  \u{2502}\u{25c4}\u{2500}shared\u{2500}\u{25ba}\u{2502}  io_uring   \u{2502}\n\u{2502}     (SQ)      \u{2502} memory  \u{2502}   kernel    \u{2502}\n\u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2524}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}        \u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2524}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}\n       \u{2502} submit                 \u{2502}\n       \u{25bc}                        \u{2502} complete\n\u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}               \u{2502}\n\u{2502} Completion Q  \u{2502}\u{25c4}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}\n\u{2502}     (CQ)      \u{2502} shared memory\n\u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}"
+                            }
+                        }
+
+                        div { class: "bg-gray-900 rounded p-3",
+                            h3 { class: "text-lg font-bold text-white mb-2", "Performance" }
+                            div { class: "text-[10px] text-gray-300 space-y-0.5",
+                                p {
+                                    span { class: "text-gray-400", "Syscalls/IO: " }
+                                    "epoll 1-2 \u{2192} io_uring 0-1 (batched)"
+                                }
+                                p {
+                                    span { class: "text-gray-400", "File async: " }
+                                    "epoll Fake \u{2192} io_uring True"
+                                }
+                                p {
+                                    span { class: "text-gray-400", "Batching: " }
+                                    "epoll No \u{2192} io_uring Yes"
+                                }
+                                p {
+                                    span { class: "text-gray-400", "Zero-copy: " }
+                                    "epoll Limited \u{2192} io_uring Yes"
+                                }
+                                p {
+                                    span { class: "text-gray-400", "CPU: " }
+                                    "io_uring 30-50% lower"
+                                }
+                            }
+                            p { class: "text-[10px] text-green-400 mt-2",
+                                "Benchmark: epoll ~400k ops/s \u{2192} io_uring ~800k ops/s (2x)"
+                            }
+                        }
+                    }
+
+                    button {
+                        class: "btn btn-primary btn-sm w-full",
+                        onclick: move |_| show_config_info.set(false),
+                        "Got it!"
+                    }
+                }
+            }
+        }
+
     }
 }

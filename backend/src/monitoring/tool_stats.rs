@@ -37,6 +37,30 @@ pub struct ToolAggregateStats {
     pub last_used: Option<String>,
 }
 
+/// LLM-specific latency stats from last N calls
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct LlmLatencyStats {
+    pub call_count: usize,
+    pub avg_ms: f64,
+    pub p95_ms: f64,
+    pub min_ms: u64,
+    pub max_ms: u64,
+    pub last_ms: Option<u64>,
+    pub calls_last_hour: usize,
+    pub last_backend: Option<String>,
+}
+
+const LLM_LATENCY_HISTORY_SIZE: usize = 20;
+
+struct LlmLatencyEntry {
+    latency_ms: u64,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    backend: String,
+}
+
+static LLM_LATENCIES: once_cell::sync::Lazy<std::sync::Mutex<VecDeque<LlmLatencyEntry>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(VecDeque::with_capacity(LLM_LATENCY_HISTORY_SIZE)));
+
 /// Global tool execution history
 struct ToolExecutionHistory {
     executions: VecDeque<ToolExecution>,
@@ -92,6 +116,20 @@ pub fn record_tool_execution(
         source: source.map(|s| s.to_string()),
     };
 
+    // Track LLM-specific latencies
+    if tool_type == "LLMGenerate" {
+        if let Ok(mut llm_hist) = LLM_LATENCIES.lock() {
+            llm_hist.push_back(LlmLatencyEntry {
+                latency_ms: execution_time_ms,
+                timestamp: chrono::Utc::now(),
+                backend: source.unwrap_or("unknown").to_string(),
+            });
+            while llm_hist.len() > LLM_LATENCY_HISTORY_SIZE {
+                llm_hist.pop_front();
+            }
+        }
+    }
+
     if let Ok(mut history) = get_history().lock() {
         // Add to execution history
         if history.executions.len() >= MAX_HISTORY_SIZE {
@@ -126,6 +164,51 @@ pub fn record_tool_execution(
         stats.avg_confidence = prev_avg + (confidence - prev_avg) / n;
 
         stats.last_used = Some(timestamp);
+    }
+}
+
+/// Get LLM latency statistics from last 20 calls
+pub fn get_llm_latency_stats() -> LlmLatencyStats {
+    let llm_hist = match LLM_LATENCIES.lock() {
+        Ok(h) => h,
+        Err(_) => return LlmLatencyStats::default(),
+    };
+
+    if llm_hist.is_empty() {
+        return LlmLatencyStats::default();
+    }
+
+    let now = chrono::Utc::now();
+    let hour_ago = now - chrono::Duration::hours(1);
+
+    let mut latencies: Vec<u64> = llm_hist.iter().map(|e| e.latency_ms).collect();
+    let calls_last_hour = llm_hist.iter().filter(|e| e.timestamp >= hour_ago).count();
+
+    let call_count = latencies.len();
+    let sum: u64 = latencies.iter().sum();
+    let avg_ms = sum as f64 / call_count as f64;
+
+    latencies.sort();
+    let min_ms = latencies[0];
+    let max_ms = latencies[call_count - 1];
+    let last_ms = llm_hist.back().map(|e| e.latency_ms);
+
+    // p95: for 20 items, index 18 (0.95 * 20 - 1 = 18)
+    let p95_idx = ((call_count as f64) * 0.95).ceil() as usize - 1;
+    let p95_idx = p95_idx.clamp(0, call_count - 1);
+    let p95_ms = latencies[p95_idx] as f64;
+
+    let last_backend = llm_hist.back().map(|e| e.backend.clone());
+
+    LlmLatencyStats {
+        call_count,
+        avg_ms,
+        p95_ms,
+        min_ms,
+        max_ms,
+        last_ms,
+        calls_last_hour,
+        last_backend,
     }
 }
 

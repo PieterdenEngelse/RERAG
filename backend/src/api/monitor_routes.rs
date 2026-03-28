@@ -567,7 +567,7 @@ pub(crate) async fn get_io_uring_stats() -> Result<HttpResponse, Error> {
                 "batch_read": "perf::io_uring::read_files()"
             },
             "current_usage": {
-                "startup_vector_load": "mmap (zero-copy, already optimal)",
+                "startup_vector_load": "io_uring bulk read (mmap fallback)",
                 "upload_indexing": "io_uring via extract_text_async()",
                 "reindex": "io_uring via index_all_documents_async()",
                 "note": "All file reads now use io_uring on Linux 5.1+ for 2-3x speedup"
