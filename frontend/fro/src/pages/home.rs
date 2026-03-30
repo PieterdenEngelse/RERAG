@@ -2,11 +2,14 @@ use crate::api::{self, RagMemoryItem};
 use crate::app::{ClearChat, Route, ShowRagInfo};
 use crate::components::HomeSettingsBoards;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
+use crate::pages::hardware::components::info_modal;
+use crate::pages::hardware::help_content::HelpTopic;
 use dioxus::prelude::*;
 use dioxus_router::Link;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use futures_util::StreamExt;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
 fn backend_origin() -> String {
@@ -217,6 +220,88 @@ pub fn Home() -> Element {
 
     // Backend type state for home page board
     let current_backend = use_signal(|| String::from("ollama"));
+    let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
+    
+    // Track last seen context to detect external changes only
+    let mut last_ctx_backend = use_signal(String::new);
+    let mut last_ctx_model = use_signal(String::new);
+    
+    // Watch RuntimeContext for changes from OTHER pages (not our own changes)
+    {
+        let mut current_backend = current_backend.clone();
+        let mut selected_model = selected_model.clone();
+        let mut available_models = available_models.clone();
+        let mut models_loading = models_loading.clone();
+        let mut last_ctx_backend = last_ctx_backend.clone();
+        let mut last_ctx_model = last_ctx_model.clone();
+        let runtime_ctx = runtime_ctx.clone();
+        use_effect(move || {
+            let ctx = runtime_ctx();
+            let ctx_backend = ctx.configured_backend.clone();
+            let ctx_model = ctx.configured_model.clone();
+            
+            // Always sync when local differs from context
+            if !ctx_backend.is_empty() && ctx_backend != current_backend() {
+                current_backend.set(ctx_backend.clone());
+                // Reload models for new backend
+                let mut available_models = available_models.clone();
+                let mut models_loading = models_loading.clone();
+                spawn(async move {
+                    models_loading.set(true);
+                    if let Ok(models) = api::fetch_models(&ctx_backend).await {
+                        available_models.set(models);
+                    }
+                    models_loading.set(false);
+                });
+            }
+            
+            // Always sync when local differs from context
+            if !ctx_model.is_empty() && ctx_model != selected_model() {
+                selected_model.set(ctx_model);
+            }
+        });
+    }
+    // Listen for config changes from other tabs
+    {
+        let mut selected_model = selected_model.clone();
+        let mut current_backend = current_backend.clone();
+        let mut available_models = available_models.clone();
+        let mut models_loading = models_loading.clone();
+        let mut runtime_ctx = runtime_ctx.clone();
+        use_future(move || async move {
+            let bc = match web_sys::BroadcastChannel::new("ag_config_sync") {
+                Ok(bc) => bc,
+                Err(_) => return,
+            };
+            let (tx, mut rx) = futures_channel::mpsc::unbounded::<()>();
+            let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: web_sys::MessageEvent| {
+                let _ = tx.unbounded_send(());
+            }) as Box<dyn FnMut(_)>);
+            bc.set_onmessage(Some(closure.as_ref().unchecked_ref()));
+            closure.forget();
+            while rx.next().await.is_some() {
+                if let Ok(resp) = api::fetch_hardware_config().await {
+                    let backend = resp.config.backend_type.clone();
+                    let model = resp.config.model.trim().to_string();
+                    current_backend.set(backend.clone());
+                    if !model.is_empty() {
+                        selected_model.set(model.clone());
+                    }
+                    // Sync runtime context so BackendSelector updates
+                    runtime_ctx.with_mut(|ctx| {
+                        ctx.configured_backend = backend.clone();
+                        ctx.configured_model = model;
+                        ctx.active_backend = Some(backend.clone());
+                    });
+                    models_loading.set(true);
+                    if let Ok(models) = api::fetch_models(&backend).await {
+                        available_models.set(models);
+                    }
+                    models_loading.set(false);
+                }
+            }
+        });
+    }
     let mut show_backend_info = use_signal(|| false);
 
     // Load documents on mount
@@ -277,6 +362,12 @@ pub fn Home() -> Element {
                         let active_model = resp.config.model.trim().to_string();
                         if !active_model.is_empty() {
                             selected_model.set(active_model);
+                        } else {
+                            // Persist default model to DB so Hardware page sees it
+                            let default_model = selected_model.peek().clone();
+                            let mut config = resp.config.clone();
+                            config.model = default_model;
+                            let _ = api::commit_hardware_config(&config).await;
                         }
                         backend_type = resp.config.backend_type.clone();
                         current_backend.set(backend_type.clone());
@@ -299,15 +390,19 @@ pub fn Home() -> Element {
                 return;
             }
 
-            // Load available models for the ACTIVE backend (not just configured)
-            let active_type = match api::fetch_runtime_health().await {
-                Ok(h) => h.active_backend.unwrap_or(backend_type.clone()),
-                Err(_) => backend_type.clone(),
-            };
-            if !active_type.is_empty() {
-                current_backend.set(active_type.clone());
+            // Load models for the CONFIGURED backend
+            runtime_ctx.with_mut(|ctx| {
+                ctx.configured_backend = backend_type.clone();
+            });
+            if let Ok(h) = api::fetch_runtime_health().await {
+                runtime_ctx.with_mut(|ctx| {
+                    ctx.active_backend = h.active_backend;
+                });
+            }
+            if !backend_type.is_empty() {
+                current_backend.set(backend_type.clone());
                 models_loading.set(true);
-                match api::fetch_models(&active_type).await {
+                match api::fetch_models(&backend_type).await {
                     Ok(models) => {
                         available_models.set(models);
                     }
@@ -1776,34 +1871,8 @@ pub fn Home() -> Element {
 
             // Backend Info Modal
             if show_backend_info() {
-                div {
-                    class: "fixed inset-0 bg-black/60 flex items-center justify-center overflow-y-auto pointer-events-auto",
-                    style: "z-index: 1000;",
-                    onclick: move |_| show_backend_info.set(false),
-
-                    div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-lg my-4 pointer-events-auto",
-                        onclick: move |evt| evt.stop_propagation(),
-
-                        div {
-                            class: "flex justify-between items-center mb-3",
-                            h3 { class: "text-base font-bold", "Inference backend" }
-                            button {
-                                class: "btn btn-ghost btn-xs",
-                                onclick: move |_| show_backend_info.set(false),
-                                "✕"
-                            }
-                        }
-
-                        div {
-                            class: "text-sm space-y-2",
-                            p { "Select the runtime that executes prompts (local llama.cpp, vLLM, OpenAI, etc.)." }
-                            p { "Switching backend clears the model name so you can pick a compatible artifact." }
-                        }
-                    }
-                }
+                { info_modal(HelpTopic::Backend.title(), show_backend_info, HelpTopic::Backend.paragraphs()) }
             }
-
             // KV Cache Info Modal
             if show_cache_info() {
                 div {

@@ -605,6 +605,182 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
     }))
 }
 
+// ── Loaded model endpoint ── v1.1.0 ─────────────────────────────────
+
+/// What's currently loaded in GPU/CPU memory
+#[derive(Serialize)]
+pub struct LoadedModelResponse {
+    /// Which backend is serving ("ollama", "llama_cpp", or "none")
+    pub backend: String,
+    /// Model identifier currently in memory (None if nothing loaded)
+    pub model: Option<String>,
+    /// Model file size in bytes (when available)
+    pub size: Option<u64>,
+    /// VRAM or RAM used by the model in bytes (Ollama only)
+    pub memory_used: Option<u64>,
+    /// Time the model expires from memory (Ollama only, ISO 8601)
+    pub expires_at: Option<String>,
+}
+
+/// Ollama /api/ps response
+#[derive(Deserialize)]
+struct OllamaPsResponse {
+    models: Vec<OllamaPsModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaPsModel {
+    name: String,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    size_vram: Option<u64>,
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+/// llama-server /props response (subset we care about)
+#[derive(Deserialize)]
+struct LlamaServerProps {
+    #[serde(default, alias = "default_generation_settings")]
+    default_generation_settings: Option<LlamaGenSettings>,
+}
+
+#[derive(Deserialize)]
+struct LlamaGenSettings {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// GET /sys/loaded-model
+pub async fn loaded_model() -> impl Responder {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+
+    // ── Try Ollama /api/ps first ──
+    if let Ok(resp) = client.get("http://127.0.0.1:11434/api/ps").send().await {
+        if resp.status().is_success() {
+            if let Ok(ps) = resp.json::<OllamaPsResponse>().await {
+                if let Some(m) = ps.models.first() {
+                    return HttpResponse::Ok().json(LoadedModelResponse {
+                        backend: "ollama".into(),
+                        model: Some(m.name.clone()),
+                        size: m.size,
+                        memory_used: m.size_vram,
+                        expires_at: m.expires_at.clone(),
+                    });
+                }
+                // Ollama is running but no model loaded
+                return HttpResponse::Ok().json(LoadedModelResponse {
+                    backend: "ollama".into(),
+                    model: None,
+                    size: None,
+                    memory_used: None,
+                    expires_at: None,
+                });
+            }
+        }
+    }
+
+    // ── Try llama-server /props ──
+    if let Ok(resp) = client.get("http://127.0.0.1:11435/props").send().await {
+        if resp.status().is_success() {
+            let model_name = resp
+                .json::<LlamaServerProps>()
+                .await
+                .ok()
+                .and_then(|p| p.default_generation_settings)
+                .and_then(|g| g.model);
+
+            return HttpResponse::Ok().json(LoadedModelResponse {
+                backend: "llama_cpp".into(),
+                model: model_name,
+                size: None,
+                memory_used: None,
+                expires_at: None,
+            });
+        }
+    }
+
+    // ── Neither backend responding ──
+    HttpResponse::Ok().json(LoadedModelResponse {
+        backend: "none".into(),
+        model: None,
+        size: None,
+        memory_used: None,
+        expires_at: None,
+    })
+}
+
+/// Request body for llama model update
+#[derive(Deserialize)]
+pub struct LlamaModelRequest {
+    pub model: String,
+}
+
+/// POST /sys/llama-model
+/// Update llama-server model in env file and restart service
+pub async fn set_llama_model(body: web::Json<LlamaModelRequest>) -> impl Responder {
+    let model_name = body.model.trim();
+    if model_name.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "error": "Model name cannot be empty",
+        }));
+    }
+
+    // Resolve full path
+    let models_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join("llama.cpp/models");
+    let model_path = models_dir.join(model_name);
+
+    if !model_path.exists() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "error": format!("Model not found: {}", model_path.display()),
+        }));
+    }
+
+    // Write env file
+    let env_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config/ag");
+    let env_path = env_dir.join("llama-server.env");
+
+    if let Err(e) = std::fs::create_dir_all(&env_dir) {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "error",
+            "error": format!("Failed to create config dir: {}", e),
+        }));
+    }
+
+    let env_content = format!("LLAMA_MODEL={}
+", model_path.display());
+    if let Err(e) = std::fs::write(&env_path, &env_content) {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "error",
+            "error": format!("Failed to write env file: {}", e),
+        }));
+    }
+
+    // Restart llama-server
+    let _ = tokio::process::Command::new("systemctl")
+        .args(&["--user", "restart", "llama-server.service"])
+        .output()
+        .await;
+
+    tracing::info!("Updated llama-server model to: {}", model_path.display());
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "model": model_name,
+        "model_path": model_path.display().to_string(),
+    }))
+}
+
 pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/cores").route(web::get().to(get_physical_cores)));
     cfg.service(web::resource("/memory").route(web::get().to(get_memory)));
@@ -615,4 +791,6 @@ pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/models/custom").route(web::get().to(get_custom_models)));
     cfg.service(web::resource("/runtime-health").route(web::get().to(runtime_health)));
     cfg.service(web::resource("/runtime/action").route(web::post().to(runtime_action)));
+    cfg.service(web::resource("/loaded-model").route(web::get().to(loaded_model)));
+    cfg.service(web::resource("/llama-model").route(web::post().to(set_llama_model)));
 }

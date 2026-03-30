@@ -132,8 +132,20 @@ impl HelpTopic {
     pub fn paragraphs(&self) -> Vec<&'static str> {
         match self {
             Self::Backend => vec![
-                "Select the runtime that executes prompts (local llama.cpp, vLLM, OpenAI, etc.).",
+                "Select the runtime that executes prompts (local llama.cpp, Ollama, vLLM, OpenAI, etc.).",
                 "Switching backend clears the model name so you can pick a compatible artifact.",
+                "",
+                "Ollama",
+                "Ollama is a model server. It runs as an empty process \u{2014} no model loaded at startup. When a request arrives with e.g. `\"model\": \"phi:latest\"`, Ollama checks if that model is already in memory. If not, it loads it from its own model store (`~/.ollama/models/`). If a different model was loaded, it evicts the old one (after ~5 min idle) and loads the new one.",
+                "The model selection happens at request time, driven by the API call, not at startup. That\u{2019}s why the systemd service file just says `ollama serve` \u{2014} no model path needed.",
+                "",
+                "llama-server (llama.cpp)",
+                "llama-server is a single-model server. At startup, it reads the `--model /path/to/file.gguf` flag, loads that one model into memory, and serves only that model for its entire lifetime.",
+                "To switch models, you must stop the process, change the `--model` argument, and restart. There\u{2019}s no API to swap models at runtime.",
+                "",
+                "What this means in the UI",
+                "Ollama: changing the model dropdown just changes which model name gets sent in API requests \u{2014} no restart needed.",
+                "llama-server: changing the model means rewriting the env file and restarting the llama-server service \u{2014} a heavier operation with a brief downtime.",
             ],
             Self::Model => vec![
                 "When the backend exposes a discovery API the select menu lists its models.",

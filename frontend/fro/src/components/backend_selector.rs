@@ -15,18 +15,17 @@ pub fn BackendSelector(
     let backend_options = BackendType::all();
     let mut save_status = use_signal(|| "Save".to_string());
     let mut show_backend_info = use_signal(|| false);
-    let mut active_backend: Signal<Option<String>> = use_signal(|| None);
-    let mut switching_backend: Signal<bool> = use_signal(|| false);
+    // Use shared runtime context
+    let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
-    // Fetch active backend from runtime health
+    // Fetch active backend once on mount — broadcast handles cross-tab updates
     {
-        let mut active_backend = active_backend.clone();
+        let mut runtime_ctx = runtime_ctx.clone();
         use_future(move || async move {
-            loop {
-                if let Ok(health) = api::fetch_runtime_health().await {
-                    active_backend.set(health.active_backend);
-                }
-                gloo_timers::future::TimeoutFuture::new(5000).await;
+            if let Ok(health) = api::fetch_runtime_health().await {
+                runtime_ctx.with_mut(|ctx| {
+                    ctx.active_backend = health.active_backend;
+                });
             }
         });
     }
@@ -41,10 +40,9 @@ pub fn BackendSelector(
                     let selected_value = evt.value();
                     current_backend.set(selected_value.clone());
                     let clear_model = clear_model_on_change;
-                    let mut active_backend = active_backend.clone();
-                    let mut switching_backend = switching_backend.clone();
+                    let mut runtime_ctx = runtime_ctx.clone();
                     spawn(async move {
-                        switching_backend.set(true);
+                        runtime_ctx.with_mut(|ctx| ctx.switching = true);
                         // Switch runtime (returns immediately)
                         let _ = api::switch_runtime(&selected_value).await;
                         // Poll until ready (max 30 attempts, 500ms each = 15s)
@@ -52,12 +50,15 @@ pub fn BackendSelector(
                             gloo_timers::future::TimeoutFuture::new(500).await;
                             if let Ok(health) = api::fetch_runtime_health().await {
                                 if health.active_backend.as_deref() == Some(&selected_value) {
-                                    active_backend.set(health.active_backend);
+                                    runtime_ctx.with_mut(|ctx| {
+                                        ctx.active_backend = health.active_backend;
+                                        ctx.configured_backend = selected_value.clone();
+                                    });
                                     break;
                                 }
                             }
                         }
-                        switching_backend.set(false);
+                        runtime_ctx.with_mut(|ctx| ctx.switching = false);
                         // Notify parent of backend change
                         if let Some(handler) = on_backend_changed {
                             handler.call(selected_value.clone());
@@ -81,12 +82,12 @@ pub fn BackendSelector(
                 }
             }
             // Show active backend or switching state
-            if switching_backend() {
+            if runtime_ctx().switching {
                 p {
                     class: "text-xs text-yellow-400 mt-1",
                     "Starting..."
                 }
-            } else if let Some(backend) = active_backend() {
+            } else if let Some(ref backend) = runtime_ctx().active_backend {
                 p {
                     class: "text-xs text-gray-400 mt-1",
                     "Active: {backend}"

@@ -1,6 +1,6 @@
 pub mod components;
 pub mod constants;
-mod help_content;
+pub mod help_content;
 mod helpers;
 pub mod quantization;
 pub mod state;
@@ -53,7 +53,13 @@ async fn fetch_and_merge_models(
     match api::fetch_custom_models().await {
         Ok(custom) => {
             if !custom.is_empty() {
-                base = merge_model_lists(base, custom);
+                // Only merge gguf custom models when using llama_cpp
+                let filtered = if backend == "llama_cpp" {
+                    custom.into_iter().filter(|m| m.name.ends_with(".gguf")).collect()
+                } else {
+                    custom
+                };
+                base = merge_model_lists(base, filtered);
             }
         }
         Err(err) => {
@@ -65,6 +71,7 @@ async fn fetch_and_merge_models(
 
 #[component]
 pub fn ConfigHardware() -> Element {
+    let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
     let mut hardware_config = use_signal(api::HardwareConfig::default);
     let status = use_signal(|| Option::<String>::None);
     let error = use_signal(|| Option::<String>::None);
@@ -242,15 +249,15 @@ pub fn ConfigHardware() -> Element {
         });
     }
 
+    // Reload models when backend changes (local changes only)
     {
         let mut models = models.clone();
         let mut models_loading = models_loading.clone();
         let mut model_error = model_error.clone();
-        let hardware_config = hardware_config.clone();
+        let mut hardware_config = hardware_config.clone();
         let mut last_model_backend = last_model_backend.clone();
         use_effect(move || {
             let backend = hardware_config().backend_type.clone();
-            // Use peek() to read without subscribing, avoiding read-write in same scope
             if backend == last_model_backend.peek().clone() {
                 return;
             }
@@ -258,8 +265,30 @@ pub fn ConfigHardware() -> Element {
             models_loading.set(true);
             model_error.set(None);
             spawn(async move {
+                // Switch runtime before fetching models
+                if backend == "ollama" || backend == "llama_cpp" {
+                    let _ = api::switch_runtime(&backend).await;
+                    // Wait for service to be ready
+                    for _ in 0..6 {
+                        gloo_timers::future::TimeoutFuture::new(500).await;
+                        if let Ok(h) = api::fetch_runtime_health().await {
+                            let ready = match backend.as_str() {
+                                "ollama" => h.ollama_available,
+                                "llama_cpp" => h.llama_cpp_available,
+                                _ => true,
+                            };
+                            if ready { break; }
+                        }
+                    }
+                }
                 match api::fetch_models(&backend).await {
                     Ok(list) => {
+                        // Auto-select first model if current is empty
+                        if hardware_config.peek().model.is_empty() {
+                            if let Some(first) = list.first() {
+                                hardware_config.with_mut(|cfg| cfg.model = first.name.clone());
+                            }
+                        }
                         models.set(list);
                         model_error.set(None);
                     }
@@ -372,6 +401,26 @@ pub fn ConfigHardware() -> Element {
                     (Ok(hw_resp), Ok(sampling_resp)) => {
                         status.set(Some("✓ Settings saved".to_string()));
                         hardware_config.set(hw_resp.config.clone());
+                        // Switch runtime if backend changed
+                        let saved_backend = hw_resp.config.backend_type.clone();
+                        if saved_backend == "llama_cpp" || saved_backend == "ollama" {
+                            // For llama_cpp, update model env file before switching
+                            if saved_backend == "llama_cpp" && !hw_resp.config.model.is_empty() {
+                                let _ = api::set_llama_model(&hw_resp.config.model).await;
+                            }
+                            let _ = api::switch_runtime(&saved_backend).await;
+                        }
+                        // Sync to shared context
+                        runtime_ctx.with_mut(|ctx| {
+                            ctx.configured_backend = hw_resp.config.backend_type.clone();
+                            ctx.configured_model = hw_resp.config.model.clone();
+                            ctx.active_backend = Some(hw_resp.config.backend_type.clone());
+                        });
+                        // Notify other tabs
+                        if let Ok(bc) = web_sys::BroadcastChannel::new("ag_config_sync") {
+                            let _ = bc.post_message(&wasm_bindgen::JsValue::from_str("config_changed"));
+                            bc.close();
+                        }
                         let mut updated_sampling = sampling_resp.config.clone();
                         updated_sampling.num_predict = updated_sampling.max_tokens as i64;
                         sampling_config.set(updated_sampling);
@@ -514,9 +563,8 @@ pub fn ConfigHardware() -> Element {
         }
     };
 
-    let available_models = models();
     let active_model_name = hardware_config().model.clone();
-    let active_model_in_list = available_models.iter().any(|m| m.name == active_model_name);
+    let active_model_in_list = models().iter().any(|m| m.name == active_model_name);
     let gpus_value = gpus();
     let system_info_value = system_info();
     let memory_info_value = memory_info();
@@ -636,6 +684,7 @@ pub fn ConfigHardware() -> Element {
                                                     cfg.backend_type = selected_value.clone();
                                                     cfg.model.clear();
                                                 });
+
                                         },
                                         for option in backend_options.iter() {
                                             option {
@@ -701,7 +750,7 @@ pub fn ConfigHardware() -> Element {
                                             hardware_config.with_mut(|cfg| cfg.model = value);
                                         },
                                         // Placeholder when no models
-                                        if available_models.is_empty() {
+                                        if models().is_empty() {
                                             option {
                                                 value: "",
                                                 disabled: true,
@@ -718,7 +767,7 @@ pub fn ConfigHardware() -> Element {
                                             }
                                         }
                                         // Show only real discovered models
-                                        for model in available_models.iter() {
+                                        for model in models().iter() {
                                             option {
                                                 value: model.name.clone(),
                                                 selected: hardware_values.model == model.name,
@@ -747,7 +796,7 @@ pub fn ConfigHardware() -> Element {
                                 if let Some((message, class_name)) = model_hint {
                                     span { class: class_name, "{message}" }
                                 }
-                                if available_models.is_empty() {
+                                if models().is_empty() {
                                     span { class: "text-[0.7rem] text-yellow-300",
                                         "No discovery results yet"
                                     }
@@ -757,7 +806,7 @@ pub fn ConfigHardware() -> Element {
                                         if models_loading() {
                                             "Refreshing list…"
                                         } else {
-                                            "{available_models.len()} model entries"
+                                            "{models().len()} model entries"
                                         }
                                     }
                                 }
@@ -766,7 +815,7 @@ pub fn ConfigHardware() -> Element {
                                 span { class: "text-gray-300 font-medium", "Model discovery status" }
                                 if let Some(err) = model_error() {
                                     div { class: "text-xs text-red-400", "{err}" }
-                                } else if available_models.is_empty() {
+                                } else if models().is_empty() {
                                     div { class: "text-xs text-yellow-300",
                                         "No catalog entries returned. You can still type the model name manually."
                                     }

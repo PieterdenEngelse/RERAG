@@ -1,4 +1,5 @@
 [application]
+default_platform = "web"
 sub_package = "fro"
 asset_dir = "frontend/fro/public"
 out_dir = "frontend/fro/dist"

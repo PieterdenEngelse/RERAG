@@ -1990,6 +1990,22 @@ pub async fn switch_runtime(backend: &str) -> Result<RuntimeHealth, String> {
 }
 
 /// Fetch available tools list
+
+/// Update llama-server model env file and restart service
+pub async fn set_llama_model(model: &str) -> Result<(), String> {
+    let url = api_url("/sys/llama-model");
+    let body = serde_json::json!({ "model": model });
+    gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    Ok(())
+}
+
+
 pub async fn fetch_available_tools() -> Result<AvailableToolsResponse, String> {
     fetch_json("/monitoring/tools/available").await
 }

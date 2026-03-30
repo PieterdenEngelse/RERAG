@@ -11,6 +11,25 @@ use crate::pages::{
     MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
+
+/// Shared runtime state across all pages
+#[derive(Clone, Default, Debug)]
+pub struct RuntimeContext {
+    pub active_backend: Option<String>,   // What's actually running (from health check)
+    pub configured_backend: String,        // Saved preference in DB
+    pub loaded_model: Option<String>,      // Model currently in memory
+    pub configured_model: String,          // Saved model preference in DB
+    pub switching: bool,                   // True while backend is starting
+}
+
+impl RuntimeContext {
+    pub fn new() -> Self {
+        Self {
+            configured_backend: "ollama".to_string(),
+            ..Default::default()
+        }
+    }
+}
 use dioxus_router::{Outlet, Routable, Router};
 
 #[derive(Routable, Clone, PartialEq)]
@@ -245,6 +264,7 @@ pub fn App() -> Element {
     use_context_provider(|| Signal::new(ClearChat(false))); // Clear chat trigger
     use_context_provider(|| Signal::new(RuntimeSuspended(false))); // LLM runtime suspended flag
     use_context_provider(|| Signal::new(PageErrors::default())); // Global page errors state
+    use_context_provider(|| Signal::new(RuntimeContext::new())); // Shared runtime context
 
     rsx! {
         document::Link { rel: "icon", href: asset!("/assets/favicon.ico") }
@@ -257,6 +277,25 @@ pub fn App() -> Element {
 #[component]
 fn Layout() -> Element {
     let is_dark = use_context::<Signal<bool>>();
+    let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
+    
+    // Initialize RuntimeContext from API on first load
+    {
+        let mut runtime_ctx = runtime_ctx.clone();
+        use_future(move || async move {
+            if let Ok(resp) = crate::api::fetch_hardware_config().await {
+                runtime_ctx.with_mut(|ctx| {
+                    ctx.configured_backend = resp.config.backend_type;
+                    ctx.configured_model = resp.config.model;
+                });
+            }
+            if let Ok(health) = crate::api::fetch_runtime_health().await {
+                runtime_ctx.with_mut(|ctx| {
+                    ctx.active_backend = health.active_backend;
+                });
+            }
+        });
+    }
     let mut show_help = use_context::<Signal<ShowHelpCommands>>();
     let mut selected_command = use_signal(|| Option::<HelpCommandDetail>::None);
     let mut show_how_it_works = use_signal(|| false);
