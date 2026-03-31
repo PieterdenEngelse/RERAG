@@ -34,7 +34,7 @@ pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use memories::ConfigMemories;
 pub use monitor::{
-    MonitorAgSystemd, MonitorAgentic, MonitorGrafanaServices, MonitorCache, MonitorDocker, MonitorIndex,
+    MonitorAgSystemd, MonitorAgentic, MonitorChunks, MonitorGrafanaServices, MonitorCache, MonitorDocker, MonitorIndex,
     MonitorKnowledgeGraph, MonitorOnnx, MonitorOnnxStatus, MonitorLogs, MonitorObservations, MonitorOverview, MonitorRag,
     MonitorRateLimits, MonitorRequests, MonitorTools,
 };

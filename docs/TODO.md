@@ -1,3 +1,1150 @@
+prompt egineering
+----------------
+
+expand lora
+-----------
+
+
+langfuse like
+
+============================================================
+SUMMARY: Prompt Tracking, Generations, and Langfuse Alternatives in Rust
+============================================================
+
+1. Core Concepts
+----------------
+
+Prompt tracking:
+    Storing the exact prompt sent to an LLM, including:
+        - system message
+        - user message
+        - context (RAG chunks)
+        - parameters (temperature, top_p, etc.)
+        - template version
+    Purpose:
+        - reproducibility
+        - debugging
+        - analytics
+        - experiment comparison
+
+Generation tracking:
+    Recording the result of an LLM call, including:
+        - model name
+        - input tokens
+        - output tokens
+        - latency
+        - output text
+        - success or error
+    Purpose:
+        - performance monitoring
+        - cost estimation
+        - quality evaluation
+
+Relationship:
+    A generation contains a prompt. Prompt tracking describes "what we asked".
+    Generation tracking describes "what the model did".
+
+------------------------------------------------------------
+
+2. What Langfuse Provides
+-------------------------
+
+Langfuse features:
+    - prompt tracking
+    - generation tracking
+    - automatic prompt versioning
+    - traces and spans (pipeline visualization)
+    - analytics (latency, tokens, cost)
+    - UI dashboard
+    - multi-user access
+    - ingestion pipeline with batching and retries
+    - environment separation (dev/staging/prod)
+
+Langfuse requires:
+    - PostgreSQL (mandatory)
+    - Langfuse server (Next.js/Node backend)
+
+Why PostgreSQL:
+    - concurrent writes
+    - server mode
+    - MVCC (read while writing)
+    - row-level locking
+    - JSONB indexing
+    - crash safety (WAL)
+    - multi-user support
+
+------------------------------------------------------------
+
+3. What You Can Do Without Langfuse
+-----------------------------------
+
+You can replicate the core functionality in Rust:
+
+    - prompt tracking
+    - generation tracking
+    - prompt versioning
+    - latency measurement
+    - token counting
+    - optional spans/traces
+    - analytics via DuckDB or SQLite
+
+What you lose without Langfuse:
+    - UI dashboard
+    - automatic analytics
+    - built-in experiment comparison
+    - multi-user access
+    - ingestion pipeline
+    - real-time filtering and search
+    - trace visualization
+
+But the essentials are fully achievable.
+
+------------------------------------------------------------
+
+4. Rust-Native Prompt Tracking
+------------------------------
+
+Define a PromptRecord struct:
+
+    struct PromptRecord {
+        id: String,
+        timestamp: DateTime<Utc>,
+        system: String,
+        user: String,
+        context: Vec<String>,
+        template_version: String,
+        parameters: serde_json::Value,
+    }
+
+Store it in:
+    - JSONL (simplest)
+    - SQLite
+    - DuckDB
+    - ClickHouse (optional)
+
+------------------------------------------------------------
+
+5. Rust-Native Generation Tracking
+----------------------------------
+
+Define a GenerationRecord struct:
+
+    struct GenerationRecord {
+        id: String,
+        prompt_id: String,
+        timestamp: DateTime<Utc>,
+        model: String,
+        input_tokens: usize,
+        output_tokens: usize,
+        latency_ms: u128,
+        output_text: String,
+        success: bool,
+        error_message: Option<String>,
+    }
+
+This gives you:
+    - reproducibility
+    - performance metrics
+    - error tracking
+
+------------------------------------------------------------
+
+6. Prompt Versioning Without Langfuse
+-------------------------------------
+
+Three strategies:
+
+A. Hash-based versioning (automatic)
+    version = sha256(template_text)
+    Pros:
+        - deterministic
+        - no manual work
+        - perfect for reproducibility
+
+B. File-based versioning
+    prompts/v1.txt
+    prompts/v2.txt
+    prompts/v3.txt
+    Pros:
+        - human-readable
+        - easy to diff
+
+C. Manual semantic versioning
+    template_version: "1.2.0"
+    Pros:
+        - explicit control
+
+All three work well with your Rust observability layer.
+
+------------------------------------------------------------
+
+7. Storage Backends: DuckDB vs PostgreSQL
+-----------------------------------------
+
+DuckDB strengths:
+    - analytics engine
+    - columnar storage
+    - extremely fast queries
+    - can query JSONL directly
+    - perfect for local development
+    - no server required
+
+DuckDB limitations:
+    - single-writer only
+    - no concurrent ingestion
+    - no MVCC
+    - no server mode
+    - no multi-user access
+    - not crash-safe for high write volume
+
+PostgreSQL strengths:
+    - concurrent writes
+    - server mode
+    - MVCC
+    - JSONB indexing
+    - crash safety (WAL)
+    - multi-user support
+
+Conclusion:
+    DuckDB is ideal for a Rust-native, single-user observability system.
+    PostgreSQL is required for a multi-user, real-time dashboard like Langfuse.
+
+------------------------------------------------------------
+
+8. Rust Logging Backends
+------------------------
+
+JSONL:
+    - simplest
+    - append-only
+    - human-readable
+    - works with DuckDB
+
+SQLite:
+    - structured
+    - fast
+    - no server
+    - good for dashboards
+
+DuckDB:
+    - best for analytics
+    - can query JSONL directly
+    - ideal for RAG evaluation
+
+ClickHouse:
+    - production scale
+    - handles millions of generations
+
+------------------------------------------------------------
+
+9. Optional: Traces and Spans in Rust
+-------------------------------------
+
+You can replicate Langfuse traces/spans using:
+    - custom SpanRecord structs
+    - the tracing crate
+    - OpenTelemetry exporters
+
+This gives you:
+    - pipeline step visibility
+    - nested spans
+    - timeline reconstruction
+
+------------------------------------------------------------
+
+10. What You Gain With a Rust-Only System
+-----------------------------------------
+
+Advantages:
+    - zero infrastructure
+    - no PostgreSQL
+    - no Langfuse server
+    - full control
+    - deterministic versioning
+    - easy to integrate with local models
+    - perfect for experimentation
+
+Trade-offs:
+    - no UI
+    - no built-in analytics
+    - no multi-user features
+    - no automatic experiment comparison
+
+------------------------------------------------------------
+
+11. Recommended Architecture for Rust
+-------------------------------------
+
+observability/
+    prompt.rs
+    generation.rs
+    span.rs (optional)
+    logger_jsonl.rs or logger_sqlite.rs
+
+Backends:
+    - JSONL for raw logs
+    - DuckDB for analytics
+
+This gives you:
+    - prompt tracking
+    - generation tracking
+    - versioning
+    - analytics
+    - no external dependencies
+
+============================================================
+END OF SUMMARY
+============================================================
+Agent
+
+============================================================
+WHAT EXTRA RAM MEMORY AN AGENT NEEDS (AND WHAT YOU ALREADY HAVE)
+============================================================
+
+1. What your project already has in RAM
+---------------------------------------
+
+Based on your existing Rust RAG pipeline, you already maintain the following
+RAM-resident components:
+
+A. Working memory (short-term)
+    - current user query
+    - retrieved context chunks
+    - prompt construction data
+    - intermediate reasoning
+    - model output
+
+B. Model memory (if using local models)
+    - model weights (GGUF/ONNX)
+    - KV cache for attention
+    - tokenizer state
+
+C. Retrieval cache
+    - recent embeddings
+    - recently accessed documents
+    - vector search results
+
+D. Runtime overhead
+    - async executor
+    - buffers
+    - temporary allocations
+
+These components already cover most of what an agent needs for short-term
+reasoning and immediate task execution.
+
+------------------------------------------------------------
+
+2. What is NOT in your RAM yet (the missing pieces)
+----------------------------------------------------
+
+To turn your system into a full agent with memory, you need additional
+components. These do NOT require large RAM usage. Most of them live on disk.
+
+A. Episodic memory (task history) — stored on disk
+    Stores:
+        - what tasks were executed
+        - inputs and outputs
+        - success or failure
+        - timestamps
+    RAM usage:
+        - minimal (only load relevant episodes)
+
+B. Semantic memory (facts learned) — stored on disk
+    Stores:
+        - extracted facts
+        - summaries
+        - reusable knowledge
+        - embeddings (optional)
+    RAM usage:
+        - minimal (load only what is needed)
+
+C. Procedural memory (skills and workflows) — stored on disk
+    Stores:
+        - strategies
+        - tool usage patterns
+        - multi-step workflows
+    RAM usage:
+        - minimal
+
+D. Memory retrieval layer — RAM + disk
+    A small component that:
+        - loads relevant episodic memory
+        - loads relevant semantic memory
+        - injects it into working memory
+    RAM usage:
+        - small and controlled
+
+------------------------------------------------------------
+
+3. What you do NOT need to add to RAM
+-------------------------------------
+
+You do NOT need to store:
+    - full history
+    - all embeddings
+    - all episodes
+    - all facts
+    - all logs
+
+These belong on disk.
+
+Your RAM should remain lean:
+    - current task context
+    - relevant retrieved memory
+    - model state
+    - short-term reasoning
+
+------------------------------------------------------------
+
+4. Minimal additions required for a full agent
+----------------------------------------------
+
+To extend your existing system into a full agent with memory, you only need:
+
+A. Disk-backed memory:
+    memory/
+        episodic.jsonl or episodic.sqlite
+        semantic.jsonl or semantic.sqlite
+
+B. Small RAM structures:
+    WorkingMemory struct
+    MemoryRetriever struct
+
+C. Retrieval logic:
+    - load only relevant memory into RAM
+    - keep everything else on disk
+
+This adds almost no RAM overhead.
+
+------------------------------------------------------------
+
+5. Summary
+----------
+
+You already have:
+    - working memory
+    - model memory
+    - retrieval cache
+    - runtime state
+
+What you need to add:
+    1. Episodic memory (task history) on disk
+    2. Semantic memory (facts learned) on disk
+    3. Procedural memory (skills) on disk
+    4. A retrieval layer to load relevant memory into RAM
+
+RAM impact:
+    - very small
+    - controlled
+    - no large new components
+
+Disk impact:
+    - where long-term memory lives
+
+============================================================
+END
+============================================================
+BM25
+
+
+============================================================
+IS BM25 THE MOST MODERN RETRIEVAL METHOD?
+============================================================
+
+1. Short answer
+---------------
+BM25 is not the most modern retrieval method, but it is still widely used,
+highly reliable, extremely fast, and an important baseline in real-world RAG
+systems.
+
+Modern retrieval typically means:
+    - dense embeddings
+    - hybrid retrieval (BM25 + embeddings)
+    - reranking (cross-encoders or LLM-based)
+    - multi-vector retrieval (ColBERT, MVR)
+
+BM25 is part of the modern stack, but not the newest component.
+
+------------------------------------------------------------
+
+2. What BM25 is
+----------------
+BM25 is a lexical retrieval method:
+    - keyword-based
+    - deterministic
+    - fast
+    - cheap to run
+    - interpretable
+    - works well on technical and keyword-heavy queries
+
+It is still used in:
+    - Elasticsearch
+    - OpenSearch
+    - Lucene
+    - Vespa
+    - many production RAG systems
+
+BM25 is not outdated; it is simply not the most recent technique.
+
+------------------------------------------------------------
+
+3. What is considered modern retrieval today
+--------------------------------------------
+
+A. Dense embeddings (semantic retrieval)
+    - sentence-transformers
+    - OpenAI embeddings
+    - Cohere embeddings
+    - bge-m3
+    - nomic-embed
+    These capture meaning, not just keywords.
+
+B. Hybrid retrieval (current best practice)
+    Combine:
+        BM25 + embeddings
+    This consistently outperforms either method alone.
+
+C. Reranking
+    Use a cross-encoder or LLM to rerank the top N candidates:
+        - bge-reranker
+        - Cohere reranker
+        - LLM-as-a-judge
+    This provides the largest quality improvement.
+
+D. Multi-vector retrieval
+    More advanced systems:
+        - ColBERT
+        - MVR
+        - late interaction models
+
+------------------------------------------------------------
+
+4. Where BM25 still wins
+------------------------
+BM25 is still the best choice when you want:
+    - speed
+    - low memory usage
+    - zero GPU
+    - deterministic behavior
+    - small or medium corpora
+    - keyword-heavy queries
+    - code search
+    - logs search
+    - legal or technical documents
+
+It remains a strong baseline for RAG pipelines.
+
+------------------------------------------------------------
+
+5. Where BM25 fails
+-------------------
+BM25 struggles with:
+    - synonyms
+    - paraphrases
+    - semantic similarity
+    - multilingual queries
+    - vague or abstract questions
+    - long-form reasoning
+
+This is why modern systems add embeddings and reranking.
+
+------------------------------------------------------------
+
+6. The modern retrieval stack (2026 reality)
+--------------------------------------------
+A modern RAG system typically uses:
+
+    1. BM25 (lexical)
+    2. Embeddings (semantic)
+    3. Hybrid scoring
+    4. Reranker (cross-encoder or LLM)
+
+BM25 is step 1, not the entire solution.
+
+------------------------------------------------------------
+
+7. Summary
+----------
+BM25 is not the most modern retrieval method, but it is still essential,
+reliable, and widely used. Modern retrieval combines BM25 with embeddings and
+reranking for best results.
+
+============================================================
+END
+============================================================
+============================================================
+RAM REQUIREMENTS FOR REACT, REFLEXION, AND SELF-REFINE
+============================================================
+
+This document lists the approximate RAM usage for each agent type.
+Values refer to the agent logic only, not the model weights.
+
+------------------------------------------------------------
+1. ReAct
+------------------------------------------------------------
+RAM needed:
+    5–50 MB
+
+Reason:
+    - Only stores short-term reasoning
+    - Keeps current thought, action, and observation
+    - No long-term memory
+    - No reflection history
+
+Notes:
+    - Lightest agent type
+    - RAM dominated by model and KV cache, not the agent logic
+
+------------------------------------------------------------
+2. Self-Refine
+------------------------------------------------------------
+RAM needed:
+    20–80 MB
+
+Reason:
+    - Stores initial output
+    - Stores critique
+    - Stores revised output
+    - Needs temporary buffers for all three
+
+Notes:
+    - Still lightweight
+    - No long-term memory
+    - No cross-episode learning
+
+------------------------------------------------------------
+3. Reflexion
+------------------------------------------------------------
+RAM needed:
+    50–300 MB
+
+Reason:
+    - Stores reflections (lessons)
+    - Stores episodic memory entries
+    - Loads relevant lessons for the current task
+    - May load embeddings into RAM
+    - Needs buffers for retrieval and similarity scoring
+
+Notes:
+    - Heaviest agent type
+    - RAM depends on how much memory is kept in-process
+    - Can be kept small by offloading memory to disk
+
+------------------------------------------------------------
+4. Summary Table
+------------------------------------------------------------
+Agent Type     RAM Needed     Explanation
+---------------------------------------------------------
+ReAct          5–50 MB        Only short-term reasoning
+Self-Refine    20–80 MB       Critique + revision buffers
+Reflexion      50–300 MB      Memory retrieval + lessons
+
+------------------------------------------------------------
+5. Model RAM (for reference)
+------------------------------------------------------------
+These values are separate from the agent logic.
+
+API models:
+    +0 MB
+
+Local models:
+    1B model:    ~2–4 GB
+    3B model:    ~4–6 GB
+    7B model:    ~8–12 GB
+    13B model:   ~16–24 GB
+
+KV cache:
+    128k context: 1–4 GB extra
+
+------------------------------------------------------------
+END
+============================================================
+============================================================
+MOST CAPABLE MODERN AGENT ARCHITECTURES (CONCEPTUAL OVERVIEW)
+============================================================
+
+This document lists the most capable agent designs used in modern
+LLM-based systems. These architectures combine planning, tool-use,
+self-reflection, refinement, and long-term learning.
+
+------------------------------------------------------------
+1. ReAct + Self-Refine + Reflexion (Hybrid Agent)
+------------------------------------------------------------
+Description:
+    A layered agent that uses:
+        - ReAct for step-by-step reasoning and tool-use
+        - Self-Refine for improving the final answer
+        - Reflexion for long-term learning across tasks
+
+Why it is powerful:
+    - Strong planning
+    - High-quality final answers
+    - Learns from past mistakes
+    - Reduces repeated failures
+    - Works across episodes
+
+This is the most capable general-purpose agent pattern today.
+
+------------------------------------------------------------
+2. DeepSeek-style Deliberate + Verify Agents
+------------------------------------------------------------
+Description:
+    Agents that generate long reasoning traces, then verify or
+    cross-check their own reasoning before acting.
+
+Capabilities:
+    - Strong mathematical reasoning
+    - Internal consistency checks
+    - Self-verification loops
+
+Used for:
+    - Hard reasoning tasks
+    - Code correctness
+    - Multi-step logic
+
+------------------------------------------------------------
+3. Constitutional Agents (Rule-Guided Reflection)
+------------------------------------------------------------
+Description:
+    Agents that critique and revise their own output using a
+    predefined set of rules ("constitution").
+
+Capabilities:
+    - Self-correction
+    - Alignment without human feedback
+    - Stable behavior across tasks
+
+Used for:
+    - Safety-critical tasks
+    - Policy-driven systems
+
+------------------------------------------------------------
+4. Multi-Agent Systems (Planner + Worker + Critic)
+------------------------------------------------------------
+Description:
+    Systems where multiple specialized agents collaborate:
+        - Planner: breaks down tasks
+        - Worker: executes steps
+        - Critic: evaluates outputs
+
+Capabilities:
+    - Parallel reasoning
+    - Division of labor
+    - Strong error detection
+
+Used for:
+    - Complex workflows
+    - Research automation
+    - Code generation pipelines
+
+------------------------------------------------------------
+5. RAG Agents with Verification and Reflection
+------------------------------------------------------------
+Description:
+    Retrieval-augmented agents that:
+        - Retrieve documents
+        - Generate an answer
+        - Reflect on hallucinations
+        - Verify citations
+        - Revise the answer
+
+Capabilities:
+    - High factual accuracy
+    - Low hallucination rate
+    - Strong document reasoning
+
+Used for:
+    - Enterprise knowledge systems
+    - Legal, medical, technical domains
+
+------------------------------------------------------------
+6. Reflexion-Enhanced Tool-Using Agents
+------------------------------------------------------------
+Description:
+    Agents that use tools (search, code execution, APIs) and
+    store reflections about tool failures or successes.
+
+Capabilities:
+    - Improved tool selection
+    - Better error recovery
+    - Long-term adaptation
+
+Used for:
+    - Automation
+    - Data pipelines
+    - Code execution agents
+
+------------------------------------------------------------
+7. Self-Improving Code Agents (Critic-Coder Loop)
+------------------------------------------------------------
+Description:
+    Agents that:
+        - Generate code
+        - Critique the code
+        - Fix errors
+        - Re-run tests
+        - Store lessons
+
+Capabilities:
+    - High-quality code generation
+    - Automatic debugging
+    - Continuous improvement
+
+Used for:
+    - Software engineering assistants
+    - Automated refactoring
+    - Test-driven code generation
+
+------------------------------------------------------------
+8. One-line summary
+------------------------------------------------------------
+The most capable modern agents combine:
+    - ReAct for reasoning and tool-use
+    - Self-Refine for answer improvement
+    - Reflexion for long-term learning
+    - Verification for correctness
+    - Memory for adaptation
+
+============================================================
+END
+============================================================
+
+astembed — RAM usage
+
+fastembed uses ONNX Runtime, which is extremely memory‑efficient.
+Typical RAM usage:
+Code
+
+Text models:        50 MB – 400 MB
+CLIP models:        200 MB – 1.2 GB
+Qwen-VL embedding:  1.5 GB – 3 GB
+Runtime overhead:   ~50–150 MB
+
+Why?
+
+    ONNX Runtime is optimized for inference
+
+    Models are pre‑quantized
+
+    Only loads the encoder you call
+
+    No multimodal pipeline overhea
+-------------------------
+graph
+
+Here’s the same answer, stripped down and vim‑friendly: plain text, no markup, just the essentials.
+
+You already have:
+- LLM backends (Ollama, llama.cpp, ONNX)
+- Neo4j + petgraph
+- Tantivy
+- Redis
+- Actix + Tokio
+- Tracing, metrics, etc.
+
+What you’re still missing for a full GraphRAG system are these six things:
+
+1) Pipeline orchestrator
+- A background/indexing pipeline that:
+  - detects new/changed documents
+  - runs chunking → extraction → graph building → clustering → summarization
+  - retries on failure
+  - logs progress
+- Think: a dedicated “indexing service” or module, not just ad‑hoc calls.
+
+2) Clustering engine
+- You need community detection on the graph:
+  - Louvain / Leiden / spectral clustering
+- Can be:
+  - Neo4j GDS (Graph Data Science)
+  - or custom clustering on top of petgraph
+- This powers the “hierarchical clustering” step in GraphRAG.
+
+3) LLM summarization layer
+- A module that:
+  - takes a cluster (subgraph)
+  - calls an LLM
+  - produces a summary for that cluster
+  - does this hierarchically (leaf → mid → top)
+- Needs:
+  - prompt templates
+  - a way to store summaries back into Neo4j / petgraph.
+
+4) Unified graph schema
+- A consistent schema for:
+  - nodes: Entity, Chunk, Cluster, etc.
+  - relationships: MENTIONS, RELATED_TO, IN_CLUSTER, etc.
+  - properties: summary, level, source, timestamps, etc.
+- This schema must be shared between:
+  - Neo4j (persistent)
+  - petgraph (in‑memory)
+
+5) Retrieval fusion layer
+- A retrieval module that:
+  - uses text search (Tantivy)
+  - uses embeddings
+  - uses graph neighbors and cluster summaries
+  - merges and ranks results
+- This is what makes GraphRAG “smart” at query time.
+
+6) Indexing state machine
+- A way to track indexing progress per document:
+  - chunked?
+  - entities extracted?
+  - graph updated?
+  - clustered?
+  - summarized?
+- Redis is perfect for this:
+  - keys like: doc:<id>:chunked = true, etc.
+- This enables incremental re‑indexing and fault tolerance.
+
+Short version:
+- You have the components.
+- You’re missing:
+  - an orchestrated pipeline
+  - clustering
+  - summarization
+  - a strict graph schema
+  - fused retrieval
+  - indexing state tracking.
+
+If you tell me which of the six you want to tackle first, I can sketch a minimal module layout you can drop straight into your repo
+
+------------------
+
+Component	GraphRAG	Your Pipeline	Equivalent?
+Clustering	Louvain/Leiden	Neo4j GDS or custom	✔ Yes
+Hierarchy	Multi‑level	If you implement multi‑level	✔ Yes
+Summaries	LLM‑generated	You generate them	✔ Yes
+Storage	Graph DB	Neo4j + petgraph	✔ Yes
+Retrieval	Summary‑first	You do summary‑first	✔ Yes
+Drill‑down	Graph traversal	petgraph	✔ Yes.
+
+----------------
+
+Here you go — **same content, rewritten in a clean, Vim‑friendly plain‑text format**.  
+No emojis, no Markdown, no headings. Just straight text you can paste into a `.txt` buffer.
+
+---
+
+How Neo4j GDS Uses RAM
+----------------------
+
+Neo4j GDS loads your graph into a compressed, in‑memory projection.  
+This projection is separate from the normal Neo4j store.
+
+Key points:
+
+- GDS RAM usage = size of the projected graph  
+- It does not reuse the database store’s memory  
+- Everything must fit in RAM  
+- This is why GDS is extremely fast for clustering and analytics
+
+Memory Cost Formula (practical)
+-------------------------------
+
+A reliable rule of thumb:
+
+RAM ≈ (nodes × 16–32 bytes) + (relationships × 24–48 bytes)
+
+Plus overhead for:
+
+- properties  
+- algorithm workspace  
+- concurrency buffers  
+
+Example RAM Usage
+-----------------
+
+Small graph (50k nodes, 200k edges):  
+20–40 MB RAM
+
+Medium graph (500k nodes, 2M edges):  
+200–400 MB RAM
+
+Large graph (5M nodes, 20M edges):  
+2–4 GB RAM
+
+Very large graph (50M nodes, 200M edges):  
+20–40 GB RAM
+
+This is why enterprise deployments often run with 64–256 GB RAM.
+
+GraphRAG‑Scale Usage
+--------------------
+
+Typical GraphRAG graphs (chunks + entities + relationships):
+
+10k–200k nodes  
+50k–1M edges
+
+Expected RAM usage:
+
+Under 1 GB RAM
+
+This includes clustering, embeddings, and summaries.
+
+Petgraph Comparison
+-------------------
+
+Petgraph also stores graphs in memory, but:
+
+- lighter memory footprint  
+- faster traversal  
+- no properties  
+- no clustering algorithms  
+
+Typical petgraph usage for GraphRAG:
+
+100k nodes + 500k edges → 50–150 MB RAM
+
+Bottom Line
+-----------
+
+Neo4j GDS is memory‑heavy only for very large graphs.  
+For your GraphRAG pipeline:
+
+- GDS RAM usage will be small  
+- petgraph RAM usage will be even smaller  
+- clustering and summarization will run comfortably  
+
+You are well within safe limits.
+
+---
+
+If you want, I can also give you a Vim‑friendly version of:
+
+- GDS clustering commands  
+- a memory‑efficient projection strategy  
+- or a full GraphRAG indexing pipeline layout in plain text.
+
+----------------------
+
+Here you go — **a clean, Vim‑friendly plain‑text guide** for *how to use Neo4j GDS*.  
+No Markdown, no emojis, no formatting tricks. Just straight text you can paste into a `.txt` buffer.
+
+---
+
+Using Neo4j GDS
+---------------
+
+Neo4j GDS is used entirely through Cypher procedures.  
+You do not write code inside Neo4j; you call GDS functions from Cypher.
+
+Steps to use GDS:
+
+1. Check if GDS is installed
+--------------------------------
+Run this:
+
+RETURN gds.version();
+
+If it returns a version number, GDS is active.
+
+2. Create an in-memory graph projection
+---------------------------------------
+GDS never works directly on the stored Neo4j graph.  
+You must project your graph into RAM.
+
+Example:
+
+CALL gds.graph.project(
+  'kg',
+  ['Entity', 'Chunk'],
+  {
+    MENTIONS: {type: 'MENTIONS', orientation: 'UNDIRECTED'},
+    RELATED_TO: {type: 'RELATED_TO', orientation: 'UNDIRECTED'}
+  }
+);
+
+This loads the graph into memory under the name "kg".
+
+3. Run Louvain or Leiden clustering
+-----------------------------------
+
+Louvain:
+
+CALL gds.louvain.stream('kg')
+YIELD nodeId, communityId
+RETURN gds.util.asNode(nodeId).id AS node, communityId
+ORDER BY communityId;
+
+Write results back to Neo4j:
+
+CALL gds.louvain.write('kg', { writeProperty: 'community' });
+
+Leiden:
+
+CALL gds.leiden.stream('kg')
+YIELD nodeId, communityId
+RETURN gds.util.asNode(nodeId).id AS node, communityId;
+
+4. Generate graph embeddings (optional)
+---------------------------------------
+
+Node2Vec:
+
+CALL gds.node2vec.stream('kg')
+YIELD nodeId, embedding
+RETURN gds.util.asNode(nodeId).id AS node, embedding;
+
+Write embeddings:
+
+CALL gds.node2vec.write('kg', { writeProperty: 'embedding' });
+
+5. Drop the projection when finished
+------------------------------------
+
+CALL gds.graph.drop('kg');
+
+This frees RAM.
+
+6. Use results in your backend
+------------------------------
+
+Your pipeline becomes:
+
+- Insert nodes and edges into Neo4j  
+- Run GDS clustering  
+- Write cluster IDs back to nodes  
+- Your Rust backend reads:
+    - community IDs
+    - embeddings
+    - relationships
+- Load the graph into petgraph for fast traversal  
+- Use LLMs to summarize each cluster  
+- Store summaries back into Neo4j  
+- Use summaries for global search  
+
+This matches the GraphRAG global-search workflow.
+
+---
+
+If you want, I can also write a Vim‑friendly cheat sheet for:
+
+- GDS clustering commands  
+- GDS embedding commands  
+- a full GraphRAG indexing pipeline  
+- or a minimal schema for Entity / Chunk / Cluster nodes  
+
+Just tell me what you want next.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-------------------------------------
+
 **LLM Latency Calculation:**
 
 ```

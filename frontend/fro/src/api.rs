@@ -2232,6 +2232,22 @@ pub async fn fetch_chunking_stats(limit: usize) -> Result<ChunkingStatsResponse,
     fetch_json(&format!("/monitoring/chunking/latest?limit={}", limit)).await
 }
 
+// ============ Tokenizer Info ============
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TokenizerInfo {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub vocab_size: usize,
+    #[serde(default)]
+    pub is_exact: bool,
+}
+
+pub async fn fetch_tokenizer_info() -> Result<TokenizerInfo, String> {
+    fetch_json("/sys/tokenizer-info").await
+}
+
 // ============ Tool Execution Monitoring ============
 
 /// Record of a single tool execution

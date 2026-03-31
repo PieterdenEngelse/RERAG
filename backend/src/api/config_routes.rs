@@ -1039,6 +1039,7 @@ pub(crate) async fn commit_hardware_config(
                 rope_frequency_scale = params.rope_frequency_scale,
                 "Hardware config committed"
             );
+            crate::api::sys_routes::reload_token_counter();
             Ok(HttpResponse::Ok().json(HardwareConfigResponse {
                 status: "ok".into(),
                 message: "Hardware settings saved".into(),

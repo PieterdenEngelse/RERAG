@@ -6,7 +6,7 @@ use crate::pages::{
     ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd, MonitorGrafanaServices,
     DocuAgPipeline, DocuBias, DocuBm25, DocuRkyv, DocuEmbeddings, DocuEntitiesProduction, DocuIoUring,
     DocuKnowledgeGraphs, DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuTantivy, DocuThreads,
-    MonitorAgentic, MonitorCache, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorOnnx, MonitorOnnxStatus,
+    MonitorAgentic, MonitorCache, MonitorChunks, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorOnnx, MonitorOnnxStatus,
     MonitorObservations, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests,
     MonitorTools, PageNotFound, Parameters, Train,
 };
@@ -70,6 +70,8 @@ pub enum Route {
         MonitorRequests {},
         #[route("/monitor/cache")]
         MonitorCache {},
+        #[route("/monitor/chunks")]
+        MonitorChunks {},
         #[route("/monitor/index")]
         MonitorIndex {},
         #[route("/monitor/observations")]

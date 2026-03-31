@@ -10,9 +10,9 @@ pub mod db {
 }
 pub mod agent;
 pub mod api;
-pub mod chunker;
 pub mod config;
 pub mod embedder;
+pub mod gguf_tokenizer;
 pub mod index;
 pub mod inference_gateway;
 pub mod mime_detect;

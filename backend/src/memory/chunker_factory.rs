@@ -254,9 +254,13 @@ fn is_heading_segment(segment: &str) -> bool {
 }
 
 fn estimate_token_count(text: &str) -> usize {
-    let char_estimate = text.len() / 4;
-    let word_estimate = text.split_whitespace().count() * 4 / 3;
-    (char_estimate + word_estimate) / 2
+    if let Some(handle) = crate::api::get_token_counter() {
+        handle.count_tokens(text)
+    } else {
+        let char_estimate = text.len() / 4;
+        let word_estimate = text.split_whitespace().count() * 4 / 3;
+        (char_estimate + word_estimate) / 2
+    }
 }
 
 fn split_into_segments(text: &str) -> Vec<String> {

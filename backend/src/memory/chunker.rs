@@ -11,6 +11,7 @@ pub struct Chunk {
     pub content: String,
     pub chunk_index: usize,
     pub token_count: usize,
+    pub tokenizer_model: String,
     pub metadata: ChunkMetadata,
 }
 
@@ -271,6 +272,9 @@ impl SemanticChunker {
                     content: text,
                     chunk_index: idx,
                     token_count,
+                    tokenizer_model: crate::api::get_token_counter()
+                        .map(|h| h.model_name())
+                        .unwrap_or_else(|| "heuristic".into()),
                     metadata: ChunkMetadata {
                         document_id: document_id.clone(),
                         source: source.clone(),
@@ -538,11 +542,16 @@ impl SemanticChunker {
         words[words.len().saturating_sub(overlap_words)..].join(" ")
     }
 
-    /// Estimate token count (rough approximation: 1 token ≈ 4 chars or 0.75 words)
+    /// Count tokens using the global GGUF tokenizer (exact) or heuristic fallback
     fn estimate_tokens(&self, text: &str) -> usize {
-        let char_estimate = text.len() / 4;
-        let word_estimate = text.split_whitespace().count() * 4 / 3;
-        (char_estimate + word_estimate) / 2
+        if let Some(handle) = crate::api::get_token_counter() {
+            handle.count_tokens(text)
+        } else {
+            // Fallback if token counter not yet initialized
+            let char_estimate = text.len() / 4;
+            let word_estimate = text.split_whitespace().count() * 4 / 3;
+            (char_estimate + word_estimate) / 2
+        }
     }
 }
 

@@ -138,6 +138,52 @@ async fn main() -> std::io::Result<()> {
     ag::db::param_hardware::load_active_config(&_db_conn);
 
     // ─────────────────────────────────────────────────────────────
+    // PHASE 3.5: Initialize GGUF Token Counter
+    // ─────────────────────────────────────────────────────────────
+    {
+        use ag::gguf_tokenizer::*;
+        use ag::db::param_hardware;
+
+        let handle = std::sync::Arc::new(TokenCounterHandle::new_heuristic());
+
+        // Try to load exact tokenizer from active model's GGUF
+        let hw = param_hardware::global_config();
+            let gguf_result = match hw.backend_type {
+                param_hardware::BackendType::Ollama => {
+                    if !hw.model.is_empty() {
+                        info!("🔢 Resolving Ollama GGUF for tokenizer: {}", hw.model);
+                        resolve_ollama_gguf_path(&hw.model)
+                    } else {
+                        Err(anyhow::anyhow!("No model configured"))
+                    }
+                }
+                param_hardware::BackendType::LlamaCpp => {
+                    info!("🔢 Resolving llama-server GGUF for tokenizer");
+                    resolve_llama_server_gguf_path()
+                }
+                _ => Err(anyhow::anyhow!("Cloud backend, no local GGUF")),
+            };
+
+            match gguf_result {
+                Ok(path) => match handle.load_from_gguf(&path) {
+                    Ok(()) => info!(
+                        "✅ Exact token counter loaded (model={}, vocab={})",
+                        handle.model_name(),
+                        handle.vocab_size()
+                    ),
+                    Err(e) => warn!("⚠️  Failed to load GGUF tokenizer: {}, using heuristic", e),
+                },
+                Err(e) => info!("ℹ️  No GGUF path resolved: {}, using heuristic token counter", e),
+            }
+
+        ag::api::set_token_counter(handle);
+        info!(
+            "🔢 Token counter ready (exact={})",
+            ag::api::get_token_counter().map(|h| h.is_exact()).unwrap_or(false)
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // PHASE 4: Initialize Retriever with PathManager
     // ─────────────────────────────────────────────────────────────
 

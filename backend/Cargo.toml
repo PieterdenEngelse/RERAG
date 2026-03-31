@@ -24,6 +24,8 @@ futures = "0.3"  # Required for neo4rs RowStream iteration
 
 # Serialization
 serde_json = "1.0.145"
+shimmytok = "0.4"
+anyhow = "1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = { version = "0.9", optional = true }
 rkyv = { version = "0.8", features = ["bytecheck"] }

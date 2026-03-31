@@ -597,6 +597,8 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
         "none"
     };
 
+    // Reload tokenizer for new backend
+    reload_token_counter();
     HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",
         "active_backend": active_backend,
@@ -773,11 +775,59 @@ pub async fn set_llama_model(body: web::Json<LlamaModelRequest>) -> impl Respond
         .await;
 
     tracing::info!("Updated llama-server model to: {}", model_path.display());
+    reload_token_counter();
 
     HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",
         "model": model_name,
         "model_path": model_path.display().to_string(),
+    }))
+}
+
+/// Reload the global token counter from the current model's GGUF.
+pub fn reload_token_counter() {
+    let hw = crate::db::param_hardware::global_config();
+    if let Some(handle) = crate::api::get_token_counter() {
+        let result = match hw.backend_type {
+            crate::db::param_hardware::BackendType::Ollama => {
+                if !hw.model.is_empty() {
+                    crate::gguf_tokenizer::resolve_ollama_gguf_path(&hw.model)
+                } else {
+                    Err(anyhow::anyhow!("No model configured"))
+                }
+            }
+            crate::db::param_hardware::BackendType::LlamaCpp => {
+                crate::gguf_tokenizer::resolve_llama_server_gguf_path()
+            }
+            _ => Err(anyhow::anyhow!("Cloud backend, no local GGUF")),
+        };
+        match result {
+            Ok(path) => match handle.load_from_gguf(&path) {
+                Ok(()) => tracing::info!(
+                    model = %handle.model_name(),
+                    vocab = handle.vocab_size(),
+                    "Token counter reloaded"
+                ),
+                Err(e) => tracing::warn!("Failed to reload GGUF tokenizer: {}", e),
+            },
+            Err(e) => {
+                tracing::info!("No GGUF path resolved: {}, resetting to heuristic", e);
+                handle.reset_to_heuristic();
+            }
+        }
+    }
+}
+
+/// GET /sys/tokenizer-info
+pub async fn tokenizer_info() -> impl Responder {
+    let (model, vocab_size, is_exact) = match crate::api::get_token_counter() {
+        Some(handle) => (handle.model_name(), handle.vocab_size(), handle.is_exact()),
+        None => ("unavailable".into(), 0, false),
+    };
+    HttpResponse::Ok().json(serde_json::json!({
+        "model": model,
+        "vocab_size": vocab_size,
+        "is_exact": is_exact,
     }))
 }
 
@@ -792,5 +842,6 @@ pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/runtime-health").route(web::get().to(runtime_health)));
     cfg.service(web::resource("/runtime/action").route(web::post().to(runtime_action)));
     cfg.service(web::resource("/loaded-model").route(web::get().to(loaded_model)));
+    cfg.service(web::resource("/tokenizer-info").route(web::get().to(tokenizer_info)));
     cfg.service(web::resource("/llama-model").route(web::post().to(set_llama_model)));
 }

@@ -103,6 +103,15 @@ pub fn get_embedding_service() -> Option<Arc<crate::embedder::EmbeddingService>>
     EMBEDDING_SERVICE.get().map(|s| Arc::clone(s))
 }
 
+// Global TokenCounterHandle for exact token counting from GGUF vocab
+static TOKEN_COUNTER: OnceLock<Arc<crate::gguf_tokenizer::TokenCounterHandle>> = OnceLock::new();
+pub fn set_token_counter(handle: Arc<crate::gguf_tokenizer::TokenCounterHandle>) {
+    let _ = TOKEN_COUNTER.set(handle);
+}
+pub fn get_token_counter() -> Option<Arc<crate::gguf_tokenizer::TokenCounterHandle>> {
+    TOKEN_COUNTER.get().map(|h| Arc::clone(h))
+}
+
 pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
     let _ = RETRIEVER.set(handle);
 }
