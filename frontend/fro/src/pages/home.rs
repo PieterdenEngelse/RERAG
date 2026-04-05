@@ -201,6 +201,7 @@ pub fn Home() -> Element {
     let mut show_llm_info = use_signal(|| false);
     let mut show_auto_info = use_signal(|| false);
     let mut show_strict_info = use_signal(|| false);
+    let mut show_agentic_info = use_signal(|| false);
 
     // Training feedback state - track last response for rating
     let mut last_query = use_signal(|| String::new());
@@ -255,10 +256,8 @@ pub fn Home() -> Element {
                 });
             }
             
-            // Always sync when local differs from context
-            if !ctx_model.is_empty() && ctx_model != selected_model() {
-                selected_model.set(ctx_model);
-            }
+            // Model sync disabled here — races with pending onchange commits.
+            // Mount-time use_future loads initial model, onchange commits changes.
         });
     }
     // Listen for config changes from other tabs
@@ -1015,6 +1014,7 @@ pub fn Home() -> Element {
             show_llm_info: show_llm_info,
             show_auto_info: show_auto_info,
             show_strict_info: show_strict_info,
+            show_agentic_info: show_agentic_info,
             show_upload_panel: show_upload_panel,
             show_delete_docs_modal: show_delete_docs_modal,
             documents: documents,
@@ -1029,6 +1029,7 @@ pub fn Home() -> Element {
             show_tune_panel: show_tune_panel,
             show_tune_info: show_tune_info,
             rag_priority_override: rag_priority_override,
+            selected_model: selected_model,
         }
 
 
@@ -1497,6 +1498,7 @@ pub fn Home() -> Element {
                             onchange: move |evt| {
                                 let new_model = evt.value();
                                 selected_model.set(new_model.clone());
+                                last_ctx_model.set(new_model.clone());
                                 // Save model selection to backend
                                 spawn(async move {
                                     // Fetch current hardware config
@@ -1514,10 +1516,10 @@ pub fn Home() -> Element {
                             } else if available_models().is_empty() {
                                 option { value: "{selected_model}", "{selected_model}" }
                             } else {
-                                for model in available_models() {
+                                for model in available_models().iter().filter(|m| !m.name.contains("embed") && !m.name.contains("nomic")) {
                                     option {
                                         value: "{model.name}",
-                                        selected: model.name == selected_model() || model.is_active,
+                                        selected: model.name == selected_model(),
                                         if model.is_active {
                                             "⚡ {friendly_model_name(&model.name)}"
                                         } else {
@@ -1661,6 +1663,49 @@ pub fn Home() -> Element {
                             class: "btn btn-primary btn-xs w-full mt-3",
                             onclick: move |_| show_help_modal.set(false),
                             "Close"
+                        }
+                    }
+                }
+            }
+
+            // Agentic Mode Info Modal
+            if show_agentic_info() {
+                div {
+                    class: "fixed inset-0 bg-black/60 flex items-center justify-center p-4",
+                    style: "z-index: 100;",
+                    onclick: move |_| show_agentic_info.set(false),
+                    div {
+                        class: "bg-gray-800 rounded-xl p-6 max-w-md w-full border border-gray-600 shadow-2xl",
+                        onclick: move |e| e.stop_propagation(),
+                        div { class: "flex justify-between items-center mb-4",
+                            h3 { class: "text-base font-bold", "\u{1F9E0} Agentic Mode" }
+                            button {
+                                class: "text-gray-400 hover:text-white text-lg",
+                                onclick: move |_| show_agentic_info.set(false),
+                                "\u{2715}"
+                            }
+                        }
+                        div { class: "text-sm text-gray-300 space-y-3",
+                            p { "Instead of a fixed pipeline, the LLM itself decides what to do at each step." }
+                            p { "It can call tools in a loop:" }
+                            p { class: "text-xs text-gray-400 pl-3",
+                                "\u{1F50D} Search your documents via Tantivy"
+                                br {}
+                                "\u{1F9E0} Recall from agent memory"
+                                br {}
+                                "\u{1F578} Query the knowledge graph"
+                                br {}
+                                "\u{1F4AD} Reason and combine results"
+                                br {}
+                                "\u{2705} Decide when it has enough to answer"
+                            }
+                            p { "Agentic mode in this project is configured for llama-server (llama.cpp) only. The model must be loaded with --jinja for tool-call support." }
+                            p { class: "text-xs text-yellow-400 mt-2", "\u{2699} Requires: llama-server backend with --jinja flag and a tool-trained model (qwen2.5, llama3.1+, mistral)." }
+                        }
+                        button {
+                            class: "btn btn-primary btn-sm mt-4 w-full",
+                            onclick: move |_| show_agentic_info.set(false),
+                            "Got it!"
                         }
                     }
                 }

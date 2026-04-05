@@ -122,27 +122,50 @@ pub fn Header() -> Element {
                         }
                     }
 
-                    // Check Ollama status by trying to fetch models.
+                    // Check LLM runtime status based on configured backend.
                     // If the runtime is intentionally suspended (e.g., during bulk uploads),
                     // do not mark it as an error in the global status light.
                     if runtime_suspended().0 {
                         page_errors.with_mut(|e| e.clear_error("ollama"));
+                        page_errors.with_mut(|e| e.clear_error("llama_cpp"));
                     } else {
-                        match api::fetch_models("ollama").await {
-                            Ok(models) => {
-                                if models.is_empty() {
-                                    // We can reach Ollama, but there are no models available.
-                                    // Treat this as a major error because chat/embeddings cannot run.
-                                    page_errors.with_mut(|e| {
-                                        e.set_error("ollama", "Ollama online, but no models")
-                                    });
-                                } else {
-                                    page_errors.with_mut(|e| e.clear_error("ollama"));
+                        let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
+                        let backend = runtime_ctx().configured_backend.clone();
+                        match backend.as_str() {
+                            "llama_cpp" => {
+                                // Clear ollama error since it's not the active backend
+                                page_errors.with_mut(|e| e.clear_error("ollama"));
+                                match api::fetch_runtime_health().await {
+                                    Ok(health) => {
+                                        if health.llama_cpp_available {
+                                            page_errors.with_mut(|e| e.clear_error("llama_cpp"));
+                                        } else {
+                                            page_errors.with_mut(|e| e.set_error("llama_cpp", "llama-server not reachable"));
+                                        }
+                                    }
+                                    Err(_) => {
+                                        page_errors.with_mut(|e| e.set_error("llama_cpp", "Runtime health check failed"));
+                                    }
                                 }
                             }
-                            Err(_) => {
-                                page_errors
-                                    .with_mut(|e| e.set_error("ollama", "Ollama not reachable"));
+                            _ => {
+                                // Ollama or other backends
+                                page_errors.with_mut(|e| e.clear_error("llama_cpp"));
+                                match api::fetch_models(&backend).await {
+                                    Ok(models) => {
+                                        if models.is_empty() {
+                                            page_errors.with_mut(|e| {
+                                                e.set_error("ollama", &format!("{} online, but no models", backend))
+                                            });
+                                        } else {
+                                            page_errors.with_mut(|e| e.clear_error("ollama"));
+                                        }
+                                    }
+                                    Err(_) => {
+                                        page_errors
+                                            .with_mut(|e| e.set_error("ollama", &format!("{} not reachable", backend)));
+                                    }
+                                }
                             }
                         }
                     }

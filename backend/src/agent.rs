@@ -36,6 +36,8 @@ pub enum AgentMode {
     /// Strict grounded RAG: LLM answers only from retrieved context.
     /// If no chunks found, says "I don't know" (no LLM fallback).
     RagStrict,
+    /// Agentic mode: LLM decides which tools to call in a loop (Rig)
+    Agentic,
 }
 
 /// Verbosity level for responses
@@ -491,6 +493,22 @@ impl<'a> Agent<'a> {
             Some(goal_context_str.as_str())
         };
 
+        // Handle Agentic mode (Rig integration — stub)
+        if matches!(mode, AgentMode::Agentic) {
+            steps.push(AgentStep {
+                kind: "mode".into(),
+                message: "Agentic mode (Rig tool-loop — integration pending)".into(),
+            });
+            let answer = "Agentic mode received your query. Rig integration is pending — this mode will use an LLM-driven tool-calling loop to dynamically search documents, recall memory, and query the knowledge graph.".to_string();
+            self.store_memory(query, &answer);
+            self.store_episode(query, &answer, 0, true);
+            return AgentResponse {
+                answer,
+                steps,
+                used_chunks: Vec::new(),
+            };
+        }
+
         // Handle LLM-only mode
         if matches!(mode, AgentMode::Llm) {
             steps.push(AgentStep {
@@ -651,6 +669,7 @@ impl<'a> Agent<'a> {
                     };
                 }
                 AgentMode::Llm => unreachable!(), // Already handled above
+                AgentMode::Agentic => unreachable!(), // Already handled above
             }
         }
 
@@ -724,6 +743,7 @@ impl<'a> Agent<'a> {
                 }
             }
             AgentMode::Llm => unreachable!(), // Already handled above
+            AgentMode::Agentic => unreachable!(), // Already handled above
         };
 
         // Step 5: Store memory
@@ -768,6 +788,7 @@ impl<'a> Agent<'a> {
             AgentMode::Llm => LlmConfig::llm_only(),
             AgentMode::Hybrid | AgentMode::Auto => LlmConfig::combined(),
             AgentMode::RagStrict => LlmConfig::documents_only(),
+            AgentMode::Agentic => LlmConfig::combined(),
         };
 
         // Apply temperature override if set

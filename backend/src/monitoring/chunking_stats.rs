@@ -44,6 +44,8 @@ pub struct ChunkingStatsSnapshot {
     pub stats: Option<ChunkingStats>,
     /// Detection observability: raw inputs and derived conclusions
     pub detection: Option<DetectionInfo>,
+    /// Which tokenizer model was active when this chunking operation ran
+    pub tokenizer_model: Option<String>,
 }
 
 impl ChunkingStatsSnapshot {
@@ -64,6 +66,7 @@ impl ChunkingStatsSnapshot {
             duration_ms,
             stats,
             detection: None,
+            tokenizer_model: None,
         }
     }
 
@@ -86,6 +89,7 @@ impl ChunkingStatsSnapshot {
             duration_ms,
             stats,
             detection: Some(detection),
+            tokenizer_model: None,
         }
     }
 }

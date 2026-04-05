@@ -15,6 +15,7 @@ pub fn HomeSettingsBoards(
     show_llm_info: Signal<bool>,
     show_auto_info: Signal<bool>,
     show_strict_info: Signal<bool>,
+    show_agentic_info: Signal<bool>,
     show_upload_panel: Signal<bool>,
     show_delete_docs_modal: Signal<bool>,
     documents: Signal<Vec<String>>,
@@ -29,7 +30,21 @@ pub fn HomeSettingsBoards(
     show_tune_panel: Signal<bool>,
     show_tune_info: Signal<bool>,
     rag_priority_override: Signal<Option<f64>>,
+    selected_model: Signal<String>,
 ) -> Element {
+    let mut show_no_tools_msg = use_signal(|| false);
+
+    let model_supports_tools = {
+        let backend = current_backend().to_lowercase();
+        // Ollama models on this system lack tool-calling support.
+        // llama-server with --jinja supports tool calling for any model.
+        backend.contains("llama") || backend.contains("llamacpp") || backend.contains("llama_cpp")
+    };
+
+    if !model_supports_tools && chat_mode() == "agentic" {
+        chat_mode.set("auto".to_string());
+    }
+
     rsx! {
         div {
             class: "fixed inset-x-0 z-10 pointer-events-none",
@@ -194,6 +209,47 @@ pub fn HomeSettingsBoards(
                                         }
                                     }
 
+                                    // Agentic mode button with info
+                                    div {
+                                        class: "flex items-center gap-1",
+                                        button {
+                                            class: "btn btn-sm rounded-lg px-3",
+                                            style: if !model_supports_tools {
+                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.15); color:rgba(255,255,255,0.35); box-shadow:none; cursor:not-allowed;"
+                                            } else if chat_mode() == "agentic" {
+                                                "background-color:#7C2A02; border-color:#7C2A02; color:white; box-shadow:none;"
+                                            } else {
+                                                "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
+                                            },
+                                            onclick: move |_| {
+                                                if model_supports_tools {
+                                                    chat_mode.set("agentic".to_string());
+                                                    show_no_tools_msg.set(false);
+                                                } else {
+                                                    show_no_tools_msg.set(true);
+                                                }
+                                            },
+                                            title: if model_supports_tools { "Agentic: LLM decides which tools to call in a loop" } else { "Current model does not support tool calling" },
+                                            span { style: "font-size: 0.75em;", "\u{1F9E0}" }
+                                            " Agent"
+                                        }
+                                        button {
+                                            class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                                            style: "width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                                            onclick: move |_| show_agentic_info.set(true),
+                                            title: "Info about Agentic mode",
+                                            svg {
+                                                class: INFO_ICON_SVG_CLASS,
+                                                view_box: "0 0 20 20",
+                                                fill: "none",
+                                                stroke: "#026B7C",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
+                                            }
+                                        }
+                                    }
+
                                     // Tune button
                                     div {
                                         class: "flex items-center gap-1",
@@ -304,10 +360,18 @@ pub fn HomeSettingsBoards(
                                 class: "text-xs font-medium text-center",
                                 style: "color: white;",
                                 match chat_mode().as_str() {
+                                    "agentic" => "Agentic mode - LLM decides when to search, recall memory, or answer",
                                     "auto" => "Auto mode - prefers RAG, falls back to Hybrid",
                                     "ragstrict" => "Strict RAG - answers only from documents",
                                     "llm" => "LLM mode - uses AI without document search",
                                     _ => "Select a mode"
+                                }
+                            }
+                            if show_no_tools_msg() {
+                                p {
+                                    class: "text-xs text-center mt-1",
+                                    style: "color: #f59e0b;",
+                                    "\u{26A0} Current model ({selected_model}) lacks tool-calling support. Switch to phi3.5, qwen2.5, or llama3."
                                 }
                             }
                         }

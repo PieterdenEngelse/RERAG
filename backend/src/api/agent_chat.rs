@@ -1266,6 +1266,7 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
             ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
             ChatMode::Auto => crate::agent::AgentMode::Auto,
             ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
+        ChatMode::Agentic => crate::agent::AgentMode::Agentic,
         };
         let query_clone = req.query.clone();
         let top_k = req.top_k;
@@ -1445,6 +1446,7 @@ pub(crate) async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result
             ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
             ChatMode::Auto => crate::agent::AgentMode::Auto,
             ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
+        ChatMode::Agentic => crate::agent::AgentMode::Agentic,
         };
         let query_str = query.query.clone();
         let top_k = query.top_k;
@@ -1829,7 +1831,76 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
         ChatMode::Auto => crate::agent::AgentMode::Auto,
         ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
+        ChatMode::Agentic => crate::agent::AgentMode::Agentic,
     };
+
+    // Agentic mode: Rig-powered tool-calling loop with all tools
+    if matches!(agent_mode, crate::agent::AgentMode::Agentic) {
+        use rig::completion::Prompt;
+        use rig::client::CompletionClient;
+        use rig::providers::ollama;
+        use crate::rig_tools::*;
+
+        let rig_result: Result<String, String> = async {
+            let client = ollama::Client::builder().api_key(rig::client::Nothing).base_url(&ollama_url).build().unwrap();
+            let retriever_arc = RETRIEVER.get().map(|r| std::sync::Arc::clone(r));
+
+            let base = client
+                .agent(&model)
+                .preamble(
+                    "You are a helpful assistant with access to tools. \
+                     Use search_documents to find information in the knowledge base. \
+                     Use recall_memory to check previous conversations. \
+                     Use store_memory to save important facts for later. \
+                     Use search_knowledge_graph to find entity relationships. \
+                     Call tools when the question might benefit from them. \
+                     If tools return no results, answer from your own knowledge. \
+                     Be concise and accurate."
+                );
+
+            if let Some(ret) = retriever_arc {
+                let agent = base
+                    .tool(TantivySearchTool::new(std::sync::Arc::clone(&ret), req.top_k))
+                    .tool(MemoryRecallTool::new())
+                    .tool(MemoryStoreTool::new())
+                    .tool(GraphSearchTool::new(ret))
+                    .build();
+
+                agent
+                    .prompt(&req.query)
+                    .await
+                    .map_err(|e| format!("Rig agent error: {}", e))
+            } else {
+                let agent = base
+                    .tool(MemoryRecallTool::new())
+                    .tool(MemoryStoreTool::new())
+                    .build();
+
+                agent
+                    .prompt(&req.query)
+                    .await
+                    .map_err(|e| format!("Rig agent error: {}", e))
+            }
+        }.await;
+
+        let response_text = match rig_result {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!(error = %e, "Agentic mode failed");
+                format!("Agentic mode error: {}", e)
+            }
+        };
+
+        let json_response = serde_json::json!({
+            "response": response_text,
+            "model": model,
+            "mode": "agentic",
+            "done": true
+        });
+        return Ok(HttpResponse::Ok()
+            .content_type("text/event-stream")
+            .body(format!("data: {}\n\n", json_response)));
+    }
 
     // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
     if matches!(
@@ -1965,6 +2036,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         }
         crate::agent::AgentMode::Llm => LlmConfig::llm_only(),
         crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto => LlmConfig::combined(),
+        crate::agent::AgentMode::Agentic => LlmConfig::combined(),
     };
 
     // Apply temperature override if set

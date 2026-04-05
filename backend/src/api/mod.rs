@@ -617,6 +617,8 @@ pub enum ChatMode {
     /// If no chunks are found, responds with "I don't know".
     #[serde(alias = "rag_strict")]
     RagStrict,
+    /// Agentic mode: LLM-driven tool-use loop (Rig integration)
+    Agentic,
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]

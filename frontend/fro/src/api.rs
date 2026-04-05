@@ -2211,6 +2211,8 @@ pub struct ChunkingStatsSnapshot {
     pub duration_ms: u64,
     pub stats: Option<ChunkingStats>,
     pub detection: Option<DetectionInfo>,
+    #[serde(default)]
+    pub tokenizer_model: Option<String>,
 }
 
 /// Response from chunking stats endpoint
