@@ -3,3 +3,16 @@ test_ag_home6/data/vectors.new.json
 test_ag_home6/data/vectors.new.json
 .fastembed_cache/
 models/ner/model.onnx
+.aider*
+.env
+.env
+.env
+.env
+.env
+.env
+.env
+.env
+.env
+.env
+.env
+.env
