@@ -3,14 +3,11 @@
 
 use super::*;
 
-
 #[derive(Clone)]
 pub(crate) struct RateLimitSharedState {
     pub limiter: Arc<RateLimiter>,
     pub opts: RateLimitOptions,
 }
-
-
 
 #[derive(Serialize)]
 pub(crate) struct L1CacheSnapshot {
@@ -20,8 +17,6 @@ pub(crate) struct L1CacheSnapshot {
     pub misses: u64,
     pub hit_rate: f64,
 }
-
-
 
 #[derive(Serialize)]
 pub(crate) struct L2CacheSnapshot {
@@ -34,15 +29,11 @@ pub(crate) struct L2CacheSnapshot {
     pub hit_rate: f64,
 }
 
-
-
 #[derive(Serialize)]
 pub(crate) struct CacheCountersSnapshot {
     pub hits_total: i64,
     pub misses_total: i64,
 }
-
-
 
 #[derive(Serialize)]
 pub(crate) struct CacheMonitorResponse {
@@ -53,15 +44,11 @@ pub(crate) struct CacheMonitorResponse {
     pub counters: CacheCountersSnapshot,
 }
 
-
-
 #[derive(Serialize)]
 pub(crate) struct RouteDropStat {
     pub route: String,
     pub drops: i64,
 }
-
-
 
 #[derive(Serialize)]
 pub(crate) struct RateLimitConfigSnapshot {
@@ -75,8 +62,6 @@ pub(crate) struct RateLimitConfigSnapshot {
     pub rules: Vec<RouteRule>,
 }
 
-
-
 #[derive(Serialize)]
 pub(crate) struct RateLimitMonitorResponse {
     pub request_id: String,
@@ -86,14 +71,10 @@ pub(crate) struct RateLimitMonitorResponse {
     pub limiter_state: RateLimiterState,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub(crate) struct LogsQuery {
     pub limit: Option<usize>,
 }
-
-
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ChunkingQuery {
@@ -101,14 +82,10 @@ pub(crate) struct ChunkingQuery {
     pub capacity: Option<usize>,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub(crate) struct LoggingQuery {
     pub enabled: Option<bool>,
 }
-
-
 
 #[derive(Serialize)]
 pub(crate) struct LogEntry {
@@ -120,8 +97,6 @@ pub(crate) struct LogEntry {
     pub fields: Option<Value>,
 }
 
-
-
 #[derive(Serialize)]
 pub(crate) struct LogsResponse {
     pub request_id: String,
@@ -130,28 +105,42 @@ pub(crate) struct LogsResponse {
     pub note: Option<String>,
 }
 
-
-
 // Track previous health status for change detection
 
 /// Get status log file content
 pub async fn get_systemd_logs(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, Error> {
-    let unit = query.get("unit").cloned().unwrap_or_else(|| "ag.service".to_string());
-    let limit = query.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(100);
+    let unit = query
+        .get("unit")
+        .cloned()
+        .unwrap_or_else(|| "ag.service".to_string());
+    let limit = query
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(100);
 
     // Validate unit name to prevent injection
     if unit.contains("..") || unit.contains('/') || unit.contains(';') {
         return Ok(HttpResponse::BadRequest().json(json!({"error": "Invalid unit name"})));
     }
 
-    let scope = query.get("scope").cloned().unwrap_or_else(|| "system".to_string());
+    let scope = query
+        .get("scope")
+        .cloned()
+        .unwrap_or_else(|| "system".to_string());
     let mut args: Vec<String> = Vec::new();
     if scope == "user" {
         args.push("--user".to_string());
     }
-    args.extend(["-u".to_string(), unit.clone(), "-n".to_string(), limit.to_string(), "--no-pager".to_string(), "--output=short-iso".to_string()]);
+    args.extend([
+        "-u".to_string(),
+        unit.clone(),
+        "-n".to_string(),
+        limit.to_string(),
+        "--no-pager".to_string(),
+        "--output=short-iso".to_string(),
+    ]);
 
     let output = tokio::process::Command::new("journalctl")
         .args(&args)
@@ -176,8 +165,6 @@ pub async fn get_systemd_logs(
         }))),
     }
 }
-
-
 
 pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let status = path.into_inner();
@@ -243,8 +230,6 @@ pub async fn get_status_log(path: web::Path<String>) -> Result<HttpResponse, Err
         }))),
     }
 }
-
-
 
 pub async fn health_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -404,15 +389,11 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 pub(crate) async fn root_handler() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok()
         .content_type("text/plain; charset=utf-8")
         .body("✅ Backend is running (Actix Web)\n\nTry /health or /ready\n"))
 }
-
-
 
 pub(crate) async fn ready_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -448,8 +429,6 @@ pub(crate) async fn ready_check() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 /// Phase 16: Export metrics in Prometheus text format
 /// GET /monitoring/metrics
 /// Returns: Prometheus-compliant text format metrics
@@ -462,8 +441,6 @@ pub(crate) async fn get_metrics() -> Result<HttpResponse, Error> {
         .content_type("text/plain; charset=utf-8")
         .body(prometheus_text))
 }
-
-
 
 /// GET /monitoring/optimizations
 /// Returns: Statistics about all performance optimizations
@@ -498,8 +475,6 @@ pub(crate) async fn get_optimization_stats() -> Result<HttpResponse, Error> {
         })))
     }
 }
-
-
 
 /// GET /monitoring/io-uring
 /// Returns: io_uring async I/O statistics, configuration, and availability
@@ -576,12 +551,12 @@ pub(crate) async fn get_io_uring_stats() -> Result<HttpResponse, Error> {
     })))
 }
 
-
-
 /// POST /monitoring/log-frontend-error
 /// Log frontend errors so they appear in the log viewer
 /// This allows page errors to be visible when filtering logs by color (red for errors)
-pub(crate) async fn log_frontend_error(body: web::Json<serde_json::Value>) -> Result<HttpResponse, Error> {
+pub(crate) async fn log_frontend_error(
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, Error> {
     let page = body
         .get("page")
         .and_then(|v| v.as_str())
@@ -612,8 +587,6 @@ pub(crate) async fn log_frontend_error(body: web::Json<serde_json::Value>) -> Re
     })))
 }
 
-
-
 /// POST /monitoring/optimizations/build-hnsw
 /// Build HNSW index for O(log n) search
 pub(crate) async fn build_hnsw_index() -> Result<HttpResponse, Error> {
@@ -641,8 +614,6 @@ pub(crate) async fn build_hnsw_index() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 /// POST /monitoring/optimizations/build-pq
 /// Build Product Quantization index for 16x memory reduction
 pub(crate) async fn build_pq_index() -> Result<HttpResponse, Error> {
@@ -669,8 +640,6 @@ pub(crate) async fn build_pq_index() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 /// POST /monitoring/optimizations/build-fp16
 /// Build FP16 vector store for 2x memory reduction
 pub(crate) async fn build_fp16_store() -> Result<HttpResponse, Error> {
@@ -696,8 +665,6 @@ pub(crate) async fn build_fp16_store() -> Result<HttpResponse, Error> {
         })))
     }
 }
-
-
 
 /// POST /monitoring/optimizations/build-all
 /// Build all optimization indexes
@@ -730,8 +697,6 @@ pub(crate) async fn build_all_indexes() -> Result<HttpResponse, Error> {
         })))
     }
 }
-
-
 
 pub(crate) async fn get_cache_monitor_info() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -790,8 +755,6 @@ pub(crate) async fn get_cache_monitor_info() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(response))
 }
 
-
-
 /// POST /cache/clear
 /// Clear all caches (L1, L2, and optionally L3/Redis)
 pub(crate) async fn clear_cache() -> Result<HttpResponse, Error> {
@@ -824,8 +787,6 @@ pub(crate) async fn clear_cache() -> Result<HttpResponse, Error> {
     })))
 }
 
-
-
 pub(crate) async fn get_rate_limit_monitor_info(
     state: web::Data<RateLimitSharedState>,
 ) -> Result<HttpResponse, Error> {
@@ -849,8 +810,6 @@ pub(crate) async fn get_rate_limit_monitor_info(
     Ok(HttpResponse::Ok().json(response))
 }
 
-
-
 /// Get inference gateway statistics
 pub(crate) async fn get_inference_gateway_stats() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -865,14 +824,10 @@ pub(crate) async fn get_inference_gateway_stats() -> Result<HttpResponse, Error>
     })))
 }
 
-
-
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct SetRateLimitEnabledRequest {
     pub enabled: bool,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SetRateLimitEnabledResponse {
@@ -880,8 +835,6 @@ pub(crate) struct SetRateLimitEnabledResponse {
     pub enabled: bool,
     pub message: String,
 }
-
-
 
 pub(crate) async fn set_rate_limit_enabled(
     state: web::Data<RateLimitSharedState>,
@@ -904,8 +857,6 @@ pub(crate) async fn set_rate_limit_enabled(
         message,
     }))
 }
-
-
 
 pub(crate) async fn get_recent_logs(query: web::Query<LogsQuery>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -949,16 +900,12 @@ pub(crate) async fn get_recent_logs(query: web::Query<LogsQuery>) -> Result<Http
     Ok(HttpResponse::Ok().json(response))
 }
 
-
-
 /// GET /monitoring/onnx
 /// Returns ONNX embedding runtime statistics.
 pub(crate) async fn get_onnx_status() -> Result<HttpResponse, Error> {
     let snap = crate::monitoring::onnx_metrics::snapshot();
     Ok(HttpResponse::Ok().json(snap))
 }
-
-
 
 /// GET /monitoring/ollama
 /// Returns Ollama service status fetched directly from the Ollama API
@@ -1017,8 +964,6 @@ pub(crate) async fn get_ollama_status() -> Result<HttpResponse, Error> {
         "model_count": model_count
     })))
 }
-
-
 
 /// GET /monitoring/docker/inspect?name=<container>
 pub(crate) async fn get_container_inspect(
@@ -1081,4 +1026,3 @@ pub(crate) async fn get_container_inspect(
         "logs": logs
     })))
 }
-

@@ -4,7 +4,7 @@ use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx, ConfigTerms,
     ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd, MonitorGrafanaServices,
-    DocuAgPipeline, DocuBias, DocuBm25, DocuRkyv, DocuEmbeddings, DocuEntitiesProduction, DocuIoUring,
+    DocuAgPipeline, DocuBias, DocuBm25, DocuRkyv, DocuRig, DocuEmbeddings, DocuEntitiesProduction, DocuIoUring,
     DocuKnowledgeGraphs, DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuTantivy, DocuThreads,
     MonitorAgentic, MonitorCache, MonitorChunks, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorOnnx, MonitorOnnxStatus,
     MonitorObservations, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests,
@@ -130,6 +130,8 @@ pub enum Route {
         DocuBm25 {},
         #[route("/docu/index/rkyv")]
         DocuRkyv {},
+        #[route("/docu/index/rig")]
+        DocuRig {},
     #[end_layout]
     #[route("/:..segments")]
     PageNotFound { segments: Vec<String> },

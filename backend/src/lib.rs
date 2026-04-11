@@ -10,7 +10,6 @@ pub mod db {
 }
 pub mod agent;
 pub mod api;
-pub mod rig_tools;
 pub mod config;
 pub mod embedder;
 pub mod gguf_tokenizer;
@@ -19,6 +18,7 @@ pub mod inference_gateway;
 pub mod mime_detect;
 pub mod parser;
 pub mod retriever;
+pub mod rig_tools;
 pub mod rules;
 pub use retriever::Retriever;
 pub mod agent_memory;

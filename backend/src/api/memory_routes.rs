@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 #[derive(serde::Deserialize)]
 pub struct StoreRagRequest {
     pub agent_id: String,
@@ -11,8 +10,6 @@ pub struct StoreRagRequest {
     pub content: String,
     pub timestamp: Option<String>,
 }
-
-
 
 #[derive(serde::Deserialize)]
 pub struct SearchRagRequest {
@@ -22,8 +19,6 @@ pub struct SearchRagRequest {
     pub top_k: usize,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct RecallRagRequest {
     pub agent_id: String,
@@ -31,15 +26,11 @@ pub struct RecallRagRequest {
     pub limit: usize,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct DeleteRagRequest {
     pub agent_id: String,
     pub ids: Vec<i64>,
 }
-
-
 
 #[derive(serde::Deserialize)]
 pub struct ManualObservationRequest {
@@ -58,8 +49,6 @@ pub struct ManualObservationRequest {
     pub project: Option<String>,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct ManualObservationSearchRequest {
     pub query: String,
@@ -75,8 +64,6 @@ pub struct ManualObservationSearchRequest {
     pub offset: usize,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct ManualObservationListQuery {
     pub entry_type: Option<String>,
@@ -84,8 +71,6 @@ pub struct ManualObservationListQuery {
     #[serde(default = "default_limit")]
     pub limit: usize,
 }
-
-
 
 #[derive(serde::Deserialize)]
 pub struct ManualObservationTimelineRequest {
@@ -99,14 +84,10 @@ pub struct ManualObservationTimelineRequest {
     pub project: Option<String>,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct ManualObservationFetchRequest {
     pub ids: Vec<String>,
 }
-
-
 
 pub(crate) fn validate_memory_type(memory_type: &str) -> Result<(), Error> {
     if VALID_MEMORY_TYPES.contains(&memory_type) {
@@ -120,8 +101,6 @@ pub(crate) fn validate_memory_type(memory_type: &str) -> Result<(), Error> {
     }
 }
 
-
-
 pub(crate) async fn list_memory_types() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(json!({
         "core": ["fact", "preference", "instruction", "context", "summary", "task"],
@@ -131,9 +110,9 @@ pub(crate) async fn list_memory_types() -> Result<HttpResponse, Error> {
     })))
 }
 
-
-
-pub(crate) async fn store_rag_memory(req: web::Json<StoreRagRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn store_rag_memory(
+    req: web::Json<StoreRagRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     validate_memory_type(&req.memory_type)?;
     let mem = AgentMemory::new(path_resolver::agent_db_path_str())
@@ -150,9 +129,9 @@ pub(crate) async fn store_rag_memory(req: web::Json<StoreRagRequest>) -> Result<
     })))
 }
 
-
-
-pub(crate) async fn search_rag_memory(req: web::Json<SearchRagRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn search_rag_memory(
+    req: web::Json<SearchRagRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
@@ -165,9 +144,9 @@ pub(crate) async fn search_rag_memory(req: web::Json<SearchRagRequest>) -> Resul
     })))
 }
 
-
-
-pub(crate) async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn recall_rag_memory(
+    req: web::Json<RecallRagRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
@@ -180,9 +159,9 @@ pub(crate) async fn recall_rag_memory(req: web::Json<RecallRagRequest>) -> Resul
     })))
 }
 
-
-
-pub(crate) async fn delete_rag_memory(req: web::Json<DeleteRagRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn delete_rag_memory(
+    req: web::Json<DeleteRagRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let mut mem = AgentMemory::new(path_resolver::agent_db_path_str())
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
@@ -195,8 +174,6 @@ pub(crate) async fn delete_rag_memory(req: web::Json<DeleteRagRequest>) -> Resul
         "request_id": request_id
     })))
 }
-
-
 
 pub(crate) fn validate_manual_observation(req: &ManualObservationRequest) -> Result<(), Error> {
     if req.title.trim().is_empty() || req.title.len() > 200 {
@@ -226,8 +203,6 @@ pub(crate) fn validate_manual_observation(req: &ManualObservationRequest) -> Res
     }
     Ok(())
 }
-
-
 
 pub(crate) async fn create_manual_observation(
     req: web::Json<ManualObservationRequest>,
@@ -270,8 +245,6 @@ pub(crate) async fn create_manual_observation(
     result
 }
 
-
-
 pub(crate) async fn list_manual_observations(
     query: web::Query<ManualObservationListQuery>,
     http_req: HttpRequest,
@@ -298,8 +271,6 @@ pub(crate) async fn list_manual_observations(
         })))
     })
 }
-
-
 
 pub(crate) async fn get_manual_observation(
     path: web::Path<String>,
@@ -329,8 +300,6 @@ pub(crate) async fn get_manual_observation(
         }
     })
 }
-
-
 
 pub(crate) async fn update_manual_observation(
     path: web::Path<String>,
@@ -375,8 +344,6 @@ pub(crate) async fn update_manual_observation(
     })
 }
 
-
-
 pub(crate) async fn delete_manual_observation(
     path: web::Path<String>,
     http_req: HttpRequest,
@@ -407,8 +374,6 @@ pub(crate) async fn delete_manual_observation(
     })
 }
 
-
-
 pub(crate) async fn manual_observation_timeline(
     req: web::Json<ManualObservationTimelineRequest>,
     http_req: HttpRequest,
@@ -438,8 +403,6 @@ pub(crate) async fn manual_observation_timeline(
         })))
     })
 }
-
-
 
 pub(crate) async fn fetch_manual_observations(
     req: web::Json<ManualObservationFetchRequest>,
@@ -476,8 +439,6 @@ pub(crate) async fn fetch_manual_observations(
     })
 }
 
-
-
 pub(crate) async fn search_manual_observations(
     req: web::Json<ManualObservationSearchRequest>,
     http_req: HttpRequest,
@@ -512,9 +473,9 @@ pub(crate) async fn search_manual_observations(
     })
 }
 
-
-
-pub(crate) async fn get_manual_observation_metrics(_http_req: HttpRequest) -> Result<HttpResponse, Error> {
+pub(crate) async fn get_manual_observation_metrics(
+    _http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
     // No admin auth required - this is read-only monitoring data
     let snapshot = metrics::manual_observation_metrics_snapshot();
     Ok(HttpResponse::Ok().json(json!({
@@ -523,10 +484,10 @@ pub(crate) async fn get_manual_observation_metrics(_http_req: HttpRequest) -> Re
     })))
 }
 
-
-
 /// GET /monitoring/memory/search/stats - 3-layer memory search metrics (SEARCH.md)
-pub(crate) async fn get_memory_search_layer_stats(_http_req: HttpRequest) -> Result<HttpResponse, Error> {
+pub(crate) async fn get_memory_search_layer_stats(
+    _http_req: HttpRequest,
+) -> Result<HttpResponse, Error> {
     // No admin auth required - this is read-only monitoring data
     let layer_stats = metrics::memory_search_layer_stats();
     let tokens_saved = metrics::memory_search_tokens_saved_total();
@@ -536,8 +497,6 @@ pub(crate) async fn get_memory_search_layer_stats(_http_req: HttpRequest) -> Res
         "request_id": generate_request_id()
     })))
 }
-
-
 
 pub(crate) async fn get_recent_observations(
     query: web::Query<ManualObservationListQuery>,
@@ -558,16 +517,12 @@ pub(crate) async fn get_recent_observations(
     })))
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub(crate) struct RagMemoriesQuery {
     #[serde(default = "default_limit")]
     pub limit: usize,
     pub agent_id: Option<String>,
 }
-
-
 
 pub(crate) async fn get_recent_rag_memories(
     query: web::Query<RagMemoriesQuery>,
@@ -584,5 +539,3 @@ pub(crate) async fn get_recent_rag_memories(
         "request_id": generate_request_id()
     })))
 }
-
-

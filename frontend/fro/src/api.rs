@@ -1687,6 +1687,8 @@ where
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AgentStatsResponse {
     pub active_agents: usize,
+    #[serde(default)]
+    pub agent_names: Vec<String>,
     pub episodes_total: usize,
     pub episodes_last_hour: usize,
     pub success_rate: f64,
@@ -1958,6 +1960,27 @@ pub async fn fetch_memory_stats() -> Result<MemoryStatsResponse, String> {
 /// Fetch tool statistics
 pub async fn fetch_tool_stats() -> Result<ToolStatsResponse, String> {
     fetch_json("/monitoring/tools/stats").await
+}
+
+/// Rig agentic-mode counters and token budget stats
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RigStatsResponse {
+    pub agentic_calls_total: usize,
+    pub agentic_fallbacks_total: usize,
+    pub rig_tool_calls_total: usize,
+    pub avg_session_ms: f64,
+    pub fallback_rate_pct: f64,
+    pub avg_tokens_in: f64,
+    pub max_tokens_in: usize,
+    pub avg_ctx_utilization_pct: f64,
+    /// "exact" | "heuristic" | "mixed (N/M exact)"
+    pub counter_type: String,
+    pub token_sample_count: usize,
+}
+
+/// Fetch Rig agentic-mode stats
+pub async fn fetch_rig_stats() -> Result<RigStatsResponse, String> {
+    fetch_json("/monitoring/agents/rig-stats").await
 }
 
 

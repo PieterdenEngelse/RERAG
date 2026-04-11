@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 // Shared agent session state for chat commands
 #[derive(Default, Clone)]
 pub(crate) struct AgentChatState {
@@ -25,8 +24,6 @@ pub(crate) struct AgentChatState {
     pub prompt_caching_enabled: bool,
 }
 
-
-
 #[derive(Clone)]
 pub(crate) enum CommandAction {
     FocusSet(Option<String>),
@@ -37,8 +34,6 @@ pub(crate) enum CommandAction {
     NoteAdded(#[allow(dead_code)] String),
 }
 
-
-
 #[derive(Clone, Copy, Default)]
 pub(crate) enum Verbosity {
     Brief,
@@ -46,8 +41,6 @@ pub(crate) enum Verbosity {
     Normal,
     Verbose,
 }
-
-
 
 impl Verbosity {
     fn label(&self) -> &'static str {
@@ -59,15 +52,11 @@ impl Verbosity {
     }
 }
 
-
-
 pub(crate) fn chat_state() -> Arc<Mutex<AgentChatState>> {
     CHAT_STATE
         .get_or_init(|| Arc::new(Mutex::new(AgentChatState::default())))
         .clone()
 }
-
-
 
 pub(crate) fn update_last_agent_run(query: String, response: &AgentResponse) {
     let state_arc = chat_state();
@@ -80,8 +69,6 @@ pub(crate) fn update_last_agent_run(query: String, response: &AgentResponse) {
     state.last_token_usage = Some(token_estimate.max(response.used_chunks.len()));
 }
 
-
-
 pub(crate) fn record_focus_change(new_focus: Option<String>) -> Option<String> {
     let state_arc = chat_state();
     let mut state = state_arc.lock().expect("chat state lock");
@@ -92,8 +79,6 @@ pub(crate) fn record_focus_change(new_focus: Option<String>) -> Option<String> {
     state.focus_topic = new_focus;
     previous
 }
-
-
 
 pub(crate) fn record_persona_change(new_persona: Option<String>) -> Option<String> {
     let state_arc = chat_state();
@@ -106,8 +91,6 @@ pub(crate) fn record_persona_change(new_persona: Option<String>) -> Option<Strin
     previous
 }
 
-
-
 pub(crate) fn record_verbosity_change(new_mode: Verbosity) -> Verbosity {
     let state_arc = chat_state();
     let mut state = state_arc.lock().expect("chat state lock");
@@ -119,15 +102,11 @@ pub(crate) fn record_verbosity_change(new_mode: Verbosity) -> Verbosity {
     previous
 }
 
-
-
 pub(crate) fn push_note_action(note: String) {
     let state_arc = chat_state();
     let mut guard = state_arc.lock().expect("chat state lock");
     guard.undo_stack.push(CommandAction::NoteAdded(note));
 }
-
-
 
 pub(crate) fn record_model_change(new_model: Option<String>) -> Option<String> {
     let state_arc = chat_state();
@@ -140,8 +119,6 @@ pub(crate) fn record_model_change(new_model: Option<String>) -> Option<String> {
     previous
 }
 
-
-
 pub(crate) fn record_temperature_change(new_temp: Option<f32>) -> Option<f32> {
     let state_arc = chat_state();
     let mut guard = state_arc.lock().expect("chat state lock");
@@ -153,15 +130,11 @@ pub(crate) fn record_temperature_change(new_temp: Option<f32>) -> Option<f32> {
     previous
 }
 
-
-
 pub(crate) fn pop_undo_action() -> Option<CommandAction> {
     let state_arc = chat_state();
     let mut guard = state_arc.lock().expect("chat state lock");
     guard.undo_stack.pop()
 }
-
-
 
 #[allow(dead_code)]
 pub(crate) fn snapshots_for_debug() -> (Option<String>, Option<String>, Verbosity, Option<String>) {
@@ -174,8 +147,6 @@ pub(crate) fn snapshots_for_debug() -> (Option<String>, Option<String>, Verbosit
         state.last_query.clone(),
     )
 }
-
-
 
 /// Get current chat settings for the agent, including RAG memories
 pub(crate) fn get_current_chat_settings() -> crate::agent::ChatSettings {
@@ -202,15 +173,11 @@ pub(crate) fn get_current_chat_settings() -> crate::agent::ChatSettings {
         .with_memories(memories)
 }
 
-
-
 pub(crate) fn store_dry_run_plan(plan: String) {
     let state_arc = chat_state();
     let mut guard = state_arc.lock().expect("chat state lock");
     guard.dry_run_plan = Some(plan);
 }
-
-
 
 #[allow(dead_code)]
 pub(crate) fn fetch_dry_run_plan() -> Option<String> {
@@ -218,8 +185,6 @@ pub(crate) fn fetch_dry_run_plan() -> Option<String> {
     let guard = state_arc.lock().expect("chat state lock");
     guard.dry_run_plan.clone()
 }
-
-
 
 #[derive(serde::Deserialize)]
 pub struct AgentRequest {
@@ -229,8 +194,6 @@ pub struct AgentRequest {
     #[serde(default)]
     pub mode: ChatMode,
 }
-
-
 
 // Simple query variant for GET /agent/chat
 #[derive(serde::Deserialize)]
@@ -242,18 +205,13 @@ pub struct AgentQueryParams {
     pub mode: ChatMode,
 }
 
-
-
 pub(crate) fn default_top_k() -> usize {
     5
 }
 
-
 pub(crate) fn default_limit() -> usize {
     20
 }
-
-
 
 /// Chat command types
 #[allow(dead_code)]
@@ -299,15 +257,11 @@ pub(crate) enum ChatCommand {
     Tokens,
 }
 
-
-
 pub(crate) fn extract_argument<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
     line.strip_prefix(marker)
         .map(|rest| rest.trim())
         .filter(|s| !s.is_empty())
 }
-
-
 
 /// Parse chat commands from user input
 pub(crate) fn parse_chat_command(query: &str) -> Option<ChatCommand> {
@@ -430,8 +384,6 @@ pub(crate) fn parse_chat_command(query: &str) -> Option<ChatCommand> {
     None
 }
 
-
-
 /// Create a goal via the agentic monitor routes
 pub(crate) fn create_goal_from_command(goal_text: &str) -> Result<serde_json::Value, String> {
     use crate::api::agentic_monitor_routes::get_agent_db_connection;
@@ -456,8 +408,6 @@ pub(crate) fn create_goal_from_command(goal_text: &str) -> Result<serde_json::Va
         "created_at": now
     }))
 }
-
-
 
 /// Get help text for chat commands
 pub(crate) fn get_help_text() -> String {
@@ -497,8 +447,6 @@ Examples:
         .to_string()
 }
 
-
-
 /// Get active goals list
 pub(crate) fn get_goals_list() -> Result<String, String> {
     use crate::api::agentic_monitor_routes::get_agent_db_connection;
@@ -529,8 +477,6 @@ pub(crate) fn get_goals_list() -> Result<String, String> {
     }
 }
 
-
-
 /// Get system status
 pub(crate) fn get_system_status() -> String {
     let health = if RETRIEVER.get().is_some() {
@@ -545,16 +491,12 @@ pub(crate) fn get_system_status() -> String {
     )
 }
 
-
-
 /// Get available models
 pub(crate) fn get_models_list() -> String {
     // This would ideally query the actual models, but for now return a placeholder
     "Available models:\n• default (local embedding model)\n\nUse /config to change model settings."
         .to_string()
 }
-
-
 
 pub(crate) fn forget_topic(topic: &str) -> Result<String, String> {
     let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
@@ -566,8 +508,6 @@ pub(crate) fn forget_topic(topic: &str) -> Result<String, String> {
         removed, topic
     ))
 }
-
-
 
 pub(crate) fn list_recent_history(limit: usize) -> Result<String, String> {
     use crate::api::agentic_monitor_routes::get_agent_db_connection;
@@ -599,8 +539,6 @@ pub(crate) fn list_recent_history(limit: usize) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) fn last_sources_summary() -> String {
     let state_arc = chat_state();
     let state = state_arc.lock().expect("chat state lock");
@@ -617,8 +555,6 @@ pub(crate) fn last_sources_summary() -> String {
     }
 }
 
-
-
 pub(crate) fn record_note(content: &str) -> Result<String, String> {
     let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
     let ts = chrono::Utc::now().to_rfc3339();
@@ -627,8 +563,6 @@ pub(crate) fn record_note(content: &str) -> Result<String, String> {
     push_note_action(content.to_string());
     Ok("Note stored.".to_string())
 }
-
-
 
 pub(crate) fn add_subgoal(text: &str) -> Result<String, String> {
     let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
@@ -645,8 +579,6 @@ pub(crate) fn add_subgoal(text: &str) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) fn update_goal_status_cmd(status: GoalStatus) -> Result<String, String> {
     let mem = AgentMemory::new(path_resolver::agent_db_path_str()).map_err(|e| e.to_string())?;
     if let Some((goal_id, goal_text)) = mem.latest_goal("default").map_err(|e| e.to_string())? {
@@ -661,8 +593,6 @@ pub(crate) fn update_goal_status_cmd(status: GoalStatus) -> Result<String, Strin
         Err("No goal found.".to_string())
     }
 }
-
-
 
 pub(crate) fn summarize_reflection() -> Result<String, String> {
     use crate::api::agentic_monitor_routes::get_agent_db_connection;
@@ -689,8 +619,6 @@ pub(crate) fn summarize_reflection() -> Result<String, String> {
     ))
 }
 
-
-
 pub(crate) fn explain_last_reasoning() -> String {
     let state_arc = chat_state();
     let state = state_arc.lock().expect("chat state lock");
@@ -706,8 +634,6 @@ pub(crate) fn explain_last_reasoning() -> String {
     }
 }
 
-
-
 pub(crate) fn apply_focus(topic: Option<String>) -> String {
     let previous = record_focus_change(topic.clone());
     match (previous, topic) {
@@ -718,8 +644,6 @@ pub(crate) fn apply_focus(topic: Option<String>) -> String {
         (_, None) => "Focus cleared.".to_string(),
     }
 }
-
-
 
 pub(crate) fn apply_persona(persona: Option<String>) -> String {
     let previous = record_persona_change(persona.clone());
@@ -732,8 +656,6 @@ pub(crate) fn apply_persona(persona: Option<String>) -> String {
     }
 }
 
-
-
 pub(crate) fn apply_verbosity(mode: Verbosity) -> String {
     let previous = record_verbosity_change(mode);
     format!(
@@ -742,8 +664,6 @@ pub(crate) fn apply_verbosity(mode: Verbosity) -> String {
         mode.label()
     )
 }
-
-
 
 pub(crate) fn apply_model(model: Option<String>) -> String {
     let previous = record_model_change(model.clone());
@@ -756,8 +676,6 @@ pub(crate) fn apply_model(model: Option<String>) -> String {
     }
 }
 
-
-
 pub(crate) fn apply_temperature(temp: Option<f32>) -> String {
     let previous = record_temperature_change(temp);
     match (previous, temp) {
@@ -768,8 +686,6 @@ pub(crate) fn apply_temperature(temp: Option<f32>) -> String {
         (_, None) => "Temperature reset to default.".to_string(),
     }
 }
-
-
 
 pub(crate) async fn run_calculator_tool(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
@@ -788,8 +704,6 @@ pub(crate) async fn run_calculator_tool(input: &str) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) async fn run_web_search_tool(input: &str) -> Result<String, String> {
     let tool = WebSearchTool::new();
     let result = tool.execute(input).await.map_err(|e| e.to_string())?;
@@ -799,8 +713,6 @@ pub(crate) async fn run_web_search_tool(input: &str) -> Result<String, String> {
         Err(result.result)
     }
 }
-
-
 
 pub(crate) async fn run_translator_tool(input: &str) -> Result<String, String> {
     if input.trim().is_empty() {
@@ -815,8 +727,6 @@ pub(crate) async fn run_translator_tool(input: &str) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) async fn run_sentiment_tool(input: &str) -> Result<String, String> {
     if input.trim().is_empty() {
         return Err("Provide text to analyze, e.g. 'sentiment I love this product'.".to_string());
@@ -829,8 +739,6 @@ pub(crate) async fn run_sentiment_tool(input: &str) -> Result<String, String> {
         Err(result.result)
     }
 }
-
-
 
 pub(crate) async fn run_entity_tool(input: &str) -> Result<String, String> {
     if input.trim().is_empty() {
@@ -848,8 +756,6 @@ pub(crate) async fn run_entity_tool(input: &str) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) async fn run_spell_checker_tool(input: &str) -> Result<String, String> {
     if input.trim().is_empty() {
         return Err("Provide text to spell check, e.g. 'spellcheck teh quikc fox'.".to_string());
@@ -863,8 +769,6 @@ pub(crate) async fn run_spell_checker_tool(input: &str) -> Result<String, String
     }
 }
 
-
-
 pub(crate) async fn run_scheduler_tool(input: &str) -> Result<String, String> {
     let tool = SchedulerTool::new();
     let result = tool.execute(input).await?;
@@ -874,8 +778,6 @@ pub(crate) async fn run_scheduler_tool(input: &str) -> Result<String, String> {
         Err(result.result)
     }
 }
-
-
 
 pub(crate) async fn run_memory_tool(input: &str) -> Result<String, String> {
     let tool = MemoryTool::new(None);
@@ -887,8 +789,6 @@ pub(crate) async fn run_memory_tool(input: &str) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) fn normalize_pipe_separators(command: &str) -> String {
     command
         .split('|')
@@ -896,8 +796,6 @@ pub(crate) fn normalize_pipe_separators(command: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
-
-
 
 pub(crate) async fn run_tool_command(command: &str) -> Result<String, String> {
     let command = normalize_pipe_separators(command);
@@ -946,8 +844,6 @@ pub(crate) async fn run_tool_command(command: &str) -> Result<String, String> {
     }
 }
 
-
-
 pub(crate) async fn run_chain_command(chain: (String, String)) -> Result<String, String> {
     let first = run_tool_command(&chain.0).await?;
     let second_input = if chain.1.trim().contains("$last") {
@@ -958,8 +854,6 @@ pub(crate) async fn run_chain_command(chain: (String, String)) -> Result<String,
     let second = run_tool_command(&second_input).await?;
     Ok(format!("Step1:\n{}\n\nStep2:\n{}", first, second))
 }
-
-
 
 pub(crate) fn retry_last_query(default_top_k: usize) -> Result<AgentResponse, String> {
     let state_arc = chat_state();
@@ -984,8 +878,6 @@ pub(crate) fn retry_last_query(default_top_k: usize) -> Result<AgentResponse, St
     }
 }
 
-
-
 pub(crate) fn apply_undo() -> String {
     if let Some(action) = pop_undo_action() {
         match action {
@@ -1001,14 +893,10 @@ pub(crate) fn apply_undo() -> String {
     }
 }
 
-
-
 pub(crate) fn render_dry_run_plan(plan: &str) -> String {
     store_dry_run_plan(plan.to_string());
     format!("Planned actions:\n{}", plan)
 }
-
-
 
 pub(crate) fn export_state() -> String {
     let state_arc = chat_state();
@@ -1048,8 +936,6 @@ pub(crate) fn export_state() -> String {
     }
 }
 
-
-
 pub(crate) fn import_state(raw: &str) -> String {
     if raw.trim().is_empty() {
         return "Provide JSON payload after /import.".to_string();
@@ -1086,8 +972,6 @@ pub(crate) fn import_state(raw: &str) -> String {
     }
 }
 
-
-
 pub(crate) fn debug_state_snapshot() -> String {
     let (focus, persona, verbosity, last_query) = snapshots_for_debug();
     format!(
@@ -1099,8 +983,6 @@ pub(crate) fn debug_state_snapshot() -> String {
     )
 }
 
-
-
 pub(crate) fn tokens_usage_snapshot() -> String {
     let state_arc = chat_state();
     let state = state_arc.lock().expect("chat state lock");
@@ -1109,8 +991,6 @@ pub(crate) fn tokens_usage_snapshot() -> String {
         None => "No token usage recorded yet.".to_string(),
     }
 }
-
-
 
 pub(crate) async fn preview_url_content(url: &str) -> Result<String, String> {
     let tool = URLFetchTool::new();
@@ -1122,8 +1002,6 @@ pub(crate) async fn preview_url_content(url: &str) -> Result<String, String> {
         Err(result.result)
     }
 }
-
-
 
 pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -1266,7 +1144,7 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
             ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
             ChatMode::Auto => crate::agent::AgentMode::Auto,
             ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
-        ChatMode::Agentic => crate::agent::AgentMode::Agentic,
+            ChatMode::Agentic => crate::agent::AgentMode::Agentic,
         };
         let query_clone = req.query.clone();
         let top_k = req.top_k;
@@ -1302,10 +1180,10 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
     }
 }
 
-
-
 // GET-based chat endpoint to avoid CORS preflight
-pub(crate) async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result<HttpResponse, Error> {
+pub(crate) async fn run_agent_get(
+    query: web::Query<AgentQueryParams>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
     // Check for chat commands
@@ -1446,7 +1324,7 @@ pub(crate) async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result
             ChatMode::Hybrid => crate::agent::AgentMode::Hybrid,
             ChatMode::Auto => crate::agent::AgentMode::Auto,
             ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
-        ChatMode::Agentic => crate::agent::AgentMode::Agentic,
+            ChatMode::Agentic => crate::agent::AgentMode::Agentic,
         };
         let query_str = query.query.clone();
         let top_k = query.top_k;
@@ -1481,8 +1359,6 @@ pub(crate) async fn run_agent_get(query: web::Query<AgentQueryParams>) -> Result
         })))
     }
 }
-
-
 
 // ============================================================================
 // OPENAI STREAMING HANDLER
@@ -1608,8 +1484,6 @@ pub(crate) async fn stream_openai_response(
         }
     }
 }
-
-
 
 // ============================================================================
 // ANTHROPIC STREAMING HANDLER
@@ -1793,8 +1667,6 @@ pub(crate) async fn stream_anthropic_response(
     }
 }
 
-
-
 // Streaming agent endpoint using Server-Sent Events
 pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<HttpResponse, Error> {
     use crate::memory::prompt_cache::CacheOptimizedPrompt;
@@ -1836,70 +1708,195 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
 
     // Agentic mode: Rig-powered tool-calling loop with all tools
     if matches!(agent_mode, crate::agent::AgentMode::Agentic) {
-        use rig::completion::Prompt;
-        use rig::client::CompletionClient;
-        use rig::providers::ollama;
         use crate::rig_tools::*;
+        use rig::client::CompletionClient;
+        use rig::completion::Prompt;
+        use rig::providers::ollama;
+
+        let preamble = "You are a helpful assistant with access to tools. \
+                        Use search_documents to find information in the knowledge base. \
+                        Use recall_memory to check previous conversations. \
+                        Use store_memory to save important facts for later. \
+                        Use search_knowledge_graph to find entity relationships. \
+                        Call tools when the question might benefit from them. \
+                        If tools return no results, answer from your own knowledge. \
+                        Be concise and accurate.";
+
+        // Token budget check via shimmytok
+        let num_ctx = hardware_config.num_ctx;
+        let (tokens_in, counter_exact) = {
+            let prompt_text = format!("{}\n\n{}", preamble, req.query);
+            match crate::api::get_token_counter() {
+                Some(tc) => (tc.count_tokens(&prompt_text), tc.is_exact()),
+                None => (prompt_text.split_whitespace().count() * 4 / 3, false),
+            }
+        };
+        crate::monitoring::rig_stats::record_token_usage(tokens_in, num_ctx, counter_exact);
+
+        let ctx_pct = if num_ctx > 0 {
+            tokens_in as f64 / num_ctx as f64 * 100.0
+        } else {
+            0.0
+        };
+        if ctx_pct > 80.0 {
+            tracing::warn!(
+                tokens_in = tokens_in,
+                num_ctx = num_ctx,
+                ctx_pct = ctx_pct,
+                "Agentic prompt is using {:.0}% of context budget before tool results",
+                ctx_pct
+            );
+        }
+
+        let rig_t0 = std::time::Instant::now();
 
         let rig_result: Result<String, String> = async {
-            let client = ollama::Client::builder().api_key(rig::client::Nothing).base_url(&ollama_url).build().unwrap();
-            let retriever_arc = RETRIEVER.get().map(|r| std::sync::Arc::clone(r));
+            use crate::db::param_hardware::BackendType;
+            let retriever_arc = RETRIEVER.get().map(std::sync::Arc::clone);
 
-            let base = client
-                .agent(&model)
-                .preamble(
-                    "You are a helpful assistant with access to tools. \
-                     Use search_documents to find information in the knowledge base. \
-                     Use recall_memory to check previous conversations. \
-                     Use store_memory to save important facts for later. \
-                     Use search_knowledge_graph to find entity relationships. \
-                     Call tools when the question might benefit from them. \
-                     If tools return no results, answer from your own knowledge. \
-                     Be concise and accurate."
-                );
-
-            if let Some(ret) = retriever_arc {
-                let agent = base
-                    .tool(TantivySearchTool::new(std::sync::Arc::clone(&ret), req.top_k))
-                    .tool(MemoryRecallTool::new())
-                    .tool(MemoryStoreTool::new())
-                    .tool(GraphSearchTool::new(ret))
-                    .build();
-
-                agent
-                    .prompt(&req.query)
-                    .await
-                    .map_err(|e| format!("Rig agent error: {}", e))
+            if matches!(hardware_config.backend_type, BackendType::OpenAi) {
+                use rig::providers::openai;
+                let api_keys = crate::db::api_keys::global_config();
+                let key = match api_keys.get_openai_key() {
+                    Some(k) => k,
+                    None => return Err("OpenAI API key not configured. Set OPENAI_API_KEY or add it in Hardware settings.".into()),
+                };
+                let client = openai::Client::new(&key)
+                    .map_err(|e| format!("Failed to build OpenAI client: {}", e))?;
+                let base = client.agent(&model).preamble(preamble);
+                if let Some(ret) = retriever_arc {
+                    base
+                        .tool(TantivySearchTool::new(std::sync::Arc::clone(&ret), req.top_k))
+                        .tool(MemoryRecallTool::new())
+                        .tool(MemoryStoreTool::new())
+                        .tool(GraphSearchTool::new(ret))
+                        .build()
+                        .prompt(&req.query)
+                        .await
+                        .map_err(|e| format!("Rig agent error: {}", e))
+                } else {
+                    base
+                        .tool(MemoryRecallTool::new())
+                        .tool(MemoryStoreTool::new())
+                        .build()
+                        .prompt(&req.query)
+                        .await
+                        .map_err(|e| format!("Rig agent error: {}", e))
+                }
             } else {
-                let agent = base
-                    .tool(MemoryRecallTool::new())
-                    .tool(MemoryStoreTool::new())
-                    .build();
-
-                agent
-                    .prompt(&req.query)
-                    .await
-                    .map_err(|e| format!("Rig agent error: {}", e))
+                let client = ollama::Client::builder().api_key(rig::client::Nothing).base_url(&ollama_url).build().unwrap();
+                let base = client.agent(&model).preamble(preamble);
+                if let Some(ret) = retriever_arc {
+                    base
+                        .tool(TantivySearchTool::new(std::sync::Arc::clone(&ret), req.top_k))
+                        .tool(MemoryRecallTool::new())
+                        .tool(MemoryStoreTool::new())
+                        .tool(GraphSearchTool::new(ret))
+                        .build()
+                        .prompt(&req.query)
+                        .await
+                        .map_err(|e| format!("Rig agent error: {}", e))
+                } else {
+                    base
+                        .tool(MemoryRecallTool::new())
+                        .tool(MemoryStoreTool::new())
+                        .build()
+                        .prompt(&req.query)
+                        .await
+                        .map_err(|e| format!("Rig agent error: {}", e))
+                }
             }
         }.await;
 
-        let response_text = match rig_result {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::warn!(error = %e, "Agentic mode failed");
-                format!("Agentic mode error: {}", e)
-            }
-        };
+        let rig_elapsed = rig_t0.elapsed().as_millis() as u64;
 
-        let json_response = serde_json::json!({
-            "response": response_text,
-            "model": model,
-            "mode": "agentic",
-            "done": true
-        });
-        return Ok(HttpResponse::Ok()
-            .content_type("text/event-stream")
-            .body(format!("data: {}\n\n", json_response)));
+        match rig_result {
+            Ok(text) => {
+                crate::monitoring::rig_stats::record_agentic_call(rig_elapsed);
+                crate::monitoring::record_tool_execution(
+                    "AgenticSession",
+                    &req.query,
+                    true,
+                    &format!("{}ms, ~{} tokens", rig_elapsed, tokens_in),
+                    rig_elapsed,
+                    1.0,
+                    Some("rig_agentic"),
+                );
+                let json_response = serde_json::json!({
+                    "response": text,
+                    "model": model,
+                    "mode": "agentic",
+                    "tokens_in": tokens_in,
+                    "ctx_pct": ctx_pct,
+                    "done": true
+                });
+                return Ok(HttpResponse::Ok()
+                    .content_type("text/event-stream")
+                    .body(format!("data: {}\n\n", json_response)));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Agentic mode failed — falling back to Hybrid");
+                crate::monitoring::rig_stats::record_agentic_call(rig_elapsed);
+                crate::monitoring::rig_stats::record_agentic_fallback();
+                crate::monitoring::record_tool_execution(
+                    "AgenticSession",
+                    &req.query,
+                    false,
+                    &e,
+                    rig_elapsed,
+                    0.0,
+                    Some("rig_agentic"),
+                );
+                // Fall through to Hybrid below — do NOT return here
+                // Re-set agent_mode so the rest of the function handles it
+                let _ = agent_mode; // silence unused warning
+                                    // Run Hybrid inline as fallback
+                if let Some(retriever) = RETRIEVER.get() {
+                    let query_clone = req.query.clone();
+                    let top_k = req.top_k;
+                    let retriever_clone = Arc::clone(retriever);
+                    let chat_settings = get_current_chat_settings();
+                    let resp = web::block(move || {
+                        let agent = Agent::new(
+                            "default",
+                            path_resolver::agent_db_path_str(),
+                            retriever_clone,
+                        )
+                        .with_settings(chat_settings);
+                        agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Hybrid)
+                    })
+                    .await
+                    .map_err(|err| {
+                        actix_web::error::ErrorInternalServerError(format!(
+                            "Fallback agent error: {}",
+                            err
+                        ))
+                    })?;
+                    update_last_agent_run(req.query.clone(), &resp);
+                    let json_response = serde_json::json!({
+                        "type": "complete",
+                        "answer": resp.answer,
+                        "steps": resp.steps,
+                        "used_chunks": resp.used_chunks,
+                        "mode": "agentic_fallback",
+                        "fallback_reason": e,
+                        "request_id": request_id
+                    });
+                    return Ok(HttpResponse::Ok()
+                        .content_type("text/event-stream")
+                        .body(format!("data: {}\n\n", json_response)));
+                }
+                // No retriever — return the error clearly
+                let json_response = serde_json::json!({
+                    "response": format!("Agentic mode unavailable: {}", e),
+                    "mode": "agentic_error",
+                    "done": true
+                });
+                return Ok(HttpResponse::Ok()
+                    .content_type("text/event-stream")
+                    .body(format!("data: {}\n\n", json_response)));
+            }
+        }
     }
 
     // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
@@ -2253,8 +2250,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                                 continue;
                             }
                             // Handle OpenAI SSE format: "data: {...}" or "data: [DONE]"
-                            let json_str = if line.starts_with("data: ") {
-                                let payload = &line[6..];
+                            let json_str = if let Some(payload) = line.strip_prefix("data: ") {
                                 if payload == "[DONE]" {
                                     let event = serde_json::json!({
                                         "type": "done",
@@ -2277,9 +2273,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                                     .and_then(|d| d.get("content"))
                                     .and_then(|v| v.as_str())
                                     // Try /api/generate format ("response" field)
-                                    .or_else(|| {
-                                        json.get("response").and_then(|v| v.as_str())
-                                    })
+                                    .or_else(|| json.get("response").and_then(|v| v.as_str()))
                                     // Try /api/chat format ("message.content" field)
                                     .or_else(|| {
                                         json.get("message")
@@ -2337,5 +2331,3 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         }
     }
 }
-
-

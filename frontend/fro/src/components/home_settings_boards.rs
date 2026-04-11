@@ -35,10 +35,11 @@ pub fn HomeSettingsBoards(
     let mut show_no_tools_msg = use_signal(|| false);
 
     let model_supports_tools = {
-        let backend = current_backend().to_lowercase();
-        // Ollama models on this system lack tool-calling support.
-        // llama-server with --jinja supports tool calling for any model.
-        backend.contains("llama") || backend.contains("llamacpp") || backend.contains("llama_cpp")
+        let model = selected_model().to_lowercase();
+        // Deny-list of model name prefixes known to lack tool-calling support.
+        // Everything else defaults to supported (safe for new/unknown models).
+        let no_tools: &[&str] = &["phi:latest", "phi:mini", "phi2", "phi:2", "phi-1", "phi-2"];
+        !no_tools.iter().any(|&bad| model == bad || model.starts_with(bad))
     };
 
     if !model_supports_tools && chat_mode() == "agentic" {

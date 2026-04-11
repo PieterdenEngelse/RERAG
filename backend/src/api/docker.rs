@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 // ============================================================================
 // DOCKER MONITORING
 // ============================================================================
@@ -20,8 +19,6 @@ pub(crate) struct DockerContainer {
     health: Option<String>,
 }
 
-
-
 /// Docker stats for a container
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DockerStats {
@@ -33,8 +30,6 @@ pub(crate) struct DockerStats {
     network_rx: String,
     network_tx: String,
 }
-
-
 
 /// GET /monitoring/docker
 /// Returns Docker container status and stats for ag infrastructure
@@ -56,8 +51,6 @@ pub(crate) async fn get_docker_status() -> Result<HttpResponse, Error> {
         "stats": stats
     })))
 }
-
-
 
 /// Check if Docker is available
 pub(crate) async fn check_docker_available() -> bool {
@@ -82,8 +75,6 @@ pub(crate) async fn check_docker_available() -> bool {
         Err(_) => false,
     }
 }
-
-
 
 /// Get Docker container list
 pub(crate) async fn get_docker_containers() -> Vec<DockerContainer> {
@@ -156,8 +147,6 @@ pub(crate) async fn get_docker_containers() -> Vec<DockerContainer> {
 
     containers
 }
-
-
 
 /// Get Docker container stats
 pub(crate) async fn get_docker_stats() -> Vec<DockerStats> {
@@ -240,8 +229,6 @@ pub(crate) async fn get_docker_stats() -> Vec<DockerStats> {
     stats
 }
 
-
-
 // ============================================================================
 // RUNTIME ACTIONS (LLM runtime control)
 // ============================================================================
@@ -251,15 +238,15 @@ pub(crate) struct RuntimeActionRequest {
     action: String,
 }
 
-
-
 /// POST /monitoring/runtime/action
 /// Stop/start the LLM runtime (currently Ollama via systemd).
 ///
 /// Notes:
 /// - This requires the backend process user to have permission to run `systemctl` for ollama
 ///   without an interactive password prompt.
-pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn runtime_action(
+    body: web::Json<RuntimeActionRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let action = body.action.as_str();
 
@@ -267,8 +254,14 @@ pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Res
     let commands: Vec<(&str, &str)> = match action {
         "stop" => vec![("stop", "ollama.service")],
         "start" => vec![("start", "ollama.service")],
-        "switch_ollama" => vec![("stop", "llama-server.service"), ("start", "ollama.service")],
-        "switch_llama_cpp" => vec![("stop", "ollama.service"), ("start", "llama-server.service")],
+        "switch_ollama" => vec![
+            ("stop", "llama-server.service"),
+            ("start", "ollama.service"),
+        ],
+        "switch_llama_cpp" => vec![
+            ("stop", "ollama.service"),
+            ("start", "llama-server.service"),
+        ],
         _ => {
             return Ok(HttpResponse::BadRequest().json(json!({
                 "status": "error",
@@ -285,7 +278,7 @@ pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Res
             .args(&[*cmd, *service])
             .output()
             .await;
-        
+
         if let Err(e) = output {
             tracing::warn!("Failed to {} {}: {}", cmd, service, e);
         }
@@ -301,7 +294,7 @@ pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Res
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
-    
+
     let llama_running = tokio::process::Command::new("systemctl")
         .args(&["--user", "is-active", "llama-server.service"])
         .output()
@@ -327,7 +320,9 @@ pub(crate) async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> Res
 }
 
 #[allow(dead_code)]
-async fn runtime_action_legacy(body: web::Json<RuntimeActionRequest>) -> Result<HttpResponse, Error> {
+async fn runtime_action_legacy(
+    body: web::Json<RuntimeActionRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let action = body.action.as_str();
 
@@ -381,8 +376,6 @@ async fn runtime_action_legacy(body: web::Json<RuntimeActionRequest>) -> Result<
     }
 }
 
-
-
 // ============================================================================
 // DOCKER ACTIONS
 // ============================================================================
@@ -394,11 +387,11 @@ pub(crate) struct DockerActionRequest {
     container: Option<String>,
 }
 
-
-
 /// POST /monitoring/docker/action
 /// Execute docker compose actions (restart, stop, start, logs)
-pub(crate) async fn docker_action(body: web::Json<DockerActionRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn docker_action(
+    body: web::Json<DockerActionRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let action = &body.action;
     let container = body.container.as_deref();
@@ -501,5 +494,3 @@ pub(crate) async fn docker_action(body: web::Json<DockerActionRequest>) -> Resul
         }
     }
 }
-
-

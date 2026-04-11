@@ -51,7 +51,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                             class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-4xl max-h-[95vh] overflow-y-auto shadow-xl",
                             onclick: move |evt| evt.stop_propagation(),
                             div { class: "flex items-center justify-between mb-4",
-                                h2 { class: "text-lg font-semibold text-gray-100", "Info" }
+                                h2 { class: "text-lg font-semibold text-gray-100", {props.title.as_ref()} }
                                 button {
                                     class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
                                     onclick: move |_| show_tooltip.set(false),

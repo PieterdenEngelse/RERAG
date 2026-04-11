@@ -3,15 +3,12 @@
 
 use super::*;
 
-
 /// Get current prompt caching state
 pub(crate) fn get_prompt_caching_enabled() -> bool {
     let state_arc = chat_state();
     let guard = state_arc.lock().expect("chat state lock");
     guard.prompt_caching_enabled
 }
-
-
 
 /// Set prompt caching state
 pub(crate) fn set_prompt_caching_enabled(enabled: bool) -> bool {
@@ -21,8 +18,6 @@ pub(crate) fn set_prompt_caching_enabled(enabled: bool) -> bool {
     guard.prompt_caching_enabled = enabled;
     previous
 }
-
-
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct ChunkConfigCommitRequest {
@@ -34,8 +29,6 @@ pub(crate) struct ChunkConfigCommitRequest {
     pub semantic_similarity_threshold: Option<f32>,
 }
 
-
-
 #[derive(Debug, Serialize, Clone)]
 pub(crate) struct ChunkerConfigSnapshot {
     pub target_size: usize,
@@ -44,8 +37,6 @@ pub(crate) struct ChunkerConfigSnapshot {
     pub overlap: usize,
     pub semantic_similarity_threshold: f32,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ChunkCommitResponse {
@@ -56,8 +47,6 @@ pub(crate) struct ChunkCommitResponse {
     pub reindex_status: String,
     pub reindex_job_id: Option<String>,
 }
-
-
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct LlmConfigRequest {
@@ -113,83 +102,65 @@ pub(crate) struct LlmConfigRequest {
     pub xtc_threshold: f32,
 }
 
-
-
 pub(crate) fn default_min_p() -> f32 {
     llm_settings::DEFAULT_MIN_P
 }
-
 
 pub(crate) fn default_typical_p() -> f32 {
     llm_settings::DEFAULT_TYPICAL_P
 }
 
-
 pub(crate) fn default_tfs_z() -> f32 {
     llm_settings::DEFAULT_TFS_Z
 }
-
 
 pub(crate) fn default_mirostat() -> i32 {
     llm_settings::DEFAULT_MIROSTAT
 }
 
-
 pub(crate) fn default_mirostat_eta() -> f32 {
     llm_settings::DEFAULT_MIROSTAT_ETA
 }
-
 
 pub(crate) fn default_mirostat_tau() -> f32 {
     llm_settings::DEFAULT_MIROSTAT_TAU
 }
 
-
 pub(crate) fn default_repeat_last_n() -> usize {
     llm_settings::DEFAULT_REPEAT_LAST_N
 }
-
 
 pub(crate) fn default_num_keep() -> i64 {
     llm_settings::DEFAULT_NUM_KEEP
 }
 
-
 pub(crate) fn default_penalize_newline() -> bool {
     llm_settings::DEFAULT_PENALIZE_NEWLINE
 }
-
 
 pub(crate) fn default_ignore_eos() -> bool {
     llm_settings::DEFAULT_IGNORE_EOS
 }
 
-
 pub(crate) fn default_dry_multiplier() -> f32 {
     llm_settings::DEFAULT_DRY_MULTIPLIER
 }
-
 
 pub(crate) fn default_dry_base() -> f32 {
     llm_settings::DEFAULT_DRY_BASE
 }
 
-
 pub(crate) fn default_dry_allowed_length() -> usize {
     llm_settings::DEFAULT_DRY_ALLOWED_LENGTH
 }
-
 
 pub(crate) fn default_xtc_probability() -> f32 {
     llm_settings::DEFAULT_XTC_PROBABILITY
 }
 
-
 pub(crate) fn default_xtc_threshold() -> f32 {
     llm_settings::DEFAULT_XTC_THRESHOLD
 }
-
-
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -250,8 +221,6 @@ pub(crate) struct HardwareConfigRequest {
     pub llama_server_url: String,
 }
 
-
-
 pub(crate) fn backend_type_to_string(bt: &crate::db::param_hardware::BackendType) -> String {
     use crate::db::param_hardware::BackendType;
     match bt {
@@ -263,8 +232,6 @@ pub(crate) fn backend_type_to_string(bt: &crate::db::param_hardware::BackendType
         BackendType::Custom => "custom".to_string(),
     }
 }
-
-
 
 pub(crate) fn string_to_backend_type(s: &str) -> crate::db::param_hardware::BackendType {
     use crate::db::param_hardware::BackendType;
@@ -279,8 +246,6 @@ pub(crate) fn string_to_backend_type(s: &str) -> crate::db::param_hardware::Back
     }
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct LlmConfigResponse {
     pub status: String,
@@ -288,8 +253,6 @@ pub(crate) struct LlmConfigResponse {
     pub request_id: String,
     pub config: LlmConfig,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct HardwareConfigResponse {
@@ -299,8 +262,6 @@ pub(crate) struct HardwareConfigResponse {
     pub config: HardwareConfigRequest,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct OnnxConfigResponse {
     pub status: String,
@@ -308,8 +269,6 @@ pub(crate) struct OnnxConfigResponse {
     pub request_id: String,
     pub config: OnnxConfigInfo,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct OnnxConfigInfo {
@@ -344,8 +303,6 @@ pub(crate) struct OnnxConfigInfo {
     pub independent_thread_pool: bool,
     pub no_env_execution_providers: bool,
 }
-
-
 
 pub(crate) fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> {
     // Thread validation
@@ -435,11 +392,11 @@ pub(crate) fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(
     Ok(())
 }
 
-
-
 /// POST /monitoring/io-uring
 /// Save io_uring configuration to .env file
-pub(crate) async fn save_io_uring_config(body: web::Json<serde_json::Value>) -> Result<HttpResponse, Error> {
+pub(crate) async fn save_io_uring_config(
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
     // ═══════════════════════════════════════════════════════════════
@@ -627,8 +584,6 @@ pub(crate) async fn save_io_uring_config(body: web::Json<serde_json::Value>) -> 
     }
 }
 
-
-
 /// GET /config/embedding
 /// Returns current embedding configuration (ONNX only)
 pub(crate) async fn get_embedding_config() -> Result<HttpResponse, Error> {
@@ -649,8 +604,6 @@ pub(crate) async fn get_embedding_config() -> Result<HttpResponse, Error> {
     })))
 }
 
-
-
 /// POST /config/embedding - No longer needed (ONNX only)
 pub(crate) async fn set_embedding_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -661,8 +614,6 @@ pub(crate) async fn set_embedding_config() -> Result<HttpResponse, Error> {
     })))
 }
 
-
-
 /// Self-contained UI metrics: HTTP Requests summary + chart
 /// GET /monitoring/ui/requests
 /// Returns: JSON with rate, p95 latency, error%, and recent points
@@ -671,9 +622,9 @@ pub(crate) async fn get_ui_requests() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(snapshot))
 }
 
-
-
-pub(crate) async fn get_chunking_stats(query: web::Query<ChunkingQuery>) -> Result<HttpResponse, Error> {
+pub(crate) async fn get_chunking_stats(
+    query: web::Query<ChunkingQuery>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
     if let Some(new_cap) = query.capacity {
@@ -705,9 +656,9 @@ pub(crate) async fn get_chunking_stats(query: web::Query<ChunkingQuery>) -> Resu
     }
 }
 
-
-
-pub(crate) async fn toggle_chunking_logging(query: web::Query<LoggingQuery>) -> Result<HttpResponse, Error> {
+pub(crate) async fn toggle_chunking_logging(
+    query: web::Query<LoggingQuery>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
     if let Some(enabled) = query.enabled {
@@ -727,8 +678,6 @@ pub(crate) async fn toggle_chunking_logging(query: web::Query<LoggingQuery>) -> 
     })))
 }
 
-
-
 /// GET /config/chunk_size - Fetch current chunk configuration
 pub(crate) async fn get_chunk_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -742,8 +691,6 @@ pub(crate) async fn get_chunk_config() -> Result<HttpResponse, Error> {
         "chunker_config": snapshot
     })))
 }
-
-
 
 pub(crate) async fn commit_chunk_config(
     config: web::Data<ApiConfig>,
@@ -829,8 +776,6 @@ pub(crate) async fn commit_chunk_config(
     }
 }
 
-
-
 pub(crate) async fn get_llm_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let config = llm_settings::global_config();
@@ -842,9 +787,9 @@ pub(crate) async fn get_llm_config() -> Result<HttpResponse, Error> {
     }))
 }
 
-
-
-pub(crate) async fn commit_llm_config(payload: web::Json<LlmConfigRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn commit_llm_config(
+    payload: web::Json<LlmConfigRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let body = payload.into_inner();
 
@@ -926,8 +871,6 @@ pub(crate) async fn commit_llm_config(payload: web::Json<LlmConfigRequest>) -> R
     }
 }
 
-
-
 // ============================================================================
 // PROMPT CACHING ENDPOINTS
 // ============================================================================
@@ -940,14 +883,10 @@ pub(crate) struct PromptCachingResponse {
     pub enabled: bool,
 }
 
-
-
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct PromptCachingRequest {
     pub enabled: bool,
 }
-
-
 
 /// Get current prompt caching state
 /// When enabled, uses /api/chat (with KV caching) instead of /api/generate
@@ -965,8 +904,6 @@ pub(crate) async fn get_prompt_caching() -> Result<HttpResponse, Error> {
         enabled,
     }))
 }
-
-
 
 /// Set prompt caching state
 pub(crate) async fn set_prompt_caching(
@@ -995,8 +932,6 @@ pub(crate) async fn set_prompt_caching(
     }))
 }
 
-
-
 pub(crate) async fn get_hardware_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let config = crate::db::param_hardware::global_config().into();
@@ -1007,8 +942,6 @@ pub(crate) async fn get_hardware_config() -> Result<HttpResponse, Error> {
         config,
     }))
 }
-
-
 
 pub(crate) async fn commit_hardware_config(
     payload: web::Json<HardwareConfigRequest>,
@@ -1062,8 +995,6 @@ pub(crate) async fn commit_hardware_config(
     }
 }
 
-
-
 pub(crate) fn onnx_opt_level_to_str(level: OnnxOptimizationLevel) -> &'static str {
     match level {
         OnnxOptimizationLevel::Disable => "disable",
@@ -1073,16 +1004,12 @@ pub(crate) fn onnx_opt_level_to_str(level: OnnxOptimizationLevel) -> &'static st
     }
 }
 
-
-
 pub(crate) fn onnx_exec_mode_to_str(mode: OnnxExecutionMode) -> &'static str {
     match mode {
         OnnxExecutionMode::Sequential => "sequential",
         OnnxExecutionMode::Parallel => "parallel",
     }
 }
-
-
 
 pub(crate) fn onnx_log_level_to_str(level: OnnxLogLevel) -> &'static str {
     match level {
@@ -1093,8 +1020,6 @@ pub(crate) fn onnx_log_level_to_str(level: OnnxLogLevel) -> &'static str {
         OnnxLogLevel::Fatal => "fatal",
     }
 }
-
-
 
 pub(crate) fn parse_log_level(input: &str) -> Option<OnnxLogLevel> {
     match input.to_lowercase().as_str() {
@@ -1107,15 +1032,11 @@ pub(crate) fn parse_log_level(input: &str) -> Option<OnnxLogLevel> {
     }
 }
 
-
-
 pub(crate) fn apply_option_field<T>(target: &mut Option<T>, value: Option<Option<T>>) {
     if let Some(inner) = value {
         *target = inner;
     }
 }
-
-
 
 pub(crate) fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig> {
     ONNX_CONFIG.get_or_init(|| {
@@ -1139,8 +1060,6 @@ pub(crate) fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig
         })
     })
 }
-
-
 
 /// Get current ONNX configuration
 pub(crate) async fn get_onnx_config() -> Result<HttpResponse, Error> {
@@ -1190,10 +1109,10 @@ pub(crate) async fn get_onnx_config() -> Result<HttpResponse, Error> {
     }))
 }
 
-
-
 /// Update ONNX configuration (requires restart to take effect for embedder)
-pub(crate) async fn set_onnx_config(payload: web::Json<OnnxConfigRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn set_onnx_config(
+    payload: web::Json<OnnxConfigRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let body = payload.into_inner();
 
@@ -1388,14 +1307,10 @@ pub(crate) async fn set_onnx_config(payload: web::Json<OnnxConfigRequest>) -> Re
     }))
 }
 
-
-
 /// Get the current ONNX config for use by embedder initialization
 pub fn get_current_onnx_config() -> OnnxConfig {
     get_onnx_config_storage().read().unwrap().clone()
 }
-
-
 
 // ============================================================================
 // API KEYS CONFIG
@@ -1408,8 +1323,6 @@ pub(crate) struct ApiKeysRequest {
     #[serde(default)]
     pub anthropic_api_key: String,
 }
-
-
 
 // ============================================================================
 // NEO4J KNOWLEDGE GRAPH CONFIG (Phase 27)
@@ -1443,8 +1356,6 @@ pub(crate) struct Neo4jConfigResponse {
     pub stats: Option<Neo4jStats>,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct Neo4jStats {
     pub total_nodes: usize,
@@ -1453,8 +1364,6 @@ pub(crate) struct Neo4jStats {
     pub chunks: usize,
     pub entities: usize,
 }
-
-
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct Neo4jConfigRequest {
@@ -1477,8 +1386,6 @@ pub(crate) struct Neo4jConfigRequest {
     pub confidence_threshold: Option<f32>,
     pub fuzzy_threshold: Option<f32>,
 }
-
-
 
 pub(crate) async fn get_neo4j_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -1541,9 +1448,9 @@ pub(crate) async fn get_neo4j_config() -> Result<HttpResponse, Error> {
     }))
 }
 
-
-
-pub(crate) async fn save_neo4j_config(payload: web::Json<Neo4jConfigRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn save_neo4j_config(
+    payload: web::Json<Neo4jConfigRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let Neo4jConfigRequest {
         enabled,
@@ -1597,8 +1504,6 @@ pub(crate) async fn save_neo4j_config(payload: web::Json<Neo4jConfigRequest>) ->
         "requested_changes": requested_changes
     })))
 }
-
-
 
 pub(crate) async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -1654,12 +1559,9 @@ pub(crate) async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 // ============================================================================
 // API KEYS CONFIG
 // ============================================================================
-
 
 // ── Entity Terms API types (Step 1 v1.0) ─────────────────────────────
 #[derive(Debug, Serialize, Deserialize)]
@@ -1668,8 +1570,6 @@ pub(crate) struct EntityTermEntry {
     pub term: String,
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct EntityTermsResponse {
     pub status: String,
@@ -1677,14 +1577,10 @@ pub(crate) struct EntityTermsResponse {
     pub file_path: String,
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SaveEntityTermsRequest {
     pub terms: Vec<EntityTermEntry>,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ApiKeysResponse {
@@ -1698,8 +1594,6 @@ pub(crate) struct ApiKeysResponse {
     pub openai_from_env: bool,
     pub anthropic_from_env: bool,
 }
-
-
 
 pub(crate) async fn get_api_keys() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -1737,9 +1631,9 @@ pub(crate) async fn get_api_keys() -> Result<HttpResponse, Error> {
     }))
 }
 
-
-
-pub(crate) async fn save_api_keys(payload: web::Json<ApiKeysRequest>) -> Result<HttpResponse, Error> {
+pub(crate) async fn save_api_keys(
+    payload: web::Json<ApiKeysRequest>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let body = payload.into_inner();
 
@@ -1804,8 +1698,6 @@ pub(crate) async fn save_api_keys(payload: web::Json<ApiKeysRequest>) -> Result<
     }
 }
 
-
-
 pub(crate) async fn delete_api_key(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let provider = path.into_inner();
@@ -1849,8 +1741,6 @@ pub(crate) async fn delete_api_key(path: web::Path<String>) -> Result<HttpRespon
     }
 }
 
-
-
 // ── POST /extract_entities — standalone NER test endpoint (v1.0) ─────
 pub(crate) async fn extract_entities_handler(
     payload: web::Json<serde_json::Value>,
@@ -1893,8 +1783,6 @@ pub(crate) async fn extract_entities_handler(
     })))
 }
 
-
-
 // ── GET /config/entity_terms (Step 1 v1.0) ───────────────────────────
 pub(crate) async fn get_entity_terms() -> Result<HttpResponse, Error> {
     let terms_path = std::env::var("AG_ENTITY_TERMS_FILE").unwrap_or_else(|_| {
@@ -1934,8 +1822,6 @@ pub(crate) async fn get_entity_terms() -> Result<HttpResponse, Error> {
         file_path: terms_path,
     }))
 }
-
-
 
 // ── POST /config/entity_terms (Step 1 v1.0) ─────────────────────────
 pub(crate) async fn save_entity_terms(
@@ -2015,5 +1901,3 @@ pub(crate) async fn save_entity_terms(
         }
     }
 }
-
-

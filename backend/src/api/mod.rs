@@ -44,20 +44,20 @@ use uuid::Uuid;
 
 pub(crate) mod helpers;
 use helpers::*;
-pub(crate) mod docker;
-pub(crate) mod training;
-pub(crate) mod config_routes;
-pub(crate) mod memory_routes;
-pub(crate) mod upload_search;
 pub(crate) mod agent_chat;
+pub(crate) mod config_routes;
+pub(crate) mod docker;
+pub(crate) mod memory_routes;
 pub(crate) mod monitor_routes;
-use monitor_routes::*;
+pub(crate) mod training;
+pub(crate) mod upload_search;
 use agent_chat::*;
-use upload_search::*;
-use memory_routes::*;
 use config_routes::*;
-use training::*;
 use docker::*;
+use memory_routes::*;
+use monitor_routes::*;
+use training::*;
+use upload_search::*;
 
 pub const UPLOAD_DIR: &str = "documents";
 
@@ -122,7 +122,8 @@ pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
 
 // Global Neo4j client handle (Phase 27)
 #[cfg(feature = "neo4j")]
-static NEO4J_CLIENT: std::sync::RwLock<Option<crate::graph::Neo4jClient>> = std::sync::RwLock::new(None);
+static NEO4J_CLIENT: std::sync::RwLock<Option<crate::graph::Neo4jClient>> =
+    std::sync::RwLock::new(None);
 
 #[cfg(feature = "neo4j")]
 pub fn set_neo4j_client(client: crate::graph::Neo4jClient) {
@@ -132,7 +133,11 @@ pub fn set_neo4j_client(client: crate::graph::Neo4jClient) {
 
 #[cfg(feature = "neo4j")]
 pub fn get_neo4j_client() -> Option<std::sync::Arc<crate::graph::Neo4jClient>> {
-    NEO4J_CLIENT.read().ok()?.as_ref().map(|c| std::sync::Arc::new(c.clone()))
+    NEO4J_CLIENT
+        .read()
+        .ok()?
+        .as_ref()
+        .map(|c| std::sync::Arc::new(c.clone()))
 }
 
 #[cfg(not(feature = "neo4j"))]
@@ -147,12 +152,15 @@ pub fn get_neo4j_client() -> Option<()> {
 
 // Global KnowledgeBuilder for graph integration during indexing
 #[cfg(feature = "neo4j")]
-static KNOWLEDGE_BUILDER: std::sync::RwLock<Option<std::sync::Arc<crate::graph::KnowledgeBuilder>>> =
-    std::sync::RwLock::new(None);
+static KNOWLEDGE_BUILDER: std::sync::RwLock<
+    Option<std::sync::Arc<crate::graph::KnowledgeBuilder>>,
+> = std::sync::RwLock::new(None);
 
 #[cfg(feature = "neo4j")]
 pub fn set_knowledge_builder(builder: std::sync::Arc<crate::graph::KnowledgeBuilder>) {
-    let mut lock = KNOWLEDGE_BUILDER.write().expect("KNOWLEDGE_BUILDER lock poisoned");
+    let mut lock = KNOWLEDGE_BUILDER
+        .write()
+        .expect("KNOWLEDGE_BUILDER lock poisoned");
     *lock = Some(builder);
 }
 
@@ -242,9 +250,15 @@ pub async fn index_to_knowledge_graph(
         let use_ner = !ner_entities.is_empty();
         if use_ner {
             for ner_entity in &ner_entities {
-                if let Err(e) = kb.add_entity_mention(
-                    chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score,
-                ).await {
+                if let Err(e) = kb
+                    .add_entity_mention(
+                        chunk_id,
+                        &ner_entity.text,
+                        &ner_entity.label,
+                        ner_entity.score,
+                    )
+                    .await
+                {
                     debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
                 }
             }
@@ -894,7 +908,10 @@ pub fn start_api_server(
                 "/config/api_keys/{provider}",
                 web::delete().to(delete_api_key),
             )
-                        .route("/extract_entities", web::post().to(extract_entities_handler))
+            .route(
+                "/extract_entities",
+                web::post().to(extract_entities_handler),
+            )
             // Entity Terms config (Step 1 v1.0)
             .route("/config/entity_terms", web::get().to(get_entity_terms))
             .route("/config/entity_terms", web::post().to(save_entity_terms))

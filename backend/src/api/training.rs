@@ -3,12 +3,9 @@
 
 use super::*;
 
-
 pub(crate) fn training_collector() -> &'static TrainingDataCollector {
     TRAINING_COLLECTOR.get_or_init(TrainingDataCollector::default)
 }
-
-
 
 pub(crate) fn lora_export_state() -> Arc<Mutex<LoraExportState>> {
     LORA_EXPORT_STATE
@@ -23,15 +20,11 @@ pub(crate) fn lora_export_state() -> Arc<Mutex<LoraExportState>> {
         .clone()
 }
 
-
-
 pub(crate) fn lora_filter_override() -> Arc<Mutex<Option<String>>> {
     LORA_FILTER_OVERRIDE
         .get_or_init(|| Arc::new(Mutex::new(None)))
         .clone()
 }
-
-
 
 #[derive(Debug)]
 pub(crate) struct LoraExportState {
@@ -40,8 +33,6 @@ pub(crate) struct LoraExportState {
     pub last_finished: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
 }
-
-
 
 #[derive(Debug)]
 pub(crate) struct SyntheticQaState {
@@ -54,23 +45,17 @@ pub(crate) struct SyntheticQaState {
     pub max_chunks: Option<usize>,
 }
 
-
-
 pub(crate) fn synthetic_qa_state() -> Arc<Mutex<SyntheticQaState>> {
     SYNTHETIC_QA_STATE
         .get_or_init(|| Arc::new(Mutex::new(SyntheticQaState::default())))
         .clone()
 }
 
-
-
 #[derive(Debug, Default)]
 pub(crate) struct AutoExportOverrides {
     pub auto_export_enabled: Option<bool>,
     pub debounce_ms: Option<u64>,
 }
-
-
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct TrainingFeedbackRequest {
@@ -83,8 +68,6 @@ pub(crate) struct TrainingFeedbackRequest {
     pub model: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct TrainingFeedbackResponse {
     pub status: String,
@@ -92,8 +75,6 @@ pub(crate) struct TrainingFeedbackResponse {
     pub message: String,
     pub request_id: String,
 }
-
-
 
 /// POST /training/feedback - Submit user feedback for training data collection
 pub(crate) async fn submit_training_feedback(
@@ -150,8 +131,6 @@ pub(crate) async fn submit_training_feedback(
     }
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct TrainingStatsResponse {
     pub status: String,
@@ -159,8 +138,6 @@ pub(crate) struct TrainingStatsResponse {
     pub stats: TrainingStats,
     pub collection_enabled: bool,
 }
-
-
 
 /// GET /training/stats - Get training data collection statistics
 pub(crate) async fn get_training_stats() -> Result<HttpResponse, Error> {
@@ -185,8 +162,6 @@ pub(crate) async fn get_training_stats() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct TrainingExportResponse {
     pub status: String,
@@ -195,8 +170,6 @@ pub(crate) struct TrainingExportResponse {
     pub output_path: String,
     pub message: String,
 }
-
-
 
 /// POST /training/export - Export collected data for Unsloth training
 pub(crate) async fn export_training_data() -> Result<HttpResponse, Error> {
@@ -245,16 +218,12 @@ pub(crate) async fn export_training_data() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct SnapshotExportResponse {
     pub status: String,
     pub request_id: String,
     pub message: String,
 }
-
-
 
 /// POST /training/export_snapshot - Run LoRA dataset export + normalization scripts
 pub(crate) async fn export_lora_snapshot() -> Result<HttpResponse, Error> {
@@ -274,8 +243,6 @@ pub(crate) async fn export_lora_snapshot() -> Result<HttpResponse, Error> {
         ),
     }
 }
-
-
 
 pub(crate) async fn spawn_lora_export_job(force: bool) -> Result<(), String> {
     use tokio::task;
@@ -347,8 +314,6 @@ pub(crate) async fn spawn_lora_export_job(force: bool) -> Result<(), String> {
     job
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct SnapshotStatusResponse {
     pub status: String,
@@ -358,8 +323,6 @@ pub(crate) struct SnapshotStatusResponse {
     pub last_error: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct SnapshotConfigResponse {
     pub status: String,
@@ -368,15 +331,11 @@ pub(crate) struct SnapshotConfigResponse {
     pub export_filter: Option<String>,
 }
 
-
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateExportConfigRequest {
     pub auto_export_enabled: Option<bool>,
     pub default_debounce_ms: Option<u64>,
 }
-
-
 
 pub(crate) async fn export_snapshot_status() -> Result<HttpResponse, Error> {
     let state_handle = lora_export_state();
@@ -393,14 +352,10 @@ pub(crate) async fn export_snapshot_status() -> Result<HttpResponse, Error> {
     }))
 }
 
-
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct SetExportFilterRequest {
     pub filter: Option<String>,
 }
-
-
 
 pub(crate) async fn set_export_snapshot_filter(
     payload: web::Json<SetExportFilterRequest>,
@@ -411,8 +366,6 @@ pub(crate) async fn set_export_snapshot_filter(
     export_snapshot_config().await
 }
 
-
-
 pub(crate) async fn export_snapshot_config() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(SnapshotConfigResponse {
         status: "ok".into(),
@@ -421,8 +374,6 @@ pub(crate) async fn export_snapshot_config() -> Result<HttpResponse, Error> {
         export_filter: current_lora_filter(),
     }))
 }
-
-
 
 pub(crate) async fn save_export_snapshot_config(
     payload: web::Json<UpdateExportConfigRequest>,
@@ -437,15 +388,11 @@ pub(crate) async fn save_export_snapshot_config(
     export_snapshot_config().await
 }
 
-
-
 pub(crate) fn auto_export_overrides() -> Arc<Mutex<AutoExportOverrides>> {
     AUTO_EXPORT_OVERRIDES
         .get_or_init(|| Arc::new(Mutex::new(AutoExportOverrides::default())))
         .clone()
 }
-
-
 
 pub(crate) fn set_auto_export_override(enabled: bool) {
     if let Ok(mut guard) = auto_export_overrides().lock() {
@@ -453,15 +400,11 @@ pub(crate) fn set_auto_export_override(enabled: bool) {
     }
 }
 
-
-
 pub(crate) fn set_auto_debounce_override(ms: u64) {
     if let Ok(mut guard) = auto_export_overrides().lock() {
         guard.debounce_ms = Some(ms);
     }
 }
-
-
 
 pub(crate) fn env_auto_export_enabled() -> bool {
     if let Ok(guard) = auto_export_overrides().lock() {
@@ -473,8 +416,6 @@ pub(crate) fn env_auto_export_enabled() -> bool {
         .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(true)
 }
-
-
 
 pub(crate) fn env_auto_export_debounce_ms() -> u64 {
     if let Ok(guard) = auto_export_overrides().lock() {
@@ -488,8 +429,6 @@ pub(crate) fn env_auto_export_debounce_ms() -> u64 {
         .unwrap_or(0)
 }
 
-
-
 pub(crate) fn env_lora_export_filter() -> Option<String> {
     std::env::var("LORA_EXPORT_ONLY").ok().and_then(|v| {
         if v.trim().is_empty() {
@@ -499,8 +438,6 @@ pub(crate) fn env_lora_export_filter() -> Option<String> {
         }
     })
 }
-
-
 
 pub(crate) fn current_lora_filter() -> Option<String> {
     if let Ok(guard) = lora_filter_override().lock() {
@@ -512,8 +449,6 @@ pub(crate) fn current_lora_filter() -> Option<String> {
     }
     env_lora_export_filter()
 }
-
-
 
 pub(crate) fn trigger_auto_export_after_upload(upload_count: usize) {
     if upload_count == 0 || !env_auto_export_enabled() {
@@ -529,8 +464,6 @@ pub(crate) fn trigger_auto_export_after_upload(upload_count: usize) {
         }
     });
 }
-
-
 
 pub(crate) fn run_script(
     workspace_root: &std::path::Path,
@@ -556,8 +489,6 @@ pub(crate) fn run_script(
         ))
     }
 }
-
-
 
 pub(crate) fn run_script_with_args(
     workspace_root: &std::path::Path,
@@ -587,8 +518,6 @@ pub(crate) fn run_script_with_args(
     }
 }
 
-
-
 // ============================================================================
 // SYNTHETIC Q&A GENERATION
 // ============================================================================
@@ -600,16 +529,12 @@ pub(crate) struct SyntheticQaRequest {
     pub ollama_model: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct SyntheticQaResponse {
     pub status: String,
     pub request_id: String,
     pub message: String,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SyntheticQaStatusResponse {
@@ -622,8 +547,6 @@ pub(crate) struct SyntheticQaStatusResponse {
     pub questions_per_chunk: u32,
     pub max_chunks: Option<usize>,
 }
-
-
 
 /// POST /training/synthetic_qa - Generate synthetic Q&A training data
 pub(crate) async fn generate_synthetic_qa(
@@ -656,8 +579,6 @@ pub(crate) async fn generate_synthetic_qa(
         ),
     }
 }
-
-
 
 pub(crate) async fn spawn_synthetic_qa_job(
     questions_per_chunk: u32,
@@ -764,8 +685,6 @@ pub(crate) async fn spawn_synthetic_qa_job(
     job
 }
 
-
-
 /// GET /training/synthetic_qa/status - Get synthetic Q&A generation status
 pub(crate) async fn synthetic_qa_status() -> Result<HttpResponse, Error> {
     let state_handle = synthetic_qa_state();
@@ -785,15 +704,11 @@ pub(crate) async fn synthetic_qa_status() -> Result<HttpResponse, Error> {
     }))
 }
 
-
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct SyntheticQaExamplesQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SyntheticQaExample {
@@ -804,8 +719,6 @@ pub(crate) struct SyntheticQaExample {
     pub timestamp: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub(crate) struct SyntheticQaExamplesResponse {
     pub status: String,
@@ -814,8 +727,6 @@ pub(crate) struct SyntheticQaExamplesResponse {
     pub limit: usize,
     pub examples: Vec<SyntheticQaExample>,
 }
-
-
 
 /// GET /training/synthetic_qa/examples - Get generated synthetic Q&A examples
 pub(crate) async fn synthetic_qa_examples(
@@ -891,8 +802,6 @@ pub(crate) async fn synthetic_qa_examples(
     }))
 }
 
-
-
 /// POST /training/clear - Clear all collected training data
 pub(crate) async fn clear_training_data() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -917,5 +826,3 @@ pub(crate) async fn clear_training_data() -> Result<HttpResponse, Error> {
         }
     }
 }
-
-

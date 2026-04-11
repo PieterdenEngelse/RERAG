@@ -536,26 +536,26 @@ fn index_file_with_detection(
             stats.average_similarity(),
         );
         let mut snap = crate::monitoring::ChunkingStatsSnapshot::with_detection(
-                filename,
-                chunker_mode,
-                ok,
-                total_tokens,
-                chunk_duration.as_millis() as u64,
-                Some(stats),
-                detection_info,
-            );
+            filename,
+            chunker_mode,
+            ok,
+            total_tokens,
+            chunk_duration.as_millis() as u64,
+            Some(stats),
+            detection_info,
+        );
         snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
         crate::monitoring::record_chunking_snapshot(snap);
     } else {
         let mut snap = crate::monitoring::ChunkingStatsSnapshot::with_detection(
-                filename,
-                chunker_mode,
-                ok,
-                total_tokens,
-                chunk_duration.as_millis() as u64,
-                None,
-                detection_info,
-            );
+            filename,
+            chunker_mode,
+            ok,
+            total_tokens,
+            chunk_duration.as_millis() as u64,
+            None,
+            detection_info,
+        );
         snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
         crate::monitoring::record_chunking_snapshot(snap);
     }

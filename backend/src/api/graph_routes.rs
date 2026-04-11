@@ -689,9 +689,7 @@ pub async fn search_entities(_query: web::Query<SearchQuery>) -> HttpResponse {
 /// GET /graph/search/enhanced - Graph-enhanced search with RRF fusion
 /// A1-v2: Uses global RETRIEVER static (no app_data needed)
 #[cfg(feature = "neo4j")]
-pub async fn graph_enhanced_search(
-    query: web::Query<SearchQuery>,
-) -> HttpResponse {
+pub async fn graph_enhanced_search(query: web::Query<SearchQuery>) -> HttpResponse {
     let search_term = &query.q;
     let limit = query.limit.unwrap_or(10).min(50) as usize;
     let rrf_k: f32 = 60.0;
@@ -700,19 +698,19 @@ pub async fn graph_enhanced_search(
     let bm25_results: Vec<(String, f32)> = match crate::api::get_retriever_handle() {
         Some(handle) => match handle.lock() {
             Ok(mut r) => match r.search(search_term) {
-            Ok(results) => results
-                .into_iter()
-                .enumerate()
-                .map(|(rank, content)| {
-                    let score = 1.0 / (rrf_k + rank as f32 + 1.0);
-                    (content, score)
-                })
-                .collect(),
-            Err(e) => {
-                warn!(error = %e, "BM25 search failed in enhanced search");
-                vec![]
-            }
-        },
+                Ok(results) => results
+                    .into_iter()
+                    .enumerate()
+                    .map(|(rank, content)| {
+                        let score = 1.0 / (rrf_k + rank as f32 + 1.0);
+                        (content, score)
+                    })
+                    .collect(),
+                Err(e) => {
+                    warn!(error = %e, "BM25 search failed in enhanced search");
+                    vec![]
+                }
+            },
             Err(_) => {
                 warn!("Failed to lock retriever in enhanced search");
                 vec![]
@@ -747,9 +745,8 @@ pub async fn graph_enhanced_search(
                     let mut rank = 0usize;
                     while let Ok(Some(row)) = result.next().await {
                         let content = row.get::<String>("content").unwrap_or_default();
-                        let entities: Vec<String> = row
-                            .get::<Vec<String>>("entities")
-                            .unwrap_or_default();
+                        let entities: Vec<String> =
+                            row.get::<Vec<String>>("entities").unwrap_or_default();
                         if !content.is_empty() {
                             let score = 1.0 / (rrf_k + rank as f32 + 1.0);
                             items.push((content, score, entities));
@@ -812,7 +809,11 @@ pub async fn graph_enhanced_search(
 
     // ── 4. Sort by fused score, truncate ──
     let mut results: Vec<GraphSearchResult> = fusion_map.into_values().collect();
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
 
     let graph_enhanced = !graph_results.is_empty();
@@ -825,9 +826,7 @@ pub async fn graph_enhanced_search(
 }
 
 #[cfg(not(feature = "neo4j"))]
-pub async fn graph_enhanced_search(
-    _query: web::Query<SearchQuery>,
-) -> HttpResponse {
+pub async fn graph_enhanced_search(_query: web::Query<SearchQuery>) -> HttpResponse {
     HttpResponse::ServiceUnavailable().json(serde_json::json!({
         "error": "Neo4j feature not enabled"
     }))

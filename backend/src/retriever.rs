@@ -471,7 +471,10 @@ pub async fn reindex_atomic(
     }
     if vectors_bak.exists() {
         if let Err(e) = std::fs::remove_file(&vectors_bak) {
-            info!("Reindex: failed to remove vectors backup (non-fatal): {}", e);
+            info!(
+                "Reindex: failed to remove vectors backup (non-fatal): {}",
+                e
+            );
         } else {
             info!("Reindex: cleaned up vectors backup: {:?}", vectors_bak);
         }
@@ -479,7 +482,10 @@ pub async fn reindex_atomic(
     let manifest_bak = manifest_dir.join(format!("manifest.json.bak-{}", ts));
     if manifest_bak.exists() {
         if let Err(e) = std::fs::remove_file(&manifest_bak) {
-            info!("Reindex: failed to remove manifest backup (non-fatal): {}", e);
+            info!(
+                "Reindex: failed to remove manifest backup (non-fatal): {}",
+                e
+            );
         } else {
             info!("Reindex: cleaned up manifest backup: {:?}", manifest_bak);
         }
@@ -573,12 +579,20 @@ impl Retriever {
             for segment_reader in searcher.segment_readers() {
                 if let Ok(store_reader) = segment_reader.get_store_reader(1) {
                     for doc_num in 0..segment_reader.max_doc() {
-                        if segment_reader.is_deleted(doc_num) { continue; }
+                        if segment_reader.is_deleted(doc_num) {
+                            continue;
+                        }
                         if let Ok(doc) = store_reader.get::<tantivy::TantivyDocument>(doc_num) {
-                            let did = doc.get_first(retriever.doc_id_field)
-                                .and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let cnt = doc.get_first(retriever.content_field)
-                                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let did = doc
+                                .get_first(retriever.doc_id_field)
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let cnt = doc
+                                .get_first(retriever.content_field)
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             if !did.is_empty() && !cnt.is_empty() {
                                 retriever.doc_id_to_content.insert(did, cnt);
                             }
@@ -586,7 +600,10 @@ impl Retriever {
                     }
                 }
             }
-            info!("Built doc_id->content map: {} entries", retriever.doc_id_to_content.len());
+            info!(
+                "Built doc_id->content map: {} entries",
+                retriever.doc_id_to_content.len()
+            );
         }
 
         Ok(retriever)
@@ -595,7 +612,6 @@ impl Retriever {
     // INSERT THIS AFTER LINE 221 (after the new_with_vector_file method ends)
 
     /// NEW for v13.1.2: Create with PathBuf paths (wrapper for new_with_vector_file)
-
     pub fn new_with_paths(
         index_dir: std::path::PathBuf,
         vector_file: std::path::PathBuf,
@@ -823,7 +839,8 @@ impl Retriever {
         doc.add_text(self.doc_id_field, doc_id);
         doc.add_text(self.title_field, title);
         doc.add_text(self.content_field, content);
-        self.doc_id_to_content.insert(doc_id.to_string(), content.to_string());
+        self.doc_id_to_content
+            .insert(doc_id.to_string(), content.to_string());
         if let Some(writer) = &mut self.index_writer {
             writer.add_document(doc)?;
             Ok(())
@@ -1054,23 +1071,27 @@ impl Retriever {
     /// Finds all nodes whose entity list contains any of the provided entity texts,
     /// then traverses 1 hop to collect connected chunk content as well.
     pub fn graph_search(&self, entities: &[String]) -> Vec<String> {
-        let runtime = match crate::graph::petgraph_runtime::RUNTIME_GRAPH.read().ok().and_then(|g| g.clone()) {
+        let runtime = match crate::graph::petgraph_runtime::RUNTIME_GRAPH
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+        {
             Some(r) => r,
             None => return vec![],
         };
         if entities.is_empty() {
             return vec![];
         }
-        let entity_set: std::collections::HashSet<String> = entities
-            .iter()
-            .map(|e| e.to_lowercase())
-            .collect();
+        let entity_set: std::collections::HashSet<String> =
+            entities.iter().map(|e| e.to_lowercase()).collect();
         let mut results: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Find seed nodes whose entity list overlaps with query entities
         for node in runtime.graph.node_weights() {
             let matches = node.entities.iter().any(|e| {
                 let el = e.to_lowercase();
-                entity_set.iter().any(|q| el.contains(q.as_str()) || q.contains(el.as_str()))
+                entity_set
+                    .iter()
+                    .any(|q| el.contains(q.as_str()) || q.contains(el.as_str()))
             });
             if matches {
                 if !node.content.is_empty() {
@@ -1093,7 +1114,9 @@ impl Retriever {
 
     pub fn get_content_by_vector_idx(&self, idx: usize) -> Option<String> {
         // Find the doc_id for this vector index
-        let doc_id = self.doc_id_to_vector_idx.iter()
+        let doc_id = self
+            .doc_id_to_vector_idx
+            .iter()
             .find(|(_, &vi)| vi == idx)
             .map(|(id, _)| id.clone())?;
         // Resolve doc_id to content via Tantivy
@@ -1751,7 +1774,11 @@ impl Retriever {
                     return Ok(());
                 }
                 Err(e) => {
-                    info!("{} load failed, trying mmap fallback: {}", async_io::backend_name(), e);
+                    info!(
+                        "{} load failed, trying mmap fallback: {}",
+                        async_io::backend_name(),
+                        e
+                    );
                     // Fall back to mmap (still fast, just has page-fault overhead on cold reads)
                     match self.load_vectors_mmap(&rkyv_path) {
                         Ok(()) => {

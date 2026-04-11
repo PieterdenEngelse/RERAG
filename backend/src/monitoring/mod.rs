@@ -20,11 +20,13 @@ pub mod health;
 pub mod histogram_config;
 pub mod metrics;
 pub mod metrics_config;
+pub mod onnx_metrics;
 pub mod otel_config;
 pub mod performance_analysis;
 pub mod pprof;
 pub mod rate_limit_middleware;
 pub mod resource_attribution;
+pub mod rig_stats;
 pub mod tool_alerts;
 pub mod tool_costs;
 pub mod tool_dependencies;
@@ -34,7 +36,6 @@ pub mod trace_alerting;
 pub mod trace_context;
 pub mod trace_middleware;
 pub mod tracing_config;
-pub mod onnx_metrics;
 pub mod ui_metrics;
 
 pub use crate::monitoring::metrics::{
@@ -64,9 +65,9 @@ pub use tool_dependencies::{
     ToolDependencyEdge, ToolDependencyGraph, ToolDependencyNode,
 };
 pub use tool_stats::{
-    clear_history as clear_tool_history, get_recent_executions, get_tool_stat, get_llm_latency_stats, get_tool_stats, LlmLatencyStats,
-    record_tool_execution, ToolAggregateStats, ToolExecution, ToolExecutionResponse,
-    ToolStatsResponse,
+    clear_history as clear_tool_history, get_llm_latency_stats, get_recent_executions,
+    get_tool_stat, get_tool_stats, record_tool_execution, LlmLatencyStats, ToolAggregateStats,
+    ToolExecution, ToolExecutionResponse, ToolStatsResponse,
 };
 pub use tool_trends::{
     compare_windows as compare_trends, get_all_trends, get_tool_trend, record_execution, ToolTrend,

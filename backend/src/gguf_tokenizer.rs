@@ -44,7 +44,11 @@ impl GgufTokenCounter {
             path = %path.display(),
             "Loaded GGUF tokenizer for exact token counting"
         );
-        Ok(Self { tokenizer, model_name: name, vocab_size })
+        Ok(Self {
+            tokenizer,
+            model_name: name,
+            vocab_size,
+        })
     }
 }
 
@@ -58,9 +62,15 @@ impl TokenCounter for GgufTokenCounter {
             }
         }
     }
-    fn model_name(&self) -> &str { &self.model_name }
-    fn vocab_size(&self) -> usize { self.vocab_size }
-    fn is_exact(&self) -> bool { true }
+    fn model_name(&self) -> &str {
+        &self.model_name
+    }
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+    fn is_exact(&self) -> bool {
+        true
+    }
 }
 
 // ============================================================================
@@ -70,10 +80,18 @@ impl TokenCounter for GgufTokenCounter {
 pub struct HeuristicTokenCounter;
 
 impl TokenCounter for HeuristicTokenCounter {
-    fn count_tokens(&self, text: &str) -> usize { heuristic_count(text) }
-    fn model_name(&self) -> &str { "heuristic" }
-    fn vocab_size(&self) -> usize { 0 }
-    fn is_exact(&self) -> bool { false }
+    fn count_tokens(&self, text: &str) -> usize {
+        heuristic_count(text)
+    }
+    fn model_name(&self) -> &str {
+        "heuristic"
+    }
+    fn vocab_size(&self) -> usize {
+        0
+    }
+    fn is_exact(&self) -> bool {
+        false
+    }
 }
 
 fn heuristic_count(text: &str) -> usize {
@@ -93,7 +111,9 @@ pub struct TokenCounterHandle {
 impl TokenCounterHandle {
     pub fn new_heuristic() -> Self {
         info!("TokenCounterHandle initialized with heuristic counter");
-        Self { inner: RwLock::new(Arc::new(HeuristicTokenCounter)) }
+        Self {
+            inner: RwLock::new(Arc::new(HeuristicTokenCounter)),
+        }
     }
 
     pub fn load_from_gguf(&self, path: &Path) -> Result<()> {
@@ -141,8 +161,8 @@ pub fn resolve_ollama_gguf_path(model: &str) -> Result<PathBuf> {
 
     let manifest_str = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("No Ollama manifest at {:?}", manifest_path))?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_str)
-        .context("Failed to parse Ollama manifest")?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_str).context("Failed to parse Ollama manifest")?;
 
     let layers = manifest["layers"]
         .as_array()
@@ -181,7 +201,8 @@ pub fn resolve_llama_server_gguf_path() -> Result<PathBuf> {
 
     for line in content.lines() {
         // Support both env var names
-        let stripped = line.strip_prefix("MODEL_PATH=")
+        let stripped = line
+            .strip_prefix("MODEL_PATH=")
             .or_else(|| line.strip_prefix("LLAMA_MODEL="));
         if let Some(path) = stripped {
             let path = path.trim().trim_matches('"');

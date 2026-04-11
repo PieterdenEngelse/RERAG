@@ -59,7 +59,9 @@ struct LlmLatencyEntry {
 }
 
 static LLM_LATENCIES: once_cell::sync::Lazy<std::sync::Mutex<VecDeque<LlmLatencyEntry>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(VecDeque::with_capacity(LLM_LATENCY_HISTORY_SIZE)));
+    once_cell::sync::Lazy::new(|| {
+        std::sync::Mutex::new(VecDeque::with_capacity(LLM_LATENCY_HISTORY_SIZE))
+    });
 
 /// Global tool execution history
 struct ToolExecutionHistory {

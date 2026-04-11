@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 // Rate limiting is enforced by middleware (see monitoring/rate_limit_middleware.rs).
 // The per-handler token-bucket implementation was removed to avoid double-limiting.
 
@@ -12,23 +11,17 @@ pub struct SearchQuery {
     pub q: String,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct RerankRequest {
     pub query: String,
     pub candidates: Vec<String>,
 }
 
-
-
 #[derive(serde::Deserialize)]
 pub struct SummarizeRequest {
     pub query: String,
     pub candidates: Vec<String>,
 }
-
-
 
 pub(crate) async fn upload_document_inner(
     mut payload: Multipart,
@@ -188,8 +181,6 @@ pub(crate) async fn upload_document_inner(
     })))
 }
 
-
-
 pub async fn list_documents() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let mut files = Vec::new();
@@ -209,8 +200,6 @@ pub async fn list_documents() -> Result<HttpResponse, Error> {
         "request_id": request_id
     })))
 }
-
-
 
 pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -249,8 +238,6 @@ pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Er
         }))),
     }
 }
-
-
 
 pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -336,9 +323,9 @@ pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpRespons
     }
 }
 
-
-
-pub(crate) fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<String, (StatusCode, String)> {
+pub(crate) fn launch_async_reindex_job(
+    config: web::Data<ApiConfig>,
+) -> Result<String, (StatusCode, String)> {
     if REINDEX_IN_PROGRESS
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -464,8 +451,6 @@ pub(crate) fn launch_async_reindex_job(config: web::Data<ApiConfig>) -> Result<S
     Ok(job_id)
 }
 
-
-
 /// Phase 15: Async reindex endpoint
 pub async fn reindex_async_handler(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -483,8 +468,6 @@ pub async fn reindex_async_handler(config: web::Data<ApiConfig>) -> Result<HttpR
         }))),
     }
 }
-
-
 
 /// Phase 15: Check async job status
 pub async fn reindex_status_handler(path: web::Path<String>) -> Result<HttpResponse, Error> {
@@ -513,8 +496,6 @@ pub async fn reindex_status_handler(path: web::Path<String>) -> Result<HttpRespo
         })))
     }
 }
-
-
 
 /// Phase 15: Index info endpoint
 pub async fn index_info_handler() -> Result<HttpResponse, Error> {
@@ -546,9 +527,9 @@ pub async fn index_info_handler() -> Result<HttpResponse, Error> {
     }
 }
 
-
-
-pub(crate) async fn search_documents_inner(query: web::Query<SearchQuery>) -> Result<HttpResponse, Error> {
+pub(crate) async fn search_documents_inner(
+    query: web::Query<SearchQuery>,
+) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
     if let Some(retriever) = RETRIEVER.get() {
@@ -575,7 +556,8 @@ pub(crate) async fn search_documents_inner(query: web::Query<SearchQuery>) -> Re
             .unwrap_or_default();
         // 3-way RRF merge
         let k = 60.0_f32;
-        let mut score_map: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+        let mut score_map: std::collections::HashMap<String, f32> =
+            std::collections::HashMap::new();
         for (rank, content) in hybrid_results.iter().enumerate() {
             *score_map.entry(content.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
         }
@@ -612,8 +594,6 @@ pub(crate) async fn search_documents_inner(query: web::Query<SearchQuery>) -> Re
     }
 }
 
-
-
 pub async fn rerank(request: web::Json<RerankRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     if let Some(retriever) = RETRIEVER.get() {
@@ -633,8 +613,6 @@ pub async fn rerank(request: web::Json<RerankRequest>) -> Result<HttpResponse, E
     }
 }
 
-
-
 pub async fn summarize(request: web::Json<SummarizeRequest>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     if let Some(retriever) = RETRIEVER.get() {
@@ -653,8 +631,6 @@ pub async fn summarize(request: web::Json<SummarizeRequest>) -> Result<HttpRespo
         })))
     }
 }
-
-
 
 pub async fn save_vectors_handler() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
@@ -681,5 +657,3 @@ pub async fn save_vectors_handler() -> Result<HttpResponse, Error> {
         })))
     }
 }
-
-

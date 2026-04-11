@@ -351,17 +351,19 @@ impl HardwareParams {
         // Split mode validation
         let valid_split_modes = ["none", "layer", "row"];
         if !valid_split_modes.contains(&self.split_mode.as_str()) {
-            return Err(HardwareParamError::Validation(
-                format!("split_mode must be one of: {}", valid_split_modes.join(", ")),
-            ));
+            return Err(HardwareParamError::Validation(format!(
+                "split_mode must be one of: {}",
+                valid_split_modes.join(", ")
+            )));
         }
 
         // Priority validation
         let valid_priorities = ["low", "normal", "high", "realtime"];
         if !valid_priorities.contains(&self.priority.as_str()) {
-            return Err(HardwareParamError::Validation(
-                format!("priority must be one of: {}", valid_priorities.join(", ")),
-            ));
+            return Err(HardwareParamError::Validation(format!(
+                "priority must be one of: {}",
+                valid_priorities.join(", ")
+            )));
         }
 
         Ok(())

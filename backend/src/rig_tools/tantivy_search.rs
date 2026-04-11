@@ -60,7 +60,8 @@ impl Tool for TantivySearchTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let retriever = self.retriever.clone();
         let top_k = self.top_k;
-        let query = args.query;
+        let query = args.query.clone();
+        let t0 = std::time::Instant::now();
 
         let result = tokio::task::spawn_blocking(move || {
             let mut r = retriever.lock().map_err(|e| SearchError(e.to_string()))?;
@@ -75,14 +76,41 @@ impl Tool for TantivySearchTool {
         .await
         .map_err(|e| SearchError(format!("Task join error: {}", e)))?;
 
-        let chunks = result?;
-        let count = chunks.len();
-        let context = if chunks.is_empty() {
-            "No relevant documents found.".to_string()
-        } else {
-            chunks.join("\n\n---\n\n")
-        };
+        let elapsed = t0.elapsed().as_millis() as u64;
+        crate::monitoring::rig_stats::record_rig_tool_call();
 
-        Ok(SearchResult { count, context })
+        match result {
+            Ok(chunks) => {
+                let count = chunks.len();
+                let preview = format!("{} chunks", count);
+                crate::monitoring::record_tool_execution(
+                    "RigSearch",
+                    &args.query,
+                    true,
+                    &preview,
+                    elapsed,
+                    if count > 0 { 1.0 } else { 0.3 },
+                    Some("rig_tantivy"),
+                );
+                let context = if chunks.is_empty() {
+                    "No relevant documents found.".to_string()
+                } else {
+                    chunks.join("\n\n---\n\n")
+                };
+                Ok(SearchResult { count, context })
+            }
+            Err(e) => {
+                crate::monitoring::record_tool_execution(
+                    "RigSearch",
+                    &args.query,
+                    false,
+                    &e.to_string(),
+                    elapsed,
+                    0.0,
+                    Some("rig_tantivy"),
+                );
+                Err(e)
+            }
+        }
     }
 }

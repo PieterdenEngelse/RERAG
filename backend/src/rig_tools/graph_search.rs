@@ -59,27 +59,63 @@ impl Tool for GraphSearchTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let retriever = self.retriever.clone();
-        let entities = args.entities;
+        let entities = args.entities.clone();
+        let query_label = args.entities.join(", ");
+        let t0 = std::time::Instant::now();
 
         let result = tokio::task::spawn_blocking(move || {
             let r = retriever.lock().map_err(|e| GraphError(e.to_string()))?;
-            let results = r.graph_search(&entities.iter().map(|s| s.as_str()).collect::<Vec<_>>().iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            let results = r.graph_search(
+                &entities
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+            );
             Ok::<_, GraphError>(results)
         })
         .await
         .map_err(|e| GraphError(format!("Task join error: {}", e)))?;
 
-        let relations = result?;
-        let count = relations.len();
-        let text = if relations.is_empty() {
-            "No relationships found for the given entities.".to_string()
-        } else {
-            relations.join("\n")
-        };
+        let elapsed = t0.elapsed().as_millis() as u64;
+        crate::monitoring::rig_stats::record_rig_tool_call();
 
-        Ok(GraphResult {
-            count,
-            relations: text,
-        })
+        match result {
+            Ok(relations) => {
+                let count = relations.len();
+                crate::monitoring::record_tool_execution(
+                    "RigGraphSearch",
+                    &query_label,
+                    true,
+                    &format!("{} relations", count),
+                    elapsed,
+                    if count > 0 { 1.0 } else { 0.3 },
+                    Some("rig_graph"),
+                );
+                let text = if relations.is_empty() {
+                    "No relationships found for the given entities.".to_string()
+                } else {
+                    relations.join("\n")
+                };
+                Ok(GraphResult {
+                    count,
+                    relations: text,
+                })
+            }
+            Err(e) => {
+                crate::monitoring::record_tool_execution(
+                    "RigGraphSearch",
+                    &query_label,
+                    false,
+                    &e.to_string(),
+                    elapsed,
+                    0.0,
+                    Some("rig_graph"),
+                );
+                Err(e)
+            }
+        }
     }
 }

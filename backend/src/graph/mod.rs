@@ -29,8 +29,8 @@ pub mod schema;
 
 // Re-exports: Petgraph (always available)
 pub use petgraph_runtime::{
-    export_to_json, get_runtime_graph, set_runtime_graph, initialize_standalone, reload_from_json_path, ChunkNode, GraphQuery, Relationship,
-    RuntimeGraph,
+    export_to_json, get_runtime_graph, initialize_standalone, reload_from_json_path,
+    set_runtime_graph, ChunkNode, GraphQuery, Relationship, RuntimeGraph,
 };
 
 // Re-exports: Neo4j (only when feature enabled)
@@ -125,9 +125,15 @@ pub async fn index_to_knowledge_graph(
         let use_ner = !ner_entities.is_empty();
         if use_ner {
             for ner_entity in &ner_entities {
-                if let Err(e) = kb.add_entity_mention(
-                    chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score,
-                ).await {
+                if let Err(e) = kb
+                    .add_entity_mention(
+                        chunk_id,
+                        &ner_entity.text,
+                        &ner_entity.label,
+                        ner_entity.score,
+                    )
+                    .await
+                {
                     debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
                 }
             }

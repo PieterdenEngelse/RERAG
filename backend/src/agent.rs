@@ -493,15 +493,20 @@ impl<'a> Agent<'a> {
             Some(goal_context_str.as_str())
         };
 
-        // Handle Agentic mode (Rig integration — stub)
+        // Agentic mode is handled by the streaming endpoint (run_agent_stream).
+        // The synchronous /agent and GET /agent paths do not support Agentic mode
+        // because Rig's tool-calling loop is async and cannot block safely.
+        // Callers should use POST /agent/stream with mode="agentic".
         if matches!(mode, AgentMode::Agentic) {
             steps.push(AgentStep {
                 kind: "mode".into(),
-                message: "Agentic mode (Rig tool-loop — integration pending)".into(),
+                message: "Agentic mode: use POST /agent/stream with mode=agentic".into(),
             });
-            let answer = "Agentic mode received your query. Rig integration is pending — this mode will use an LLM-driven tool-calling loop to dynamically search documents, recall memory, and query the knowledge graph.".to_string();
+            let answer = "Agentic mode requires the streaming endpoint (/agent/stream). \
+                          Please send your request to POST /agent/stream with {\"mode\":\"agentic\"}."
+                .to_string();
             self.store_memory(query, &answer);
-            self.store_episode(query, &answer, 0, true);
+            self.store_episode(query, &answer, 0, false);
             return AgentResponse {
                 answer,
                 steps,
@@ -755,7 +760,7 @@ impl<'a> Agent<'a> {
             self.record_goal_progress(goal_id, query, true);
             steps.push(AgentStep {
                 kind: "goal_progress".into(),
-                message: format!("Recorded progress toward goal"),
+                message: "Recorded progress toward goal".to_string(),
             });
         }
 
@@ -820,143 +825,211 @@ impl<'a> Agent<'a> {
 
         // Dispatch to correct backend
         let hw = crate::db::param_hardware::global_config();
-        let use_llama = matches!(
-            hw.backend_type,
-            crate::db::param_hardware::BackendType::LlamaCpp
-        );
 
         crate::monitoring::mark_llm_started();
         let llm_start = std::time::Instant::now();
 
-        let (result, success) = if use_llama {
-            // llama-server: OpenAI-compatible /v1/chat/completions
-            let url = format!("{}/v1/chat/completions", hw.llama_server_url);
+        // Shared OpenAI-compatible request/response types (used by llama.cpp and OpenAI)
+        #[derive(serde::Serialize)]
+        struct OaiMsg {
+            role: String,
+            content: String,
+        }
+        #[derive(serde::Serialize)]
+        struct OaiReq {
+            model: String,
+            messages: Vec<OaiMsg>,
+            temperature: f32,
+            max_tokens: usize,
+            stream: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct OaiChoice {
+            message: OaiMsgResp,
+        }
+        #[derive(serde::Deserialize)]
+        struct OaiMsgResp {
+            content: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct OaiResp {
+            choices: Vec<OaiChoice>,
+        }
 
-            #[derive(serde::Serialize)]
-            struct LlamaMsg { role: String, content: String }
-            #[derive(serde::Serialize)]
-            struct LlamaReq {
-                model: String,
-                messages: Vec<LlamaMsg>,
-                temperature: f32,
-                max_tokens: usize,
-                stream: bool,
-            }
-            #[derive(serde::Deserialize)]
-            struct LlamaChoice { message: LlamaMsgResp }
-            #[derive(serde::Deserialize)]
-            struct LlamaMsgResp { content: String }
-            #[derive(serde::Deserialize)]
-            struct LlamaResp { choices: Vec<LlamaChoice> }
-
-            let mut messages: Vec<LlamaMsg> = Vec::new();
-            if let Some(sys) = system_field {
-                messages.push(LlamaMsg { role: "system".into(), content: sys });
-            }
-            messages.push(LlamaMsg { role: "user".into(), content: final_prompt });
-
-            let req_body = LlamaReq {
-                model,
-                messages,
-                temperature: config.temperature,
-                max_tokens: config.max_tokens,
-                stream: false,
-            };
-
+        fn call_oai_compat(
+            url: &str,
+            bearer: Option<&str>,
+            req_body: &OaiReq,
+            backend_label: &str,
+        ) -> (String, bool) {
             let client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client.post(&url).json(&req_body).send() {
+            let mut req = client.post(url).json(req_body);
+            if let Some(key) = bearer {
+                req = req.bearer_auth(key);
+            }
+            match req.send() {
                 Ok(resp) => match resp.text() {
-                    Ok(text) => match serde_json::from_str::<LlamaResp>(&text) {
+                    Ok(text) => match serde_json::from_str::<OaiResp>(&text) {
                         Ok(data) => {
-                            let content = data.choices.into_iter()
+                            let content = data
+                                .choices
+                                .into_iter()
                                 .next()
                                 .map(|c| c.message.content.trim().to_string())
                                 .unwrap_or_default();
                             (content, true)
                         }
                         Err(e) => (
-                            format!("llama-server parse error: {} - Raw: {}", e, &text[..text.len().min(200)]),
-                            false,
-                        ),
-                    },
-                    Err(e) => (format!("llama-server read error: {}", e), false),
-                },
-                Err(e) => (
-                    format!("llama-server error: {}. Is llama-server running at {}?", e, hw.llama_server_url),
-                    false,
-                ),
-            }
-        } else {
-            // Ollama: /api/generate
-            let url = format!("{}/api/generate", ollama_url);
-
-            #[derive(serde::Serialize)]
-            struct OllamaOptions {
-                temperature: f32,
-                top_p: f32,
-                top_k: usize,
-                num_predict: usize,
-                repeat_penalty: f32,
-            }
-            #[derive(serde::Serialize)]
-            struct OllamaRequest {
-                model: String,
-                prompt: String,
-                stream: bool,
-                options: OllamaOptions,
-                #[serde(skip_serializing_if = "Option::is_none")]
-                system: Option<String>,
-            }
-            #[derive(serde::Deserialize, Debug)]
-            struct OllamaResponse {
-                response: String,
-                #[serde(default)]
-                #[allow(dead_code)]
-                done: bool,
-            }
-
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            let request_body = OllamaRequest {
-                model,
-                prompt: final_prompt,
-                stream: false,
-                options: OllamaOptions {
-                    temperature: config.temperature,
-                    top_p: config.top_p,
-                    top_k: config.top_k,
-                    num_predict: config.max_tokens,
-                    repeat_penalty: config.repeat_penalty,
-                },
-                system: system_field,
-            };
-
-            match client.post(&url).json(&request_body).send() {
-                Ok(response) => match response.text() {
-                    Ok(text) => match serde_json::from_str::<OllamaResponse>(&text) {
-                        Ok(data) => (data.response.trim().to_string(), true),
-                        Err(e) => (
                             format!(
-                                "Failed to parse LLM response: {} - Raw: {}",
+                                "{} parse error: {} - Raw: {}",
+                                backend_label,
                                 e,
                                 &text[..text.len().min(200)]
                             ),
                             false,
                         ),
                     },
-                    Err(e) => (format!("Failed to read LLM response: {}", e), false),
+                    Err(e) => (format!("{} read error: {}", backend_label, e), false),
                 },
-                Err(e) => (
-                    format!("LLM error: {}. Make sure Ollama is running.", e),
-                    false,
-                ),
+                Err(e) => (format!("{} error: {}", backend_label, e), false),
+            }
+        }
+
+        let backend_label = hw.backend_type.label().to_lowercase();
+        let backend_label = backend_label.replace([' ', '.'], "_");
+
+        let (result, success) = match hw.backend_type {
+            crate::db::param_hardware::BackendType::LlamaCpp => {
+                let url = format!("{}/v1/chat/completions", hw.llama_server_url);
+                let mut messages: Vec<OaiMsg> = Vec::new();
+                if let Some(sys) = system_field {
+                    messages.push(OaiMsg {
+                        role: "system".into(),
+                        content: sys,
+                    });
+                }
+                messages.push(OaiMsg {
+                    role: "user".into(),
+                    content: final_prompt,
+                });
+                let req_body = OaiReq {
+                    model,
+                    messages,
+                    temperature: config.temperature,
+                    max_tokens: config.max_tokens,
+                    stream: false,
+                };
+                let (mut res, ok) = call_oai_compat(&url, None, &req_body, "llama-server");
+                if !ok {
+                    res = format!(
+                        "{}. Is llama-server running at {}?",
+                        res, hw.llama_server_url
+                    );
+                }
+                (res, ok)
+            }
+
+            crate::db::param_hardware::BackendType::OpenAi => {
+                let api_keys = crate::db::api_keys::global_config();
+                match api_keys.get_openai_key() {
+                    None => (
+                        "OpenAI API key not configured. Set OPENAI_API_KEY or add it in Hardware settings.".into(),
+                        false,
+                    ),
+                    Some(key) => {
+                        let mut messages: Vec<OaiMsg> = Vec::new();
+                        if let Some(sys) = system_field {
+                            messages.push(OaiMsg { role: "system".into(), content: sys });
+                        }
+                        messages.push(OaiMsg { role: "user".into(), content: final_prompt });
+                        let req_body = OaiReq {
+                            model,
+                            messages,
+                            temperature: config.temperature,
+                            max_tokens: config.max_tokens,
+                            stream: false,
+                        };
+                        call_oai_compat(
+                            "https://api.openai.com/v1/chat/completions",
+                            Some(&key),
+                            &req_body,
+                            "OpenAI",
+                        )
+                    }
+                }
+            }
+
+            _ => {
+                // Ollama: /api/generate
+                let url = format!("{}/api/generate", ollama_url);
+
+                #[derive(serde::Serialize)]
+                struct OllamaOptions {
+                    temperature: f32,
+                    top_p: f32,
+                    top_k: usize,
+                    num_predict: usize,
+                    repeat_penalty: f32,
+                }
+                #[derive(serde::Serialize)]
+                struct OllamaRequest {
+                    model: String,
+                    prompt: String,
+                    stream: bool,
+                    options: OllamaOptions,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    system: Option<String>,
+                }
+                #[derive(serde::Deserialize, Debug)]
+                struct OllamaResponse {
+                    response: String,
+                    #[serde(default)]
+                    #[allow(dead_code)]
+                    done: bool,
+                }
+
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(120))
+                    .build()
+                    .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+                let request_body = OllamaRequest {
+                    model,
+                    prompt: final_prompt,
+                    stream: false,
+                    options: OllamaOptions {
+                        temperature: config.temperature,
+                        top_p: config.top_p,
+                        top_k: config.top_k,
+                        num_predict: config.max_tokens,
+                        repeat_penalty: config.repeat_penalty,
+                    },
+                    system: system_field,
+                };
+
+                match client.post(&url).json(&request_body).send() {
+                    Ok(response) => match response.text() {
+                        Ok(text) => match serde_json::from_str::<OllamaResponse>(&text) {
+                            Ok(data) => (data.response.trim().to_string(), true),
+                            Err(e) => (
+                                format!(
+                                    "Failed to parse LLM response: {} - Raw: {}",
+                                    e,
+                                    &text[..text.len().min(200)]
+                                ),
+                                false,
+                            ),
+                        },
+                        Err(e) => (format!("Failed to read LLM response: {}", e), false),
+                    },
+                    Err(e) => (
+                        format!("LLM error: {}. Make sure Ollama is running.", e),
+                        false,
+                    ),
+                }
             }
         };
 
@@ -977,7 +1050,7 @@ impl<'a> Agent<'a> {
             },
             llm_time,
             if success { 0.9 } else { 0.0 },
-            Some(if use_llama { "llama_cpp" } else { "ollama" }),
+            Some(&backend_label),
         );
 
         result
@@ -1076,7 +1149,10 @@ impl<'a> Agent<'a> {
             let url = format!("{}/v1/chat/completions", hw.llama_server_url);
 
             #[derive(serde::Serialize)]
-            struct StrictMsg { role: String, content: String }
+            struct StrictMsg {
+                role: String,
+                content: String,
+            }
             #[derive(serde::Serialize)]
             struct StrictReq {
                 model: String,
@@ -1086,15 +1162,27 @@ impl<'a> Agent<'a> {
                 stream: bool,
             }
             #[derive(serde::Deserialize)]
-            struct StrictChoice { message: StrictMsgResp }
+            struct StrictChoice {
+                message: StrictMsgResp,
+            }
             #[derive(serde::Deserialize)]
-            struct StrictMsgResp { content: String }
+            struct StrictMsgResp {
+                content: String,
+            }
             #[derive(serde::Deserialize)]
-            struct StrictResp { choices: Vec<StrictChoice> }
+            struct StrictResp {
+                choices: Vec<StrictChoice>,
+            }
 
             let messages = vec![
-                StrictMsg { role: "system".into(), content: system.clone() },
-                StrictMsg { role: "user".into(), content: prompt },
+                StrictMsg {
+                    role: "system".into(),
+                    content: system.clone(),
+                },
+                StrictMsg {
+                    role: "user".into(),
+                    content: prompt,
+                },
             ];
 
             let req_body = StrictReq {
@@ -1114,7 +1202,9 @@ impl<'a> Agent<'a> {
                 Ok(resp) => match resp.text() {
                     Ok(text) => match serde_json::from_str::<StrictResp>(&text) {
                         Ok(data) => {
-                            let content = data.choices.into_iter()
+                            let content = data
+                                .choices
+                                .into_iter()
                                 .next()
                                 .map(|c| c.message.content.trim().to_string())
                                 .unwrap_or_default();
@@ -1125,7 +1215,10 @@ impl<'a> Agent<'a> {
                     Err(e) => (format!("llama-server read error: {}", e), false),
                 },
                 Err(e) => (
-                    format!("llama-server error: {}. Is llama-server running at {}?", e, hw.llama_server_url),
+                    format!(
+                        "llama-server error: {}. Is llama-server running at {}?",
+                        e, hw.llama_server_url
+                    ),
                     false,
                 ),
             }
@@ -1370,7 +1463,7 @@ impl<'a> Agent<'a> {
     }
 }
 
-fn naive_summarize(_query: &str, chunks: &Vec<String>) -> String {
+fn naive_summarize(_query: &str, chunks: &[String]) -> String {
     // Very basic: take up to first 3 non-empty lines
     let mut out = String::new();
     for (i, c) in chunks.iter().enumerate() {

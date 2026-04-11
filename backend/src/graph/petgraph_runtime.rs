@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::OnceCell;
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "neo4j")]
@@ -85,7 +84,8 @@ impl Default for RuntimeGraph {
 // Global Runtime Graph (Thread-Safe Singleton)
 // ─────────────────────────────────────────────────────────────
 
-pub static RUNTIME_GRAPH: std::sync::RwLock<Option<Arc<RuntimeGraph>>> = std::sync::RwLock::new(None);
+pub static RUNTIME_GRAPH: std::sync::RwLock<Option<Arc<RuntimeGraph>>> =
+    std::sync::RwLock::new(None);
 
 pub fn get_runtime_graph() -> Arc<RuntimeGraph> {
     RUNTIME_GRAPH
@@ -508,8 +508,6 @@ pub async fn initialize_standalone(data_dir: &str) {
 }
 
 /// Force-reload the petgraph runtime from a specific JSON file path.
-
-
 pub fn export_to_json(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = get_runtime_graph();
     let json = serde_json::to_string_pretty(&*runtime)?;

@@ -5,18 +5,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 // ── Runtime counters ──────────────────────────────────────────────────────────
-static CACHE_HITS:        AtomicU64 = AtomicU64::new(0);
-static CACHE_MISSES:      AtomicU64 = AtomicU64::new(0);
-static TOTAL_EMBEDDINGS:  AtomicU64 = AtomicU64::new(0);
-static TOTAL_BATCHES:     AtomicU64 = AtomicU64::new(0);
+static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static TOTAL_EMBEDDINGS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_BATCHES: AtomicU64 = AtomicU64::new(0);
 static TOTAL_BATCH_TEXTS: AtomicU64 = AtomicU64::new(0);
-static TOTAL_EMBED_US:    AtomicU64 = AtomicU64::new(0);
-static LAST_EMBED_US:     AtomicU64 = AtomicU64::new(0);
+static TOTAL_EMBED_US: AtomicU64 = AtomicU64::new(0);
+static LAST_EMBED_US: AtomicU64 = AtomicU64::new(0);
 
 // ── Static model metadata ─────────────────────────────────────────────────────
 struct ModelMeta {
-    name:       String,
-    dims:       usize,
+    name: String,
+    dims: usize,
     batch_size: usize,
 }
 
@@ -54,28 +54,28 @@ pub fn record_batch(text_count: usize) {
 // ── Snapshot ──────────────────────────────────────────────────────────────────
 #[derive(serde::Serialize)]
 pub struct OnnxSnapshot {
-    pub status:            &'static str,
-    pub model_name:        String,
-    pub model_dims:        usize,
-    pub batch_size:        usize,
-    pub cache_hits:        u64,
-    pub cache_misses:      u64,
-    pub cache_hit_rate:    f64,
-    pub total_embeddings:  u64,
-    pub total_batches:     u64,
+    pub status: &'static str,
+    pub model_name: String,
+    pub model_dims: usize,
+    pub batch_size: usize,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_hit_rate: f64,
+    pub total_embeddings: u64,
+    pub total_batches: u64,
     pub total_batch_texts: u64,
-    pub avg_embed_ms:      f64,
-    pub last_embed_ms:     f64,
+    pub avg_embed_ms: f64,
+    pub last_embed_ms: f64,
 }
 
 pub fn snapshot() -> OnnxSnapshot {
-    let hits     = CACHE_HITS.load(Ordering::Relaxed);
-    let misses   = CACHE_MISSES.load(Ordering::Relaxed);
-    let total    = TOTAL_EMBEDDINGS.load(Ordering::Relaxed);
+    let hits = CACHE_HITS.load(Ordering::Relaxed);
+    let misses = CACHE_MISSES.load(Ordering::Relaxed);
+    let total = TOTAL_EMBEDDINGS.load(Ordering::Relaxed);
     let total_us = TOTAL_EMBED_US.load(Ordering::Relaxed);
-    let last_us  = LAST_EMBED_US.load(Ordering::Relaxed);
-    let batches  = TOTAL_BATCHES.load(Ordering::Relaxed);
-    let b_texts  = TOTAL_BATCH_TEXTS.load(Ordering::Relaxed);
+    let last_us = LAST_EMBED_US.load(Ordering::Relaxed);
+    let batches = TOTAL_BATCHES.load(Ordering::Relaxed);
+    let b_texts = TOTAL_BATCH_TEXTS.load(Ordering::Relaxed);
 
     let cache_total = hits + misses;
     let cache_hit_rate = if cache_total > 0 {
@@ -95,7 +95,11 @@ pub fn snapshot() -> OnnxSnapshot {
         .unwrap_or_else(|| ("unknown".to_owned(), 0, 0));
 
     OnnxSnapshot {
-        status: if model_dims > 0 { "loaded" } else { "unregistered" },
+        status: if model_dims > 0 {
+            "loaded"
+        } else {
+            "unregistered"
+        },
         model_name,
         model_dims,
         batch_size,

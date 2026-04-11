@@ -98,48 +98,169 @@ With local LLM and limited resources, heuristics with LLM fallback keeps things 
 
 NOTE: Currently, goals must be explicitly created. Automatic detection is not yet implemented."#;
 
+/// Rig agentic mode explanation modal
+const RIG_MODE_INFO_TOOLTIP: &str = r#"TOTAL CALLS
+Number of times agentic mode was invoked since the backend started.
+Resets on restart.
+
+TOOL CALLS
+Total individual tool invocations across all agentic sessions.
+One session can trigger multiple tool calls — e.g. the LLM calls
+search_documents twice then recall_memory once = 3 tool calls.
+
+Available tools the LLM can call:
+  search_documents       full-text + semantic search
+  recall_memory          retrieve past conversation memories
+  store_memory           persist a fact for future sessions
+  search_knowledge_graph entity relationship lookup"#;
+
+/// Context budget modal
+const TOKEN_BUDGET_INFO_TOOLTIP: &str = r#"CONTEXT BUDGET BAR
+Average % of the model's context window (num_ctx) consumed by the prompt
+before any tool results are added. Tool results grow this further each loop.
+  Teal   0–60%   enough headroom
+  Yellow 60–80%  getting full; tool results may be cut short
+  Red    >80%    near limit; earlier context may be dropped by the model
+
+AVG TOKENS / SESSION
+Preamble + query token count averaged across the last 100 sessions.
+
+MAX TOKENS SEEN
+Highest single-session token count recorded.
+
+AVG SESSION
+Mean time for the full Rig tool-calling loop to complete, in milliseconds.
+
+COUNTER
+  exact     — token counts from the loaded GGUF vocab (precise)
+  heuristic — estimated from character and word counts (~10–15% error)
+  mixed     — model changed mid-run; some sessions used each method"#;
+
+/// Rig fallback modal
+const RIG_FALLBACK_INFO_TOOLTIP: &str = r#"FALLBACKS
+Number of agentic sessions where the Rig loop failed and the system
+automatically retried using Classic Hybrid mode. The user received an
+answer either way.
+
+Common causes:
+  model returned malformed tool-call JSON
+  Ollama connection dropped mid-loop
+  a tool execution threw an error
+
+Hitting the max iteration cap is NOT a fallback — the loop ends
+normally and the last model response is returned directly.
+
+FALLBACK RATE
+Fallbacks ÷ Total Calls × 100.
+A high rate means the model is not reliably producing tool-call JSON.
+Fallback responses include "mode": "agentic_fallback" and a
+"fallback_reason" field."#;
+
+/// Tool Performance panel tooltip
+const TOOL_PERF_INFO_TOOLTIP: &str = r#"TOOL PERFORMANCE
+
+Tracks every tool invocation made by the agent across all modes.
+
+METRICS
+• Tool Executions  — total tool calls since startup (Classic + Rig combined)
+• Avg Confidence   — mean confidence score returned by tool selection logic
+• Fallback Rate    — % of calls that used a secondary tool because the primary
+                     returned no results or failed
+
+TOOL USAGE DISTRIBUTION
+Shows the share of calls per tool type. Dominated by search tools in RAG/Hybrid
+mode; memory and graph tools appear more when Rig Agentic mode is active.
+
+NOTE
+Rig Agentic tool calls (search_documents, recall_memory, store_memory,
+search_knowledge_graph) are recorded here alongside Classic pipeline tools.
+Check the Rig Agentic Mode section above for Rig-specific fallback stats."#;
+
+/// Memory Statistics panel tooltip
+const MEMORY_STATS_INFO_TOOLTIP: &str = r#"MEMORY STATISTICS
+
+The agent uses SQLite (agent.db) as its memory store. Three types of memory
+are tracked here.
+
+MEMORY TYPES
+• Episodes       — one record per agent interaction (query + response + success flag)
+                   Written automatically after every /agent call
+• RAG Memories   — short-form facts extracted and embedded for vector retrieval
+                   Written when the agent calls store_memory or via Rig tool
+• Unique Agents  — distinct agent_id values seen in the database
+                   Typically "default" unless you run multiple named agents
+
+REFLECTIONS
+Self-analysis records generated after a configurable number of episodes.
+The agent reviews recent interactions and writes observations about patterns,
+failures, and improvements. Appears in "Recent Reflections" below.
+
+STORAGE
+All memory is local to agent.db (SQLite). No external service required.
+LanceDB handles the vector embeddings for RAG Memories separately."#;
+
+/// Recent Reflections panel tooltip
+const REFLECTIONS_INFO_TOOLTIP: &str = r#"RECENT REFLECTIONS
+
+After a configurable number of episodes the agent reviews its own recent
+interactions and writes a short self-analysis record.
+
+REFLECTION TYPES
+  success     — something worked well; pattern worth reinforcing
+  failure     — a query failed or returned poor results; root cause noted
+  pattern     — recurring behaviour observed across multiple episodes
+  improvement — specific change the agent identifies as beneficial
+
+WHAT TRIGGERS A REFLECTION
+Reflections are generated automatically by the agent's reflection scheduler.
+The interval is controlled by the REFLECTION_INTERVAL env variable (default: 10 episodes).
+
+HOW TO READ THEM
+Each reflection shows a type badge, timestamp, and insight text. Failure
+reflections are most actionable — they surface gaps in the knowledge base
+or queries that consistently produce low-confidence answers."#;
+
 /// Agent vs Tools explanation tooltip
 const AGENT_INFO_TOOLTIP: &str = r#"AGENT vs AGENT TOOLS
 
 ┌─────────────────────────────────────────────────────────────┐
 │                        THE AGENT                            │
 ├─────────────────────────────────────────────────────────────┤
-│ The brain/orchestrator that decides what to do              │
+│ The orchestrator that decides what to do and how            │
 │                                                             │
-│ • Receives user queries                                     │
-│ • Decides which mode to use (RAG, LLM, Hybrid)              │
-│ • Coordinates the workflow: retrieve → reason → respond     │
-│ • Tracks goals and manages memory                           │
-│ • There is ONE agent that handles all queries               │
+│ • Receives user queries via /agent or /agent/stream         │
+│ • Selects a mode: RAG, LLM, Hybrid, RagStrict, Agentic      │
+│ • Tracks goals, records episodes, manages memory            │
+│ • One agent instance handles all queries                    │
 └─────────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────────┐
-│                      AGENT TOOLS                            │
-├─────────────────────────────────────────────────────────────┤
-│ The capabilities/actions the agent can use                  │
-│                                                             │
-│ • search         - Search documents in Tantivy              │
-│ • vector_search  - Semantic similarity search               │
-│ • llm_generate   - Call Ollama for text generation          │
-│ • store_memory   - Save to agent memory                     │
-│ • retrieve_memory- Recall from memory                       │
-│ • set_goal       - Create a new goal                        │
-│ • update_goal    - Update goal status                       │
-└─────────────────────────────────────────────────────────────┘
+TWO DIFFERENT TOOL SETS
+
+Classic mode (RAG / Hybrid / RagStrict)
+  Tools are Rust functions called directly in the pipeline:
+  • search / vector_search  — document retrieval
+  • llm_generate            — Ollama text generation
+  • store_memory            — write to agent.db
+  • retrieve_memory         — read from agent.db
+  • set_goal / update_goal  — goal lifecycle management
+  The agent decides which steps to run; it is not the LLM.
+
+Rig Agentic mode (/agent/stream with mode=agentic)
+  Tools are JSON-schema definitions handed to the LLM:
+  • search_documents        — Tantivy + LanceDB search
+  • recall_memory           — retrieve conversation memories
+  • store_memory            — persist facts for later sessions
+  • search_knowledge_graph  — entity relationship lookup
+  The LLM decides which tools to call and in what order.
 
 ANALOGY
 
-  Agent = A chef (1 person)
-  Tools = Kitchen equipment (knives, pans, oven, mixer...)
-
-The chef (agent) decides what to cook and which tools to use.
-The tools don't make decisions - they just execute when the
-chef uses them.
+  Classic = sous chef following a recipe (predictable steps)
+  Agentic = head chef improvising (LLM picks the tools)
 
 KEY DIFFERENCE
-
-• Agent: Makes decisions, orchestrates workflow (1 instance)
-• Tools: Execute specific actions when called (many types)"#;
+• Classic tools: called by Rust code, deterministic order
+• Rig tools: called by the LLM, dynamic order, may be skipped"#;
 
 #[derive(Clone, Default)]
 struct AgenticState {
@@ -157,6 +278,8 @@ struct AgenticState {
     memory_stats: Option<api::MemoryStatsResponse>,
     // Tool stats from API
     tool_stats: Option<api::ToolStatsResponse>,
+    // Rig agentic-mode stats
+    rig_stats: Option<api::RigStatsResponse>,
 }
 
 #[component]
@@ -181,6 +304,7 @@ pub fn MonitorAgentic() -> Element {
                     reflections: None,
                     memory_stats: None,
                     tool_stats: None,
+                    rig_stats: None,
                 };
 
                 // Fetch agent stats
@@ -222,6 +346,11 @@ pub fn MonitorAgentic() -> Element {
                     new_state.tool_stats = Some(tools);
                 }
 
+                // Fetch Rig agentic-mode stats
+                if let Ok(rig) = api::fetch_rig_stats().await {
+                    new_state.rig_stats = Some(rig);
+                }
+
                 state.set(new_state);
 
                 // Refresh every 5 seconds
@@ -239,6 +368,7 @@ pub fn MonitorAgentic() -> Element {
     let reflections = snapshot.reflections.clone().unwrap_or_default();
     let memory_stats = snapshot.memory_stats.clone().unwrap_or_default();
     let tool_stats = snapshot.tool_stats.clone().unwrap_or_default();
+    let rig_stats = snapshot.rig_stats.clone().unwrap_or_default();
 
     rsx! {
         div { class: "space-y-6",
@@ -262,29 +392,24 @@ pub fn MonitorAgentic() -> Element {
             // Agent Activity Section
             RowHeader {
                 title: "Agent Activity".into(),
-                description: Some("Real-time agent behavior and performance metrics".into()),
             }
 
             Panel { title: Some("Agent Overview".into()), refresh: Some("5s".into()),
                 if snapshot.loading {
                     div { class: "text-gray-400 text-sm", "Loading agent stats…" }
                 } else {
-                    div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
-                        // Active Agents with info button
-                        div { class: "rounded p-4 bg-gray-800 border border-gray-700",
-                            div { class: "flex items-center gap-2 mb-2",
-                                span { class: "text-2xl font-bold text-gray-100",
-                                    "{agent_stats.active_agents}"
-                                }
-                                span { class: "text-sm font-semibold text-gray-200",
-                                    "Active Agent"
-                                }
-                                AgentInfoButton {}
-                            }
-                            div { class: "text-xs text-gray-400",
-                                "The orchestrator that coordinates retrieval, reasoning, and response"
+                    // Active Agents — one card per agent, expands as more are added
+                    div { class: "flex flex-wrap gap-3 mb-4",
+                        for name in &agent_stats.agent_names {
+                            div { class: "rounded p-3 bg-gray-800 border border-teal-700/50 flex items-center gap-2",
+                                div { class: "w-2 h-2 rounded-full bg-teal-400 shrink-0" }
+                                span { class: "text-sm font-mono text-teal-300", "{name}" }
+                                span { class: "text-xs text-gray-500", "agent" }
                             }
                         }
+                    }
+
+                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
                         // Episodes/hr with Success Rate below
                         div { class: "rounded p-4 bg-gray-800 border border-gray-700",
                             div { class: "flex items-center gap-2 mb-2",
@@ -304,8 +429,122 @@ pub fn MonitorAgentic() -> Element {
                             title: "Active Goals".into(),
                             value: agent_stats.active_goals.to_string().into(),
                             unit: None,
-                            description: None,
                             info_tooltip: Some(GOAL_INFO_TOOLTIP.into()),
+                        }
+                    }
+                }
+            }
+
+            // Rig Agentic Mode Section
+            RowHeader {
+                title: "Rig Agentic Mode".into(),
+            }
+
+            Panel { title: Some("Agentic Sessions".into()), refresh: Some("5s".into()),
+                div { class: "grid grid-cols-2 md:grid-cols-4 gap-4",
+                    StatCard {
+                        title: "Total Calls".into(),
+                        value: rig_stats.agentic_calls_total.to_string().into(),
+                        unit: None,
+                        info_tooltip: Some(RIG_MODE_INFO_TOOLTIP.into()),
+                    }
+                    StatCard {
+                        title: "Fallbacks".into(),
+                        value: rig_stats.agentic_fallbacks_total.to_string().into(),
+                        unit: None,
+                        info_tooltip: Some(RIG_FALLBACK_INFO_TOOLTIP.into()),
+                    }
+                    StatCard {
+                        title: "Tool Calls".into(),
+                        value: rig_stats.rig_tool_calls_total.to_string().into(),
+                        unit: None,
+                        info_tooltip: Some(RIG_MODE_INFO_TOOLTIP.into()),
+                    }
+                    StatCard {
+                        title: "Fallback Rate".into(),
+                        value: format!("{:.1}", rig_stats.fallback_rate_pct).into(),
+                        unit: Some("%".into()),
+                        info_tooltip: Some(RIG_FALLBACK_INFO_TOOLTIP.into()),
+                    }
+                }
+
+                // Token budget section
+                div { class: "mt-4 bg-gray-800/50 rounded p-4 space-y-3",
+                    div { class: "flex items-center justify-between mb-1",
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-xs font-semibold text-gray-300", "Context Budget (avg)" }
+                            TokenBudgetInfoButton {}
+                        }
+                        span { class: "text-xs text-gray-400",
+                            "Counter: "
+                            span {
+                                class: if rig_stats.counter_type.starts_with("exact") {
+                                    "text-teal-400"
+                                } else if rig_stats.counter_type.starts_with("heuristic") {
+                                    "text-yellow-400"
+                                } else {
+                                    "text-gray-400"
+                                },
+                                "{rig_stats.counter_type}"
+                            }
+                        }
+                    }
+
+                    // Context utilization bar
+                    {
+                        let pct = rig_stats.avg_ctx_utilization_pct.min(100.0);
+                        let bar_color = if pct > 80.0 {
+                            "bg-red-500"
+                        } else if pct > 60.0 {
+                            "bg-yellow-500"
+                        } else {
+                            "bg-teal-500"
+                        };
+                        rsx! {
+                            div { class: "space-y-1",
+                                div { class: "flex items-center gap-2",
+                                    div { class: "flex-1 h-4 bg-gray-700 rounded overflow-hidden",
+                                        div {
+                                            class: "h-full {bar_color} transition-all",
+                                            style: "width: {pct:.1}%"
+                                        }
+                                    }
+                                    span { class: "text-xs text-gray-300 w-12 text-right",
+                                        "{pct:.1}%"
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    div { class: "grid grid-cols-3 gap-4 mt-2",
+                        div { class: "text-center",
+                            div { class: "text-xs text-gray-500", "Avg tokens/session" }
+                            div { class: "text-sm font-medium text-gray-200",
+                                "{rig_stats.avg_tokens_in:.0}"
+                            }
+                        }
+                        div { class: "text-center",
+                            div { class: "text-xs text-gray-500", "Max tokens seen" }
+                            div { class: "text-sm font-medium text-gray-200",
+                                "{rig_stats.max_tokens_in}"
+                            }
+                        }
+                        div { class: "text-center",
+                            div { class: "text-xs text-gray-500", "Avg session" }
+                            div { class: "text-sm font-medium text-gray-200",
+                                "{rig_stats.avg_session_ms:.0} ms"
+                            }
+                        }
+                    }
+
+                    if rig_stats.token_sample_count == 0 {
+                        div { class: "text-xs text-gray-500 italic mt-2",
+                            "No agentic sessions recorded yet. Token stats appear after the first agentic query."
+                        }
+                    } else {
+                        div { class: "text-xs text-gray-600 mt-1",
+                            "Based on {rig_stats.token_sample_count} session(s)"
                         }
                     }
                 }
@@ -314,7 +553,6 @@ pub fn MonitorAgentic() -> Element {
             // Decision Engine Section
             RowHeader {
                 title: "Decision Engine".into(),
-                description: Some("Tool selection and reasoning metrics".into()),
             }
 
             Panel { title: Some("Tool Performance".into()), refresh: Some("10s".into()),
@@ -323,19 +561,16 @@ pub fn MonitorAgentic() -> Element {
                         title: "Tool Executions".into(),
                         value: tool_stats.tool_executions.to_string().into(),
                         unit: None,
-                        description: Some("Total tool calls".into()),
                     }
                     StatCard {
                         title: "Avg Confidence".into(),
                         value: format!("{:.1}", tool_stats.avg_confidence).into(),
                         unit: Some("%".into()),
-                        description: Some("Decision confidence score".into()),
                     }
                     StatCard {
                         title: "Fallback Rate".into(),
                         value: format!("{:.1}", tool_stats.fallback_rate).into(),
                         unit: Some("%".into()),
-                        description: Some("Secondary tool usage".into()),
                     }
                 }
 
@@ -343,7 +578,6 @@ pub fn MonitorAgentic() -> Element {
                 div { class: "mt-4",
                     RowHeader {
                         title: "Tool Usage Distribution".into(),
-                        description: Some("Which tools are being selected".into()),
                     }
                     div { class: "bg-gray-800/50 rounded p-4 space-y-2",
                         for tool in tool_stats.tool_distribution.iter() {
@@ -368,7 +602,6 @@ pub fn MonitorAgentic() -> Element {
             // Memory Health Section
             RowHeader {
                 title: "Agent Memory".into(),
-                description: Some("Episodic memory and storage health".into()),
             }
 
             Panel { title: Some("Memory Statistics".into()), refresh: Some("10s".into()),
@@ -377,25 +610,21 @@ pub fn MonitorAgentic() -> Element {
                         title: "Total Episodes".into(),
                         value: memory_stats.total_episodes.to_string().into(),
                         unit: None,
-                        description: Some("Stored interactions".into()),
                     }
                     StatCard {
                         title: "RAG Memories".into(),
                         value: memory_stats.total_rag_memories.to_string().into(),
                         unit: None,
-                        description: Some("Vector-embedded memories".into()),
                     }
                     StatCard {
                         title: "Unique Agents".into(),
                         value: memory_stats.unique_agents.to_string().into(),
                         unit: None,
-                        description: Some("Distinct agent IDs".into()),
                     }
                     StatCard {
                         title: "Reflections".into(),
                         value: agent_stats.total_reflections.to_string().into(),
                         unit: None,
-                        description: Some("Self-analysis records".into()),
                     }
                 }
             }
@@ -568,6 +797,53 @@ fn EpisodeInfoButton() -> Element {
                     div {
                         class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed",
                         {EPISODE_INFO_TOOLTIP}
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Info button for Rig token budget / context window explanation
+#[component]
+fn TokenBudgetInfoButton() -> Element {
+    let mut show_tooltip = use_signal(|| false);
+
+    rsx! {
+        button {
+            class: PARAM_ICON_BUTTON_CLASS,
+            style: PARAM_ICON_BUTTON_STYLE,
+            onclick: move |_| show_tooltip.set(!show_tooltip()),
+            title: "Context budget info",
+            svg {
+                class: INFO_ICON_SVG_CLASS,
+                view_box: "0 0 20 20",
+                fill: "none",
+                stroke: "currentColor",
+                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+            }
+        }
+
+        if *show_tooltip.read() {
+            div {
+                class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show_tooltip.set(false),
+                div {
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[95vh] overflow-y-auto shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "Context Budget" }
+                        button {
+                            class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show_tooltip.set(false),
+                            "×"
+                        }
+                    }
+                    div {
+                        class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed font-mono",
+                        {TOKEN_BUDGET_INFO_TOOLTIP}
                     }
                 }
             }

@@ -5,14 +5,10 @@ use super::*;
 
 const LOG_FILE_PREFIX: &str = "backend.log";
 
-
-
 /// Generate a short request ID for correlation
 pub(crate) fn generate_request_id() -> String {
     Uuid::new_v4().to_string()[..8].to_string()
 }
-
-
 
 pub(crate) fn validate_chunk_request(req: &ChunkConfigCommitRequest) -> Result<(), String> {
     if req.min_size == 0 {
@@ -38,8 +34,6 @@ pub(crate) fn validate_chunk_request(req: &ChunkConfigCommitRequest) -> Result<(
     }
     Ok(())
 }
-
-
 
 pub(crate) fn validate_llm_request(req: &LlmConfigRequest) -> Result<(), String> {
     if !(0.0..=2.0).contains(&req.temperature) {
@@ -87,11 +81,8 @@ pub(crate) fn validate_llm_request(req: &LlmConfigRequest) -> Result<(), String>
     Ok(())
 }
 
-
 static LAST_HEALTH_STATUS: std::sync::OnceLock<std::sync::Mutex<String>> =
     std::sync::OnceLock::new();
-
-
 
 /// Write to status-specific log file
 pub(crate) fn write_status_log(status: &str, reason: &str, is_change: bool) {
@@ -137,8 +128,6 @@ pub(crate) fn write_status_log(status: &str, reason: &str, is_change: bool) {
     }
 }
 
-
-
 pub(crate) fn log_status_change(new_status: &str, reason: &str) {
     let status_lock = LAST_HEALTH_STATUS.get_or_init(|| std::sync::Mutex::new(String::new()));
     let mut last_status = status_lock.lock().unwrap();
@@ -164,8 +153,6 @@ pub(crate) fn log_status_change(new_status: &str, reason: &str) {
         *last_status = new_status.to_string();
     }
 }
-
-
 
 pub(crate) fn latest_log_file(log_dir: &Path) -> Option<PathBuf> {
     let mut newest: Option<(SystemTime, PathBuf)> = None;
@@ -197,8 +184,6 @@ pub(crate) fn latest_log_file(log_dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
-
-
 pub(crate) fn read_recent_lines(path: &Path, limit: usize) -> std::io::Result<Vec<String>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
@@ -212,8 +197,6 @@ pub(crate) fn read_recent_lines(path: &Path, limit: usize) -> std::io::Result<Ve
     }
     Ok(buffer.into_iter().collect())
 }
-
-
 
 pub(crate) fn parse_log_line(line: &str) -> LogEntry {
     let parsed = serde_json::from_str::<Value>(line)
@@ -263,8 +246,6 @@ pub(crate) fn parse_log_line(line: &str) -> LogEntry {
     }
 }
 
-
-
 pub(crate) fn require_admin(req: &HttpRequest, config: &ApiConfig) -> Result<(), Error> {
     if let Some(expected) = &config.admin_api_token {
         if expected.is_empty() {
@@ -287,9 +268,10 @@ pub(crate) fn require_admin(req: &HttpRequest, config: &ApiConfig) -> Result<(),
     }
 }
 
-
-
-pub(crate) fn observe_manual_endpoint<F>(endpoint: &'static str, f: F) -> Result<HttpResponse, Error>
+pub(crate) fn observe_manual_endpoint<F>(
+    endpoint: &'static str,
+    f: F,
+) -> Result<HttpResponse, Error>
 where
     F: FnOnce() -> Result<HttpResponse, Error>,
 {
@@ -305,11 +287,12 @@ where
     result
 }
 
-
-
 /// Helper for 3-layer memory search metrics (SEARCH.md)
 /// layer: "search" | "timeline" | "fetch"
-pub(crate) fn observe_memory_search_layer<F>(layer: &'static str, f: F) -> Result<HttpResponse, Error>
+pub(crate) fn observe_memory_search_layer<F>(
+    layer: &'static str,
+    f: F,
+) -> Result<HttpResponse, Error>
 where
     F: FnOnce() -> Result<HttpResponse, Error>,
 {
@@ -325,5 +308,3 @@ where
 
     result
 }
-
-

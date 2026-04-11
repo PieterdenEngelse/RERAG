@@ -87,10 +87,36 @@ pub fn BackendSelector(
                     class: "text-xs text-yellow-400 mt-1",
                     "Starting..."
                 }
-            } else if let Some(ref backend) = runtime_ctx().active_backend {
-                p {
-                    class: "text-xs text-gray-400 mt-1",
-                    "Active: {backend}"
+            } else {
+                {
+                    let ctx = runtime_ctx();
+                    let configured = &ctx.configured_backend;
+                    let active = ctx.active_backend.as_deref().unwrap_or("");
+                    // Show discrepancy when configured != active (e.g. llama_cpp saved but not running)
+                    if !configured.is_empty() && !active.is_empty() && configured != active {
+                        rsx! {
+                            p {
+                                class: "text-xs text-yellow-400 mt-1",
+                                "Configured: {configured} | Running: {active}"
+                            }
+                        }
+                    } else if !active.is_empty() {
+                        rsx! {
+                            p {
+                                class: "text-xs text-gray-400 mt-1",
+                                "Active: {active}"
+                            }
+                        }
+                    } else if !configured.is_empty() {
+                        rsx! {
+                            p {
+                                class: "text-xs text-gray-400 mt-1",
+                                "Configured: {configured}"
+                            }
+                        }
+                    } else {
+                        rsx! {}
+                    }
                 }
             }
             if show_info_button {
@@ -117,10 +143,15 @@ pub fn BackendSelector(
                     style: "background-color: #1D6B9A; border: 1px solid #1D6B9A; padding: 0.25rem 1rem;",
                     onclick: move |_| {
                         let backend_value = current_backend();
+                        let mut runtime_ctx = runtime_ctx.clone();
                         spawn(async move {
                             if let Ok(mut config) = api::fetch_hardware_config().await {
-                                config.config.backend_type = backend_value;
+                                config.config.backend_type = backend_value.clone();
                                 if api::commit_hardware_config(&config.config).await.is_ok() {
+                                    // Reflect the saved choice in the shared context
+                                    runtime_ctx.with_mut(|ctx| {
+                                        ctx.configured_backend = backend_value.clone();
+                                    });
                                     save_status.set("Saved".to_string());
                                     gloo_timers::future::TimeoutFuture::new(1500).await;
                                     save_status.set("Save".to_string());

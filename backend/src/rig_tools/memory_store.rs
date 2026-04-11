@@ -61,26 +61,57 @@ impl Tool for MemoryStoreTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let content = args.content;
-        let category = args.category.unwrap_or_else(|| "conversation".to_string());
+        let content = args.content.clone();
+        let category = args
+            .category
+            .clone()
+            .unwrap_or_else(|| "conversation".to_string());
         let db_path = path_resolver::agent_db_path_str();
         let timestamp = chrono::Utc::now().to_rfc3339();
+        let t0 = std::time::Instant::now();
 
         let cat_clone = category.clone();
+        let content_clone = content.clone();
         let result = tokio::task::spawn_blocking(move || {
             let mem = AgentMemory::new(&db_path).map_err(|e| StoreError(e.to_string()))?;
-            mem.store_rag("default", &content, &cat_clone, &timestamp)
+            mem.store_rag("default", &content_clone, &cat_clone, &timestamp)
                 .map_err(|e| StoreError(e.to_string()))?;
             Ok::<_, StoreError>(())
         })
         .await
         .map_err(|e| StoreError(format!("Task join error: {}", e)))?;
 
-        result?;
+        let elapsed = t0.elapsed().as_millis() as u64;
+        crate::monitoring::rig_stats::record_rig_tool_call();
 
-        Ok(StoreResult {
-            stored: true,
-            message: format!("Stored memory in category '{}'", category),
-        })
+        match result {
+            Ok(()) => {
+                crate::monitoring::record_tool_execution(
+                    "RigMemoryStore",
+                    &content,
+                    true,
+                    &format!("stored in '{}'", category),
+                    elapsed,
+                    1.0,
+                    Some("rig_memory"),
+                );
+                Ok(StoreResult {
+                    stored: true,
+                    message: format!("Stored memory in category '{}'", category),
+                })
+            }
+            Err(e) => {
+                crate::monitoring::record_tool_execution(
+                    "RigMemoryStore",
+                    &content,
+                    false,
+                    &e.to_string(),
+                    elapsed,
+                    0.0,
+                    Some("rig_memory"),
+                );
+                Err(e)
+            }
+        }
     }
 }

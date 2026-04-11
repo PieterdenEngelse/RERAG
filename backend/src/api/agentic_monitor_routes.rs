@@ -19,6 +19,7 @@ use crate::tools::tool_rate_limiter::{get_all_rate_limit_status, ToolRateLimitSt
 #[derive(Debug, Serialize)]
 pub struct AgentStatsResponse {
     pub active_agents: usize,
+    pub agent_names: Vec<String>,
     pub episodes_total: usize,
     pub episodes_last_hour: usize,
     pub success_rate: f64,
@@ -232,7 +233,8 @@ pub async fn get_agent_stats() -> ActixResult<HttpResponse> {
         Some(c) => c,
         None => {
             return Ok(HttpResponse::Ok().json(AgentStatsResponse {
-                active_agents: 1, // Default agent always exists
+                active_agents: 1,
+                agent_names: vec!["default".to_string()],
                 episodes_total: 0,
                 episodes_last_hour: 0,
                 success_rate: 0.0,
@@ -245,12 +247,21 @@ pub async fn get_agent_stats() -> ActixResult<HttpResponse> {
         }
     };
 
-    // Count unique agents
+    // Count unique agents and collect their names
     let active_agents: usize = conn
         .query_row("SELECT COUNT(DISTINCT agent_id) FROM episodes", [], |row| {
             row.get(0)
         })
-        .unwrap_or(1); // At least 1 default agent
+        .unwrap_or(1);
+
+    let agent_names: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT agent_id FROM episodes ORDER BY agent_id")
+            .unwrap_or_else(|_| conn.prepare("SELECT 'default'").unwrap());
+        stmt.query_map([], |row| row.get(0))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_else(|_| vec!["default".to_string()])
+    };
 
     // Total episodes
     let episodes_total: usize = conn
@@ -313,7 +324,12 @@ pub async fn get_agent_stats() -> ActixResult<HttpResponse> {
         .unwrap_or(0);
 
     Ok(HttpResponse::Ok().json(AgentStatsResponse {
-        active_agents: active_agents.max(1), // At least 1
+        active_agents: active_agents.max(1),
+        agent_names: if agent_names.is_empty() {
+            vec!["default".to_string()]
+        } else {
+            agent_names
+        },
         episodes_total,
         episodes_last_hour,
         success_rate,
@@ -1002,6 +1018,13 @@ pub async fn get_tool_dependencies_endpoint() -> ActixResult<HttpResponse> {
     }))
 }
 
+/// GET /monitoring/agents/rig-stats
+/// Returns Rig agentic-mode counters and token budget stats
+pub async fn get_rig_stats() -> ActixResult<HttpResponse> {
+    let snap = crate::monitoring::rig_stats::snapshot();
+    Ok(HttpResponse::Ok().json(snap))
+}
+
 // ============ Route Configuration ============
 
 pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
@@ -1010,7 +1033,8 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
             .route("/stats", web::get().to(get_agent_stats))
             .route("/episodes", web::get().to(get_recent_episodes))
             .route("/goals", web::get().to(get_goals))
-            .route("/reflections", web::get().to(get_reflections)),
+            .route("/reflections", web::get().to(get_reflections))
+            .route("/rig-stats", web::get().to(get_rig_stats)),
     )
     .service(web::scope("/monitoring/memory").route("/stats", web::get().to(get_memory_stats)))
     .service(

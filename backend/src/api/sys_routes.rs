@@ -500,7 +500,7 @@ pub async fn runtime_health() -> impl Responder {
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .unwrap_or_default();
-    
+
     // Probe Ollama (11434)
     let ollama_available = client
         .get("http://127.0.0.1:11434/api/tags")
@@ -508,7 +508,7 @@ pub async fn runtime_health() -> impl Responder {
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false);
-    
+
     // Probe llama-server (11435)
     let llama_cpp_available = client
         .get("http://127.0.0.1:11435/health")
@@ -516,7 +516,7 @@ pub async fn runtime_health() -> impl Responder {
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false);
-    
+
     // Determine active backend (prefer configured, fallback to available)
     let active_backend = if llama_cpp_available {
         Some("llama_cpp".to_string())
@@ -525,7 +525,7 @@ pub async fn runtime_health() -> impl Responder {
     } else {
         None
     };
-    
+
     HttpResponse::Ok().json(RuntimeHealth {
         ollama_available,
         llama_cpp_available,
@@ -548,8 +548,14 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
     let commands: Vec<(&str, &str)> = match action {
         "stop" => vec![("stop", "ollama.service")],
         "start" => vec![("start", "ollama.service")],
-        "switch_ollama" => vec![("stop", "llama-server.service"), ("start", "ollama.service")],
-        "switch_llama_cpp" => vec![("stop", "ollama.service"), ("start", "llama-server.service")],
+        "switch_ollama" => vec![
+            ("stop", "llama-server.service"),
+            ("start", "ollama.service"),
+        ],
+        "switch_llama_cpp" => vec![
+            ("stop", "ollama.service"),
+            ("start", "llama-server.service"),
+        ],
         _ => {
             return HttpResponse::BadRequest().json(serde_json::json!({
                 "status": "error",
@@ -565,7 +571,7 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
             .args(&[*cmd, *service])
             .output()
             .await;
-        
+
         if let Err(e) = output {
             tracing::warn!("Failed to {} {}: {}", cmd, service, e);
         }
@@ -581,7 +587,7 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
-    
+
     let llama_running = tokio::process::Command::new("systemctl")
         .args(&["--user", "is-active", "llama-server.service"])
         .output()
@@ -747,9 +753,7 @@ pub async fn set_llama_model(body: web::Json<LlamaModelRequest>) -> impl Respond
     }
 
     // Write env file
-    let env_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".config/ag");
+    let env_dir = dirs::home_dir().unwrap_or_default().join(".config/ag");
     let env_path = env_dir.join("llama-server.env");
 
     if let Err(e) = std::fs::create_dir_all(&env_dir) {
@@ -759,8 +763,11 @@ pub async fn set_llama_model(body: web::Json<LlamaModelRequest>) -> impl Respond
         }));
     }
 
-    let env_content = format!("LLAMA_MODEL={}
-", model_path.display());
+    let env_content = format!(
+        "LLAMA_MODEL={}
+",
+        model_path.display()
+    );
     if let Err(e) = std::fs::write(&env_path, &env_content) {
         return HttpResponse::InternalServerError().json(serde_json::json!({
             "status": "error",

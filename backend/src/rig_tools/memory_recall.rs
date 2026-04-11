@@ -64,6 +64,7 @@ impl Tool for MemoryRecallTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let limit = args.limit.unwrap_or(10).min(20);
         let db_path = path_resolver::agent_db_path_str();
+        let t0 = std::time::Instant::now();
 
         let result = tokio::task::spawn_blocking(move || {
             let mem = AgentMemory::new(&db_path).map_err(|e| RecallError(e.to_string()))?;
@@ -75,17 +76,43 @@ impl Tool for MemoryRecallTool {
         .await
         .map_err(|e| RecallError(format!("Task join error: {}", e)))?;
 
-        let items = result?;
-        let count = items.len();
-        let memories = items
-            .into_iter()
-            .map(|item| MemoryEntry {
-                content: item.content,
-                category: item.memory_type.clone(),
-                timestamp: item.timestamp,
-            })
-            .collect();
+        let elapsed = t0.elapsed().as_millis() as u64;
+        crate::monitoring::rig_stats::record_rig_tool_call();
 
-        Ok(RecallResult { count, memories })
+        match result {
+            Ok(items) => {
+                let count = items.len();
+                crate::monitoring::record_tool_execution(
+                    "RigMemoryRecall",
+                    "recall_memory",
+                    true,
+                    &format!("{} memories", count),
+                    elapsed,
+                    if count > 0 { 1.0 } else { 0.3 },
+                    Some("rig_memory"),
+                );
+                let memories = items
+                    .into_iter()
+                    .map(|item| MemoryEntry {
+                        content: item.content,
+                        category: item.memory_type.clone(),
+                        timestamp: item.timestamp,
+                    })
+                    .collect();
+                Ok(RecallResult { count, memories })
+            }
+            Err(e) => {
+                crate::monitoring::record_tool_execution(
+                    "RigMemoryRecall",
+                    "recall_memory",
+                    false,
+                    &e.to_string(),
+                    elapsed,
+                    0.0,
+                    Some("rig_memory"),
+                );
+                Err(e)
+            }
+        }
     }
 }

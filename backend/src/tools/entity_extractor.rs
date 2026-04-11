@@ -305,13 +305,13 @@ impl EntityExtractorTool {
                     }
                     let entity_type = match prefix.trim().to_uppercase().as_str() {
                         "MED" | "MEDICAL" => EntityType::Medical,
-                        "ORG"             => EntityType::Organization,
-                        "LOC"             => EntityType::Location,
-                        "TECH"            => EntityType::Technology,
-                        "PERSON"          => EntityType::Person,
-                        "PRODUCT"         => EntityType::Product,
-                        "EVENT"           => EntityType::Event,
-                        _                 => EntityType::Technology,
+                        "ORG" => EntityType::Organization,
+                        "LOC" => EntityType::Location,
+                        "TECH" => EntityType::Technology,
+                        "PERSON" => EntityType::Person,
+                        "PRODUCT" => EntityType::Product,
+                        "EVENT" => EntityType::Event,
+                        _ => EntityType::Technology,
                     };
                     custom_terms.entry(entity_type).or_default().insert(term);
                 } else {
@@ -439,11 +439,10 @@ impl EntityExtractorTool {
                 let mut search_start = 0;
                 while let Some(rel_pos) = lower_text[search_start..].find(term.as_str()) {
                     let pos = search_start + rel_pos;
-                    let before_ok =
-                        pos == 0 || !text.as_bytes()[pos - 1].is_ascii_alphanumeric();
+                    let before_ok = pos == 0 || !text.as_bytes()[pos - 1].is_ascii_alphanumeric();
                     let after_pos = pos + term.len();
-                    let after_ok =
-                        after_pos >= text.len() || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
+                    let after_ok = after_pos >= text.len()
+                        || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
                     if before_ok && after_ok {
                         let original = &text[pos..pos + term.len()];
                         entities.push(Entity {
