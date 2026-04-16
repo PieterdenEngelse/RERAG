@@ -22,33 +22,73 @@ pub enum EmbeddingProvider {
     Onnx,
 }
 
+/// Supported ONNX embedding models.
+///
+/// Set `EMBEDDING_MODEL` in `.env` to select a model. The ONNX graph file
+/// must be placed at `ONNX_MODEL_PATH` (default: `models/embedding_model.onnx`)
+/// and a `tokenizer.json` file must exist in the same directory. Both files
+/// can be downloaded from the model's HuggingFace page.
 #[derive(Debug, Clone, Copy)]
 pub enum EmbeddingModelConfig {
+    /// BAAI/bge-small-en-v1.5 — 384 dims, 33 MB. Default. Good balance of
+    /// speed and quality for English text.
     BgeSmallEnV15,
+    /// BAAI/bge-small-en-v1.5 (INT8 quantized) — 384 dims, ~8 MB. ~30% faster
+    /// than the full model with minor quality trade-off.
     BgeSmallEnV15Q,
+    /// sentence-transformers/all-MiniLM-L6-v2 — 384 dims, 22 MB. Excellent
+    /// general-purpose model; slightly faster than BGE-small.
+    AllMiniLML6V2,
+    /// BAAI/bge-base-en-v1.5 — 768 dims, 109 MB. Meaningfully better retrieval
+    /// quality than the small variants; requires re-indexing when switching.
+    BgeBaseEnV15,
+    /// intfloat/e5-small-v2 — 384 dims, 33 MB. Instruction-following model;
+    /// prefix queries with "query: " and passages with "passage: " for best results.
+    E5SmallV2,
 }
 
 impl EmbeddingModelConfig {
-    fn from_env() -> Self {
+    pub fn from_env() -> Self {
         match env::var("EMBEDDING_MODEL")
             .unwrap_or_else(|_| "bge-small-en-v1.5".to_string())
             .to_lowercase()
             .as_str()
         {
             "bge-small-en-v1.5q" => EmbeddingModelConfig::BgeSmallEnV15Q,
-            "bge-small-en-v1.5" | _ => EmbeddingModelConfig::BgeSmallEnV15,
+            "all-minilm-l6-v2" => EmbeddingModelConfig::AllMiniLML6V2,
+            "bge-base-en-v1.5" => EmbeddingModelConfig::BgeBaseEnV15,
+            "e5-small-v2" => EmbeddingModelConfig::E5SmallV2,
+            _ => EmbeddingModelConfig::BgeSmallEnV15,
         }
     }
 
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             EmbeddingModelConfig::BgeSmallEnV15 => "bge-small-en-v1.5",
             EmbeddingModelConfig::BgeSmallEnV15Q => "bge-small-en-v1.5q",
+            EmbeddingModelConfig::AllMiniLML6V2 => "all-minilm-l6-v2",
+            EmbeddingModelConfig::BgeBaseEnV15 => "bge-base-en-v1.5",
+            EmbeddingModelConfig::E5SmallV2 => "e5-small-v2",
         }
     }
 
-    fn dimension(&self) -> usize {
-        DEFAULT_EMBEDDING_DIM
+    pub fn dimension(&self) -> usize {
+        match self {
+            EmbeddingModelConfig::BgeBaseEnV15 => 768,
+            _ => DEFAULT_EMBEDDING_DIM,
+        }
+    }
+
+    /// HuggingFace model ID — used in log messages and error hints.
+    pub fn huggingface_id(&self) -> &'static str {
+        match self {
+            EmbeddingModelConfig::BgeSmallEnV15 | EmbeddingModelConfig::BgeSmallEnV15Q => {
+                "BAAI/bge-small-en-v1.5"
+            }
+            EmbeddingModelConfig::AllMiniLML6V2 => "sentence-transformers/all-MiniLM-L6-v2",
+            EmbeddingModelConfig::BgeBaseEnV15 => "BAAI/bge-base-en-v1.5",
+            EmbeddingModelConfig::E5SmallV2 => "intfloat/e5-small-v2",
+        }
     }
 }
 
@@ -114,6 +154,8 @@ impl EmbeddingRuntime {
         eprintln!("[EMBEDDER] Starting ONNX embedding runtime initialization...");
         info!(
             model = %config.model.as_str(),
+            hf_id = %config.model.huggingface_id(),
+            dims = config.model.dimension(),
             "Initializing ONNX embedding runtime"
         );
 
@@ -135,7 +177,12 @@ impl EmbeddingRuntime {
         eprintln!("[EMBEDDER] Creating OnnxEmbedder...");
         match crate::perf::onnx_embedder::OnnxEmbedder::new(onnx_config) {
             Ok(embedder) => {
-                info!(model_path = %onnx_model_path, "ONNX embedder ready");
+                info!(
+                    model_path = %onnx_model_path,
+                    model = %config.model.as_str(),
+                    dims = config.model.dimension(),
+                    "ONNX embedder ready"
+                );
                 Self {
                     backend: EmbeddingBackend::Onnx {
                         inner: Mutex::new(embedder),
@@ -356,9 +403,9 @@ impl EmbeddingService {
         self.embed_text(query).await
     }
 
-    /// Get embedding dimension
+    /// Get embedding dimension (matches the loaded model's output size).
     pub fn dimension(&self) -> usize {
-        DEFAULT_EMBEDDING_DIM
+        self.runtime.dim
     }
 
     // ========================================================================

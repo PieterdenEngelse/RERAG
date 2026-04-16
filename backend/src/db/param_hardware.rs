@@ -47,8 +47,10 @@ pub enum BackendType {
     LlamaCpp,
     /// OpenAI API - cloud-based, hardware params not applicable
     OpenAi,
-    /// Anthropic API - cloud-based, hardware params not applicable  
+    /// Anthropic API - cloud-based, hardware params not applicable
     Anthropic,
+    /// OpenRouter - cloud gateway, OpenAI-compatible API
+    OpenRouter,
     /// vLLM server - some hardware params applicable
     Vllm,
     /// Custom/other backend
@@ -88,7 +90,7 @@ impl BackendType {
 
     /// Returns true if this is a cloud/API-based backend
     pub fn is_cloud_backend(&self) -> bool {
-        matches!(self, Self::OpenAi | Self::Anthropic)
+        matches!(self, Self::OpenAi | Self::Anthropic | Self::OpenRouter)
     }
 
     /// Human-readable label for the backend
@@ -98,6 +100,7 @@ impl BackendType {
             Self::LlamaCpp => "llama.cpp",
             Self::OpenAi => "OpenAI",
             Self::Anthropic => "Anthropic",
+            Self::OpenRouter => "OpenRouter",
             Self::Vllm => "vLLM",
             Self::Custom => "Custom",
         }
@@ -110,6 +113,7 @@ impl BackendType {
             Self::LlamaCpp,
             Self::OpenAi,
             Self::Anthropic,
+            Self::OpenRouter,
             Self::Vllm,
             Self::Custom,
         ]

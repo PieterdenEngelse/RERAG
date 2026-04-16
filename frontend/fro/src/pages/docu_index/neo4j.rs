@@ -8,7 +8,7 @@ use dioxus_router::Link;
 pub fn DocuNeo4j() -> Element {
     rsx! {
         div { class: "min-h-screen bg-gray-900 p-6",
-            div { class: "max-w-4xl mx-auto",
+            div { class: "w-full",
 
                 div { class: "flex items-center gap-4 mb-6",
                     Link {

@@ -216,17 +216,61 @@ impl SimpleTokenizer {
     }
 }
 
+/// Tokenizer used for text encoding inside the ONNX embedder.
+///
+/// When a `tokenizer.json` is found next to the ONNX model file the real
+/// HuggingFace tokenizer is used, producing proper sub-word encodings that
+/// match what the model was trained on. If the file is absent the simple
+/// hash-based fallback is used (lower quality but no extra files needed).
+enum OnnxTokenizer {
+    /// HuggingFace `tokenizers` — requires `tokenizer.json` alongside the model.
+    Real(Box<tokenizers::Tokenizer>),
+    /// Fallback: seahash word-to-id mapping (no vocabulary file needed).
+    Simple(SimpleTokenizer),
+}
+
+impl OnnxTokenizer {
+    /// Encode a single text into (input_ids, attention_mask), both padded /
+    /// truncated to `max_length`.
+    fn encode(&self, text: &str, max_length: usize) -> (Vec<i64>, Vec<i64>) {
+        match self {
+            OnnxTokenizer::Real(tok) => {
+                match tok.encode(text, true) {
+                    Ok(enc) => {
+                        let mut ids: Vec<i64> =
+                            enc.get_ids().iter().map(|&x| x as i64).collect();
+                        let mut mask: Vec<i64> =
+                            enc.get_attention_mask().iter().map(|&x| x as i64).collect();
+                        ids.truncate(max_length);
+                        mask.truncate(max_length);
+                        ids.resize(max_length, 0);
+                        mask.resize(max_length, 0);
+                        (ids, mask)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Tokenization failed: {e}; returning blank encoding");
+                        (vec![0i64; max_length], vec![0i64; max_length])
+                    }
+                }
+            }
+            OnnxTokenizer::Simple(st) => st.encode_i64(text),
+        }
+    }
+}
+
 #[cfg(feature = "onnx")]
 pub struct OnnxEmbedder {
     config: OnnxConfig,
-    tokenizer: SimpleTokenizer,
+    tokenizer: OnnxTokenizer,
+    /// Whether the session's input list includes `token_type_ids`.
+    needs_token_type_ids: bool,
     session: Session,
 }
 
 #[cfg(not(feature = "onnx"))]
 pub struct OnnxEmbedder {
     config: OnnxConfig,
-    tokenizer: SimpleTokenizer,
+    tokenizer: OnnxTokenizer,
 }
 
 #[cfg(feature = "onnx")]
@@ -243,6 +287,42 @@ impl OnnxEmbedder {
         }
 
         eprintln!("[ONNX] Model file exists, initializing...");
+
+        // ── Tokenizer ───────────────────────────────────────────────────────
+        // Look for tokenizer.json in the same directory as the ONNX model.
+        let tokenizer = {
+            let model_dir = Path::new(&config.model_path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            let tok_path = model_dir.join("tokenizer.json");
+            if tok_path.exists() {
+                match tokenizers::Tokenizer::from_file(&tok_path) {
+                    Ok(t) => {
+                        eprintln!(
+                            "[ONNX] Loaded real HuggingFace tokenizer from {:?}",
+                            tok_path
+                        );
+                        OnnxTokenizer::Real(Box::new(t))
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[ONNX] tokenizer.json found but failed to load ({e}); \
+                             falling back to SimpleTokenizer"
+                        );
+                        OnnxTokenizer::Simple(SimpleTokenizer::new(config.max_length))
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[ONNX] No tokenizer.json at {:?} — using SimpleTokenizer \
+                     (degraded quality). Place tokenizer.json next to the ONNX \
+                     model for proper sub-word encoding.",
+                    tok_path
+                );
+                OnnxTokenizer::Simple(SimpleTokenizer::new(config.max_length))
+            }
+        };
+
         info!(model = %config.model_path, "Initializing ONNX embedder");
 
         eprintln!("[ONNX] Calling ort::init()...");
@@ -378,15 +458,28 @@ impl OnnxEmbedder {
             .commit_from_file(&config.model_path)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
 
-        eprintln!("[ONNX] Session created successfully with all options");
+        // Detect whether this model expects token_type_ids as an input
+        let needs_token_type_ids = session
+            .inputs()
+            .iter()
+            .any(|inp| inp.name() == "token_type_ids");
+
+        eprintln!(
+            "[ONNX] Session created (token_type_ids: {})",
+            needs_token_type_ids
+        );
         info!(
-            "ONNX session created with optimization_level={:?}, intra_threads={}, inter_threads={}",
-            config.optimization_level, config.num_threads, config.inter_op_num_threads
+            optimization_level = ?config.optimization_level,
+            intra_threads = config.num_threads,
+            inter_threads = config.inter_op_num_threads,
+            token_type_ids = needs_token_type_ids,
+            "ONNX session created"
         );
 
         Ok(Self {
-            tokenizer: SimpleTokenizer::new(config.max_length),
+            tokenizer,
             config,
+            needs_token_type_ids,
             session,
         })
     }
@@ -404,28 +497,42 @@ impl OnnxEmbedder {
         let mut all_attention_mask = Vec::with_capacity(batch_size * seq_len);
 
         for text in texts {
-            let (ids, mask) = self.tokenizer.encode_i64(text);
+            let (ids, mask) = self.tokenizer.encode(text, seq_len);
             all_input_ids.extend(ids);
             all_attention_mask.extend(mask);
         }
 
+        let shape = vec![batch_size as i64, seq_len as i64];
+
         // Create tensors using Tensor::from_array
         let input_ids_tensor =
-            Tensor::from_array((vec![batch_size as i64, seq_len as i64], all_input_ids))
+            Tensor::from_array((shape.clone(), all_input_ids))
                 .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
         let attention_mask_tensor =
-            Tensor::from_array((vec![batch_size as i64, seq_len as i64], all_attention_mask))
+            Tensor::from_array((shape.clone(), all_attention_mask))
                 .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
-        // Run inference
-        let outputs = self
-            .session
-            .run(ort::inputs![
-                "input_ids" => input_ids_tensor,
-                "attention_mask" => attention_mask_tensor
-            ])
-            .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+        // Run inference — conditionally include token_type_ids (all zeros)
+        let outputs = if self.needs_token_type_ids {
+            let token_type_ids_tensor =
+                Tensor::from_array((shape, vec![0i64; batch_size * seq_len]))
+                    .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+            self.session
+                .run(ort::inputs![
+                    "input_ids" => input_ids_tensor,
+                    "attention_mask" => attention_mask_tensor,
+                    "token_type_ids" => token_type_ids_tensor
+                ])
+                .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?
+        } else {
+            self.session
+                .run(ort::inputs![
+                    "input_ids" => input_ids_tensor,
+                    "attention_mask" => attention_mask_tensor
+                ])
+                .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?
+        };
 
         // Get first output
         let output = &outputs[0];
@@ -481,7 +588,7 @@ impl OnnxEmbedder {
         }
         warn!("ONNX feature not enabled");
         Ok(Self {
-            tokenizer: SimpleTokenizer::new(config.max_length),
+            tokenizer: OnnxTokenizer::Simple(SimpleTokenizer::new(config.max_length)),
             config,
         })
     }

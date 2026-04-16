@@ -39,7 +39,9 @@ pub fn HomeSettingsBoards(
         // Deny-list of model name prefixes known to lack tool-calling support.
         // Everything else defaults to supported (safe for new/unknown models).
         let no_tools: &[&str] = &["phi:latest", "phi:mini", "phi2", "phi:2", "phi-1", "phi-2"];
-        !no_tools.iter().any(|&bad| model == bad || model.starts_with(bad))
+        !no_tools
+            .iter()
+            .any(|&bad| model == bad || model.starts_with(bad))
     };
 
     if !model_supports_tools && chat_mode() == "agentic" {

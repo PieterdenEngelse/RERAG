@@ -11,6 +11,7 @@
 //! - Requires RUST_LOG environment variable
 //! - Requires MONITORING_ENABLED=true environment variable
 pub mod alerting_hooks;
+pub mod extraction_stats;
 pub mod chunking_stats;
 pub mod config;
 pub mod config_phase15;
@@ -41,9 +42,14 @@ pub mod ui_metrics;
 pub use crate::monitoring::metrics::{
     export_prometheus, observe_reindex_duration_ms, observe_search_latency_ms,
     refresh_retriever_gauges, APP_INFO, CACHE_HITS_TOTAL, CACHE_MISSES_TOTAL, DOCUMENTS_TOTAL,
-    INDEX_SIZE_BYTES, RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_TOTAL, REGISTRY,
-    REINDEX_FAILURE_TOTAL, REINDEX_SUCCESS_TOTAL, SEARCH_LATENCY_MS, STARTUP_DURATION_MS,
-    VECTORS_TOTAL,
+    EXTRACTION_CHARS_TOTAL, EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL, INDEX_SIZE_BYTES,
+    RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_TOTAL, REGISTRY, REINDEX_FAILURE_TOTAL,
+    REINDEX_SUCCESS_TOTAL, SEARCH_LATENCY_MS, STARTUP_DURATION_MS, VECTORS_TOTAL,
+};
+pub use extraction_stats::{
+    get_stats as get_extraction_stats, load_history as load_extraction_history,
+    record_format as record_extraction_format, record_ocr_attempted, record_ocr_no_pages,
+    record_ocr_no_text, record_ocr_ok, record_ocr_unavailable, ExtractionStats, FileRecord,
 };
 pub use alerting_hooks::{AlertingHooksConfig, ReindexCompletionEvent};
 pub use chunking_stats::{

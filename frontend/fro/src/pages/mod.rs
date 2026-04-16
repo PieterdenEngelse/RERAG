@@ -1,6 +1,7 @@
 // src/pages/mod.rs
 pub mod about;
 pub mod config;
+pub mod config_chunker;
 pub mod config_io_uring;
 pub mod docu;
 pub mod docu_index;
@@ -9,6 +10,7 @@ pub mod home;
 pub mod memories;
 pub mod monitor;
 pub mod neo4j;
+pub mod ner;
 pub mod not_found;
 pub mod onnx;
 pub mod onnx_help;
@@ -22,23 +24,27 @@ pub mod train;
 // Re-export so they can be used as `pages::Home`
 pub use about::About;
 pub use config::Config;
+pub use config_chunker::ConfigChunker;
 pub use config_io_uring::ConfigIoUring;
 pub use docu::Docu;
 pub use docu_index::DocuIndex;
 pub use docu_index::{
-    DocuEmbeddings, DocuKnowledgeGraphs, DocuOnnx, DocuOnnxParams, DocuIoUring,
-    DocuBias, DocuThreads, DocuEntitiesProduction, DocuAgPipeline, DocuLoraExport,
-    DocuNeo4j, DocuTantivy, DocuBm25, DocuRkyv, DocuRig,
+    DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
+    DocuEmbeddings, DocuEntitiesProduction, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport,
+    DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads,
+    DocuTokenizersGeneral,
 };
 pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use memories::ConfigMemories;
 pub use monitor::{
-    MonitorAgSystemd, MonitorAgentic, MonitorChunks, MonitorGrafanaServices, MonitorCache, MonitorDocker, MonitorIndex,
-    MonitorKnowledgeGraph, MonitorOnnx, MonitorOnnxStatus, MonitorLogs, MonitorObservations, MonitorOverview, MonitorRag,
-    MonitorRateLimits, MonitorRequests, MonitorTools,
+    MonitorAgSystemd, MonitorAgentic, MonitorCache, MonitorChunks, MonitorDocker,
+    MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
+    MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits,
+    MonitorRequests, MonitorTip, MonitorTools,
 };
 pub use neo4j::ConfigNeo4j;
+pub use ner::ConfigNer;
 pub use not_found::PageNotFound;
 pub use onnx::ConfigOnnx;
 pub use other::ConfigOther;

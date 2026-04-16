@@ -3,9 +3,7 @@ use crate::{
     app::Route,
     components::monitor::*,
     pages::hardware::components::InfoIcon,
-    pages::hardware::constants::{
-        PARAM_ICON_BUTTON_STYLE, QUICK_ACTION_INFO_BUTTON_CLASS,
-    },
+    pages::hardware::constants::{PARAM_ICON_BUTTON_STYLE, QUICK_ACTION_INFO_BUTTON_CLASS},
 };
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;

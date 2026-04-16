@@ -137,3 +137,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 INSERT OR IGNORE INTO schema_migrations (version, description) VALUES
     ('13.1.2', 'Agentic RAG with PathManager');
+
+CREATE TABLE IF NOT EXISTS extraction_records (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename  TEXT NOT NULL,
+    path      TEXT NOT NULL,
+    format    TEXT NOT NULL,
+    ok        INTEGER NOT NULL,
+    chars     INTEGER NOT NULL,
+    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_extraction_records_recorded ON extraction_records(recorded_at DESC);

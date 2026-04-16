@@ -3,8 +3,7 @@ use crate::{
     app::{PageErrors, Route},
     components::monitor::*,
     pages::hardware::constants::{
-        PARAM_ICON_BUTTON_STYLE,
-        QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
+        PARAM_ICON_BUTTON_STYLE, QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
     },
 };
 use dioxus::prelude::*;

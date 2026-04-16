@@ -2,7 +2,9 @@ pub mod path_manager;
 pub mod db {
     pub mod api_keys;
     pub mod chunk_settings;
+    pub mod extraction_records;
     pub mod llm_settings;
+    pub mod ner_settings;
     pub mod param_hardware;
     pub mod param_store;
     pub mod path_resolver;

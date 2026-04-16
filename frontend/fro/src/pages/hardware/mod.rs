@@ -55,7 +55,10 @@ async fn fetch_and_merge_models(
             if !custom.is_empty() {
                 // Only merge gguf custom models when using llama_cpp
                 let filtered = if backend == "llama_cpp" {
-                    custom.into_iter().filter(|m| m.name.ends_with(".gguf")).collect()
+                    custom
+                        .into_iter()
+                        .filter(|m| m.name.ends_with(".gguf"))
+                        .collect()
                 } else {
                     custom
                 };
@@ -92,12 +95,16 @@ pub fn ConfigHardware() -> Element {
     let api_keys_loaded = use_signal(|| false);
     let has_openai_key = use_signal(|| false);
     let has_anthropic_key = use_signal(|| false);
+    let has_openrouter_key = use_signal(|| false);
     let openai_masked = use_signal(String::new);
     let anthropic_masked = use_signal(String::new);
+    let openrouter_masked = use_signal(String::new);
     let openai_from_env = use_signal(|| false);
     let anthropic_from_env = use_signal(|| false);
+    let openrouter_from_env = use_signal(|| false);
     let openai_input = use_signal(String::new);
     let anthropic_input = use_signal(String::new);
+    let openrouter_input = use_signal(String::new);
     let saving_keys = use_signal(|| false);
     let mut show_api_key_values = use_signal(|| false);
 
@@ -277,7 +284,9 @@ pub fn ConfigHardware() -> Element {
                                 "llama_cpp" => h.llama_cpp_available,
                                 _ => true,
                             };
-                            if ready { break; }
+                            if ready {
+                                break;
+                            }
                         }
                     }
                 }
@@ -352,19 +361,25 @@ pub fn ConfigHardware() -> Element {
         let mut api_keys_loaded = api_keys_loaded.clone();
         let mut has_openai_key = has_openai_key.clone();
         let mut has_anthropic_key = has_anthropic_key.clone();
+        let mut has_openrouter_key = has_openrouter_key.clone();
         let mut openai_masked = openai_masked.clone();
         let mut anthropic_masked = anthropic_masked.clone();
+        let mut openrouter_masked = openrouter_masked.clone();
         let mut openai_from_env = openai_from_env.clone();
         let mut anthropic_from_env = anthropic_from_env.clone();
+        let mut openrouter_from_env = openrouter_from_env.clone();
         use_future(move || async move {
             match api::fetch_api_keys().await {
                 Ok(resp) => {
                     has_openai_key.set(resp.has_openai_key);
                     has_anthropic_key.set(resp.has_anthropic_key);
+                    has_openrouter_key.set(resp.has_openrouter_key);
                     openai_masked.set(resp.openai_key_masked);
                     anthropic_masked.set(resp.anthropic_key_masked);
+                    openrouter_masked.set(resp.openrouter_key_masked);
                     openai_from_env.set(resp.openai_from_env);
                     anthropic_from_env.set(resp.anthropic_from_env);
+                    openrouter_from_env.set(resp.openrouter_from_env);
                     api_key_status.set(Some(resp.message));
                     api_keys_loaded.set(true);
                 }
@@ -418,7 +433,8 @@ pub fn ConfigHardware() -> Element {
                         });
                         // Notify other tabs
                         if let Ok(bc) = web_sys::BroadcastChannel::new("ag_config_sync") {
-                            let _ = bc.post_message(&wasm_bindgen::JsValue::from_str("config_changed"));
+                            let _ =
+                                bc.post_message(&wasm_bindgen::JsValue::from_str("config_changed"));
                             bc.close();
                         }
                         let mut updated_sampling = sampling_resp.config.clone();
@@ -443,13 +459,16 @@ pub fn ConfigHardware() -> Element {
     let on_save_keys = {
         let openai_input = openai_input.clone();
         let anthropic_input = anthropic_input.clone();
+        let openrouter_input = openrouter_input.clone();
         let mut saving_keys = saving_keys.clone();
         let api_key_status = api_key_status.clone();
         let mut api_key_error = api_key_error.clone();
         let has_openai_key = has_openai_key.clone();
         let has_anthropic_key = has_anthropic_key.clone();
+        let has_openrouter_key = has_openrouter_key.clone();
         let openai_masked = openai_masked.clone();
         let anthropic_masked = anthropic_masked.clone();
+        let openrouter_masked = openrouter_masked.clone();
         move |_| {
             if saving_keys() {
                 return;
@@ -459,26 +478,33 @@ pub fn ConfigHardware() -> Element {
             let payload = api::ApiKeysRequest {
                 openai_api_key: openai_input(),
                 anthropic_api_key: anthropic_input(),
+                openrouter_api_key: openrouter_input(),
             };
             let mut saving_keys = saving_keys.clone();
             let mut api_key_status = api_key_status.clone();
             let mut api_key_error = api_key_error.clone();
             let mut has_openai_key = has_openai_key.clone();
             let mut has_anthropic_key = has_anthropic_key.clone();
+            let mut has_openrouter_key = has_openrouter_key.clone();
             let mut openai_masked = openai_masked.clone();
             let mut anthropic_masked = anthropic_masked.clone();
+            let mut openrouter_masked = openrouter_masked.clone();
             let mut openai_input = openai_input.clone();
             let mut anthropic_input = anthropic_input.clone();
+            let mut openrouter_input = openrouter_input.clone();
             spawn(async move {
                 match api::save_api_keys(&payload).await {
                     Ok(resp) => {
                         api_key_status.set(Some(resp.message));
                         has_openai_key.set(resp.has_openai_key);
                         has_anthropic_key.set(resp.has_anthropic_key);
+                        has_openrouter_key.set(resp.has_openrouter_key);
                         openai_masked.set(resp.openai_key_masked);
                         anthropic_masked.set(resp.anthropic_key_masked);
+                        openrouter_masked.set(resp.openrouter_key_masked);
                         openai_input.set(String::new());
                         anthropic_input.set(String::new());
+                        openrouter_input.set(String::new());
                     }
                     Err(err_msg) => {
                         api_key_error.set(Some(format!("Failed to save API keys: {}", err_msg)));
@@ -632,6 +658,7 @@ pub fn ConfigHardware() -> Element {
 
     let mut openai_input_signal = openai_input.clone();
     let mut anthropic_input_signal = anthropic_input.clone();
+    let mut openrouter_input_signal = openrouter_input.clone();
 
     rsx! {
         div { class: "space-y-5",
@@ -708,9 +735,6 @@ pub fn ConfigHardware() -> Element {
                             div { class: "flex flex-col gap-1 text-xs text-gray-200",
                                 span { class: "font-semibold text-gray-300", "Active backend" }
                                 span { class: "text-sm text-gray-100", "{backend_enum.label()}" }
-                                span { class: "text-xs text-gray-400",
-                                    "Active model: {hardware_values.model}"
-                                }
                                 span { class: "text-xs text-gray-400",
                                     "Supports: threads {supports_threads}, GPU {supports_gpu}, GPU layers {supports_gpu_layers}, RoPE {supports_rope}"
                                 }
@@ -2176,7 +2200,7 @@ pub fn ConfigHardware() -> Element {
                                 }
                             }
                         }
-                    
+
                     }
                 }
             }
@@ -2924,9 +2948,42 @@ pub fn ConfigHardware() -> Element {
                             input {
                                 r#type: "password",
                                 class: PARAM_TEXT_INPUT_CLASS,
-                                placeholder: "anthropic-key",
+                                placeholder: "sk-ant-...",
                                 value: anthropic_input_signal(),
                                 oninput: move |evt| anthropic_input_signal.set(evt.value()),
+                            }
+                        }
+                        div { class: PARAM_BLOCK_CLASS,
+                            span { class: "text-sm text-gray-300 font-semibold", "OpenRouter" }
+                            span { class: "text-[0.7rem] text-gray-400",
+                                if openrouter_from_env() {
+                                    "Loaded from environment"
+                                } else {
+                                    "Persisted in database"
+                                }
+                            }
+                            span { class: "text-[0.7rem] text-gray-400",
+                                {
+                                    if has_openrouter_key() {
+                                        format!(
+                                            "Current: {}",
+                                            if show_api_key_values() {
+                                                openrouter_masked()
+                                            } else {
+                                                "••••••".into()
+                                            },
+                                        )
+                                    } else {
+                                        "No key stored".into()
+                                    }
+                                }
+                            }
+                            input {
+                                r#type: "password",
+                                class: PARAM_TEXT_INPUT_CLASS,
+                                placeholder: "sk-or-...",
+                                value: openrouter_input_signal(),
+                                oninput: move |evt| openrouter_input_signal.set(evt.value()),
                             }
                         }
                     }

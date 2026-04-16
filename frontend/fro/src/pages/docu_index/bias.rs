@@ -7,31 +7,25 @@ use dioxus_router::Link;
 #[component]
 pub fn DocuBias() -> Element {
     rsx! {
-        div { class: "min-h-screen bg-gray-900 p-6",
-            div { class: "max-w-4xl mx-auto",
+        div { class: "min-h-screen bg-gray-900 p-3",
+            div { class: "w-full",
 
-                div { class: "flex items-center gap-4 mb-6",
-                    Link {
-                        to: Route::DocuIndex {},
-                        class: "text-primary hover:underline",
-                        "← Back to Index"
-                    }
+                div { class: "flex items-center gap-3 mb-2",
+                    Link { to: Route::DocuIndex {}, class: "text-primary hover:underline text-sm shrink-0", "← Index" }
+                    h1 { class: "text-lg font-bold text-white", "Bias: Two Different Meanings" }
+                    span { class: "text-xs text-gray-400", "Same word, completely different concepts depending on context." }
                 }
 
-                    h2 { class: "text-2xl font-bold text-white mb-4", "Bias: Two Different Meanings" }
-                    p { class: "text-lg text-gray-200 mb-6",
-                        "The word 'bias' means completely different things in ML depending on context."
-                    }
+                div { class: "grid grid-cols-3 gap-2",
 
-                    h3 { class: "text-xl font-bold text-white mt-6 mb-3",
-                        "1. Social/Cognitive Bias (Training Data, Behavior)"
-                    }
-                    div { class: "bg-red-900/30 border border-red-700 rounded p-4 mb-4",
-                        p { class: "text-sm text-gray-200 mb-3",
-                            "What people usually mean in public discourse\u{2014}the model favoring certain viewpoints, perpetuating stereotypes, having political leanings, etc."
+                    // Social bias
+                    div { class: "bg-red-900/30 border border-red-700/60 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-red-300 mb-1", "1. Social / Cognitive Bias" }
+                        p { class: "text-xs text-gray-200 mb-1",
+                            "What people usually mean in public discourse — the model favoring certain viewpoints, perpetuating stereotypes, having political leanings."
                         }
-                        p { class: "text-sm text-gray-300 mb-2", "This comes from:" }
-                        ul { class: "text-sm text-gray-300 list-disc ml-6 space-y-1",
+                        p { class: "text-xs text-gray-400 mb-1", "Sources:" }
+                        ul { class: "text-xs text-gray-300 list-disc ml-3 space-y-0.5",
                             li { "Training data reflecting societal biases" }
                             li { "RLHF (Reinforcement Learning from Human Feedback) choices" }
                             li { "Imbalanced representation in datasets" }
@@ -39,75 +33,52 @@ pub fn DocuBias() -> Element {
                         }
                     }
 
-                    h3 { class: "text-xl font-bold text-white mt-6 mb-3",
-                        "2. Mathematical Bias (Weight Parameter)"
-                    }
-                    div { class: "bg-blue-900/30 border border-blue-700 rounded p-4 mb-4",
-                        p { class: "text-sm text-gray-200 mb-3",
+                    // Mathematical bias
+                    div { class: "bg-blue-900/30 border border-blue-700/60 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-blue-300 mb-1", "2. Mathematical Bias (Weight Parameter)" }
+                        p { class: "text-xs text-gray-200 mb-1",
                             "ML papers and code are full of \"bias terms\", \"bias vectors\", \"bias parameters\". This is a completely unrelated concept."
                         }
-                        p { class: "text-sm text-gray-300 mb-2",
-                            "In a neural network: y = \u{03c3}(W\u{00b7}x + b)"
+                        p { class: "text-xs text-gray-300 mb-1",
+                            "In a neural network: "
+                            code { class: "text-xs text-yellow-300", "y = σ(W·x + b)" }
                         }
-                        p { class: "text-sm text-gray-300",
-                            "The 'b' is the bias\u{2014}a learnable offset that shifts the activation function. It allows neurons to activate even when inputs are zero."
-                        }
-                    }
-
-                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "Quick Reference" }
-                    table { class: "table table-sm w-full text-gray-300",
-                        thead {
-                            tr {
-                                th { class: "text-gray-200", "" }
-                                th { class: "text-gray-200", "Social Bias" }
-                                th { class: "text-gray-200", "Mathematical Bias" }
-                            }
-                        }
-                        tbody {
-                            tr {
-                                td { "Meaning" }
-                                td { "Prejudice, unfairness" }
-                                td { "Numeric offset" }
-                            }
-                            tr {
-                                td { "Source" }
-                                td { "Training data, RLHF" }
-                                td { "Learned parameter" }
-                            }
-                            tr {
-                                td { "Fix" }
-                                td { "Better data, alignment" }
-                                td { "N/A (it's intentional)" }
-                            }
-                            tr {
-                                td { "In code" }
-                                td { "Not visible" }
-                                td { "model.bias, b tensor" }
-                            }
-                            tr {
-                                td { "Origin" }
-                                td { "Fairness research" }
-                                td { "Statistics (1900s)" }
-                            }
+                        p { class: "text-xs text-gray-300",
+                            "The 'b' is the bias — a learnable offset that shifts the activation function. It allows neurons to activate even when inputs are zero."
                         }
                     }
 
-                    div { class: "bg-gray-700 rounded p-4 mt-6 text-sm text-gray-200",
-                        p { class: "mb-2",
-                            "\u{2022} When someone says \"the model is biased\" \u{2192} they mean social/cognitive bias (prejudice)"
+                    // Table + summary
+                    div { class: "space-y-2",
+                        div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                            h3 { class: "text-sm font-bold text-white mb-1", "Quick Reference" }
+                            table { class: "table table-xs w-full text-gray-300",
+                                thead {
+                                    tr {
+                                        th { class: "text-gray-400 text-xs", "" }
+                                        th { class: "text-red-300 text-xs", "Social" }
+                                        th { class: "text-blue-300 text-xs", "Mathematical" }
+                                    }
+                                }
+                                tbody {
+                                    tr { td { class: "text-xs", "Meaning" } td { class: "text-xs", "Prejudice" } td { class: "text-xs", "Numeric offset" } }
+                                    tr { td { class: "text-xs", "Source" } td { class: "text-xs", "Training data, RLHF" } td { class: "text-xs", "Learned parameter" } }
+                                    tr { td { class: "text-xs", "Fix" } td { class: "text-xs", "Better data" } td { class: "text-xs", "N/A — intentional" } }
+                                    tr { td { class: "text-xs", "In code" } td { class: "text-xs", "Not visible" } td { class: "text-xs", "model.bias" } }
+                                    tr { td { class: "text-xs", "Origin" } td { class: "text-xs", "Fairness research" } td { class: "text-xs", "Statistics (1900s)" } }
+                                }
+                            }
                         }
-                        p { class: "mb-2",
-                            "\u{2022} When code says \"bias=True\" or \"self.bias\" \u{2192} it means the mathematical offset parameter"
+                        div { class: "bg-gray-700 border border-gray-600 rounded-lg p-2 text-xs text-gray-200 space-y-0.5",
+                            p { "• \"The model is biased\" → social/cognitive bias (prejudice)" }
+                            p { "• Code says \"bias=True\" → mathematical offset parameter" }
+                            p { class: "text-gray-400", "Context is everything — same word, completely different meanings." }
                         }
-                        p { "\u{2022} Context is everything\u{2014}same word, completely different meanings" }
                     }
+                }
 
-                div { class: "mt-8 pt-4 border-t border-gray-700",
-                    Link {
-                        to: Route::DocuIndex {},
-                        class: "btn btn-primary btn-sm",
-                        "← Back to Index"
-                    }
+                div { class: "mt-2 pt-2 border-t border-gray-700",
+                    Link { to: Route::DocuIndex {}, class: "btn btn-primary btn-xs", "← Back to Index" }
                 }
             }
         }

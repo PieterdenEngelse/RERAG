@@ -7,7 +7,7 @@ use dioxus_router::Link;
 pub fn DocuIoUring() -> Element {
     rsx! {
         div { class: "min-h-screen bg-gray-900 p-3",
-            div { class: "max-w-7xl mx-auto",
+            div { class: "w-full",
                 div { class: "flex items-center gap-4 mb-3",
                     Link {
                         to: Route::DocuIndex {},

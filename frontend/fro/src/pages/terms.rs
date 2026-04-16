@@ -1,10 +1,10 @@
 // ~/ag/frontend/fro/src/pages/terms.rs  v1.0
 // Config page: manage custom entity recognition terms
 
+use crate::components::config_nav::{ConfigNav, ConfigTab};
 use crate::pages::hardware::constants::{
     INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
 };
-use crate::components::config_nav::{ConfigNav, ConfigTab};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -41,25 +41,25 @@ struct ExtractResponse {
 }
 
 const CATEGORIES: &[(&str, &str)] = &[
-    ("MED",     "Medical"),
-    ("TECH",    "Technology"),
-    ("ORG",     "Organization"),
-    ("LOC",     "Location"),
-    ("PERSON",  "Person"),
+    ("MED", "Medical"),
+    ("TECH", "Technology"),
+    ("ORG", "Organization"),
+    ("LOC", "Location"),
+    ("PERSON", "Person"),
     ("PRODUCT", "Product"),
-    ("EVENT",   "Event"),
+    ("EVENT", "Event"),
 ];
 
 fn category_color(cat: &str) -> &'static str {
     match cat {
-        "MED"     => "background-color:#991B1B;",
-        "TECH"    => "background-color:#1E40AF;",
-        "ORG"     => "background-color:#065F46;",
-        "LOC"     => "background-color:#92400E;",
-        "PERSON"  => "background-color:#5B21B6;",
+        "MED" => "background-color:#991B1B;",
+        "TECH" => "background-color:#1E40AF;",
+        "ORG" => "background-color:#065F46;",
+        "LOC" => "background-color:#92400E;",
+        "PERSON" => "background-color:#5B21B6;",
         "PRODUCT" => "background-color:#0E7490;",
-        "EVENT"   => "background-color:#9D174D;",
-        _         => "background-color:#374151;",
+        "EVENT" => "background-color:#9D174D;",
+        _ => "background-color:#374151;",
     }
 }
 
@@ -113,11 +113,14 @@ pub fn ConfigTerms() -> Element {
         }
         let cat = new_category();
         let mut current = terms();
-        let exists = current.iter().any(|e| {
-            e.category == cat && e.term.to_lowercase() == t.to_lowercase()
-        });
+        let exists = current
+            .iter()
+            .any(|e| e.category == cat && e.term.to_lowercase() == t.to_lowercase());
         if !exists {
-            current.push(TermEntry { category: cat, term: t });
+            current.push(TermEntry {
+                category: cat,
+                term: t,
+            });
             terms.set(current);
             new_term.set(String::new());
             status_msg.set(Some("Term added — click Save to persist".into()));

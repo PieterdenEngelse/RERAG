@@ -80,7 +80,8 @@ fn should_render_as_code(line: &str) -> bool {
     // Simple heuristics for formulas / code-ish snippets.
     // - Contains typical operators and is relatively short
     // - Or starts with common code keywords
-    let looks_like_formula = (t.contains('=') || t.contains("→") || t.contains('·')) && t.len() <= 80;
+    let looks_like_formula =
+        (t.contains('=') || t.contains("→") || t.contains('·')) && t.len() <= 80;
     let looks_like_code = t.starts_with("use ")
         || t.starts_with("import ")
         || t.starts_with("let ")

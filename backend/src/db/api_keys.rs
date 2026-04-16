@@ -18,6 +18,8 @@ pub struct ApiKeys {
     pub openai_api_key: String,
     #[serde(default)]
     pub anthropic_api_key: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
 }
 
 impl ApiKeys {
@@ -29,6 +31,11 @@ impl ApiKeys {
     /// Check if Anthropic key is configured (env var or stored)
     pub fn has_anthropic_key(&self) -> bool {
         std::env::var("ANTHROPIC_API_KEY").is_ok() || !self.anthropic_api_key.is_empty()
+    }
+
+    /// Check if OpenRouter key is configured (env var or stored)
+    pub fn has_openrouter_key(&self) -> bool {
+        std::env::var("OPENROUTER_API_KEY").is_ok() || !self.openrouter_api_key.is_empty()
     }
 
     /// Get the effective OpenAI API key (env var takes precedence)
@@ -49,6 +56,17 @@ impl ApiKeys {
                 None
             } else {
                 Some(self.anthropic_api_key.clone())
+            }
+        })
+    }
+
+    /// Get the effective OpenRouter API key (env var takes precedence)
+    pub fn get_openrouter_key(&self) -> Option<String> {
+        std::env::var("OPENROUTER_API_KEY").ok().or_else(|| {
+            if self.openrouter_api_key.is_empty() {
+                None
+            } else {
+                Some(self.openrouter_api_key.clone())
             }
         })
     }
@@ -111,7 +129,10 @@ pub fn global_config() -> ApiKeys {
     let keys = cache.read().clone();
 
     // If cache is empty, try loading from DB
-    if keys.openai_api_key.is_empty() && keys.anthropic_api_key.is_empty() {
+    if keys.openai_api_key.is_empty()
+        && keys.anthropic_api_key.is_empty()
+        && keys.openrouter_api_key.is_empty()
+    {
         if let Ok(loaded) = load_from_db() {
             return loaded;
         }

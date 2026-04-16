@@ -3,11 +3,14 @@ use crate::{
     app::Route,
     components::monitor::*,
     pages::hardware::constants::{
-        PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE, INFO_ICON_SVG_CLASS,
+        INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
     },
 };
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
+
+const PREVIEW_TEXTAREA_CLASS: &str =
+    "textarea textarea-sm bg-gray-700 text-gray-200 w-full font-mono text-xs min-h-24 resize-y";
 
 #[component]
 fn InfoIcon() -> Element {
@@ -33,13 +36,18 @@ pub fn MonitorChunks() -> Element {
     let mut show_shimmytok = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
+    // Chunk preview state
+    let mut preview_text = use_signal(|| String::new());
+    let mut preview_filename = use_signal(|| String::new());
+    let mut preview_loading = use_signal(|| false);
+    let mut preview_result = use_signal(|| None::<api::ChunkPreviewResponse>);
+    let mut preview_error = use_signal(|| None::<String>);
+
     use_future(move || async move {
         loop {
             // Fetch both in parallel
-            let (tok_res, stats_res) = futures_util::join!(
-                api::fetch_tokenizer_info(),
-                api::fetch_chunking_stats(20),
-            );
+            let (tok_res, stats_res) =
+                futures_util::join!(api::fetch_tokenizer_info(), api::fetch_chunking_stats(20),);
 
             if let Ok(tok) = tok_res {
                 tokenizer.set(Some(tok));
@@ -221,6 +229,136 @@ pub fn MonitorChunks() -> Element {
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Chunk Preview panel
+            Panel { title: Some("Chunk Preview".into()), refresh: None,
+                div { class: "flex flex-col gap-3",
+                    span { class: "text-xs text-gray-400",
+                        "Paste sample text to preview how it will be chunked with the current configuration. No documents are indexed."
+                    }
+                    div { class: "flex flex-col gap-2",
+                        textarea {
+                            class: PREVIEW_TEXTAREA_CLASS,
+                            placeholder: "Paste text here…",
+                            value: "{preview_text()}",
+                            oninput: move |e| preview_text.set(e.value()),
+                        }
+                        div { class: "flex items-center gap-3",
+                            input {
+                                class: "input input-xs input-bordered bg-gray-700 text-gray-200 w-48",
+                                placeholder: "filename (optional)",
+                                value: "{preview_filename()}",
+                                oninput: move |e| preview_filename.set(e.value()),
+                            }
+                            button {
+                                class: "btn btn-xs text-white",
+                                style: "background-color: #7C2A02; border-color: #7C2A02;",
+                                disabled: preview_loading() || preview_text().is_empty(),
+                                onclick: move |_| {
+                                    let text = preview_text();
+                                    let filename = preview_filename();
+                                    spawn(async move {
+                                        preview_loading.set(true);
+                                        preview_error.set(None);
+                                        let req = api::ChunkPreviewRequest {
+                                            text,
+                                            filename: if filename.is_empty() { None } else { Some(filename) },
+                                        };
+                                        match api::chunk_preview(&req).await {
+                                            Ok(resp) => preview_result.set(Some(resp)),
+                                            Err(e) => preview_error.set(Some(e)),
+                                        }
+                                        preview_loading.set(false);
+                                    });
+                                },
+                                if preview_loading() { "Previewing…" } else { "Preview" }
+                            }
+                            if let Some(res) = preview_result() {
+                                span { class: "text-xs text-gray-400",
+                                    "{res.chunk_count} chunks — mode: {res.mode}"
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(err) = preview_error() {
+                        div { class: "text-xs text-red-400", "{err}" }
+                    }
+
+                    if let Some(res) = preview_result() {
+                        // Stats summary
+                        if let Some(s) = &res.stats {
+                            div { class: "flex flex-wrap gap-4 text-xs text-gray-300 bg-gray-900 rounded p-3 border border-gray-700",
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "avg tokens" }
+                                    span { "{s.avg_chunk_tokens}" }
+                                }
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "min tokens" }
+                                    span { "{s.min_chunk_tokens}" }
+                                }
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "max tokens" }
+                                    span { "{s.max_chunk_tokens}" }
+                                }
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "size flushes" }
+                                    span { "{s.size_flushes}" }
+                                }
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "sentence flushes" }
+                                    span { "{s.sentence_flushes}" }
+                                }
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "semantic flushes" }
+                                    span { "{s.semantic_flushes}" }
+                                }
+                                div { class: "flex flex-col gap-1",
+                                    span { class: "text-gray-500", "heading flushes" }
+                                    span { "{s.heading_flushes}" }
+                                }
+                                if s.html_tags_stripped > 0 {
+                                    div { class: "flex flex-col gap-1",
+                                        span { class: "text-gray-500", "html stripped" }
+                                        span { class: "text-yellow-400", "{s.html_tags_stripped}" }
+                                    }
+                                }
+                                if s.unicode_chars_normalized > 0 {
+                                    div { class: "flex flex-col gap-1",
+                                        span { class: "text-gray-500", "unicode norm." }
+                                        span { class: "text-yellow-400", "{s.unicode_chars_normalized}" }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Chunk list
+                        div { class: "flex flex-col gap-2 max-h-96 overflow-y-auto",
+                            for (idx, chunk) in res.chunks.iter().enumerate() {
+                                {
+                                    let tok_approx = chunk.split_whitespace().count() * 4 / 3;
+                                    let min_size = 128usize; // rough visual threshold
+                                    let max_size = 384usize;
+                                    let color = if tok_approx < min_size {
+                                        "border-yellow-600/40 bg-yellow-900/10"
+                                    } else if tok_approx > max_size {
+                                        "border-red-600/40 bg-red-900/10"
+                                    } else {
+                                        "border-green-700/30 bg-green-900/10"
+                                    };
+                                    rsx! {
+                                        div {
+                                            class: "rounded border p-2 text-xs text-gray-300 font-mono whitespace-pre-wrap {color}",
+                                            div { class: "text-gray-500 mb-1 text-[0.65rem]", "#{idx + 1} · ~{tok_approx} tokens" }
+                                            "{chunk}"
                                         }
                                     }
                                 }

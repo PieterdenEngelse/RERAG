@@ -136,6 +136,9 @@ async fn main() -> std::io::Result<()> {
     ag::db::chunk_settings::load_active_config(&_db_conn);
     ag::db::llm_settings::load_active_config(&_db_conn);
     ag::db::param_hardware::load_active_config(&_db_conn);
+    ag::db::ner_settings::load_active_config(&_db_conn);
+    ag::db::extraction_records::init(pm.db_path("documents"));
+    ag::monitoring::load_extraction_history();
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 3.5: Initialize GGUF Token Counter

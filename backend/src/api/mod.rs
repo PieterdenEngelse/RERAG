@@ -350,6 +350,12 @@ impl From<&ChunkerConfig> for ChunkerConfigSnapshot {
             max_size: cfg.max_size,
             overlap: cfg.overlap,
             semantic_similarity_threshold: cfg.semantic_similarity_threshold,
+            mode: cfg.mode.clone(),
+            clean_html: cfg.clean_html,
+            clean_unicode: cfg.clean_unicode,
+            context_prefix_enabled: cfg.context_prefix_enabled,
+            context_prefix_tokens: cfg.context_prefix_tokens,
+            pipeline_stages: cfg.pipeline_stages.clone(),
         }
     }
 }
@@ -888,14 +894,19 @@ pub fn start_api_server(
             .route("/documents/{filename}", web::delete().to(delete_document))
             .route("/config/chunk_size", web::get().to(get_chunk_config))
             .route("/config/chunk_size", web::post().to(commit_chunk_config))
+            .route("/chunk/preview", web::post().to(chunk_preview_handler))
             .route("/config/embedding", web::get().to(get_embedding_config))
             .route("/config/embedding", web::post().to(set_embedding_config))
+            .route("/config/embedding-model", web::post().to(set_embedding_model))
+            .route("/config/embedding/download-tokenizer", web::post().to(download_tokenizer))
             .route("/config/llm", web::get().to(get_llm_config))
             .route("/config/llm", web::post().to(commit_llm_config))
             .route("/config/prompt_caching", web::get().to(get_prompt_caching))
             .route("/config/prompt_caching", web::post().to(set_prompt_caching))
             .route("/config/hardware", web::get().to(get_hardware_config))
             .route("/config/hardware", web::post().to(commit_hardware_config))
+            .route("/config/ner", web::get().to(get_ner_config))
+            .route("/config/ner", web::post().to(set_ner_config))
             .route("/config/onnx", web::get().to(get_onnx_config))
             .route("/config/onnx", web::post().to(set_onnx_config))
             // Neo4j Knowledge Graph config (Phase 27)
@@ -941,6 +952,7 @@ pub fn start_api_server(
                 web::get().to(get_inference_gateway_stats),
             )
             .route("/monitor/logs/recent", web::get().to(get_recent_logs))
+            .route("/monitor/parser/stats", web::get().to(get_parser_stats))
             // ============================================================================
             // RAG MEMORY ROUTES
             // ============================================================================

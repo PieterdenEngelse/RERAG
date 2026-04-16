@@ -48,6 +48,8 @@ rayon = "1.10"
 regex = "1.10"
 lru = "0.12"
 infer = "0.16"  # MIME type detection from file magic bytes
+zip = "2"        # ZIP archive reading for DOCX/ODT extraction
+calamine = "0.26" # Spreadsheet parsing: XLSX, ODS, CSV
 
 # Performance Optimizations (Phase 1)
 lz4_flex = "0.11"           # Fast compression for vectors

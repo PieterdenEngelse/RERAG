@@ -6,6 +6,8 @@ pub enum ChunkerMode {
     Fixed,
     Lightweight,
     Semantic,
+    Sentence,
+    Pipeline,
 }
 
 impl ChunkerMode {
@@ -23,6 +25,8 @@ impl std::str::FromStr for ChunkerMode {
             "fixed" => Ok(ChunkerMode::Fixed),
             "lightweight" => Ok(ChunkerMode::Lightweight),
             "semantic" => Ok(ChunkerMode::Semantic),
+            "sentence" => Ok(ChunkerMode::Sentence),
+            "pipeline" => Ok(ChunkerMode::Pipeline),
             other => Err(format!("unknown chunker mode: {}", other)),
         }
     }

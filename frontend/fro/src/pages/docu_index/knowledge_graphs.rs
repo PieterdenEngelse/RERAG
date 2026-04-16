@@ -7,70 +7,59 @@ use dioxus_router::Link;
 #[component]
 pub fn DocuKnowledgeGraphs() -> Element {
     rsx! {
-        div { class: "min-h-screen bg-gray-900 p-6",
-            div { class: "max-w-4xl mx-auto",
+        div { class: "min-h-screen bg-gray-900 p-3",
+            div { class: "w-full",
 
-                div { class: "flex items-center gap-4 mb-6",
-                    Link {
-                        to: Route::DocuIndex {},
-                        class: "text-primary hover:underline",
-                        "← Back to Index"
+                div { class: "flex items-center gap-3 mb-2",
+                    Link { to: Route::DocuIndex {}, class: "text-primary hover:underline text-sm shrink-0", "← Index" }
+                    h1 { class: "text-lg font-bold text-white", "Knowledge Graphs" }
+                    span { class: "text-xs text-gray-400", "Structured information as a network of entities and relationships." }
+                }
+
+                div { class: "grid grid-cols-3 gap-2",
+
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-white mb-1", "What Is a Knowledge Graph?" }
+                        p { class: "text-xs text-gray-300 mb-1",
+                            "A knowledge graph is a structured representation of information as a network of entities and relationships."
+                        }
+                        p { class: "text-xs text-gray-300",
+                            "Nodes represent entities (people, places, concepts, documents). Edges represent relationships between them (works at, located in, mentions, depends on)."
+                        }
+                    }
+
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-white mb-1", "Why Knowledge Graphs for RAG?" }
+                        p { class: "text-xs text-gray-300 mb-1", "Standard RAG retrieves isolated chunks. Knowledge graphs add structure:" }
+                        div { class: "text-xs text-gray-300 space-y-0.5",
+                            p { span { class: "text-white font-medium", "Multi-hop reasoning " } "— follow relationships across documents" }
+                            p { span { class: "text-white font-medium", "Entity disambiguation " } "— distinguish same-name entities by context" }
+                            p { span { class: "text-white font-medium", "Cross-document connections " } "— link related chunks via shared entities" }
+                            p { span { class: "text-white font-medium", "Structural context " } "— understand how concepts relate, not just what they are" }
+                        }
+                    }
+
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-white mb-1", "In the AG System" }
+                        p { class: "text-xs text-gray-300 mb-1", "AG uses a two-tier graph architecture:" }
+                        div { class: "text-xs text-gray-300 space-y-1",
+                            p {
+                                span { class: "text-white font-medium", "Neo4j " }
+                                "— ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph."
+                            }
+                            p {
+                                span { class: "text-white font-medium", "Petgraph " }
+                                "— runtime graph queries. Loads an exported JSON snapshot from Neo4j into RAM for fast, in-process traversal."
+                            }
+                        }
+                        p { class: "text-xs text-gray-500 mt-1",
+                            "Neo4j never runs at query time. All runtime graph traversal goes through petgraph — nanoseconds with no network overhead."
+                        }
                     }
                 }
 
-                    h2 { class: "text-2xl font-bold text-white mb-4", "Knowledge Graphs" }
-                    p { class: "text-lg text-gray-200 mb-4",
-                        "A knowledge graph is a structured representation of information as a network of entities and relationships."
-                    }
-                    p { class: "text-sm text-gray-300 mb-4",
-                        "In a knowledge graph, nodes represent entities (people, places, concepts, documents) and edges represent relationships between them (works at, located in, mentions, depends on)."
-                    }
-                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "Why Knowledge Graphs for RAG?" }
-                    p { class: "text-sm text-gray-300 mb-2",
-                        "Standard RAG retrieves isolated chunks. Knowledge graphs add structure:"
-                    }
-                    ul { class: "space-y-2 text-sm text-gray-300 ml-4 list-disc",
-                        li {
-                            strong { "Multi-hop reasoning" }
-                            " \u{2014} follow relationships across documents"
-                        }
-                        li {
-                            strong { "Entity disambiguation" }
-                            " \u{2014} distinguish same-name entities by context"
-                        }
-                        li {
-                            strong { "Cross-document connections" }
-                            " \u{2014} link related chunks via shared entities"
-                        }
-                        li {
-                            strong { "Structural context" }
-                            " \u{2014} understand how concepts relate, not just what they are"
-                        }
-                    }
-                    h3 { class: "text-xl font-bold text-white mt-6 mb-3", "In the AG System" }
-                    p { class: "text-sm text-gray-300 mb-2",
-                        "AG uses a two-tier graph architecture:"
-                    }
-                    ul { class: "space-y-2 text-sm text-gray-300 ml-4 list-disc",
-                        li {
-                            strong { "Neo4j" }
-                            " \u{2014} ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph."
-                        }
-                        li {
-                            strong { "Petgraph" }
-                            " \u{2014} runtime graph queries. Loads an exported JSON snapshot from Neo4j into RAM for fast, in-process traversal."
-                        }
-                    }
-                    p { class: "text-sm text-gray-300 mt-3",
-                        "Neo4j never runs at query time. All runtime graph traversal goes through petgraph, which is nanoseconds with no network overhead."
-                    }
-
-                div { class: "mt-8 pt-4 border-t border-gray-700",
-                    Link {
-                        to: Route::DocuIndex {},
-                        class: "btn btn-primary btn-sm",
-                        "← Back to Index"
-                    }
+                div { class: "mt-2 pt-2 border-t border-gray-700",
+                    Link { to: Route::DocuIndex {}, class: "btn btn-primary btn-xs", "← Back to Index" }
                 }
             }
         }

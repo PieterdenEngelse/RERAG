@@ -319,14 +319,14 @@ pub fn MonitorDocker() -> Element {
 /// Per-container info descriptions
 fn container_info_title(name: &str) -> &'static str {
     match name {
-        "grafana"    => "Grafana",
-        "redis"      => "Redis",
+        "grafana" => "Grafana",
+        "redis" => "Redis",
         "prometheus" => "Prometheus",
-        "loki"       => "Loki",
-        "tempo"      => "Tempo",
-        "otel"       => "OTel Collector",
-        "neo4j"      => "Neo4j",
-        _            => "Container",
+        "loki" => "Loki",
+        "tempo" => "Tempo",
+        "otel" => "OTel Collector",
+        "neo4j" => "Neo4j",
+        _ => "Container",
     }
 }
 

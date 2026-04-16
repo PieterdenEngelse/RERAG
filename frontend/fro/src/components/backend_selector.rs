@@ -92,19 +92,21 @@ pub fn BackendSelector(
                     let ctx = runtime_ctx();
                     let configured = &ctx.configured_backend;
                     let active = ctx.active_backend.as_deref().unwrap_or("");
-                    // Show discrepancy when configured != active (e.g. llama_cpp saved but not running)
-                    if !configured.is_empty() && !active.is_empty() && configured != active {
+                    let is_cloud = matches!(configured.as_str(), "openai" | "anthropic" | "openrouter");
+                    // Cloud backends have no local process to health-check — skip the discrepancy warning
+                    if !is_cloud && !configured.is_empty() && !active.is_empty() && configured != active {
                         rsx! {
                             p {
                                 class: "text-xs text-yellow-400 mt-1",
                                 "Configured: {configured} | Running: {active}"
                             }
                         }
-                    } else if !active.is_empty() {
+                    } else if !active.is_empty() || (is_cloud && !configured.is_empty()) {
+                        let display = if is_cloud && active.is_empty() { configured.as_str() } else { active };
                         rsx! {
                             p {
                                 class: "text-xs text-gray-400 mt-1",
-                                "Active: {active}"
+                                "Active: {display}"
                             }
                         }
                     } else if !configured.is_empty() {

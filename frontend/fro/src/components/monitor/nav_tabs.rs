@@ -11,6 +11,7 @@ pub struct NavTabsProps {
 pub fn NavTabs(props: NavTabsProps) -> Element {
     let tabs = vec![
         ("Overview", Route::MonitorOverview {}),
+        ("Tip", Route::MonitorTip {}),
         ("Agentic", Route::MonitorAgentic {}),
         ("Tools", Route::MonitorTools {}),
         ("Requests", Route::MonitorRequests {}),

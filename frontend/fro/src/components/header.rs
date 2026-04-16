@@ -40,6 +40,7 @@ pub fn Header() -> Element {
     let mut clear_chat = use_context::<Signal<ClearChat>>();
     let mut page_errors = use_context::<Signal<PageErrors>>();
     let runtime_suspended = use_context::<Signal<RuntimeSuspended>>();
+    let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
     let header_bg = "bg-gray-900";
 
@@ -80,9 +81,7 @@ pub fn Header() -> Element {
                                 let required_containers: Vec<_> = docker_info
                                     .containers
                                     .iter()
-                                    .filter(|c| {
-                                        c.name != "ag-neo4j" && c.name != "visual-cypher"
-                                    })
+                                    .filter(|c| c.name != "ag-neo4j" && c.name != "visual-cypher")
                                     .collect();
 
                                 let running = required_containers
@@ -129,41 +128,88 @@ pub fn Header() -> Element {
                         page_errors.with_mut(|e| e.clear_error("ollama"));
                         page_errors.with_mut(|e| e.clear_error("llama_cpp"));
                     } else {
-                        let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
                         let backend = runtime_ctx().configured_backend.clone();
                         match backend.as_str() {
                             "llama_cpp" => {
-                                // Clear ollama error since it's not the active backend
+                                // Clear ollama/cloud errors since they're not the active backend
                                 page_errors.with_mut(|e| e.clear_error("ollama"));
+                                page_errors.with_mut(|e| e.clear_error("cloud_backend"));
                                 match api::fetch_runtime_health().await {
                                     Ok(health) => {
                                         if health.llama_cpp_available {
                                             page_errors.with_mut(|e| e.clear_error("llama_cpp"));
                                         } else {
-                                            page_errors.with_mut(|e| e.set_error("llama_cpp", "llama-server not reachable"));
+                                            page_errors.with_mut(|e| {
+                                                e.set_error(
+                                                    "llama_cpp",
+                                                    "llama-server not reachable",
+                                                )
+                                            });
                                         }
                                     }
                                     Err(_) => {
-                                        page_errors.with_mut(|e| e.set_error("llama_cpp", "Runtime health check failed"));
+                                        page_errors.with_mut(|e| {
+                                            e.set_error("llama_cpp", "Runtime health check failed")
+                                        });
+                                    }
+                                }
+                            }
+                            "openai" | "anthropic" | "openrouter" => {
+                                // Cloud backends — check key is configured, no local process to ping
+                                page_errors.with_mut(|e| e.clear_error("ollama"));
+                                page_errors.with_mut(|e| e.clear_error("llama_cpp"));
+                                match api::fetch_api_keys().await {
+                                    Ok(keys) => {
+                                        let has_key = match backend.as_str() {
+                                            "openai" => keys.has_openai_key,
+                                            "anthropic" => keys.has_anthropic_key,
+                                            "openrouter" => keys.has_openrouter_key,
+                                            _ => false,
+                                        };
+                                        if has_key {
+                                            page_errors
+                                                .with_mut(|e| e.clear_error("cloud_backend"));
+                                        } else {
+                                            page_errors.with_mut(|e| {
+                                                e.set_error(
+                                                    "cloud_backend",
+                                                    &format!(
+                                                        "No API key configured for {}",
+                                                        backend
+                                                    ),
+                                                )
+                                            });
+                                        }
+                                    }
+                                    Err(_) => {
+                                        page_errors.with_mut(|e| e.clear_error("cloud_backend"));
                                     }
                                 }
                             }
                             _ => {
                                 // Ollama or other backends
                                 page_errors.with_mut(|e| e.clear_error("llama_cpp"));
+                                page_errors.with_mut(|e| e.clear_error("cloud_backend"));
                                 match api::fetch_models(&backend).await {
                                     Ok(models) => {
                                         if models.is_empty() {
                                             page_errors.with_mut(|e| {
-                                                e.set_error("ollama", &format!("{} online, but no models", backend))
+                                                e.set_error(
+                                                    "ollama",
+                                                    &format!("{} online, but no models", backend),
+                                                )
                                             });
                                         } else {
                                             page_errors.with_mut(|e| e.clear_error("ollama"));
                                         }
                                     }
                                     Err(_) => {
-                                        page_errors
-                                            .with_mut(|e| e.set_error("ollama", &format!("{} not reachable", backend)));
+                                        page_errors.with_mut(|e| {
+                                            e.set_error(
+                                                "ollama",
+                                                &format!("{} not reachable", backend),
+                                            )
+                                        });
                                     }
                                 }
                             }

@@ -68,6 +68,8 @@ impl SourceType {
             ContentType::Code(_) => SourceType::Code,
             ContentType::Json => SourceType::Json,
             ContentType::Xml => SourceType::Xml,
+            ContentType::Docx | ContentType::Odt | ContentType::Epub | ContentType::Pptx => SourceType::Text,
+            ContentType::Xlsx | ContentType::Ods | ContentType::Csv => SourceType::Text,
             ContentType::Binary => SourceType::Binary,
             ContentType::Unknown => SourceType::Text, // Default to text
         }
@@ -86,6 +88,7 @@ pub const DEFAULT_MIN_SIZE: usize = 128; // Minimum tokens (avoid too-small chun
 pub const DEFAULT_MAX_SIZE: usize = 384; // Maximum tokens (stay well under 512 limit)
 pub const DEFAULT_OVERLAP: usize = 32; // Overlap tokens (helps with context continuity)
 pub const DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD: f32 = 0.78;
+pub const DEFAULT_PIPELINE_STAGES: &str = "lw,sent,sem";
 
 // BGE-small-en-v1.5 specific constants
 pub const BGE_SMALL_MAX_TOKENS: usize = 512; // Model's max sequence length
@@ -98,6 +101,12 @@ pub struct ChunkerConfig {
     pub max_size: usize,    // Maximum tokens (avoid splitting mid-concept)
     pub overlap: usize,     // Overlap tokens between chunks
     pub semantic_similarity_threshold: f32,
+    pub mode: String,     // Active chunker mode: fixed|lightweight|semantic|sentence
+    pub clean_html: bool, // Strip HTML tags before chunking
+    pub clean_unicode: bool, // Normalize unicode whitespace/quotes before chunking
+    pub context_prefix_enabled: bool, // Prepend [Source: filename] to each chunk
+    pub context_prefix_tokens: usize, // Token budget for the context prefix
+    pub pipeline_stages: String, // Active pipeline stages: comma-separated "lw", "sent", "sem"
 }
 
 impl Default for ChunkerConfig {
@@ -108,6 +117,12 @@ impl Default for ChunkerConfig {
             max_size: DEFAULT_MAX_SIZE,
             overlap: DEFAULT_OVERLAP,
             semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
+            mode: "lightweight".to_string(),
+            clean_html: false,
+            clean_unicode: false,
+            context_prefix_enabled: false,
+            context_prefix_tokens: 32,
+            pipeline_stages: DEFAULT_PIPELINE_STAGES.to_string(),
         }
     }
 }
@@ -148,41 +163,68 @@ impl ChunkerConfig {
             .map(|v: f32| v.clamp(0.0, 1.0))
             .unwrap_or(DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD);
 
+        let mode = env::var("CHUNKER_MODE")
+            .unwrap_or_else(|_| "lightweight".to_string())
+            .to_lowercase();
+
+        let clean_html = env::var("CHUNK_CLEAN_HTML")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(false);
+
+        let clean_unicode = env::var("CHUNK_CLEAN_UNICODE")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(false);
+
+        let context_prefix_enabled = env::var("CHUNK_CONTEXT_PREFIX")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(false);
+
+        let context_prefix_tokens = env::var("CHUNK_CONTEXT_PREFIX_TOKENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32usize);
+
+        let pipeline_stages = env::var("PIPELINE_STAGES")
+            .unwrap_or_else(|_| DEFAULT_PIPELINE_STAGES.to_string());
+
         Self {
             target_size,
             min_size,
             max_size,
             overlap,
             semantic_similarity_threshold,
+            mode,
+            clean_html,
+            clean_unicode,
+            context_prefix_enabled,
+            context_prefix_tokens,
+            pipeline_stages,
         }
     }
 
     /// Create config optimized for different LLM context sizes
     pub fn for_model(model_context_size: usize) -> Self {
         match model_context_size {
-            // Small models (phi, tinyllama) - 2K context
             0..=2048 => Self {
                 target_size: 256,
                 min_size: 128,
                 max_size: 384,
                 overlap: 32,
-                semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
+                ..Self::default()
             },
-            // Medium models (llama2-7b) - 4K context
             2049..=4096 => Self {
                 target_size: 384,
                 min_size: 192,
                 max_size: 512,
                 overlap: 48,
-                semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
+                ..Self::default()
             },
-            // Large models (llama3, mistral) - 8K+ context
             _ => Self {
                 target_size: 512,
                 min_size: 256,
                 max_size: 768,
                 overlap: 64,
-                semantic_similarity_threshold: DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD,
+                ..Self::default()
             },
         }
     }
@@ -190,39 +232,38 @@ impl ChunkerConfig {
     /// Create config optimized for specific embedding models
     pub fn for_embedding_model(model_name: &str) -> Self {
         match model_name.to_lowercase().as_str() {
-            // BGE-small-en-v1.5: 512 token max, 384-dim embeddings
             "bge-small-en-v1.5" | "bge-small-en-v1.5q" | "bge-small" => Self {
-                target_size: 256,                    // ~50% of max to leave room for query context
-                min_size: 128,                       // Avoid too-small chunks that lose context
-                max_size: 384,                       // Stay well under 512 limit
-                overlap: 32,                         // ~12% overlap for continuity
-                semantic_similarity_threshold: 0.75, // Slightly lower for better recall
+                target_size: 256,
+                min_size: 128,
+                max_size: 384,
+                overlap: 32,
+                semantic_similarity_threshold: 0.75,
+                ..Self::default()
             },
-            // BGE-base-en-v1.5: 512 token max, 768-dim embeddings
             "bge-base-en-v1.5" | "bge-base" => Self {
                 target_size: 256,
                 min_size: 128,
                 max_size: 384,
                 overlap: 32,
                 semantic_similarity_threshold: 0.75,
+                ..Self::default()
             },
-            // BGE-large-en-v1.5: 512 token max, 1024-dim embeddings
             "bge-large-en-v1.5" | "bge-large" => Self {
                 target_size: 256,
                 min_size: 128,
                 max_size: 384,
                 overlap: 32,
                 semantic_similarity_threshold: 0.75,
+                ..Self::default()
             },
-            // all-MiniLM-L6-v2: 256 token max, 384-dim embeddings
             "all-minilm-l6-v2" | "minilm" => Self {
                 target_size: 128,
                 min_size: 64,
                 max_size: 192,
                 overlap: 16,
                 semantic_similarity_threshold: 0.78,
+                ..Self::default()
             },
-            // Default: assume BGE-small-like constraints
             _ => Self::default(),
         }
     }

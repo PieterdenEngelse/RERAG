@@ -9,7 +9,7 @@ pub fn DocuRig() -> Element {
 
     rsx! {
         div { class: "min-h-screen bg-gray-900 p-3",
-            div { class: "max-w-7xl mx-auto",
+            div { class: "w-full",
                 a {
                     href: "/docu/index",
                     class: "text-primary hover:underline mb-4 inline-block",

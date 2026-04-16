@@ -50,14 +50,15 @@ pub(crate) async fn upload_document_inner(
         let allowed_extensions = [
             // Documents
             "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "xml", "json",
-            // Code files
+            // Office formats
+            "docx", "xlsx", "csv", "odt", "ods", "epub", "pptx", // Code files
             "rs", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "go", "java", "cs", "cpp", "cc",
             "cxx", "hpp", "c", "h", "rb", "php", "sh", "bash", "zsh", "sql", "yaml", "yml", "toml",
         ];
 
         if !allowed_extensions.contains(&ext.as_str()) {
             return Ok(HttpResponse::BadRequest().body(format!(
-                "File type '{}' not supported. Allowed: documents (pdf, txt, md, html, xml, json) and code files (rs, py, js, ts, go, java, etc.)",
+                "File type '{}' not supported. Allowed: documents (pdf, txt, md, html, xml, json), office formats (docx, xlsx, csv, odt, ods, epub, pptx), and code files (rs, py, js, ts, go, java, etc.)",
                 ext
             )));
         }
@@ -656,4 +657,114 @@ pub async fn save_vectors_handler() -> Result<HttpResponse, Error> {
             "request_id": request_id
         })))
     }
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct ChunkPreviewRequest {
+    pub text: String,
+    pub filename: Option<String>,
+}
+
+pub(crate) async fn chunk_preview_handler(
+    payload: web::Json<ChunkPreviewRequest>,
+) -> Result<HttpResponse, Error> {
+    use crate::db::chunk_settings;
+    use crate::memory::chunker_factory::create_chunker;
+
+    let request_id = generate_request_id();
+    let body = payload.into_inner();
+
+    if body.text.is_empty() {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "status": "invalid",
+            "message": "text must not be empty",
+            "request_id": request_id,
+        })));
+    }
+
+    let config = chunk_settings::global_config();
+    let mode = chunk_settings::global_chunker_mode();
+
+    // Semantic and Pipeline (with sem stage) require the ONNX embedder.
+    // Check availability before attempting to chunk — the embedder panics on
+    // first use if the model file is absent, which produces an empty 500 body.
+    let needs_embedder = matches!(mode, crate::config::ChunkerMode::Semantic)
+        || (matches!(mode, crate::config::ChunkerMode::Pipeline)
+            && config.pipeline_stages.split(',').any(|s| s.trim() == "sem"));
+    if needs_embedder {
+        if !crate::perf::onnx_embedder::is_onnx_enabled() {
+            return Ok(HttpResponse::UnprocessableEntity().json(json!({
+                "status": "error",
+                "message": "The backend was compiled without the 'onnx' feature. Rebuild with: cargo build (onnx is on by default).",
+                "request_id": request_id,
+            })));
+        }
+        let model_path = std::env::var("ONNX_MODEL_PATH")
+            .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+        if !std::path::Path::new(&model_path).exists() {
+            // Derive the companion .data path for the diagnostic message
+            let data_path = format!("{}.data", model_path);
+            let data_exists = std::path::Path::new(&data_path).exists();
+            let detail = if data_exists {
+                format!(
+                    "The weight file '{}' exists but the model graph '{}' is missing.",
+                    data_path, model_path
+                )
+            } else {
+                format!(
+                    "Neither '{}' nor '{}.data' were found. \
+                     Both files are required — the graph file is ~600 KB and \
+                     the weight file is ~87 MB.",
+                    model_path, model_path
+                )
+            };
+            return Ok(HttpResponse::UnprocessableEntity().json(json!({
+                "status": "error",
+                "message": format!(
+                    "ONNX model not found. {} \
+                     Place both files in the models/ directory at the repo root, \
+                     or set ONNX_MODEL_PATH in .env to point to the graph file. \
+                     See /config/onnx for path configuration, then restart the backend.",
+                    detail
+                ),
+                "request_id": request_id,
+            })));
+        }
+    }
+
+    let chunker = create_chunker(mode.into(), &config);
+
+    let preprocessed = crate::index::apply_text_preprocessing(body.text.clone());
+
+    let filename = body.filename.as_deref().unwrap_or("preview");
+    let mut chunks = chunker.chunk_text(&preprocessed);
+    if config.context_prefix_enabled {
+        chunks = chunks
+            .into_iter()
+            .map(|c| format!("[Source: {}] {}", filename, c))
+            .collect();
+    }
+
+    let stats = chunker.stats();
+    let mode_str = config.mode.clone();
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "request_id": request_id,
+        "chunk_count": chunks.len(),
+        "chunks": chunks,
+        "stats": stats,
+        "mode": mode_str,
+        "config": {
+            "target_size": config.target_size,
+            "min_size": config.min_size,
+            "max_size": config.max_size,
+            "overlap": config.overlap,
+            "semantic_similarity_threshold": config.semantic_similarity_threshold,
+            "clean_html": config.clean_html,
+            "clean_unicode": config.clean_unicode,
+            "context_prefix_enabled": config.context_prefix_enabled,
+            "context_prefix_tokens": config.context_prefix_tokens,
+        }
+    })))
 }

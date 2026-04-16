@@ -1,8 +1,6 @@
 //! ONNX Runtime Configuration Page
 
-use crate::pages::hardware::constants::{
-    PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
-};
+use crate::pages::hardware::constants::{PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE};
 use crate::{
     api,
     app::{PageErrors, Route},
@@ -100,6 +98,35 @@ pub fn ConfigOnnx() -> Element {
     let mut _show_model_path_info = use_signal(|| false);
     let mut _show_embed_dim_info = use_signal(|| false);
     let mut _show_max_length_info = use_signal(|| false);
+    // Session Options (read-only / advanced)
+    let mut show_exec_order_info = use_signal(|| false);
+    let mut show_create_thread_info = use_signal(|| false);
+    let mut show_join_thread_info = use_signal(|| false);
+    let mut show_free_dim_info = use_signal(|| false);
+    let mut show_session_config_info = use_signal(|| false);
+    // Session Config Keys
+    let mut show_save_model_fmt_info = use_signal(|| false);
+    let mut show_ort_bytes_direct_info = use_signal(|| false);
+    let mut show_ort_bytes_init_info = use_signal(|| false);
+    let mut show_intra_spin_ctrl_info = use_signal(|| false);
+    let mut show_dyn_block_info = use_signal(|| false);
+    let mut show_graph_opt_loop_info = use_signal(|| false);
+    let mut show_bias_gelu_info = use_signal(|| false);
+    let mut show_conv_bn_info = use_signal(|| false);
+    // Run Options
+    let mut show_run_tag_info = use_signal(|| false);
+    let mut show_run_log_sev_info = use_signal(|| false);
+    let mut show_run_log_verb_info = use_signal(|| false);
+    let mut show_log_tag_info = use_signal(|| false);
+    // CPU Execution Provider
+    let mut show_ep_intra_threads_info = use_signal(|| false);
+    let mut show_ep_inter_threads_info = use_signal(|| false);
+    let mut show_use_arena_info = use_signal(|| false);
+    let mut show_arena_extend_info = use_signal(|| false);
+    let mut show_init_chunk_info = use_signal(|| false);
+    let mut show_max_chunk_info = use_signal(|| false);
+    let mut show_growth_chunk_info = use_signal(|| false);
+    let mut show_dead_bytes_info = use_signal(|| false);
 
     // Get global page errors context
     let mut page_errors = use_context::<Signal<PageErrors>>();
@@ -316,6 +343,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_exec_order_info.set(true),
                                         title: "Execution order",
                                         InfoIcon {}
                                     }
@@ -438,6 +466,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_create_thread_info.set(true),
                                         title: "Custom create thread function",
                                         InfoIcon {}
                                     }
@@ -452,6 +481,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_join_thread_info.set(true),
                                         title: "Custom join thread function",
                                         InfoIcon {}
                                     }
@@ -537,6 +567,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_free_dim_info.set(true),
                                         title: "Free dimension overrides",
                                         InfoIcon {}
                                     }
@@ -551,6 +582,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_session_config_info.set(true),
                                         title: "Session config entries",
                                         InfoIcon {}
                                     }
@@ -717,6 +749,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_save_model_fmt_info.set(true),
                                         title: "Save model format",
                                         InfoIcon {}
                                     }
@@ -730,6 +763,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_ort_bytes_direct_info.set(true),
                                         title: "Use ORT model bytes directly",
                                         InfoIcon {}
                                     }
@@ -743,6 +777,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_ort_bytes_init_info.set(true),
                                         title: "Use ORT model bytes for initializers",
                                         InfoIcon {}
                                     }
@@ -848,6 +883,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_intra_spin_ctrl_info.set(true),
                                         title: "Intra-op spin control",
                                         InfoIcon {}
                                     }
@@ -861,6 +897,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_dyn_block_info.set(true),
                                         title: "Dynamic block base",
                                         InfoIcon {}
                                     }
@@ -900,6 +937,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_graph_opt_loop_info.set(true),
                                         title: "Graph optimizations loop level",
                                         InfoIcon {}
                                     }
@@ -965,6 +1003,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_bias_gelu_info.set(true),
                                         title: "Enable bias GELU fusion",
                                         InfoIcon {}
                                     }
@@ -978,6 +1017,7 @@ pub fn ConfigOnnx() -> Element {
                                     button {
                                         class: PARAM_ICON_BUTTON_CLASS,
                                         style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_conv_bn_info.set(true),
                                         title: "Enable conv BN fusion",
                                         InfoIcon {}
                                     }
@@ -1065,6 +1105,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_run_tag_info.set(true),
                                                 title: "Run tag",
                                                 InfoIcon {}
                                             }
@@ -1082,6 +1123,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_run_log_sev_info.set(true),
                                                 title: "Log severity level",
                                                 InfoIcon {}
                                             }
@@ -1095,6 +1137,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_run_log_verb_info.set(true),
                                                 title: "Log verbosity level",
                                                 InfoIcon {}
                                             }
@@ -1108,6 +1151,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_log_tag_info.set(true),
                                                 title: "Log tag",
                                                 InfoIcon {}
                                             }
@@ -1130,6 +1174,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_ep_intra_threads_info.set(true),
                                                 title: "Intra-op num threads",
                                                 InfoIcon {}
                                             }
@@ -1143,6 +1188,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_ep_inter_threads_info.set(true),
                                                 title: "Inter-op num threads",
                                                 InfoIcon {}
                                             }
@@ -1161,6 +1207,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_use_arena_info.set(true),
                                                 title: "Use arena",
                                                 InfoIcon {}
                                             }
@@ -1174,6 +1221,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_arena_extend_info.set(true),
                                                 title: "Arena extend strategy",
                                                 InfoIcon {}
                                             }
@@ -1187,6 +1235,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_init_chunk_info.set(true),
                                                 title: "Initial chunk size bytes",
                                                 InfoIcon {}
                                             }
@@ -1200,6 +1249,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_max_chunk_info.set(true),
                                                 title: "Max chunk size bytes",
                                                 InfoIcon {}
                                             }
@@ -1213,6 +1263,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_growth_chunk_info.set(true),
                                                 title: "Initial growth chunk size bytes",
                                                 InfoIcon {}
                                             }
@@ -1226,6 +1277,7 @@ pub fn ConfigOnnx() -> Element {
                                             button {
                                                 class: PARAM_ICON_BUTTON_CLASS,
                                                 style: PARAM_ICON_BUTTON_STYLE,
+                                                onclick: move |_| show_dead_bytes_info.set(true),
                                                 title: "Max dead bytes per chunk",
                                                 InfoIcon {}
                                             }
@@ -1456,6 +1508,95 @@ pub fn ConfigOnnx() -> Element {
         }
         if _show_max_length_info() {
             { info_modal(OnnxHelpTopic::MaxLength.title(), _show_max_length_info, OnnxHelpTopic::MaxLength.paragraphs()) }
+        }
+        // Pre-declared signals for params not yet shown in UI
+        if _show_indep_pool_info() {
+            { info_modal(OnnxHelpTopic::IndependentThreadPool.title(), _show_indep_pool_info, OnnxHelpTopic::IndependentThreadPool.paragraphs()) }
+        }
+        if _show_no_env_ep_info() {
+            { info_modal(OnnxHelpTopic::NoEnvExecutionProviders.title(), _show_no_env_ep_info, OnnxHelpTopic::NoEnvExecutionProviders.paragraphs()) }
+        }
+        if _show_aot_inlining_info() {
+            { info_modal(OnnxHelpTopic::EnableAotInlining.title(), _show_aot_inlining_info, OnnxHelpTopic::EnableAotInlining.paragraphs()) }
+        }
+        // Session Options (read-only / advanced)
+        if show_exec_order_info() {
+            { info_modal(OnnxHelpTopic::ExecutionOrder.title(), show_exec_order_info, OnnxHelpTopic::ExecutionOrder.paragraphs()) }
+        }
+        if show_create_thread_info() {
+            { info_modal(OnnxHelpTopic::CustomCreateThreadFn.title(), show_create_thread_info, OnnxHelpTopic::CustomCreateThreadFn.paragraphs()) }
+        }
+        if show_join_thread_info() {
+            { info_modal(OnnxHelpTopic::CustomJoinThreadFn.title(), show_join_thread_info, OnnxHelpTopic::CustomJoinThreadFn.paragraphs()) }
+        }
+        if show_free_dim_info() {
+            { info_modal(OnnxHelpTopic::FreeDimensionOverrides.title(), show_free_dim_info, OnnxHelpTopic::FreeDimensionOverrides.paragraphs()) }
+        }
+        if show_session_config_info() {
+            { info_modal(OnnxHelpTopic::SessionConfigEntries.title(), show_session_config_info, OnnxHelpTopic::SessionConfigEntries.paragraphs()) }
+        }
+        // Session Config Keys
+        if show_save_model_fmt_info() {
+            { info_modal(OnnxHelpTopic::SaveModelFormat.title(), show_save_model_fmt_info, OnnxHelpTopic::SaveModelFormat.paragraphs()) }
+        }
+        if show_ort_bytes_direct_info() {
+            { info_modal(OnnxHelpTopic::UseOrtModelBytesDirectly.title(), show_ort_bytes_direct_info, OnnxHelpTopic::UseOrtModelBytesDirectly.paragraphs()) }
+        }
+        if show_ort_bytes_init_info() {
+            { info_modal(OnnxHelpTopic::UseOrtModelBytesForInitializers.title(), show_ort_bytes_init_info, OnnxHelpTopic::UseOrtModelBytesForInitializers.paragraphs()) }
+        }
+        if show_intra_spin_ctrl_info() {
+            { info_modal(OnnxHelpTopic::IntraOpSpinControl.title(), show_intra_spin_ctrl_info, OnnxHelpTopic::IntraOpSpinControl.paragraphs()) }
+        }
+        if show_dyn_block_info() {
+            { info_modal(OnnxHelpTopic::DynamicBlockBase.title(), show_dyn_block_info, OnnxHelpTopic::DynamicBlockBase.paragraphs()) }
+        }
+        if show_graph_opt_loop_info() {
+            { info_modal(OnnxHelpTopic::GraphOptimizationsLoopLevel.title(), show_graph_opt_loop_info, OnnxHelpTopic::GraphOptimizationsLoopLevel.paragraphs()) }
+        }
+        if show_bias_gelu_info() {
+            { info_modal(OnnxHelpTopic::EnableBiasGeluFusion.title(), show_bias_gelu_info, OnnxHelpTopic::EnableBiasGeluFusion.paragraphs()) }
+        }
+        if show_conv_bn_info() {
+            { info_modal(OnnxHelpTopic::EnableConvBnFusion.title(), show_conv_bn_info, OnnxHelpTopic::EnableConvBnFusion.paragraphs()) }
+        }
+        // Run Options
+        if show_run_tag_info() {
+            { info_modal(OnnxHelpTopic::RunTag.title(), show_run_tag_info, OnnxHelpTopic::RunTag.paragraphs()) }
+        }
+        if show_run_log_sev_info() {
+            { info_modal(OnnxHelpTopic::RunLogSeverityLevel.title(), show_run_log_sev_info, OnnxHelpTopic::RunLogSeverityLevel.paragraphs()) }
+        }
+        if show_run_log_verb_info() {
+            { info_modal(OnnxHelpTopic::RunLogVerbosityLevel.title(), show_run_log_verb_info, OnnxHelpTopic::RunLogVerbosityLevel.paragraphs()) }
+        }
+        if show_log_tag_info() {
+            { info_modal(OnnxHelpTopic::LogTag.title(), show_log_tag_info, OnnxHelpTopic::LogTag.paragraphs()) }
+        }
+        // CPU Execution Provider
+        if show_ep_intra_threads_info() {
+            { info_modal(OnnxHelpTopic::EpIntraOpNumThreads.title(), show_ep_intra_threads_info, OnnxHelpTopic::EpIntraOpNumThreads.paragraphs()) }
+        }
+        if show_ep_inter_threads_info() {
+            { info_modal(OnnxHelpTopic::EpInterOpNumThreads.title(), show_ep_inter_threads_info, OnnxHelpTopic::EpInterOpNumThreads.paragraphs()) }
+        }
+        if show_use_arena_info() {
+            { info_modal(OnnxHelpTopic::UseArena.title(), show_use_arena_info, OnnxHelpTopic::UseArena.paragraphs()) }
+        }
+        if show_arena_extend_info() {
+            { info_modal(OnnxHelpTopic::ArenaExtendStrategy.title(), show_arena_extend_info, OnnxHelpTopic::ArenaExtendStrategy.paragraphs()) }
+        }
+        if show_init_chunk_info() {
+            { info_modal(OnnxHelpTopic::InitialChunkSizeBytes.title(), show_init_chunk_info, OnnxHelpTopic::InitialChunkSizeBytes.paragraphs()) }
+        }
+        if show_max_chunk_info() {
+            { info_modal(OnnxHelpTopic::MaxChunkSizeBytes.title(), show_max_chunk_info, OnnxHelpTopic::MaxChunkSizeBytes.paragraphs()) }
+        }
+        if show_growth_chunk_info() {
+            { info_modal(OnnxHelpTopic::InitialGrowthChunkSizeBytes.title(), show_growth_chunk_info, OnnxHelpTopic::InitialGrowthChunkSizeBytes.paragraphs()) }
+        }
+        if show_dead_bytes_info() {
+            { info_modal(OnnxHelpTopic::MaxDeadBytesPerChunk.title(), show_dead_bytes_info, OnnxHelpTopic::MaxDeadBytesPerChunk.paragraphs()) }
         }
     }
 }

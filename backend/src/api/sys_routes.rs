@@ -838,6 +838,68 @@ pub async fn tokenizer_info() -> impl Responder {
     }))
 }
 
+/// POST /sys/restart — restart the ag.service unit and respond before the process dies.
+pub async fn restart_backend() -> HttpResponse {
+    tracing::info!("Backend restart requested via API");
+    // Spawn the restart with a short delay so the HTTP response can be flushed first.
+    tokio::spawn(async {
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        let _ = tokio::process::Command::new("systemctl")
+            .args(["--user", "restart", "ag.service"])
+            .output()
+            .await;
+    });
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "message": "Restart initiated — ag.service will restart momentarily."
+    }))
+}
+
+/// POST /sys/restart-process — re-exec just the ag binary without touching ag.service or Docker.
+/// Reads /proc/self/exe to get the current binary path, flushes the response, then exec-replaces
+/// the process. Docker services and systemd are untouched.
+pub async fn restart_process() -> HttpResponse {
+    tracing::info!("Process re-exec requested via API");
+    tokio::spawn(async {
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        // Read the current executable path from /proc/self/exe (follows the symlink)
+        let exe = match std::fs::read_link("/proc/self/exe") {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Failed to read /proc/self/exe: {e}");
+                return;
+            }
+        };
+        // Build null-terminated argv and envp for execve
+        let to_cstring = |s: String| std::ffi::CString::new(s).ok();
+        let args: Vec<std::ffi::CString> = std::env::args().filter_map(to_cstring).collect();
+        let env: Vec<std::ffi::CString> = std::env::vars()
+            .filter_map(|(k, v)| to_cstring(format!("{k}={v}")))
+            .collect();
+        let exe_cstr = match std::ffi::CString::new(exe.to_string_lossy().as_bytes()) {
+            Ok(s) => s,
+            Err(e) => { tracing::error!("Invalid exe path: {e}"); return; }
+        };
+
+        // Build raw pointer arrays (null-terminated)
+        let mut argv: Vec<*const libc::c_char> =
+            args.iter().map(|s| s.as_ptr()).collect();
+        argv.push(std::ptr::null());
+        let mut envp: Vec<*const libc::c_char> =
+            env.iter().map(|s| s.as_ptr()).collect();
+        envp.push(std::ptr::null());
+
+        tracing::info!(exe = %exe.display(), "Exec-replacing process");
+        // execve replaces the process image; returns only on failure
+        unsafe { libc::execve(exe_cstr.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+        tracing::error!("execve failed: {}", std::io::Error::last_os_error());
+    });
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "message": "Process restart initiated — binary will re-exec momentarily."
+    }))
+}
+
 pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/cores").route(web::get().to(get_physical_cores)));
     cfg.service(web::resource("/memory").route(web::get().to(get_memory)));
@@ -851,4 +913,6 @@ pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/loaded-model").route(web::get().to(loaded_model)));
     cfg.service(web::resource("/tokenizer-info").route(web::get().to(tokenizer_info)));
     cfg.service(web::resource("/llama-model").route(web::post().to(set_llama_model)));
+    cfg.service(web::resource("/restart").route(web::post().to(restart_backend)));
+    cfg.service(web::resource("/restart-process").route(web::post().to(restart_process)));
 }

@@ -1364,8 +1364,8 @@ pub(crate) async fn run_agent_get(
 // OPENAI STREAMING HANDLER
 // ============================================================================
 
-/// Stream response from OpenAI API
-/// OpenAI uses Server-Sent Events with format:
+/// Stream response from an OpenAI-compatible API (OpenAI, OpenRouter, etc.)
+/// Uses Server-Sent Events with format:
 /// data: {"choices":[{"delta":{"content":"text"}}]}
 /// data: [DONE]
 pub(crate) async fn stream_openai_response(
@@ -1376,33 +1376,57 @@ pub(crate) async fn stream_openai_response(
     chunks_count: usize,
     request_id: String,
 ) -> Result<HttpResponse, Error> {
+    stream_openai_compatible_response(
+        client,
+        "https://api.openai.com/v1/chat/completions",
+        api_key,
+        model,
+        body,
+        chunks_count,
+        request_id,
+        &[],
+    )
+    .await
+}
+
+/// Stream response from any OpenAI-compatible API endpoint
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn stream_openai_compatible_response(
+    client: reqwest::Client,
+    url: &str,
+    api_key: &str,
+    model: &str,
+    body: serde_json::Value,
+    chunks_count: usize,
+    request_id: String,
+    extra_headers: &[(&str, &str)],
+) -> Result<HttpResponse, Error> {
     use actix_web::web::Bytes;
     use futures_util::stream::StreamExt;
-
-    let url = "https://api.openai.com/v1/chat/completions";
 
     tracing::info!(
         model = %model,
         request_id = %request_id,
-        "Streaming from OpenAI API"
+        url = %url,
+        "Streaming from OpenAI-compatible API"
     );
 
-    match client
+    let mut req = client
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
+        .header("Content-Type", "application/json");
+    for (key, val) in extra_headers {
+        req = req.header(*key, *val);
+    }
+    match req.json(&body).send().await {
         Ok(response) => {
             if !response.status().is_success() {
                 let status = response.status();
                 let error_text = response.text().await.unwrap_or_default();
-                tracing::error!("OpenAI API error: {} - {}", status, error_text);
+                tracing::error!("OpenAI-compatible API error: {} - {}", status, error_text);
                 let error_response = serde_json::json!({
                     "type": "error",
-                    "message": format!("OpenAI API error: {} - {}", status, error_text),
+                    "message": format!("API error: {} - {}", status, error_text),
                     "request_id": request_id
                 });
                 return Ok(HttpResponse::Ok()
@@ -1475,7 +1499,7 @@ pub(crate) async fn stream_openai_response(
         Err(e) => {
             let error_response = serde_json::json!({
                 "type": "error",
-                "message": format!("Failed to connect to OpenAI: {}", e),
+                "message": format!("Failed to connect to API: {}", e),
                 "request_id": request_id
             });
             Ok(HttpResponse::Ok()
@@ -2187,6 +2211,59 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                     chunks_count,
                     request_id,
                     prompt_caching,
+                )
+                .await;
+            }
+        }
+        crate::db::param_hardware::BackendType::OpenRouter => {
+            // OpenRouter: OpenAI-compatible API gateway
+            let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| {
+                crate::db::api_keys::global_config()
+                    .openrouter_api_key
+                    .clone()
+            });
+
+            if api_key.is_empty() {
+                tracing::warn!("OpenRouter API key not configured, falling back to Ollama");
+                let fallback_body = serde_json::json!({
+                    "model": final_model,
+                    "prompt": prompt,
+                    "stream": true,
+                    "options": {
+                        "temperature": config.temperature,
+                        "top_p": config.top_p,
+                        "top_k": config.top_k,
+                        "num_predict": config.max_tokens,
+                        "repeat_penalty": config.repeat_penalty,
+                        "num_thread": thread_count
+                    }
+                });
+                (format!("{}/api/generate", ollama_url), fallback_body)
+            } else {
+                let messages = if prompt_caching {
+                    cache_prompt.build_openai_messages()
+                } else {
+                    vec![
+                        serde_json::json!({"role": "system", "content": system_prompt}),
+                        serde_json::json!({"role": "user", "content": format!("{}\n\nQuestion: {}", context, req.query)}),
+                    ]
+                };
+                let body = serde_json::json!({
+                    "model": final_model,
+                    "messages": messages,
+                    "stream": true,
+                    "temperature": config.temperature,
+                    "max_tokens": config.max_tokens
+                });
+                return stream_openai_compatible_response(
+                    client,
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    &api_key,
+                    &final_model,
+                    body,
+                    chunks_count,
+                    request_id,
+                    &[("HTTP-Referer", "https://github.com/pde/ag")],
                 )
                 .await;
             }

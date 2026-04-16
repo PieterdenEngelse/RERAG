@@ -2,7 +2,11 @@ use crate::config::ChunkerMode;
 use crate::embedder;
 use crate::memory::chunker_factory::{create_chunker, Chunker};
 use crate::mime_detect::{detect_content_type, ContentType};
-use crate::monitoring::DetectionInfo;
+use crate::monitoring::{
+    record_extraction_format, record_ocr_attempted, record_ocr_no_pages, record_ocr_no_text,
+    record_ocr_ok, record_ocr_unavailable, DetectionInfo, EXTRACTION_CHARS_TOTAL,
+    EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL,
+};
 use crate::retriever::Retriever;
 use std::fs;
 use std::path::Path;
@@ -245,7 +249,7 @@ pub fn index_content_direct(
         .unwrap_or("unknown");
 
     let chunk_start = std::time::Instant::now();
-    let chunks = chunker.chunk_text(content);
+    let chunks = apply_context_prefix(chunker.chunk_text(content), filename);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -308,7 +312,7 @@ pub fn index_content_with_graph(
         .unwrap_or("unknown");
 
     let chunk_start = std::time::Instant::now();
-    let chunks = chunker.chunk_text(content);
+    let chunks = apply_context_prefix(chunker.chunk_text(content), filename);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -402,7 +406,7 @@ async fn index_file_with_detection_async(
     };
 
     let chunk_start = std::time::Instant::now();
-    let chunks = chunker.chunk_text(&content);
+    let chunks = apply_context_prefix(chunker.chunk_text(&content), filename);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -477,7 +481,7 @@ fn index_file_with_detection(
     };
 
     let chunk_start = std::time::Instant::now();
-    let chunks = chunker.chunk_text(&content);
+    let chunks = apply_context_prefix(chunker.chunk_text(&content), filename);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -595,6 +599,22 @@ fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo
         ContentType::Xml => ("XML".to_string(), "tag_aware".to_string()),
         ContentType::Json => ("JSON".to_string(), "structure_aware".to_string()),
         ContentType::Code(_) => ("Source Code".to_string(), "ast_based".to_string()),
+        ContentType::Docx => ("Word Document".to_string(), "paragraph_split".to_string()),
+        ContentType::Xlsx => ("Excel Spreadsheet".to_string(), "row_split".to_string()),
+        ContentType::Csv => ("CSV".to_string(), "row_split".to_string()),
+        ContentType::Odt => (
+            "OpenDocument Text".to_string(),
+            "paragraph_split".to_string(),
+        ),
+        ContentType::Ods => (
+            "OpenDocument Spreadsheet".to_string(),
+            "row_split".to_string(),
+        ),
+        ContentType::Epub => ("EPUB e-book".to_string(), "chapter_split".to_string()),
+        ContentType::Pptx => (
+            "PowerPoint Presentation".to_string(),
+            "slide_split".to_string(),
+        ),
         ContentType::Binary => ("Binary".to_string(), "skip".to_string()),
         ContentType::Unknown => ("Unknown".to_string(), "fallback_paragraph".to_string()),
     };
@@ -624,33 +644,438 @@ pub async fn extract_text_async(path: &Path) -> Option<String> {
     extract_text_from_bytes(path, bytes)
 }
 
+/// Strip HTML/XML tags from text, returning (clean_text, tag_count).
+pub fn strip_html_tags(text: &str) -> (String, usize) {
+    let mut result = String::with_capacity(text.len());
+    let mut in_tag = false;
+    let mut count = 0usize;
+    for ch in text.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                count += 1;
+            }
+            '>' => {
+                in_tag = false;
+                result.push(' ');
+            }
+            _ if !in_tag => result.push(ch),
+            _ => {}
+        }
+    }
+    (
+        result.split_whitespace().collect::<Vec<_>>().join(" "),
+        count,
+    )
+}
+
+/// Normalize Unicode whitespace and typographic characters to ASCII.
+/// Returns (clean_text, replacement_count).
+pub fn normalize_unicode(text: &str) -> (String, usize) {
+    let mut count = 0usize;
+    let mut result = String::with_capacity(text.len());
+    for ch in text.chars() {
+        let replacement = match ch {
+            '\u{00A0}' => Some(" "),   // non-breaking space
+            '\u{200B}' => Some(""),    // zero-width space
+            '\u{2019}' => Some("'"),   // right single quote
+            '\u{2018}' => Some("'"),   // left single quote
+            '\u{201C}' => Some("\""),  // left double quote
+            '\u{201D}' => Some("\""),  // right double quote
+            '\u{2013}' => Some("-"),   // en-dash
+            '\u{2014}' => Some("--"),  // em-dash
+            '\u{2026}' => Some("..."), // ellipsis
+            _ => None,
+        };
+        if let Some(r) = replacement {
+            result.push_str(r);
+            count += 1;
+        } else {
+            result.push(ch);
+        }
+    }
+    (result, count)
+}
+
 /// Common text extraction logic from bytes
 fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
     let filename = path.file_name().and_then(|n| n.to_str());
     let content_type = detect_content_type(&bytes, filename);
 
-    match content_type {
+    let format_label = match &content_type {
+        ContentType::Pdf => "pdf",
+        ContentType::Docx => "docx",
+        ContentType::Odt => "odt",
+        ContentType::Xlsx => "xlsx",
+        ContentType::Ods => "ods",
+        ContentType::Csv => "csv",
+        ContentType::Epub => "epub",
+        ContentType::Pptx => "pptx",
+        ContentType::Text => "text",
+        ContentType::Markdown => "markdown",
+        ContentType::Html => "html",
+        ContentType::Json => "json",
+        ContentType::Xml => "xml",
+        ContentType::Code(_) => "code",
+        ContentType::Binary => "binary",
+        ContentType::Unknown => "unknown",
+    };
+
+    let result = match content_type {
         ContentType::Pdf => {
-            // PDF parsing - could use pdf-extract crate here
-            debug!("extract_text: PDF detected, attempting extraction");
-            Some("PDF parsing not fully implemented.".to_string())
+            debug!("extract_text: PDF detected, extracting text layer");
+            match pdf_extract::extract_text(path) {
+                Ok(text) if !text.trim().is_empty() => Some(text),
+                Ok(_) => {
+                    debug!("extract_text: PDF has no text layer — trying OCR fallback");
+                    extract_text_from_pdf_ocr(path)
+                }
+                Err(e) => {
+                    warn!("extract_text: pdf_extract failed ({}), trying OCR fallback", e);
+                    extract_text_from_pdf_ocr(path)
+                }
+            }
+        }
+        ContentType::Docx => {
+            debug!("extract_text: DOCX detected, extracting word/document.xml");
+            extract_text_from_zip_xml(&bytes, "word/document.xml")
+        }
+        ContentType::Odt => {
+            debug!("extract_text: ODT detected, extracting content.xml");
+            extract_text_from_zip_xml(&bytes, "content.xml")
+        }
+        ContentType::Xlsx => {
+            debug!("extract_text: XLSX detected, using calamine");
+            extract_text_from_spreadsheet(&bytes)
+        }
+        ContentType::Ods => {
+            debug!("extract_text: ODS detected, using calamine");
+            extract_text_from_spreadsheet(&bytes)
+        }
+        ContentType::Csv => {
+            // CSV is plain UTF-8 text
+            String::from_utf8(bytes.clone())
+                .ok()
+                .or_else(|| Some(String::from_utf8_lossy(&bytes).to_string()))
+        }
+        ContentType::Epub => {
+            debug!("extract_text: EPUB detected, extracting XHTML spine items");
+            extract_text_from_epub(&bytes)
+        }
+        ContentType::Pptx => {
+            debug!("extract_text: PPTX detected, extracting slide XML");
+            extract_text_from_pptx(&bytes)
         }
         ContentType::Binary => {
             debug!("extract_text: Binary file detected, skipping");
             None
         }
         _ => {
-            // For all text-based types, try to read as UTF-8
+            // For all other text-based types, try to read as UTF-8
             String::from_utf8(bytes.clone()).ok().or_else(|| {
-                // Fall back to lossy conversion for non-UTF8 text
                 debug!("extract_text: Non-UTF8 content, using lossy conversion");
                 Some(String::from_utf8_lossy(&bytes).to_string())
             })
         }
     }
+    .map(|text| apply_text_preprocessing(text));
+
+    // Record extraction metrics
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let file_path = abs.to_string_lossy();
+    match &result {
+        Some(text) => {
+            let chars = text.len();
+            record_extraction_format(format_label, true, chars, file_name, &file_path);
+            let _ = EXTRACTION_TOTAL
+                .get_metric_with_label_values(&[format_label, "ok"])
+                .map(|c| c.inc());
+            let _ = EXTRACTION_CHARS_TOTAL
+                .get_metric_with_label_values(&[format_label])
+                .map(|c| c.inc_by(chars as u64));
+        }
+        None => {
+            record_extraction_format(format_label, false, 0, file_name, &file_path);
+            let _ = EXTRACTION_TOTAL
+                .get_metric_with_label_values(&[format_label, "empty"])
+                .map(|c| c.inc());
+        }
+    }
+
+    result
 }
 
-pub fn default_chunker(mode: ChunkerMode) -> Box<dyn Chunker> {
+/// Apply [Source: filename] context prefix to chunks if enabled in global config.
+pub fn apply_context_prefix(chunks: Vec<String>, filename: &str) -> Vec<String> {
     let config = crate::db::chunk_settings::global_config();
+    if config.context_prefix_enabled {
+        chunks
+            .into_iter()
+            .map(|c| format!("[Source: {}] {}", filename, c))
+            .collect()
+    } else {
+        chunks
+    }
+}
+
+/// Apply clean_html and clean_unicode preprocessing based on global ChunkerConfig.
+pub fn apply_text_preprocessing(text: String) -> String {
+    let config = crate::db::chunk_settings::global_config();
+    let mut result = text;
+    if config.clean_html {
+        let (cleaned, count) = strip_html_tags(&result);
+        if count > 0 {
+            debug!("apply_text_preprocessing: stripped {} HTML tags", count);
+        }
+        result = cleaned;
+    }
+    if config.clean_unicode {
+        let (cleaned, count) = normalize_unicode(&result);
+        if count > 0 {
+            debug!(
+                "apply_text_preprocessing: normalized {} unicode chars",
+                count
+            );
+        }
+        result = cleaned;
+    }
+    result
+}
+
+/// Extract text from a ZIP-based XML format (DOCX uses word/document.xml, ODT uses content.xml).
+/// Strips all XML tags, leaving only text content.
+fn extract_text_from_zip_xml(bytes: &[u8], entry_path: &str) -> Option<String> {
+    use std::io::Read;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut entry = archive.by_name(entry_path).ok()?;
+    let mut xml_content = String::new();
+    entry.read_to_string(&mut xml_content).ok()?;
+    Some(strip_xml_tags(&xml_content))
+}
+
+/// Strip XML/HTML tags from a string, returning just the text nodes joined by spaces.
+fn strip_xml_tags(xml: &str) -> String {
+    let mut result = String::with_capacity(xml.len() / 2);
+    let mut in_tag = false;
+    for ch in xml.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                result.push(' ');
+            }
+            _ if !in_tag => result.push(ch),
+            _ => {}
+        }
+    }
+    // Collapse whitespace
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Extract text from XLSX or ODS using calamine.
+/// Concatenates all sheets: each row becomes a tab-separated line.
+fn extract_text_from_spreadsheet(bytes: &[u8]) -> Option<String> {
+    use calamine::{open_workbook_auto_from_rs, Data, Reader};
+    let cursor = std::io::Cursor::new(bytes);
+    let mut workbook = open_workbook_auto_from_rs(cursor).ok()?;
+    let sheet_names = workbook.sheet_names().to_vec();
+    let mut text = String::new();
+    for sheet_name in &sheet_names {
+        if sheet_names.len() > 1 {
+            text.push_str(&format!("[Sheet: {}]\n", sheet_name));
+        }
+        if let Ok(range) = workbook.worksheet_range(sheet_name) {
+            for row in range.rows() {
+                let cols: Vec<String> = row
+                    .iter()
+                    .map(|cell| match cell {
+                        Data::Empty => String::new(),
+                        Data::String(s) => s.clone(),
+                        Data::Float(f) => f.to_string(),
+                        Data::Int(i) => i.to_string(),
+                        Data::Bool(b) => b.to_string(),
+                        Data::Error(e) => format!("{:?}", e),
+                        Data::DateTime(dt) => dt.to_string(),
+                        Data::DateTimeIso(s) => s.clone(),
+                        Data::DurationIso(s) => s.clone(),
+                    })
+                    .collect();
+                let line = cols.join("\t");
+                if !line.trim().is_empty() {
+                    text.push_str(&line);
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// Extract text from an EPUB file.
+/// EPUBs are ZIP archives; text lives in XHTML/HTML spine items anywhere in the archive.
+fn extract_text_from_epub(bytes: &[u8]) -> Option<String> {
+    use std::io::Read;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut text = String::new();
+    // Collect names first to avoid borrow issues
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|e| e.name().to_string()))
+        .collect();
+    for name in &names {
+        if name.ends_with(".xhtml") || name.ends_with(".html") || name.ends_with(".htm") {
+            if let Ok(mut entry) = archive.by_name(name) {
+                let mut buf = String::new();
+                if entry.read_to_string(&mut buf).is_ok() {
+                    let extracted = strip_xml_tags(&buf);
+                    if !extracted.is_empty() {
+                        text.push_str(&extracted);
+                        text.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// Extract text from a PPTX file.
+/// PPTXs are ZIP archives; slide text lives in `ppt/slides/slide*.xml`.
+fn extract_text_from_pptx(bytes: &[u8]) -> Option<String> {
+    use std::io::Read;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut text = String::new();
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|e| e.name().to_string()))
+        .filter(|n| n.starts_with("ppt/slides/slide") && n.ends_with(".xml"))
+        .collect();
+    for name in &names {
+        if let Ok(mut entry) = archive.by_name(name) {
+            let mut buf = String::new();
+            if entry.read_to_string(&mut buf).is_ok() {
+                let extracted = strip_xml_tags(&buf);
+                if !extracted.is_empty() {
+                    text.push_str(&extracted);
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// OCR fallback for scanned/image-only PDFs.
+///
+/// Pipeline: `pdftoppm` (poppler-utils) renders each page to a PPM image,
+/// then `tesseract` OCRs each image and concatenates the results.
+///
+/// Gracefully returns `None` if either tool is absent, with a one-time warning.
+fn extract_text_from_pdf_ocr(path: &Path) -> Option<String> {
+    use std::process::Command;
+
+    // Check both tools are on PATH before doing any work
+    let has_pdftoppm = Command::new("pdftoppm").arg("-v").output().is_ok();
+    let has_tesseract = Command::new("tesseract").arg("--version").output().is_ok();
+
+    if !has_pdftoppm || !has_tesseract {
+        warn!(
+            "extract_text: OCR fallback unavailable (pdftoppm={}, tesseract={}). \
+            Install with: sudo apt install poppler-utils tesseract-ocr tesseract-ocr-eng",
+            has_pdftoppm, has_tesseract
+        );
+        record_ocr_unavailable();
+        let _ = EXTRACTION_OCR_TOTAL
+            .get_metric_with_label_values(&["unavailable"])
+            .map(|c| c.inc());
+        return None;
+    }
+
+    record_ocr_attempted();
+    let _ = EXTRACTION_OCR_TOTAL
+        .get_metric_with_label_values(&["attempted"])
+        .map(|c| c.inc());
+
+    // Render PDF pages to PPM images in a temp directory (150 dpi — fast + legible)
+    let tmp = tempfile::tempdir().ok()?;
+    let prefix = tmp.path().join("pg");
+
+    let render = Command::new("pdftoppm")
+        .args(["-r", "150", path.to_str()?, prefix.to_str()?])
+        .output()
+        .ok()?;
+
+    if !render.status.success() {
+        warn!(
+            "extract_text: pdftoppm failed: {}",
+            String::from_utf8_lossy(&render.stderr)
+        );
+        return None;
+    }
+
+    // Collect and sort page images (pdftoppm names them pg-1.ppm, pg-2.ppm, …)
+    let mut pages: Vec<_> = std::fs::read_dir(tmp.path())
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "ppm").unwrap_or(false))
+        .collect();
+    pages.sort();
+
+    if pages.is_empty() {
+        debug!("extract_text: pdftoppm produced no page images");
+        record_ocr_no_pages();
+        let _ = EXTRACTION_OCR_TOTAL
+            .get_metric_with_label_values(&["no_pages"])
+            .map(|c| c.inc());
+        return None;
+    }
+
+    // OCR each page
+    let mut text = String::new();
+    for img in &pages {
+        let ocr = Command::new("tesseract")
+            .args([img.to_str()?, "stdout", "-l", "eng", "--psm", "3"])
+            .output()
+            .ok()?;
+        if ocr.status.success() {
+            let page_text = String::from_utf8_lossy(&ocr.stdout);
+            if !page_text.trim().is_empty() {
+                text.push_str(&page_text);
+                text.push('\n');
+            }
+        }
+    }
+
+    if text.trim().is_empty() {
+        debug!("extract_text: OCR produced no text");
+        record_ocr_no_text();
+        let _ = EXTRACTION_OCR_TOTAL
+            .get_metric_with_label_values(&["no_text"])
+            .map(|c| c.inc());
+        None
+    } else {
+        record_ocr_ok();
+        let _ = EXTRACTION_OCR_TOTAL
+            .get_metric_with_label_values(&["ok"])
+            .map(|c| c.inc());
+        info!(
+            "extract_text: OCR extracted {} chars from {} page(s)",
+            text.len(),
+            pages.len()
+        );
+        Some(text)
+    }
+}
+
+pub fn default_chunker(_hint: ChunkerMode) -> Box<dyn Chunker> {
+    let config = crate::db::chunk_settings::global_config();
+    let mode = crate::db::chunk_settings::global_chunker_mode();
     create_chunker(mode.into(), &config)
 }

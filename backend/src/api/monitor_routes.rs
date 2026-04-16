@@ -1026,3 +1026,8 @@ pub(crate) async fn get_container_inspect(
         "logs": logs
     })))
 }
+
+pub(crate) async fn get_parser_stats() -> Result<HttpResponse, Error> {
+    let stats = crate::monitoring::get_extraction_stats();
+    Ok(HttpResponse::Ok().json(stats))
+}

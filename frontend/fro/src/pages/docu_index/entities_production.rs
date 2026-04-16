@@ -7,105 +7,91 @@ use dioxus_router::Link;
 #[component]
 pub fn DocuEntitiesProduction() -> Element {
     rsx! {
-        div { class: "min-h-screen bg-gray-900 p-6",
-            div { class: "max-w-4xl mx-auto",
+        div { class: "min-h-screen bg-gray-900 p-3",
+            div { class: "w-full",
 
-                div { class: "flex items-center gap-4 mb-6",
-                    Link {
-                        to: Route::DocuIndex {},
-                        class: "text-primary hover:underline",
-                        "← Back to Index"
+                div { class: "flex items-center gap-3 mb-2",
+                    Link { to: Route::DocuIndex {}, class: "text-primary hover:underline text-sm shrink-0", "← Index" }
+                    h1 { class: "text-lg font-bold text-white", "Entities Production" }
+                    span { class: "text-xs text-gray-400", "Entities are created from your data — the pipeline determines how." }
+                }
+
+                div { class: "grid grid-cols-3 gap-2",
+
+                    // Col 1: source data
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-white mb-1", "1. From uploaded documents" }
+                        p { class: "text-xs text-gray-300 mb-1",
+                            "AG runs NER at ingestion time — as each document is chunked and indexed, "
+                            code { class: "text-green-300", "ner_extractor.rs" }
+                            " scans the text and extracts named entities automatically."
+                        }
+                        p { class: "text-xs text-gray-400 mb-1", "Supported input formats:" }
+                        ul { class: "text-xs text-gray-300 list-disc ml-3 space-y-0.5",
+                            li { "PDF, TXT, Markdown" }
+                            li { "HTML, XML, JSON" }
+                            li { "Office: DOCX, XLSX, CSV, ODT, ODS" }
+                            li { "Source code: .rs .py .js .ts .go .java .cs .cpp .c .rb .php .sh .sql .yaml .toml" }
+                            li { "Special files: Dockerfile, Makefile, .gitignore, README" }
+                        }
+                        p { class: "text-xs text-gray-500 mt-1",
+                            "No separate dataset needed — your documents are the input."
+                        }
+                    }
+
+                    // Col 2: NER extraction
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-white mb-1", "2. How the model works" }
+                        p { class: "text-xs text-gray-300 mb-1",
+                            "Uses " span { class: "text-white", "dslim/bert-base-NER" } " — a pre-trained BERT model fine-tuned on CoNLL-2003, loaded from "
+                            code { class: "text-green-300", "~/ag/models/ner/model.onnx" }
+                            ". Runs on each chunk at index time."
+                        }
+                        div { class: "bg-gray-700 rounded p-2 my-1 text-xs text-gray-200 italic", "Microsoft acquired GitHub in 2018." }
+                        p { class: "text-xs text-gray-400 mb-0.5", "Model outputs:" }
+                        ul { class: "text-xs text-gray-300 list-disc ml-3 space-y-0.5",
+                            li { span { class: "text-blue-300", "Microsoft" } " → ORG" }
+                            li { span { class: "text-blue-300", "GitHub" } " → ORG" }
+                            li { span { class: "text-blue-300", "2018" } " → MISC" }
+                        }
+                        p { class: "text-xs text-gray-500 mt-1", "Labels: PERSON, ORG, LOC, MISC" }
+                    }
+
+                    // Col 3: pipeline summary
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
+                        h3 { class: "text-sm font-bold text-white mb-1", "Pipeline Summary" }
+                        div { class: "text-xs text-gray-300 space-y-1",
+                            p {
+                                span { class: "text-gray-400", "Input: " }
+                                "uploaded document (PDF, TXT, MD, DOCX, XLSX, CSV, ODT, ODS, …)"
+                            }
+                            p {
+                                span { class: "text-gray-400", "Chunked by: " }
+                                code { class: "text-green-300", "chunker.rs" }
+                            }
+                            p {
+                                span { class: "text-gray-400", "NER run by: " }
+                                code { class: "text-green-300", "ner_extractor.rs" }
+                                " on each chunk text"
+                            }
+                            p {
+                                span { class: "text-gray-400", "Model: " }
+                                "dslim/bert-base-NER via ONNX Runtime"
+                            }
+                            p {
+                                span { class: "text-gray-400", "Stored to: " }
+                                "Neo4j as Entity nodes with MENTIONS edges to Chunk nodes"
+                            }
+                            p {
+                                span { class: "text-gray-400", "Threshold: " }
+                                "confidence ≥ 0.7, length ≥ 2 chars"
+                            }
+                        }
                     }
                 }
 
-                    h2 { class: "text-2xl font-bold text-white mb-4", "Entities Production" }
-                    p { class: "text-lg text-gray-200 mb-4",
-                        "Entities aren't \"generated\" automatically by a knowledge graph system\u{2014}they are "
-                        strong { "created from your data" }
-                        ". But the way they are produced depends on the pipeline you build."
-                    }
-
-                    h3 { class: "text-xl font-bold text-white mt-8 mb-3", "How Entities Are Produced" }
-
-                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2",
-                        "1. Entities come from your source data"
-                    }
-                    p { class: "text-sm text-gray-300 mb-2",
-                        "Any concrete, real-world thing in your dataset becomes an entity."
-                    }
-                    ul { class: "space-y-1 text-sm text-gray-300 ml-4 list-disc",
-                        li { "A row in a database \u{2192} entity" }
-                        li { "A JSON object \u{2192} entity" }
-                        li { "A document \u{2192} entity" }
-                        li { "A user profile \u{2192} entity" }
-                        li { "A product \u{2192} entity" }
-                        li { "A location \u{2192} entity" }
-                    }
-
-                    h4 { class: "text-lg font-semibold text-white mt-6 mb-2",
-                        "2. Entities can be extracted from text"
-                    }
-                    p { class: "text-sm text-gray-300 mb-2",
-                        "If you run NLP or an ONNX model for NER (Named Entity Recognition), you can detect entities inside text."
-                    }
-                    p { class: "text-sm text-gray-300 mb-2", "Example sentence:" }
-                    div { class: "bg-gray-700 rounded p-3 my-2 text-sm text-gray-200 italic",
-                        "Microsoft acquired GitHub in 2018."
-                    }
-                    p { class: "text-sm text-gray-300 mt-2 mb-2", "NER model outputs:" }
-                    ul { class: "space-y-1 text-sm text-gray-300 ml-4 list-disc",
-                        li {
-                            span { class: "text-blue-300", "Microsoft" }
-                            " \u{2192} Organization entity"
-                        }
-                        li {
-                            span { class: "text-blue-300", "GitHub" }
-                            " \u{2192} Organization entity"
-                        }
-                        li {
-                            span { class: "text-blue-300", "2018" }
-                            " \u{2192} Date entity"
-                        }
-                    }
-
-                    h3 { class: "text-xl font-bold text-white mt-8 mb-3", "Summary Table" }
-                    table { class: "table table-sm w-full text-gray-300 mb-4",
-                        thead {
-                            tr {
-                                th { class: "text-gray-200", "Source" }
-                                th { class: "text-gray-200", "How Entities Are Produced" }
-                            }
-                        }
-                        tbody {
-                            tr {
-                                td { "Structured data" }
-                                td { "Each row/object becomes an entity node" }
-                            }
-                            tr {
-                                td { "Text (NER)" }
-                                td { "ONNX/NLP models extract named entities" }
-                            }
-                            tr {
-                                td { "Manual modeling" }
-                                td { "You define entity types and create nodes" }
-                            }
-                            tr {
-                                td { "Embeddings + clustering" }
-                                td { "Semantic groups become entity nodes" }
-                            }
-                            tr {
-                                td { "Graph inference" }
-                                td { "Patterns in relationships reveal new entities" }
-                            }
-                        }
-                    }
-
-                div { class: "mt-8 pt-4 border-t border-gray-700",
-                    Link {
-                        to: Route::DocuIndex {},
-                        class: "btn btn-primary btn-sm",
-                        "← Back to Index"
-                    }
+                div { class: "mt-2 pt-2 border-t border-gray-700",
+                    Link { to: Route::DocuIndex {}, class: "btn btn-primary btn-xs", "← Back to Index" }
                 }
             }
         }

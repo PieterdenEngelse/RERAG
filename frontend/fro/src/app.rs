@@ -2,24 +2,28 @@ use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j, ConfigOnnx, ConfigTerms,
-    ConfigOther, ConfigPrompt, ConfigSampling, Docu, DocuIndex, Home, MonitorAgSystemd, MonitorGrafanaServices,
-    DocuAgPipeline, DocuBias, DocuBm25, DocuRkyv, DocuRig, DocuEmbeddings, DocuEntitiesProduction, DocuIoUring,
-    DocuKnowledgeGraphs, DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuTantivy, DocuThreads,
-    MonitorAgentic, MonitorCache, MonitorChunks, MonitorDocker, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorOnnx, MonitorOnnxStatus,
-    MonitorObservations, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests,
-    MonitorTools, PageNotFound, Parameters, Train,
+    About, Config, ConfigChunker, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j,
+    ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, ConfigTerms, Docu,
+    DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
+    DocuEmbeddings, DocuEntitiesProduction, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
+    DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy,
+    DocuThreads, DocuTokenizersGeneral,
+    Home,
+    MonitorAgSystemd, MonitorAgentic, MonitorCache,
+    MonitorChunks, MonitorDocker, MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph,
+    MonitorLogs, MonitorObservations, MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag,
+    MonitorRateLimits, MonitorRequests, MonitorTip, MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 
 /// Shared runtime state across all pages
 #[derive(Clone, Default, Debug)]
 pub struct RuntimeContext {
-    pub active_backend: Option<String>,   // What's actually running (from health check)
-    pub configured_backend: String,        // Saved preference in DB
-    pub loaded_model: Option<String>,      // Model currently in memory
-    pub configured_model: String,          // Saved model preference in DB
-    pub switching: bool,                   // True while backend is starting
+    pub active_backend: Option<String>, // What's actually running (from health check)
+    pub configured_backend: String,     // Saved preference in DB
+    pub loaded_model: Option<String>,   // Model currently in memory
+    pub configured_model: String,       // Saved model preference in DB
+    pub switching: bool,                // True while backend is starting
 }
 
 impl RuntimeContext {
@@ -42,6 +46,8 @@ pub enum Route {
         About {},
         #[route("/monitor")]
         MonitorOverview {},
+        #[route("/monitor/tip")]
+        MonitorTip {},
         #[route("/monitor/agentic")]
         MonitorAgentic {},
         #[route("/config")]
@@ -60,6 +66,10 @@ pub enum Route {
         ConfigMemories {},
         #[route("/config/io-uring")]
         ConfigIoUring {},
+        #[route("/config/chunker")]
+        ConfigChunker {},
+        #[route("/config/ner")]
+        ConfigNer {},
         #[route("/config/onnx")]
         ConfigOnnx {},
         #[route("/config/neo4j")]
@@ -132,12 +142,21 @@ pub enum Route {
         DocuRkyv {},
         #[route("/docu/index/rig")]
         DocuRig {},
+        #[route("/docu/index/tokenizers-general")]
+        DocuTokenizersGeneral {},
+        #[route("/docu/index/bpe-unigram")]
+        DocuBpeUnigram {},
+        #[route("/docu/index/canonicalization")]
+        DocuCanonicalization {},
+        #[route("/docu/index/agglutinative-languages")]
+        DocuAgglutinative {},
     #[end_layout]
     #[route("/:..segments")]
     PageNotFound { segments: Vec<String> },
 }
 
 /// Signal for toggling the global help overlay
+
 #[derive(Clone, Copy, Default)]
 pub struct ShowHelpCommands(pub bool);
 
@@ -282,7 +301,7 @@ pub fn App() -> Element {
 fn Layout() -> Element {
     let is_dark = use_context::<Signal<bool>>();
     let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
-    
+
     // Initialize RuntimeContext from API on first load
     {
         let mut runtime_ctx = runtime_ctx.clone();

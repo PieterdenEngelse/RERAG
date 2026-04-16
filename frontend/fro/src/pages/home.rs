@@ -1,15 +1,15 @@
 use crate::api::{self, RagMemoryItem};
 use crate::app::{ClearChat, Route, ShowRagInfo};
 use crate::components::HomeSettingsBoards;
-use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use crate::pages::hardware::components::info_modal;
+use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use crate::pages::hardware::help_content::HelpTopic;
 use dioxus::prelude::*;
 use dioxus_router::Link;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use futures_util::StreamExt;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
 fn backend_origin() -> String {
@@ -222,11 +222,11 @@ pub fn Home() -> Element {
     // Backend type state for home page board
     let current_backend = use_signal(|| String::from("ollama"));
     let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
-    
+
     // Track last seen context to detect external changes only
     let mut last_ctx_backend = use_signal(String::new);
     let mut last_ctx_model = use_signal(String::new);
-    
+
     // Watch RuntimeContext for changes from OTHER pages (not our own changes)
     {
         let mut current_backend = current_backend.clone();
@@ -240,7 +240,7 @@ pub fn Home() -> Element {
             let ctx = runtime_ctx();
             let ctx_backend = ctx.configured_backend.clone();
             let ctx_model = ctx.configured_model.clone();
-            
+
             // Always sync when local differs from context
             if !ctx_backend.is_empty() && ctx_backend != current_backend() {
                 current_backend.set(ctx_backend.clone());
@@ -255,7 +255,7 @@ pub fn Home() -> Element {
                     models_loading.set(false);
                 });
             }
-            
+
             // Model sync disabled here — races with pending onchange commits.
             // Mount-time use_future loads initial model, onchange commits changes.
         });
@@ -273,9 +273,10 @@ pub fn Home() -> Element {
                 Err(_) => return,
             };
             let (tx, mut rx) = futures_channel::mpsc::unbounded::<()>();
-            let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: web_sys::MessageEvent| {
-                let _ = tx.unbounded_send(());
-            }) as Box<dyn FnMut(_)>);
+            let closure =
+                wasm_bindgen::closure::Closure::wrap(Box::new(move |_: web_sys::MessageEvent| {
+                    let _ = tx.unbounded_send(());
+                }) as Box<dyn FnMut(_)>);
             bc.set_onmessage(Some(closure.as_ref().unchecked_ref()));
             closure.forget();
             while rx.next().await.is_some() {
@@ -509,10 +510,10 @@ pub fn Home() -> Element {
 
             // Use streaming endpoint
             let body = if let Some(p) = rag_priority_override() {
-                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
-                } else {
-                    serde_json::json!({ "query": user_input, "mode": mode })
-                };
+                serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+            } else {
+                serde_json::json!({ "query": user_input, "mode": mode })
+            };
 
             // Create fetch request with streaming
             let window = web_sys::window().unwrap();
@@ -711,10 +712,10 @@ pub fn Home() -> Element {
             spawn(async move {
                 if is_chat_command(&user_input) {
                     let body = if let Some(p) = rag_priority_override() {
-                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
-                } else {
-                    serde_json::json!({ "query": user_input, "mode": mode })
-                };
+                        serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                    } else {
+                        serde_json::json!({ "query": user_input, "mode": mode })
+                    };
                     let request = gloo_net::http::Request::post(&backend_agent_url())
                         .header("Content-Type", "application/json")
                         .body(body.to_string())

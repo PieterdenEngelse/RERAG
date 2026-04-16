@@ -1,6 +1,4 @@
-use crate::pages::hardware::constants::{
-    INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS,
-};
+use crate::pages::hardware::constants::{INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS};
 use crate::{
     api,
     app::{PageErrors, Route},

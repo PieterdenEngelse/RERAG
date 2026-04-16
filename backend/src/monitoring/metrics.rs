@@ -437,6 +437,37 @@ pub fn observe_embedding_latency_ms(duration_ms: f64) {
     EMBEDDING_LATENCY_MS.observe(duration_ms);
 }
 
+// Extraction metrics
+pub static EXTRACTION_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    let opts = Opts::new(
+        "extraction_total",
+        "Text extraction attempts by format and status (ok/empty)",
+    );
+    let cv = IntCounterVec::new(opts, &["format", "status"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
+pub static EXTRACTION_CHARS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    let opts = Opts::new(
+        "extraction_chars_total",
+        "Total characters extracted per format",
+    );
+    let cv = IntCounterVec::new(opts, &["format"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
+pub static EXTRACTION_OCR_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    let opts = Opts::new(
+        "extraction_ocr_total",
+        "OCR pipeline events (attempted/ok/no_text/no_pages/unavailable)",
+    );
+    let cv = IntCounterVec::new(opts, &["status"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
 // Record embedding batch size
 pub fn observe_embedding_batch_size(size: usize) {
     EMBEDDING_BATCH_SIZE.observe(size as f64);

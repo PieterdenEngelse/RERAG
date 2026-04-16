@@ -27,6 +27,18 @@ pub(crate) struct ChunkConfigCommitRequest {
     pub overlap: usize,
     #[serde(default)]
     pub semantic_similarity_threshold: Option<f32>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub clean_html: Option<bool>,
+    #[serde(default)]
+    pub clean_unicode: Option<bool>,
+    #[serde(default)]
+    pub context_prefix_enabled: Option<bool>,
+    #[serde(default)]
+    pub context_prefix_tokens: Option<usize>,
+    #[serde(default)]
+    pub pipeline_stages: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -36,6 +48,12 @@ pub(crate) struct ChunkerConfigSnapshot {
     pub max_size: usize,
     pub overlap: usize,
     pub semantic_similarity_threshold: f32,
+    pub mode: String,
+    pub clean_html: bool,
+    pub clean_unicode: bool,
+    pub context_prefix_enabled: bool,
+    pub context_prefix_tokens: usize,
+    pub pipeline_stages: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,6 +246,7 @@ pub(crate) fn backend_type_to_string(bt: &crate::db::param_hardware::BackendType
         BackendType::LlamaCpp => "llama_cpp".to_string(),
         BackendType::OpenAi => "openai".to_string(),
         BackendType::Anthropic => "anthropic".to_string(),
+        BackendType::OpenRouter => "openrouter".to_string(),
         BackendType::Vllm => "vllm".to_string(),
         BackendType::Custom => "custom".to_string(),
     }
@@ -240,6 +259,7 @@ pub(crate) fn string_to_backend_type(s: &str) -> crate::db::param_hardware::Back
         "llama_cpp" => BackendType::LlamaCpp,
         "openai" => BackendType::OpenAi,
         "anthropic" => BackendType::Anthropic,
+        "openrouter" => BackendType::OpenRouter,
         "vllm" => BackendType::Vllm,
         "custom" => BackendType::Custom,
         _ => BackendType::Ollama, // default fallback
@@ -584,33 +604,215 @@ pub(crate) async fn save_io_uring_config(
     }
 }
 
+/// Returns the embedding dimension for a model name string.
+fn embedding_model_dimension(model: &str) -> usize {
+    match model {
+        "bge-base-en-v1.5" => 768,
+        _ => 384,
+    }
+}
+
+/// Returns the HuggingFace model ID for a model name string.
+fn embedding_model_hf_id(model: &str) -> &'static str {
+    match model {
+        "bge-small-en-v1.5q" => "BAAI/bge-small-en-v1.5",
+        "all-minilm-l6-v2" => "sentence-transformers/all-MiniLM-L6-v2",
+        "bge-base-en-v1.5" => "BAAI/bge-base-en-v1.5",
+        "e5-small-v2" => "intfloat/e5-small-v2",
+        _ => "BAAI/bge-small-en-v1.5",
+    }
+}
+
 /// GET /config/embedding
-/// Returns current embedding configuration (ONNX only)
+/// Returns current embedding model configuration.
 pub(crate) async fn get_embedding_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
+    let model = std::env::var("EMBEDDING_MODEL")
+        .unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
     let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
         .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
-    let onnx_available = std::path::Path::new(&onnx_model_path).exists();
+
+    let model_exists = std::path::Path::new(&onnx_model_path).exists();
+    let tokenizer_exists = std::path::Path::new(&onnx_model_path)
+        .parent()
+        .map(|d| d.join("tokenizer.json").exists())
+        .unwrap_or(false);
+    let dimension = embedding_model_dimension(&model);
+    let hf_id = embedding_model_hf_id(&model);
 
     Ok(HttpResponse::Ok().json(json!({
         "status": "success",
         "request_id": request_id,
         "provider": "onnx",
+        "model": model,
         "model_path": onnx_model_path,
-        "model_exists": onnx_available,
-        "ready": onnx_available,
-        "note": "ONNX is the only supported embedding provider"
+        "model_exists": model_exists,
+        "tokenizer_exists": tokenizer_exists,
+        "dimension": dimension,
+        "hf_id": hf_id,
+        "ready": model_exists,
     })))
 }
 
-/// POST /config/embedding - No longer needed (ONNX only)
+/// POST /config/embedding-model
+/// Persist a new embedding model selection to .env.embedding.
+/// Takes effect on next restart.
+pub(crate) async fn set_embedding_model(
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    let model = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("bge-small-en-v1.5");
+
+    // Validate against known models
+    let known = ["bge-small-en-v1.5", "bge-small-en-v1.5q", "all-minilm-l6-v2",
+                 "bge-base-en-v1.5", "e5-small-v2"];
+    if !known.contains(&model) {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("Unknown model '{}'. Valid options: {}", model, known.join(", "))
+        })));
+    }
+
+    let model_path = std::env::var("ONNX_MODEL_PATH")
+        .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+    let dimension = embedding_model_dimension(model);
+    let hf_id = embedding_model_hf_id(model);
+
+    let env_content = format!(
+        "# Embedding model selection — written by /config/embedding-model\n\
+         EMBEDDING_MODEL={}\n\
+         ONNX_MODEL_PATH={}\n",
+        model, model_path
+    );
+
+    let env_path = std::path::Path::new(".env.embedding");
+    match std::fs::write(env_path, &env_content) {
+        Ok(_) => {
+            info!(model = %model, "Embedding model selection saved to .env.embedding");
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "request_id": request_id,
+                "model": model,
+                "dimension": dimension,
+                "hf_id": hf_id,
+                "message": "Saved. Restart the service for the new model to take effect."
+            })))
+        }
+        Err(e) => {
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "message": format!("Failed to write .env.embedding: {}", e)
+            })))
+        }
+    }
+}
+
+/// POST /config/embedding/download-tokenizer
+/// Downloads tokenizer.json from HuggingFace for the current EMBEDDING_MODEL and writes it
+/// next to the ONNX model file. Idempotent — safe to call if the file already exists.
+pub(crate) async fn download_tokenizer() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    let model = std::env::var("EMBEDDING_MODEL")
+        .unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
+        .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
+
+    let model_dir = std::path::Path::new(&onnx_model_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("models"));
+
+    // Create the directory if it doesn't exist yet
+    if let Err(e) = std::fs::create_dir_all(model_dir) {
+        return Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("Could not create model directory: {e}")
+        })));
+    }
+
+    let tok_path = model_dir.join("tokenizer.json");
+    let hf_id = embedding_model_hf_id(&model);
+    let url = format!(
+        "https://huggingface.co/{}/resolve/main/tokenizer.json",
+        hf_id
+    );
+
+    info!(model = %model, hf_id = %hf_id, dest = %tok_path.display(), "Downloading tokenizer.json");
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("Failed to build HTTP client: {e}")
+        }))),
+    };
+
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => return Ok(HttpResponse::BadGateway().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("HuggingFace request failed: {e}")
+        }))),
+    };
+
+    if !resp.status().is_success() {
+        return Ok(HttpResponse::BadGateway().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("HuggingFace returned HTTP {}", resp.status())
+        })));
+    }
+
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => return Ok(HttpResponse::BadGateway().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("Failed to read response body: {e}")
+        }))),
+    };
+
+    if let Err(e) = std::fs::write(&tok_path, &bytes) {
+        return Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("Failed to write tokenizer.json: {e}")
+        })));
+    }
+
+    info!(dest = %tok_path.display(), bytes = bytes.len(), "tokenizer.json saved");
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "success",
+        "request_id": request_id,
+        "model": model,
+        "hf_id": hf_id,
+        "dest": tok_path.to_string_lossy(),
+        "bytes": bytes.len(),
+        "message": format!("tokenizer.json downloaded ({} bytes). Restart to activate.", bytes.len())
+    })))
+}
+
+/// POST /config/embedding — legacy stub kept for route compatibility.
 pub(crate) async fn set_embedding_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     Ok(HttpResponse::Ok().json(json!({
         "status": "info",
         "request_id": request_id,
-        "message": "ONNX is the only supported embedding provider. No configuration needed."
+        "message": "Use POST /config/embedding-model to change the active embedding model."
     })))
 }
 
@@ -706,6 +908,7 @@ pub(crate) async fn commit_chunk_config(
         })));
     }
 
+    let existing = chunk_settings::global_config();
     let new_cfg = ChunkerConfig {
         target_size: body.target_size,
         min_size: body.min_size,
@@ -713,7 +916,19 @@ pub(crate) async fn commit_chunk_config(
         overlap: body.overlap,
         semantic_similarity_threshold: body
             .semantic_similarity_threshold
-            .unwrap_or_else(|| chunk_settings::global_config().semantic_similarity_threshold),
+            .unwrap_or(existing.semantic_similarity_threshold),
+        mode: body.mode.unwrap_or(existing.mode),
+        clean_html: body.clean_html.unwrap_or(existing.clean_html),
+        clean_unicode: body.clean_unicode.unwrap_or(existing.clean_unicode),
+        context_prefix_enabled: body
+            .context_prefix_enabled
+            .unwrap_or(existing.context_prefix_enabled),
+        context_prefix_tokens: body
+            .context_prefix_tokens
+            .unwrap_or(existing.context_prefix_tokens),
+        pipeline_stages: body
+            .pipeline_stages
+            .unwrap_or(existing.pipeline_stages),
     };
 
     match chunk_settings::save_chunker_config_default_db(&new_cfg) {
@@ -1313,6 +1528,135 @@ pub fn get_current_onnx_config() -> OnnxConfig {
 }
 
 // ============================================================================
+// NER CONFIG
+// ============================================================================
+
+use crate::db::ner_settings::NerConfig;
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct NerConfigRequest {
+    pub extraction_enabled: Option<bool>,
+    pub type_allowlist: Option<String>,
+    pub confidence_threshold: Option<f64>,
+    pub type_thresholds: Option<String>,
+    pub fuzzy_threshold: Option<f64>,
+    pub min_length: Option<usize>,
+    pub max_length: Option<usize>,
+    pub dedup_case_insensitive: Option<bool>,
+    pub nesting_strategy: Option<String>,
+    pub batch_size: Option<usize>,
+    pub quantization_enabled: Option<bool>,
+    pub model_cache_enabled: Option<bool>,
+    pub graph_storage_enabled: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct NerConfigResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub config: NerConfig,
+}
+
+pub(crate) async fn get_ner_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let config = crate::db::ner_settings::global_config();
+    Ok(HttpResponse::Ok().json(NerConfigResponse {
+        status: "ok".into(),
+        message: "".into(),
+        request_id,
+        config,
+    }))
+}
+
+pub(crate) async fn set_ner_config(
+    payload: web::Json<NerConfigRequest>,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let body = payload.into_inner();
+    let mut config = crate::db::ner_settings::global_config();
+
+    if let Some(v) = body.extraction_enabled {
+        config.extraction_enabled = v;
+    }
+    if let Some(v) = body.type_allowlist {
+        config.type_allowlist = v;
+    }
+    if let Some(v) = body.confidence_threshold {
+        config.confidence_threshold = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = body.type_thresholds {
+        config.type_thresholds = v;
+    }
+    if let Some(v) = body.fuzzy_threshold {
+        config.fuzzy_threshold = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = body.min_length {
+        config.min_length = v;
+    }
+    if let Some(v) = body.max_length {
+        config.max_length = v;
+    }
+    if let Some(v) = body.dedup_case_insensitive {
+        config.dedup_case_insensitive = v;
+    }
+    if let Some(v) = body.nesting_strategy {
+        match v.as_str() {
+            "KeepLongest" | "KeepAll" | "KeepShortest" => config.nesting_strategy = v,
+            _ => {
+                return Ok(HttpResponse::BadRequest().json(json!({
+                    "status": "error",
+                    "message": "Invalid nesting_strategy. Use: KeepLongest, KeepAll, KeepShortest",
+                    "request_id": request_id
+                })));
+            }
+        }
+    }
+    if let Some(v) = body.batch_size {
+        if v == 0 {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "message": "batch_size must be greater than 0",
+                "request_id": request_id
+            })));
+        }
+        config.batch_size = v;
+    }
+    if let Some(v) = body.quantization_enabled {
+        config.quantization_enabled = v;
+    }
+    if let Some(v) = body.model_cache_enabled {
+        config.model_cache_enabled = v;
+    }
+    if let Some(v) = body.graph_storage_enabled {
+        config.graph_storage_enabled = v;
+    }
+
+    if let Err(e) = crate::db::ner_settings::save_ner_config_default_db(&config) {
+        tracing::error!(request_id = %request_id, error = %e, "Failed to persist NER config");
+        return Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": format!("Failed to save NER config: {e}"),
+            "request_id": request_id
+        })));
+    }
+
+    tracing::info!(
+        request_id = %request_id,
+        extraction_enabled = config.extraction_enabled,
+        batch_size = config.batch_size,
+        "NER config saved to database"
+    );
+
+    Ok(HttpResponse::Ok().json(NerConfigResponse {
+        status: "ok".into(),
+        message: "NER config saved.".into(),
+        request_id,
+        config,
+    }))
+}
+
+// ============================================================================
 // API KEYS CONFIG
 // ============================================================================
 
@@ -1322,6 +1666,8 @@ pub(crate) struct ApiKeysRequest {
     pub openai_api_key: String,
     #[serde(default)]
     pub anthropic_api_key: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
 }
 
 // ============================================================================
@@ -1589,10 +1935,13 @@ pub(crate) struct ApiKeysResponse {
     pub request_id: String,
     pub has_openai_key: bool,
     pub has_anthropic_key: bool,
+    pub has_openrouter_key: bool,
     pub openai_key_masked: String,
     pub anthropic_key_masked: String,
+    pub openrouter_key_masked: String,
     pub openai_from_env: bool,
     pub anthropic_from_env: bool,
+    pub openrouter_from_env: bool,
 }
 
 pub(crate) async fn get_api_keys() -> Result<HttpResponse, Error> {
@@ -1601,6 +1950,7 @@ pub(crate) async fn get_api_keys() -> Result<HttpResponse, Error> {
 
     let openai_from_env = std::env::var("OPENAI_API_KEY").is_ok();
     let anthropic_from_env = std::env::var("ANTHROPIC_API_KEY").is_ok();
+    let openrouter_from_env = std::env::var("OPENROUTER_API_KEY").is_ok();
 
     let openai_key_masked = if openai_from_env {
         "[from environment]".to_string()
@@ -1618,16 +1968,27 @@ pub(crate) async fn get_api_keys() -> Result<HttpResponse, Error> {
         String::new()
     };
 
+    let openrouter_key_masked = if openrouter_from_env {
+        "[from environment]".to_string()
+    } else if !keys.openrouter_api_key.is_empty() {
+        crate::db::api_keys::ApiKeys::mask_key(&keys.openrouter_api_key)
+    } else {
+        String::new()
+    };
+
     Ok(HttpResponse::Ok().json(ApiKeysResponse {
         status: "ok".into(),
         message: "API keys status".into(),
         request_id,
         has_openai_key: keys.has_openai_key(),
         has_anthropic_key: keys.has_anthropic_key(),
+        has_openrouter_key: keys.has_openrouter_key(),
         openai_key_masked,
         anthropic_key_masked,
+        openrouter_key_masked,
         openai_from_env,
         anthropic_from_env,
+        openrouter_from_env,
     }))
 }
 
@@ -1646,6 +2007,9 @@ pub(crate) async fn save_api_keys(
     if !body.anthropic_api_key.is_empty() {
         keys.anthropic_api_key = body.anthropic_api_key;
     }
+    if !body.openrouter_api_key.is_empty() {
+        keys.openrouter_api_key = body.openrouter_api_key;
+    }
 
     match crate::db::api_keys::update_config(keys.clone()) {
         Ok(_) => {
@@ -1653,11 +2017,13 @@ pub(crate) async fn save_api_keys(
                 request_id = %request_id,
                 has_openai = keys.has_openai_key(),
                 has_anthropic = keys.has_anthropic_key(),
+                has_openrouter = keys.has_openrouter_key(),
                 "API keys saved"
             );
 
             let openai_from_env = std::env::var("OPENAI_API_KEY").is_ok();
             let anthropic_from_env = std::env::var("ANTHROPIC_API_KEY").is_ok();
+            let openrouter_from_env = std::env::var("OPENROUTER_API_KEY").is_ok();
 
             Ok(HttpResponse::Ok().json(ApiKeysResponse {
                 status: "ok".into(),
@@ -1665,6 +2031,7 @@ pub(crate) async fn save_api_keys(
                 request_id,
                 has_openai_key: keys.has_openai_key(),
                 has_anthropic_key: keys.has_anthropic_key(),
+                has_openrouter_key: keys.has_openrouter_key(),
                 openai_key_masked: if openai_from_env {
                     "[from environment]".to_string()
                 } else if !keys.openai_api_key.is_empty() {
@@ -1679,8 +2046,16 @@ pub(crate) async fn save_api_keys(
                 } else {
                     String::new()
                 },
+                openrouter_key_masked: if openrouter_from_env {
+                    "[from environment]".to_string()
+                } else if !keys.openrouter_api_key.is_empty() {
+                    crate::db::api_keys::ApiKeys::mask_key(&keys.openrouter_api_key)
+                } else {
+                    String::new()
+                },
                 openai_from_env,
                 anthropic_from_env,
+                openrouter_from_env,
             }))
         }
         Err(err) => {

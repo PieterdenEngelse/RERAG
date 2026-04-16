@@ -10,7 +10,11 @@ const DEFAULT_LIMIT: usize = 200;
 // (unit, description, scope)
 // scope: "system" | "user"
 const SERVICES: &[(&str, &str, &str)] = &[
-    ("prometheus-node-exporter.service", "Host system metrics", "system"),
+    (
+        "prometheus-node-exporter.service",
+        "Host system metrics",
+        "system",
+    ),
     ("vector.service", "Log shipper → Loki", "user"),
     ("alertmanager.service", "Alert routing", "system"),
 ];
@@ -27,10 +31,7 @@ async fn fetch_logs(unit: &str, scope: &str, limit: usize) -> Result<(String, us
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {e}"))?;
+    let json: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
     let content = json["content"].as_str().unwrap_or("").to_string();
     let total = json["total_lines"].as_u64().unwrap_or(0) as usize;
     Ok((content, total))

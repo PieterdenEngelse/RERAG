@@ -44,18 +44,21 @@ pub fn MonitorAgSystemd() -> Element {
     // Filter raw content lines by level keyword
     let filtered_content = {
         let filter = level_filter();
-        logs().as_ref().map(|r| {
-            r.content
-                .lines()
-                .filter(|line| {
-                    if filter == "all" {
-                        return true;
-                    }
-                    line.to_uppercase().contains(&filter.to_uppercase())
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default()
+        logs()
+            .as_ref()
+            .map(|r| {
+                r.content
+                    .lines()
+                    .filter(|line| {
+                        if filter == "all" {
+                            return true;
+                        }
+                        line.to_uppercase().contains(&filter.to_uppercase())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
     };
 
     let total_lines = logs().as_ref().map(|r| r.total_lines).unwrap_or(0);

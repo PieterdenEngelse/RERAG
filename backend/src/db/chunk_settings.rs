@@ -6,8 +6,13 @@ use thiserror::Error;
 
 use crate::memory::chunker::{
     ChunkerConfig, DEFAULT_MAX_SIZE, DEFAULT_MIN_SIZE, DEFAULT_OVERLAP,
-    DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD, DEFAULT_TARGET_SIZE,
+    DEFAULT_PIPELINE_STAGES, DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD, DEFAULT_TARGET_SIZE,
 };
+const DEFAULT_MODE: &str = "fixed";
+const DEFAULT_CLEAN_HTML: bool = false;
+const DEFAULT_CLEAN_UNICODE: bool = false;
+const DEFAULT_CONTEXT_PREFIX: bool = false;
+const DEFAULT_CONTEXT_PREFIX_TOKENS: usize = 32;
 
 static GLOBAL_CHUNK_CONFIG: OnceLock<RwLock<ChunkerConfig>> = OnceLock::new();
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -18,6 +23,12 @@ static CONFIG_KEYS: ChunkConfigKeys = ChunkConfigKeys {
     max: "chunk_max_size",
     overlap: "chunk_overlap",
     semantic_threshold: "semantic_similarity_threshold",
+    mode: "chunker_mode",
+    clean_html: "chunk_clean_html",
+    clean_unicode: "chunk_clean_unicode",
+    context_prefix: "chunk_context_prefix",
+    context_prefix_tokens: "chunk_context_prefix_tokens",
+    pipeline_stages: "pipeline_stages",
 };
 
 struct ChunkConfigKeys {
@@ -26,6 +37,12 @@ struct ChunkConfigKeys {
     max: &'static str,
     overlap: &'static str,
     semantic_threshold: &'static str,
+    mode: &'static str,
+    clean_html: &'static str,
+    clean_unicode: &'static str,
+    context_prefix: &'static str,
+    context_prefix_tokens: &'static str,
+    pipeline_stages: &'static str,
 }
 
 #[derive(Debug, Error)]
@@ -44,6 +61,16 @@ fn config_lock() -> &'static RwLock<ChunkerConfig> {
 
 pub fn global_config() -> ChunkerConfig {
     config_lock().read().unwrap().clone()
+}
+
+/// Returns the active chunker mode from SQLite-backed config.
+pub fn global_chunker_mode() -> crate::config::ChunkerMode {
+    config_lock()
+        .read()
+        .unwrap()
+        .mode
+        .parse()
+        .unwrap_or(crate::config::ChunkerMode::Fixed)
 }
 
 pub fn set_global_db_path(path: PathBuf) {
@@ -66,6 +93,16 @@ pub fn load_chunker_config(conn: &Connection) -> Result<ChunkerConfig> {
     let overlap = read_int(conn, CONFIG_KEYS.overlap)?.unwrap_or(DEFAULT_OVERLAP as i64);
     let semantic = read_float(conn, CONFIG_KEYS.semantic_threshold)?
         .unwrap_or(DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD as f64);
+    let mode = read_value(conn, CONFIG_KEYS.mode)?.unwrap_or_else(|| DEFAULT_MODE.to_string());
+    let clean_html = read_bool(conn, CONFIG_KEYS.clean_html)?.unwrap_or(DEFAULT_CLEAN_HTML);
+    let clean_unicode =
+        read_bool(conn, CONFIG_KEYS.clean_unicode)?.unwrap_or(DEFAULT_CLEAN_UNICODE);
+    let context_prefix_enabled =
+        read_bool(conn, CONFIG_KEYS.context_prefix)?.unwrap_or(DEFAULT_CONTEXT_PREFIX);
+    let context_prefix_tokens = read_int(conn, CONFIG_KEYS.context_prefix_tokens)?
+        .unwrap_or(DEFAULT_CONTEXT_PREFIX_TOKENS as i64) as usize;
+    let pipeline_stages = read_value(conn, CONFIG_KEYS.pipeline_stages)?
+        .unwrap_or_else(|| DEFAULT_PIPELINE_STAGES.to_string());
 
     let cfg = ChunkerConfig {
         target_size: target as usize,
@@ -73,6 +110,12 @@ pub fn load_chunker_config(conn: &Connection) -> Result<ChunkerConfig> {
         max_size: max as usize,
         overlap: overlap as usize,
         semantic_similarity_threshold: semantic as f32,
+        mode,
+        clean_html,
+        clean_unicode,
+        context_prefix_enabled,
+        context_prefix_tokens,
+        pipeline_stages,
     };
     Ok(cfg)
 }
@@ -89,6 +132,28 @@ pub fn save_chunker_config(conn: &Connection, cfg: &ChunkerConfig) -> Result<()>
         CONFIG_KEYS.semantic_threshold,
         cfg.semantic_similarity_threshold.to_string(),
     )?;
+    write_value(conn, CONFIG_KEYS.mode, cfg.mode.clone())?;
+    write_value(conn, CONFIG_KEYS.clean_html, cfg.clean_html.to_string())?;
+    write_value(
+        conn,
+        CONFIG_KEYS.clean_unicode,
+        cfg.clean_unicode.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.context_prefix,
+        cfg.context_prefix_enabled.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.context_prefix_tokens,
+        cfg.context_prefix_tokens.to_string(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.pipeline_stages,
+        cfg.pipeline_stages.clone(),
+    )?;
 
     conn.execute("COMMIT", []).map_err(db_err)?;
     *config_lock().write().unwrap() = cfg.clone();
@@ -102,6 +167,10 @@ pub fn save_chunker_config_default_db(cfg: &ChunkerConfig) -> Result<()> {
         .clone();
     let conn = Connection::open(path).map_err(db_err)?;
     save_chunker_config(&conn, cfg)
+}
+
+fn read_bool(conn: &Connection, key: &str) -> Result<Option<bool>> {
+    Ok(read_value(conn, key)?.map(|v| v == "true" || v == "1"))
 }
 
 fn read_int(conn: &Connection, key: &str) -> Result<Option<i64>> {
@@ -203,6 +272,12 @@ mod tests {
             max_size: 768,
             overlap: 80,
             semantic_similarity_threshold: 0.9,
+            mode: "fixed".to_string(),
+            clean_html: false,
+            clean_unicode: false,
+            context_prefix_enabled: false,
+            context_prefix_tokens: 32,
+            pipeline_stages: "lw,sent,sem".to_string(),
         };
         save_chunker_config(&conn, &cfg).unwrap();
         let loaded = load_chunker_config(&conn).unwrap();

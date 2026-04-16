@@ -420,6 +420,18 @@ pub struct ChunkerConfigSnapshot {
     pub max_size: usize,
     pub overlap: usize,
     pub semantic_similarity_threshold: f32,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub clean_html: bool,
+    #[serde(default)]
+    pub clean_unicode: bool,
+    #[serde(default)]
+    pub context_prefix_enabled: bool,
+    #[serde(default)]
+    pub context_prefix_tokens: usize,
+    #[serde(default)]
+    pub pipeline_stages: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -439,6 +451,44 @@ pub struct ChunkCommitRequest {
     pub max_size: usize,
     pub overlap: usize,
     pub semantic_similarity_threshold: Option<f32>,
+    pub mode: Option<String>,
+    pub clean_html: Option<bool>,
+    pub clean_unicode: Option<bool>,
+    pub context_prefix_enabled: Option<bool>,
+    pub context_prefix_tokens: Option<usize>,
+    pub pipeline_stages: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChunkPreviewRequest {
+    pub text: String,
+    pub filename: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ChunkPreviewStats {
+    pub total_chunks: usize,
+    pub total_segments: usize,
+    pub avg_chunk_tokens: usize,
+    pub min_chunk_tokens: usize,
+    pub max_chunk_tokens: usize,
+    pub size_flushes: usize,
+    pub sentence_flushes: usize,
+    pub semantic_flushes: usize,
+    pub heading_flushes: usize,
+    pub html_tags_stripped: usize,
+    pub unicode_chars_normalized: usize,
+    pub context_prefixes_added: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChunkPreviewResponse {
+    pub status: String,
+    pub request_id: String,
+    pub chunk_count: usize,
+    pub chunks: Vec<String>,
+    pub stats: Option<ChunkPreviewStats>,
+    pub mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -535,6 +585,7 @@ pub enum BackendType {
     #[serde(rename = "openai")]
     OpenAi,
     Anthropic,
+    OpenRouter,
     Vllm,
     Custom,
 }
@@ -572,7 +623,7 @@ impl BackendType {
 
     /// Returns true if this is a cloud/API-based backend
     pub fn is_cloud_backend(&self) -> bool {
-        matches!(self, Self::OpenAi | Self::Anthropic)
+        matches!(self, Self::OpenAi | Self::Anthropic | Self::OpenRouter)
     }
 
     /// Human-readable label for the backend
@@ -582,6 +633,7 @@ impl BackendType {
             Self::LlamaCpp => "llama.cpp",
             Self::OpenAi => "OpenAI",
             Self::Anthropic => "Anthropic",
+            Self::OpenRouter => "OpenRouter",
             Self::Vllm => "vLLM",
             Self::Custom => "Custom",
         }
@@ -594,6 +646,7 @@ impl BackendType {
             Self::LlamaCpp,
             Self::OpenAi,
             Self::Anthropic,
+            Self::OpenRouter,
             Self::Vllm,
             Self::Custom,
         ]
@@ -606,6 +659,7 @@ impl BackendType {
             Self::LlamaCpp => "llama_cpp",
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
             Self::Vllm => "vllm",
             Self::Custom => "custom",
         }
@@ -618,6 +672,7 @@ impl BackendType {
             "llama_cpp" => Self::LlamaCpp,
             "openai" => Self::OpenAi,
             "anthropic" => Self::Anthropic,
+            "openrouter" => Self::OpenRouter,
             "vllm" => Self::Vllm,
             "custom" => Self::Custom,
             _ => Self::Ollama,
@@ -799,6 +854,8 @@ pub struct ApiKeysRequest {
     pub openai_api_key: String,
     #[serde(default)]
     pub anthropic_api_key: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -808,10 +865,16 @@ pub struct ApiKeysResponse {
     pub request_id: String,
     pub has_openai_key: bool,
     pub has_anthropic_key: bool,
+    #[serde(default)]
+    pub has_openrouter_key: bool,
     pub openai_key_masked: String,
     pub anthropic_key_masked: String,
+    #[serde(default)]
+    pub openrouter_key_masked: String,
     pub openai_from_env: bool,
     pub anthropic_from_env: bool,
+    #[serde(default)]
+    pub openrouter_from_env: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1328,6 +1391,35 @@ pub async fn commit_chunk_config(
         .await
         .map_err(|e| format!("Request failed: {}", e))?
         .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+pub async fn chunk_preview(payload: &ChunkPreviewRequest) -> Result<ChunkPreviewResponse, String> {
+    let url = api_url("/chunk/preview");
+    let resp = gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(
+            serde_json::to_string(payload)
+                .map_err(|e| format!("Failed to serialize payload: {}", e))?,
+        )
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.ok() {
+        // Try to extract a message from the error body, fall back to status text.
+        let msg = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v["message"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("Server error ({})", resp.status()));
+        return Err(msg);
+    }
+
+    resp.json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
@@ -1983,7 +2075,6 @@ pub async fn fetch_rig_stats() -> Result<RigStatsResponse, String> {
     fetch_json("/monitoring/agents/rig-stats").await
 }
 
-
 pub async fn fetch_runtime_health() -> Result<RuntimeHealth, String> {
     fetch_json("/sys/runtime-health").await
 }
@@ -1994,7 +2085,7 @@ pub async fn switch_runtime(backend: &str) -> Result<RuntimeHealth, String> {
         "llama_cpp" => "switch_llama_cpp",
         _ => return Err(format!("Unknown backend: {}", backend)),
     };
-    
+
     let url = api_url("/sys/runtime/action");
     let client = reqwest::Client::new();
     let resp = client
@@ -2003,11 +2094,11 @@ pub async fn switch_runtime(backend: &str) -> Result<RuntimeHealth, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    
+
     if !resp.status().is_success() {
         return Err(format!("Failed to switch runtime: {}", resp.status()));
     }
-    
+
     // Return updated health
     fetch_runtime_health().await
 }
@@ -2027,7 +2118,6 @@ pub async fn set_llama_model(model: &str) -> Result<(), String> {
         .map_err(|e| format!("Request failed: {}", e))?;
     Ok(())
 }
-
 
 pub async fn fetch_available_tools() -> Result<AvailableToolsResponse, String> {
     fetch_json("/monitoring/tools/available").await
@@ -2329,6 +2419,18 @@ pub struct EmbeddingConfigResponse {
     pub onnx: OnnxStatus,
     #[serde(default)]
     pub note: Option<String>,
+    /// Active model name (e.g. "bge-small-en-v1.5")
+    #[serde(default)]
+    pub model: String,
+    /// Whether tokenizer.json is present alongside the ONNX file
+    #[serde(default)]
+    pub tokenizer_exists: bool,
+    /// Output dimension of the active model
+    #[serde(default)]
+    pub dimension: usize,
+    /// HuggingFace model ID
+    #[serde(default)]
+    pub hf_id: String,
 }
 
 // ============ ONNX Runtime Configuration ============
@@ -2526,9 +2628,58 @@ pub async fn fetch_embedding_config() -> Result<EmbeddingConfigResponse, String>
                 ready: json["ready"].as_bool().unwrap_or(false),
             },
             note: json["note"].as_str().map(|s| s.to_string()),
+            model: json["model"].as_str().unwrap_or("bge-small-en-v1.5").to_string(),
+            tokenizer_exists: json["tokenizer_exists"].as_bool().unwrap_or(false),
+            dimension: json["dimension"].as_u64().unwrap_or(384) as usize,
+            hf_id: json["hf_id"].as_str().unwrap_or("").to_string(),
         })
     } else {
         Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// POST /config/embedding/download-tokenizer
+/// Downloads tokenizer.json from HuggingFace for the current model and saves it next to
+/// the ONNX file. Returns a message on success.
+pub async fn download_tokenizer() -> Result<String, String> {
+    let url = api_url("/config/embedding/download-tokenizer");
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    if json["status"].as_str().unwrap_or("") == "success" {
+        Ok(json["message"].as_str().unwrap_or("Downloaded.").to_string())
+    } else {
+        Err(json["message"].as_str().unwrap_or("Unknown error").to_string())
+    }
+}
+
+/// Save a new embedding model selection to the backend (.env.embedding).
+/// Returns a message; the change takes effect after restart.
+pub async fn set_embedding_model(model: &str) -> Result<String, String> {
+    let url = api_url("/config/embedding-model");
+    let body = serde_json::json!({ "model": model });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    if json["status"].as_str().unwrap_or("") == "success" {
+        Ok(json["message"].as_str().unwrap_or("Saved.").to_string())
+    } else {
+        Err(json["message"].as_str().unwrap_or("Unknown error").to_string())
     }
 }
 
@@ -2730,6 +2881,32 @@ pub async fn runtime_action(action: &str) -> Result<RuntimeActionResponse, Strin
         .map_err(|e| e.to_string())
 }
 
+/// POST /sys/restart — ask the backend to restart ag.service (full stack).
+pub async fn restart_backend() -> Result<(), String> {
+    let url = api_url("/sys/restart");
+    gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// POST /sys/restart-process — re-exec just the ag binary, leaving Docker services untouched.
+pub async fn restart_process() -> Result<(), String> {
+    let url = api_url("/sys/restart-process");
+    gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ============================================================================
 // OLLAMA STATUS API
 // ============================================================================
@@ -2843,26 +3020,166 @@ pub async fn fetch_container_inspect(name: &str) -> Result<ContainerInspectRespo
     .await
 }
 
-
 // ============================================================================
 // ONNX MONITORING API
 // ============================================================================
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 pub struct OnnxMonitorStats {
-    pub status:            String,
-    pub model_name:        String,
-    pub model_dims:        usize,
-    pub batch_size:        usize,
-    pub cache_hits:        u64,
-    pub cache_misses:      u64,
-    pub cache_hit_rate:    f64,
-    pub total_embeddings:  u64,
-    pub total_batches:     u64,
+    pub status: String,
+    pub model_name: String,
+    pub model_dims: usize,
+    pub batch_size: usize,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_hit_rate: f64,
+    pub total_embeddings: u64,
+    pub total_batches: u64,
     pub total_batch_texts: u64,
-    pub avg_embed_ms:      f64,
-    pub last_embed_ms:     f64,
+    pub avg_embed_ms: f64,
+    pub last_embed_ms: f64,
 }
 
 pub async fn fetch_onnx_monitor_stats() -> Result<OnnxMonitorStats, String> {
     fetch_json("/monitoring/onnx").await
+}
+
+// ============================================================================
+// NER CONFIG API
+// ============================================================================
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct NerConfigInfo {
+    pub extraction_enabled: bool,
+    pub type_allowlist: String,
+    pub confidence_threshold: f64,
+    pub type_thresholds: String,
+    pub fuzzy_threshold: f64,
+    pub min_length: usize,
+    pub max_length: usize,
+    pub dedup_case_insensitive: bool,
+    pub nesting_strategy: String,
+    pub batch_size: usize,
+    pub quantization_enabled: bool,
+    pub model_cache_enabled: bool,
+    pub graph_storage_enabled: bool,
+}
+
+impl Default for NerConfigInfo {
+    fn default() -> Self {
+        Self {
+            extraction_enabled: true,
+            type_allowlist: "PERSON,ORGANIZATION,LOCATION,PRODUCT".to_string(),
+            confidence_threshold: 0.85,
+            type_thresholds: r#"{"PERSON":0.75,"ORGANIZATION":0.95,"PRODUCT":0.95}"#.to_string(),
+            fuzzy_threshold: 0.8,
+            min_length: 2,
+            max_length: 100,
+            dedup_case_insensitive: true,
+            nesting_strategy: "KeepLongest".to_string(),
+            batch_size: 4,
+            quantization_enabled: false,
+            model_cache_enabled: true,
+            graph_storage_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct NerConfigResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub config: NerConfigInfo,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct NerConfigRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extraction_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_allowlist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_thresholds: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuzzy_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dedup_case_insensitive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nesting_strategy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantization_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_cache_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_storage_enabled: Option<bool>,
+}
+
+pub async fn fetch_ner_config() -> Result<NerConfigResponse, String> {
+    fetch_json("/config/ner").await
+}
+
+// ── TIP / Parser stats ───────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct FormatCounts {
+    pub ok: u64,
+    pub empty: u64,
+    pub chars: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct OcrCounts {
+    pub attempted: u64,
+    pub ok: u64,
+    pub no_text: u64,
+    pub no_pages: u64,
+    pub unavailable: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct FileRecord {
+    pub filename: String,
+    pub path: String,
+    pub format: String,
+    pub ok: bool,
+    pub chars: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct ParserStats {
+    pub by_format: std::collections::HashMap<String, FormatCounts>,
+    pub ocr: OcrCounts,
+    pub recent_files: Vec<FileRecord>,
+}
+
+pub async fn fetch_parser_stats() -> Result<ParserStats, String> {
+    fetch_json("/monitor/parser/stats").await
+}
+
+pub async fn update_ner_config(config: NerConfigRequest) -> Result<NerConfigResponse, String> {
+    let url = api_url("/config/ner");
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .json(&config)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status().is_success() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
 }
