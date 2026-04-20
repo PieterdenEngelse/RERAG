@@ -953,6 +953,16 @@ pub fn start_api_server(
             )
             .route("/monitor/logs/recent", web::get().to(get_recent_logs))
             .route("/monitor/parser/stats", web::get().to(get_parser_stats))
+            .route("/monitor/canon/stats", web::get().to(get_canon_stats))
+            .route("/monitor/golden-sample", web::get().to(get_golden_sample))
+            .route(
+                "/monitor/golden-sample/recapture",
+                web::post().to(post_golden_sample_recapture),
+            )
+            .route(
+                "/monitor/tokenizer/diff",
+                web::post().to(post_tokenizer_diff),
+            )
             // ============================================================================
             // RAG MEMORY ROUTES
             // ============================================================================

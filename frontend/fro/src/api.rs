@@ -1772,6 +1772,39 @@ where
         .map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
+async fn post_json<B, T>(path: &str, body: &B) -> Result<T, String>
+where
+    B: serde::Serialize + ?Sized,
+    T: for<'de> serde::Deserialize<'de>,
+{
+    let url = api_url(path);
+    let response = gloo_net::http::Request::post(&url)
+        .json(body)
+        .map_err(|e| format!("Failed to encode body: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = match response.text().await {
+            Ok(body) => body.trim().to_string(),
+            Err(_) => String::new(),
+        };
+        let detail = if body.is_empty() {
+            "(empty response)".to_string()
+        } else {
+            body
+        };
+        return Err(format!("HTTP {} {}", status, detail));
+    }
+
+    response
+        .json::<T>()
+        .await
+        .map_err(|e| format!("Failed to parse JSON: {}", e))
+}
+
 // ============================================================================
 // AGENTIC MONITORING API
 // ============================================================================
@@ -2287,7 +2320,7 @@ pub async fn delete_rag_memories(req: &DeleteRagRequest) -> Result<DeleteRagResp
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Detection info for observability - tracks raw inputs vs derived conclusions
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct DetectionInfo {
     /// Raw input: MIME type from magic bytes (if detected)
     pub mime_type: Option<String>,
@@ -2302,7 +2335,7 @@ pub struct DetectionInfo {
 }
 
 /// Chunking stats from semantic chunker
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct ChunkingStats {
     pub semantic_similarity_threshold: f32,
     pub semantic_flushes: usize,
@@ -2314,7 +2347,7 @@ pub struct ChunkingStats {
 }
 
 /// Snapshot of chunking operation with detection info
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ChunkingStatsSnapshot {
     pub recorded_at: String,
     pub file: String,
@@ -2357,10 +2390,173 @@ pub struct TokenizerInfo {
     pub vocab_size: usize,
     #[serde(default)]
     pub is_exact: bool,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub fallback_reason: Option<String>,
+    #[serde(default)]
+    pub fallback_detail: Option<String>,
+    #[serde(default)]
+    pub attempted_path: Option<String>,
+    #[serde(default)]
+    pub attempted_at: Option<String>,
 }
 
 pub async fn fetch_tokenizer_info() -> Result<TokenizerInfo, String> {
     fetch_json("/sys/tokenizer-info").await
+}
+
+// ============ Golden Sample ============
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GoldenSampleStatus {
+    #[serde(default)]
+    pub capacity: usize,
+    #[serde(default)]
+    pub current_size: usize,
+    #[serde(default)]
+    pub chunks_seen: u64,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub captured_at: Option<String>,
+    #[serde(default)]
+    pub tokenizer_model: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GoldenSampleEntry {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub chunk_text: String,
+    #[serde(default)]
+    pub baseline_token_count: usize,
+    #[serde(default)]
+    pub baseline_token_ids: Option<Vec<u32>>,
+    #[serde(default)]
+    pub tokenizer_model: String,
+    #[serde(default)]
+    pub captured_at: String,
+    #[serde(default)]
+    pub position_in_corpus: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GoldenSampleResponse {
+    #[serde(default)]
+    pub status: Option<GoldenSampleStatus>,
+    #[serde(default)]
+    pub entries: Vec<GoldenSampleEntry>,
+}
+
+pub async fn fetch_golden_sample(limit: usize) -> Result<GoldenSampleResponse, String> {
+    fetch_json(&format!("/monitor/golden-sample?limit={}", limit)).await
+}
+
+pub async fn recapture_golden_sample(rotate_seed: bool) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({ "rotate_seed": rotate_seed });
+    post_json("/monitor/golden-sample/recapture", &body).await
+}
+
+// ============ Tokenizer Diff Engine ============
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TokenizerDiffSummary {
+    #[serde(default)]
+    pub entries_total: usize,
+    #[serde(default)]
+    pub entries_skipped: usize,
+    #[serde(default)]
+    pub entries_identical: usize,
+    #[serde(default)]
+    pub entries_count_changed: usize,
+    #[serde(default)]
+    pub entries_ids_changed: usize,
+    #[serde(default)]
+    pub total_baseline_tokens: u64,
+    #[serde(default)]
+    pub total_candidate_tokens: u64,
+    #[serde(default)]
+    pub total_delta_pct: Option<f64>,
+    #[serde(default)]
+    pub mean_count_delta: f64,
+    #[serde(default)]
+    pub mean_count_delta_abs: f64,
+    #[serde(default)]
+    pub max_count_delta_abs: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TokenizerDiffEntry {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub chunk_text: String,
+    #[serde(default)]
+    pub position_in_corpus: u64,
+    #[serde(default)]
+    pub baseline_count: usize,
+    #[serde(default)]
+    pub candidate_count: usize,
+    #[serde(default)]
+    pub count_delta: i32,
+    #[serde(default)]
+    pub ids_match: bool,
+    #[serde(default)]
+    pub common_prefix_len: usize,
+    #[serde(default)]
+    pub common_suffix_len: usize,
+    #[serde(default)]
+    pub baseline_token_ids: Vec<u32>,
+    #[serde(default)]
+    pub candidate_token_ids: Vec<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TokenizerDiffReport {
+    #[serde(default)]
+    pub candidate_path: String,
+    #[serde(default)]
+    pub candidate_model_name: String,
+    #[serde(default)]
+    pub candidate_vocab_size: usize,
+    #[serde(default)]
+    pub baseline_tokenizer_model: Option<String>,
+    #[serde(default)]
+    pub generated_at: String,
+    #[serde(default)]
+    pub summary: TokenizerDiffSummary,
+    #[serde(default)]
+    pub entries: Vec<TokenizerDiffEntry>,
+}
+
+/// Run a tokenizer diff against the golden corpus baseline.
+/// Exactly one of `candidate_path` / `candidate_ollama_model` must be set.
+pub async fn compute_tokenizer_diff(
+    candidate_path: Option<String>,
+    candidate_ollama_model: Option<String>,
+    limit: Option<usize>,
+) -> Result<TokenizerDiffReport, String> {
+    let body = serde_json::json!({
+        "candidate_path": candidate_path,
+        "candidate_ollama_model": candidate_ollama_model,
+        "limit": limit,
+    });
+    post_json("/monitor/tokenizer/diff", &body).await
+}
+
+/// Apply an explicit GGUF (path or Ollama model) to the live token counter.
+/// Returns the new tokenizer status on success.
+pub async fn swap_tokenizer(
+    candidate_path: Option<String>,
+    candidate_ollama_model: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({
+        "candidate_path": candidate_path,
+        "candidate_ollama_model": candidate_ollama_model,
+    });
+    post_json("/sys/tokenizer/swap", &body).await
 }
 
 // ============ Tool Execution Monitoring ============
@@ -3162,6 +3358,35 @@ pub struct ParserStats {
 
 pub async fn fetch_parser_stats() -> Result<ParserStats, String> {
     fetch_json("/monitor/parser/stats").await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct CallSiteStats {
+    pub calls: u64,
+    pub chars_in: u64,
+    pub chars_out: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct StoreRecord {
+    pub file: String,
+    pub chars_in: u64,
+    pub chars_out: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct CanonStats {
+    pub store_ingestion: CallSiteStats,
+    #[serde(default)]
+    pub store_records: Vec<StoreRecord>,
+    pub embed_ingestion: CallSiteStats,
+    pub index_ingestion: CallSiteStats,
+    pub embed_query: CallSiteStats,
+    pub index_query: CallSiteStats,
+}
+
+pub async fn fetch_canon_stats() -> Result<CanonStats, String> {
+    fetch_json("/monitor/canon/stats").await
 }
 
 pub async fn update_ner_config(config: NerConfigRequest) -> Result<NerConfigResponse, String> {

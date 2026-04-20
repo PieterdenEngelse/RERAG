@@ -11,6 +11,7 @@
 //! - Requires RUST_LOG environment variable
 //! - Requires MONITORING_ENABLED=true environment variable
 pub mod alerting_hooks;
+pub mod canon_stats;
 pub mod extraction_stats;
 pub mod chunking_stats;
 pub mod config;
@@ -45,6 +46,13 @@ pub use crate::monitoring::metrics::{
     EXTRACTION_CHARS_TOTAL, EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL, INDEX_SIZE_BYTES,
     RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_TOTAL, REGISTRY, REINDEX_FAILURE_TOTAL,
     REINDEX_SUCCESS_TOTAL, SEARCH_LATENCY_MS, STARTUP_DURATION_MS, VECTORS_TOTAL,
+};
+pub use canon_stats::{
+    get_stats as get_canon_stats, record_embed_ingestion as record_canon_embed_ingestion,
+    record_embed_query as record_canon_embed_query,
+    record_index_ingestion as record_canon_index_ingestion,
+    record_index_query as record_canon_index_query, record_store as record_canon_store, CanonStats,
+    CallSiteStats,
 };
 pub use extraction_stats::{
     get_stats as get_extraction_stats, load_history as load_extraction_history,

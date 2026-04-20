@@ -793,49 +793,160 @@ pub async fn set_llama_model(body: web::Json<LlamaModelRequest>) -> impl Respond
 
 /// Reload the global token counter from the current model's GGUF.
 pub fn reload_token_counter() {
+    use crate::gguf_tokenizer::FallbackReason;
     let hw = crate::db::param_hardware::global_config();
     if let Some(handle) = crate::api::get_token_counter() {
-        let result = match hw.backend_type {
+        let (result, expected_local_gguf) = match hw.backend_type {
             crate::db::param_hardware::BackendType::Ollama => {
                 if !hw.model.is_empty() {
-                    crate::gguf_tokenizer::resolve_ollama_gguf_path(&hw.model)
+                    (
+                        crate::gguf_tokenizer::resolve_ollama_gguf_path(&hw.model),
+                        true,
+                    )
                 } else {
-                    Err(anyhow::anyhow!("No model configured"))
+                    handle.mark_fallback(FallbackReason::NoModelConfigured, None);
+                    (Err(anyhow::anyhow!("No model configured")), false)
                 }
             }
             crate::db::param_hardware::BackendType::LlamaCpp => {
-                crate::gguf_tokenizer::resolve_llama_server_gguf_path()
+                (crate::gguf_tokenizer::resolve_llama_server_gguf_path(), true)
             }
-            _ => Err(anyhow::anyhow!("Cloud backend, no local GGUF")),
+            _ => {
+                handle.mark_fallback(FallbackReason::CloudBackend, None);
+                (Err(anyhow::anyhow!("Cloud backend, no local GGUF")), false)
+            }
         };
-        match result {
-            Ok(path) => match handle.load_from_gguf(&path) {
-                Ok(()) => tracing::info!(
-                    model = %handle.model_name(),
-                    vocab = handle.vocab_size(),
-                    "Token counter reloaded"
+        if expected_local_gguf {
+            match result {
+                Ok(path) => match handle.load_from_gguf(&path) {
+                    Ok(()) => tracing::info!(
+                        model = %handle.model_name(),
+                        vocab = handle.vocab_size(),
+                        "Token counter reloaded"
+                    ),
+                    Err(_) => {} // load_from_gguf recorded the fallback + warned
+                },
+                Err(e) => handle.mark_fallback(
+                    FallbackReason::PathNotFound {
+                        detail: format!("{:#}", e),
+                    },
+                    None,
                 ),
-                Err(e) => tracing::warn!("Failed to reload GGUF tokenizer: {}", e),
-            },
-            Err(e) => {
-                tracing::info!("No GGUF path resolved: {}, resetting to heuristic", e);
-                handle.reset_to_heuristic();
             }
         }
     }
 }
 
+/// Request body for explicit tokenizer swap
+#[derive(Deserialize)]
+pub struct TokenizerSwapRequest {
+    pub candidate_path: Option<String>,
+    pub candidate_ollama_model: Option<String>,
+}
+
+/// POST /sys/tokenizer/swap
+/// Apply an explicit GGUF (by path or Ollama model) to the live token counter
+/// without touching the configured backend. Used by the Step 4 compare/swap
+/// UI to accept a candidate after reviewing the diff.
+pub async fn swap_tokenizer(body: web::Json<TokenizerSwapRequest>) -> impl Responder {
+    let req = body.into_inner();
+    let candidate = match (req.candidate_path, req.candidate_ollama_model) {
+        (Some(_), Some(_)) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "error": "Specify either candidate_path or candidate_ollama_model, not both",
+            }));
+        }
+        (None, None) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "error": "Must specify candidate_path or candidate_ollama_model",
+            }));
+        }
+        (Some(p), None) => {
+            let pb = std::path::PathBuf::from(&p);
+            if !pb.exists() {
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "status": "error",
+                    "error": format!("candidate_path does not exist: {}", p),
+                }));
+            }
+            pb
+        }
+        (None, Some(m)) => match crate::gguf_tokenizer::resolve_ollama_gguf_path(&m) {
+            Ok(p) => p,
+            Err(e) => {
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "status": "error",
+                    "error": format!("Failed to resolve Ollama model {:?}: {:#}", m, e),
+                }));
+            }
+        },
+    };
+
+    let handle = match crate::api::get_token_counter() {
+        Some(h) => h,
+        None => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "error": "Token counter not initialized",
+            }));
+        }
+    };
+
+    match handle.load_from_gguf(&candidate) {
+        Ok(()) => {
+            tracing::info!(
+                model = %handle.model_name(),
+                vocab = handle.vocab_size(),
+                path = %candidate.display(),
+                "Tokenizer swapped via /sys/tokenizer/swap"
+            );
+            let status = handle.status();
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "ok",
+                "model": handle.model_name(),
+                "vocab_size": handle.vocab_size(),
+                "is_exact": handle.is_exact(),
+                "mode": status.mode,
+                "candidate_path": candidate.display().to_string(),
+                "note": "Tokenizer swapped. Re-capture the golden sample so the new baseline is captured under this tokenizer.",
+            }))
+        }
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "error": format!("{:#}", e),
+        })),
+    }
+}
+
 /// GET /sys/tokenizer-info
 pub async fn tokenizer_info() -> impl Responder {
-    let (model, vocab_size, is_exact) = match crate::api::get_token_counter() {
-        Some(handle) => (handle.model_name(), handle.vocab_size(), handle.is_exact()),
-        None => ("unavailable".into(), 0, false),
-    };
-    HttpResponse::Ok().json(serde_json::json!({
-        "model": model,
-        "vocab_size": vocab_size,
-        "is_exact": is_exact,
-    }))
+    match crate::api::get_token_counter() {
+        Some(handle) => {
+            let status = handle.status();
+            HttpResponse::Ok().json(serde_json::json!({
+                "model": handle.model_name(),
+                "vocab_size": handle.vocab_size(),
+                "is_exact": handle.is_exact(),
+                "mode": status.mode,
+                "fallback_reason": status.fallback_reason.as_ref().map(|r| r.discriminant()),
+                "fallback_detail": status.fallback_reason.as_ref().and_then(|r| r.detail().map(|s| s.to_string())),
+                "attempted_path": status.attempted_path,
+                "attempted_at": status.attempted_at,
+            }))
+        }
+        None => HttpResponse::Ok().json(serde_json::json!({
+            "model": "unavailable",
+            "vocab_size": 0,
+            "is_exact": false,
+            "mode": "heuristic",
+            "fallback_reason": "not_attempted",
+            "fallback_detail": null,
+            "attempted_path": null,
+            "attempted_at": null,
+        })),
+    }
 }
 
 /// POST /sys/restart — restart the ag.service unit and respond before the process dies.
@@ -912,6 +1023,7 @@ pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/runtime/action").route(web::post().to(runtime_action)));
     cfg.service(web::resource("/loaded-model").route(web::get().to(loaded_model)));
     cfg.service(web::resource("/tokenizer-info").route(web::get().to(tokenizer_info)));
+    cfg.service(web::resource("/tokenizer/swap").route(web::post().to(swap_tokenizer)));
     cfg.service(web::resource("/llama-model").route(web::post().to(set_llama_model)));
     cfg.service(web::resource("/restart").route(web::post().to(restart_backend)));
     cfg.service(web::resource("/restart-process").route(web::post().to(restart_process)));

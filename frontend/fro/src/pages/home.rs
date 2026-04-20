@@ -1100,7 +1100,7 @@ pub fn Home() -> Element {
                                     class: "hidden",
                                     // Documents: pdf, txt, md, html, xml, json
                                     // Code: rs, py, js, ts, go, java, cs, cpp, c, rb, php, sh, sql, yaml, toml
-                                    accept: ".pdf,.txt,.text,.md,.markdown,.html,.htm,.xml,.xhtml,.json,.rs,.py,.pyw,.js,.mjs,.cjs,.ts,.tsx,.go,.java,.cs,.cpp,.cc,.cxx,.hpp,.c,.h,.rb,.php,.sh,.bash,.zsh,.sql,.yaml,.yml,.toml",
+                                    accept: ".pdf,.txt,.text,.md,.markdown,.html,.htm,.xhtml,.xml,.json,.docx,.xlsx,.csv,.odt,.ods,.epub,.pptx,.rs,.py,.pyw,.js,.mjs,.cjs,.ts,.tsx,.go,.java,.cs,.cpp,.cc,.cxx,.hpp,.c,.h,.rb,.php,.sh,.bash,.zsh,.sql,.yaml,.yml,.toml",
                                     disabled: is_uploading(),
                                     onchange: {
                                         let is_uploading = is_uploading.clone();
@@ -1118,6 +1118,33 @@ pub fn Home() -> Element {
                                                 let files = evt.files();
                                                 let total_files = files.len();
                                                 let mut success_count = 0;
+
+                                                // Client-side extension check
+                                                const ALLOWED_EXTS: &[&str] = &[
+                                                    "pdf","txt","text","md","markdown","html","htm","xhtml","xml","json",
+                                                    "docx","xlsx","csv","odt","ods","epub","pptx",
+                                                    "rs","py","pyw","js","mjs","cjs","ts","tsx","go","java","cs",
+                                                    "cpp","cc","cxx","hpp","c","h","rb","php","sh","bash","zsh",
+                                                    "sql","yaml","yml","toml",
+                                                ];
+                                                let mut bad_exts: Vec<String> = Vec::new();
+                                                for f in &files {
+                                                    let name = f.name();
+                                                    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+                                                    if !ALLOWED_EXTS.contains(&ext.as_str()) {
+                                                        bad_exts.push(format!("{} (.{})", name, ext));
+                                                    }
+                                                }
+                                                if !bad_exts.is_empty() {
+                                                    upload_status.set(Some(format!("✗ Unsupported: {}", bad_exts.join(", "))));
+                                                    is_uploading.set(false);
+                                                    let mut upload_status_clear = upload_status.clone();
+                                                    spawn(async move {
+                                                        gloo_timers::future::TimeoutFuture::new(5000).await;
+                                                        upload_status_clear.set(None);
+                                                    });
+                                                    return;
+                                                }
 
                                                 if total_files > 0 {
                                                     // Heuristic: only stop runtime for "bulk" uploads

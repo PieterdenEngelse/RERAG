@@ -138,6 +138,7 @@ async fn main() -> std::io::Result<()> {
     ag::db::param_hardware::load_active_config(&_db_conn);
     ag::db::ner_settings::load_active_config(&_db_conn);
     ag::db::extraction_records::init(pm.db_path("documents"));
+    ag::db::golden_sample::init(pm.db_path("documents"));
     ag::monitoring::load_extraction_history();
 
     // ─────────────────────────────────────────────────────────────
@@ -151,35 +152,44 @@ async fn main() -> std::io::Result<()> {
 
         // Try to load exact tokenizer from active model's GGUF
         let hw = param_hardware::global_config();
-        let gguf_result = match hw.backend_type {
+        let (gguf_result, expected_local_gguf) = match hw.backend_type {
             param_hardware::BackendType::Ollama => {
                 if !hw.model.is_empty() {
                     info!("🔢 Resolving Ollama GGUF for tokenizer: {}", hw.model);
-                    resolve_ollama_gguf_path(&hw.model)
+                    (resolve_ollama_gguf_path(&hw.model), true)
                 } else {
-                    Err(anyhow::anyhow!("No model configured"))
+                    handle.mark_fallback(FallbackReason::NoModelConfigured, None);
+                    (Err(anyhow::anyhow!("No model configured")), false)
                 }
             }
             param_hardware::BackendType::LlamaCpp => {
                 info!("🔢 Resolving llama-server GGUF for tokenizer");
-                resolve_llama_server_gguf_path()
+                (resolve_llama_server_gguf_path(), true)
             }
-            _ => Err(anyhow::anyhow!("Cloud backend, no local GGUF")),
+            _ => {
+                handle.mark_fallback(FallbackReason::CloudBackend, None);
+                (Err(anyhow::anyhow!("Cloud backend, no local GGUF")), false)
+            }
         };
 
-        match gguf_result {
-            Ok(path) => match handle.load_from_gguf(&path) {
-                Ok(()) => info!(
-                    "✅ Exact token counter loaded (model={}, vocab={})",
-                    handle.model_name(),
-                    handle.vocab_size()
+        if expected_local_gguf {
+            match gguf_result {
+                Ok(path) => match handle.load_from_gguf(&path) {
+                    Ok(()) => info!(
+                        "✅ Exact token counter loaded (model={}, vocab={})",
+                        handle.model_name(),
+                        handle.vocab_size()
+                    ),
+                    // load_from_gguf already recorded the fallback + warned.
+                    Err(_) => {}
+                },
+                Err(e) => handle.mark_fallback(
+                    FallbackReason::PathNotFound {
+                        detail: format!("{:#}", e),
+                    },
+                    None,
                 ),
-                Err(e) => warn!("⚠️  Failed to load GGUF tokenizer: {}, using heuristic", e),
-            },
-            Err(e) => info!(
-                "ℹ️  No GGUF path resolved: {}, using heuristic token counter",
-                e
-            ),
+            }
         }
 
         ag::api::set_token_counter(handle);

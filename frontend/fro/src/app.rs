@@ -2,8 +2,8 @@ use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigChunker, ConfigHardware, ConfigIoUring, ConfigMemories, ConfigNeo4j,
-    ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, ConfigTerms, Docu,
+    About, Config, ConfigChunker, ConfigEmbedding, ConfigHardware, ConfigIoUring, ConfigMemories,
+    ConfigNeo4j, ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, ConfigTerms, Docu,
     DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
     DocuEmbeddings, DocuEntitiesProduction, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
     DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy,
@@ -70,6 +70,8 @@ pub enum Route {
         ConfigChunker {},
         #[route("/config/ner")]
         ConfigNer {},
+        #[route("/config/embedding")]
+        ConfigEmbedding {},
         #[route("/config/onnx")]
         ConfigOnnx {},
         #[route("/config/neo4j")]

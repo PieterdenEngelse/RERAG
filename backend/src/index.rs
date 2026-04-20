@@ -3,11 +3,12 @@ use crate::embedder;
 use crate::memory::chunker_factory::{create_chunker, Chunker};
 use crate::mime_detect::{detect_content_type, ContentType};
 use crate::monitoring::{
-    record_extraction_format, record_ocr_attempted, record_ocr_no_pages, record_ocr_no_text,
+    record_canon_store, record_extraction_format, record_ocr_attempted, record_ocr_no_pages, record_ocr_no_text,
     record_ocr_ok, record_ocr_unavailable, DetectionInfo, EXTRACTION_CHARS_TOTAL,
     EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL,
 };
 use crate::retriever::Retriever;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
@@ -249,7 +250,22 @@ pub fn index_content_direct(
         .unwrap_or("unknown");
 
     let chunk_start = std::time::Instant::now();
-    let chunks = apply_context_prefix(chunker.chunk_text(content), filename);
+    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename)
+        .into_iter()
+        .map(|c| {
+            let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
+    let index_chunks: Vec<String> = chunks
+        .iter()
+        .map(|c| {
+            let out = crate::normalizer::to_index(c);
+            crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -274,7 +290,7 @@ pub fn index_content_direct(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, chunk, &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
             warn!(
                 "index_content_direct: Failed to index chunk {}: {}",
                 chunk_id, e
@@ -312,7 +328,25 @@ pub fn index_content_with_graph(
         .unwrap_or("unknown");
 
     let chunk_start = std::time::Instant::now();
-    let chunks = apply_context_prefix(chunker.chunk_text(content), filename);
+    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename)
+        .into_iter()
+        .map(|c| {
+            let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
+    for c in &chunks {
+        crate::db::golden_sample::offer_chunk(c);
+    }
+    let index_chunks: Vec<String> = chunks
+        .iter()
+        .map(|c| {
+            let out = crate::normalizer::to_index(c);
+            crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -338,7 +372,7 @@ pub fn index_content_with_graph(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, chunk, &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
             warn!(
                 "index_content_with_graph: Failed to index chunk {}: {}",
                 chunk_id, e
@@ -358,6 +392,17 @@ pub fn index_content_with_graph(
         chunk_duration.as_millis(),
         embed_duration.as_millis()
     );
+
+    let mut snap = crate::monitoring::ChunkingStatsSnapshot::new(
+        filename,
+        chunker_mode,
+        ok,
+        total_tokens,
+        chunk_duration.as_millis() as u64,
+        chunker.stats(),
+    );
+    snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+    crate::monitoring::record_chunking_snapshot(snap);
 
     Ok((ok, graph_chunks))
 }
@@ -406,7 +451,25 @@ async fn index_file_with_detection_async(
     };
 
     let chunk_start = std::time::Instant::now();
-    let chunks = apply_context_prefix(chunker.chunk_text(&content), filename);
+    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(&content), filename)
+        .into_iter()
+        .map(|c| {
+            let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
+    for c in &chunks {
+        crate::db::golden_sample::offer_chunk(c);
+    }
+    let index_chunks: Vec<String> = chunks
+        .iter()
+        .map(|c| {
+            let out = crate::normalizer::to_index(c);
+            crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -431,7 +494,7 @@ async fn index_file_with_detection_async(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, chunk, &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
             warn!(
                 "index_file_async: Failed to index chunk {}: {}",
                 chunk_id, e
@@ -450,6 +513,18 @@ async fn index_file_with_detection_async(
         chunk_duration.as_millis(),
         crate::perf::io_uring::backend_name()
     );
+
+    let mut snap = crate::monitoring::ChunkingStatsSnapshot::with_detection(
+        filename,
+        chunker_mode,
+        ok,
+        total_tokens,
+        chunk_duration.as_millis() as u64,
+        chunker.stats(),
+        detection_info,
+    );
+    snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+    crate::monitoring::record_chunking_snapshot(snap);
 
     Ok(ok)
 }
@@ -481,7 +556,25 @@ fn index_file_with_detection(
     };
 
     let chunk_start = std::time::Instant::now();
-    let chunks = apply_context_prefix(chunker.chunk_text(&content), filename);
+    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(&content), filename)
+        .into_iter()
+        .map(|c| {
+            let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
+    for c in &chunks {
+        crate::db::golden_sample::offer_chunk(c);
+    }
+    let index_chunks: Vec<String> = chunks
+        .iter()
+        .map(|c| {
+            let out = crate::normalizer::to_index(c);
+            crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
+            out
+        })
+        .collect();
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -506,7 +599,7 @@ fn index_file_with_detection(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, chunk, &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
             warn!("index_file: Failed to index chunk {}: {}", chunk_id, e);
         } else {
             ok += 1;
@@ -669,33 +762,6 @@ pub fn strip_html_tags(text: &str) -> (String, usize) {
     )
 }
 
-/// Normalize Unicode whitespace and typographic characters to ASCII.
-/// Returns (clean_text, replacement_count).
-pub fn normalize_unicode(text: &str) -> (String, usize) {
-    let mut count = 0usize;
-    let mut result = String::with_capacity(text.len());
-    for ch in text.chars() {
-        let replacement = match ch {
-            '\u{00A0}' => Some(" "),   // non-breaking space
-            '\u{200B}' => Some(""),    // zero-width space
-            '\u{2019}' => Some("'"),   // right single quote
-            '\u{2018}' => Some("'"),   // left single quote
-            '\u{201C}' => Some("\""),  // left double quote
-            '\u{201D}' => Some("\""),  // right double quote
-            '\u{2013}' => Some("-"),   // en-dash
-            '\u{2014}' => Some("--"),  // em-dash
-            '\u{2026}' => Some("..."), // ellipsis
-            _ => None,
-        };
-        if let Some(r) = replacement {
-            result.push_str(r);
-            count += 1;
-        } else {
-            result.push(ch);
-        }
-    }
-    (result, count)
-}
 
 /// Common text extraction logic from bytes
 fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
@@ -721,20 +787,38 @@ fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
         ContentType::Unknown => "unknown",
     };
 
+    let needs_html_clean = matches!(content_type, ContentType::Html);
+    let needs_unicode_clean = matches!(
+        content_type,
+        ContentType::Pdf
+            | ContentType::Docx
+            | ContentType::Odt
+            | ContentType::Epub
+            | ContentType::Pptx
+            | ContentType::Html
+    );
+
     let result = match content_type {
         ContentType::Pdf => {
-            debug!("extract_text: PDF detected, extracting text layer");
-            match pdf_extract::extract_text(path) {
-                Ok(text) if !text.trim().is_empty() => Some(text),
-                Ok(_) => {
-                    debug!("extract_text: PDF has no text layer — trying OCR fallback");
-                    extract_text_from_pdf_ocr(path)
+            debug!("extract_text: PDF detected, trying pdftotext → pdf-extract → OCR");
+            let text = extract_text_from_pdf_pdftotext(path).or_else(|| {
+                match pdf_extract::extract_text(path) {
+                    Ok(t) if !t.trim().is_empty() => Some(t),
+                    Ok(_) => {
+                        debug!("extract_text: pdf-extract found no text layer — trying OCR");
+                        extract_text_from_pdf_ocr(path)
+                    }
+                    Err(e) => {
+                        warn!("extract_text: pdf-extract failed ({}), trying OCR", e);
+                        extract_text_from_pdf_ocr(path)
+                    }
                 }
-                Err(e) => {
-                    warn!("extract_text: pdf_extract failed ({}), trying OCR fallback", e);
-                    extract_text_from_pdf_ocr(path)
-                }
-            }
+            });
+            text.map(dedupe_pdf_noise)
+        }
+        ContentType::Html => {
+            debug!("extract_text: HTML detected, using smart extractor");
+            extract_text_from_html(&bytes)
         }
         ContentType::Docx => {
             debug!("extract_text: DOCX detected, extracting word/document.xml");
@@ -771,14 +855,15 @@ fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
             None
         }
         _ => {
-            // For all other text-based types, try to read as UTF-8
-            String::from_utf8(bytes.clone()).ok().or_else(|| {
-                debug!("extract_text: Non-UTF8 content, using lossy conversion");
-                Some(String::from_utf8_lossy(&bytes).to_string())
-            })
+            detect_and_decode(&bytes)
         }
     }
-    .map(|text| apply_text_preprocessing(text));
+    .map(|text| {
+        let preprocessed = apply_text_preprocessing(text, needs_html_clean, needs_unicode_clean);
+        let normalized = crate::normalizer::normalize(&preprocessed, crate::normalizer::NormalizeTarget::Store);
+        record_canon_store(path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"), preprocessed.len(), normalized.len());
+        normalized
+    });
 
     // Record extraction metrics
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -819,26 +904,42 @@ pub fn apply_context_prefix(chunks: Vec<String>, filename: &str) -> Vec<String> 
     }
 }
 
-/// Apply clean_html and clean_unicode preprocessing based on global ChunkerConfig.
-pub fn apply_text_preprocessing(text: String) -> String {
-    let config = crate::db::chunk_settings::global_config();
+/// Normalise typography-heavy Unicode to plain ASCII so tokenisers see consistent tokens.
+/// Handles: curly quotes, em/en dashes, non-breaking hyphen, ellipsis, and PDF ligatures.
+fn clean_unicode_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\u{2018}' | '\u{2019}' => out.push('\''),
+            '\u{201C}' | '\u{201D}' => out.push('"'),
+            '\u{2013}' | '\u{2014}' => out.push_str(" - "),
+            '\u{2011}' => out.push('-'),
+            '\u{2026}' => out.push_str("..."),
+            '\u{FB00}' => out.push_str("ff"),
+            '\u{FB01}' => out.push_str("fi"),
+            '\u{FB02}' => out.push_str("fl"),
+            '\u{FB03}' => out.push_str("ffi"),
+            '\u{FB04}' => out.push_str("ffl"),
+            '\u{FB06}' => out.push_str("st"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Apply format-driven preprocessing: HTML tag stripping and Unicode normalisation.
+/// Callers compute the two booleans from the detected ContentType before calling this.
+pub fn apply_text_preprocessing(text: String, clean_html: bool, clean_unicode: bool) -> String {
     let mut result = text;
-    if config.clean_html {
+    if clean_html {
         let (cleaned, count) = strip_html_tags(&result);
         if count > 0 {
             debug!("apply_text_preprocessing: stripped {} HTML tags", count);
         }
         result = cleaned;
     }
-    if config.clean_unicode {
-        let (cleaned, count) = normalize_unicode(&result);
-        if count > 0 {
-            debug!(
-                "apply_text_preprocessing: normalized {} unicode chars",
-                count
-            );
-        }
-        result = cleaned;
+    if clean_unicode {
+        result = clean_unicode_text(&result);
     }
     result
 }
@@ -1007,7 +1108,7 @@ fn extract_text_from_pdf_ocr(path: &Path) -> Option<String> {
     let prefix = tmp.path().join("pg");
 
     let render = Command::new("pdftoppm")
-        .args(["-r", "150", path.to_str()?, prefix.to_str()?])
+        .args(["-r", "300", path.to_str()?, prefix.to_str()?])
         .output()
         .ok()?;
 
@@ -1072,6 +1173,180 @@ fn extract_text_from_pdf_ocr(path: &Path) -> Option<String> {
         );
         Some(text)
     }
+}
+
+/// Try pdftotext (poppler-utils) for higher-quality PDF text extraction.
+/// Handles multi-column layouts, complex fonts, and non-standard encodings
+/// better than pdf-extract. Returns None if pdftotext is not on PATH.
+fn extract_text_from_pdf_pdftotext(path: &Path) -> Option<String> {
+    use std::process::Command;
+    let output = Command::new("pdftotext")
+        .args(["-layout", "-enc", "UTF-8", path.to_str()?, "-"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        debug!(
+            "extract_text: pdftotext failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if text.trim().is_empty() { None } else { Some(text) }
+}
+
+/// Remove repeated short lines that are likely PDF page headers/footers.
+/// Lines appearing 4+ times that are ≤80 chars are treated as noise.
+fn dedupe_pdf_noise(text: String) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 12 {
+        return text;
+    }
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for line in &lines {
+        let t = line.trim();
+        if !t.is_empty() {
+            *counts.entry(t).or_insert(0) += 1;
+        }
+    }
+    let noise: std::collections::HashSet<&str> = counts
+        .into_iter()
+        .filter(|(line, count)| *count >= 4 && line.len() <= 80)
+        .map(|(line, _)| line)
+        .collect();
+    if noise.is_empty() {
+        return text;
+    }
+    let filtered: Vec<&str> = lines
+        .iter()
+        .filter(|l| !noise.contains(l.trim()))
+        .copied()
+        .collect();
+    let removed = lines.len() - filtered.len();
+    if removed > 0 {
+        debug!("dedupe_pdf_noise: removed {} repeated header/footer lines", removed);
+    }
+    filtered.join("\n")
+}
+
+/// Smart HTML text extractor:
+/// 1. Strips `<script>`, `<style>`, and `<head>` blocks entirely (content included).
+/// 2. Strips remaining HTML tags.
+/// 3. Decodes HTML entities.
+fn extract_text_from_html(bytes: &[u8]) -> Option<String> {
+    let raw = detect_and_decode(bytes)?;
+    let cleaned = remove_html_blocks(&raw, &["script", "style", "head"]);
+    let (stripped, _) = strip_html_tags(&cleaned);
+    Some(decode_html_entities(&stripped))
+}
+
+/// Remove named block-level HTML elements and their contents entirely.
+fn remove_html_blocks(html: &str, block_tags: &[&str]) -> String {
+    let mut result = html.to_string();
+    for tag in block_tags {
+        let open_pat = format!("<{}", tag);
+        let close_pat = format!("</{}>", tag);
+        loop {
+            let lower = result.to_lowercase();
+            let Some(start) = lower.find(&open_pat) else { break };
+            // find '>' to end the opening tag
+            let tag_end = lower[start..].find('>').map(|i| start + i + 1).unwrap_or(start + open_pat.len());
+            if let Some(close_off) = lower[tag_end..].find(&close_pat) {
+                let end = tag_end + close_off + close_pat.len();
+                result.replace_range(start..end, " ");
+            } else {
+                result.truncate(start);
+                break;
+            }
+        }
+    }
+    result
+}
+
+/// Decode common HTML named entities and numeric entities (&#NNN; / &#xHHH;).
+pub fn decode_html_entities(text: &str) -> String {
+    // Named entities
+    let s = text
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&ldquo;", "\"")
+        .replace("&rdquo;", "\"")
+        .replace("&lsquo;", "'")
+        .replace("&rsquo;", "'")
+        .replace("&hellip;", "...")
+        .replace("&copy;", "©")
+        .replace("&reg;", "®")
+        .replace("&trade;", "™");
+
+    // Numeric entities: &#NNN; and &#xHHH;
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '&' && i + 2 < chars.len() && chars[i + 1] == '#' {
+            let mut j = i + 2;
+            let hex = j < chars.len() && (chars[j] == 'x' || chars[j] == 'X');
+            if hex {
+                j += 1;
+            }
+            let start = j;
+            while j < chars.len() && chars[j] != ';' && j - start < 8 {
+                j += 1;
+            }
+            if j < chars.len() && chars[j] == ';' {
+                let num_str: String = chars[start..j].iter().collect();
+                let codepoint = if hex {
+                    u32::from_str_radix(&num_str, 16).ok()
+                } else {
+                    num_str.parse::<u32>().ok()
+                };
+                if let Some(cp) = codepoint.and_then(char::from_u32) {
+                    out.push(cp);
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Decode bytes to a UTF-8 string, detecting encoding when not UTF-8.
+/// Priority: UTF-8 (fast path) → BOM detection → chardetng detection → lossy UTF-8.
+pub fn detect_and_decode(bytes: &[u8]) -> Option<String> {
+    // Fast path: valid UTF-8
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return Some(s.to_string());
+    }
+    // BOM detection
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        // UTF-8 BOM
+        return std::str::from_utf8(&bytes[3..]).ok().map(|s| s.to_string())
+            .or_else(|| Some(String::from_utf8_lossy(&bytes[3..]).into_owned()));
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let (cow, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
+        return Some(cow.into_owned());
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let (cow, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
+        return Some(cow.into_owned());
+    }
+    // chardetng: feed up to 4 KB for detection
+    let mut det = chardetng::EncodingDetector::new();
+    det.feed(&bytes[..bytes.len().min(4096)], true);
+    let encoding = det.guess(None, true);
+    debug!("detect_and_decode: detected encoding={}", encoding.name());
+    let (cow, _, _) = encoding.decode(bytes);
+    Some(cow.into_owned())
 }
 
 pub fn default_chunker(_hint: ChunkerMode) -> Box<dyn Chunker> {

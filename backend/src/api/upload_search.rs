@@ -534,12 +534,17 @@ pub(crate) async fn search_documents_inner(
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
     if let Some(retriever) = RETRIEVER.get() {
+        // Normalize query for each use: Embed for vector search, Index for BM25
+        let embed_q = crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
+        crate::monitoring::record_canon_embed_query(query.q.len(), embed_q.len());
+        let index_q = crate::normalizer::to_index(&embed_q);
+        crate::monitoring::record_canon_index_query(embed_q.len(), index_q.len());
         let query_vector = if let Some(svc) = get_embedding_service() {
-            svc.embed_query(&query.q).await
+            svc.embed_query(&embed_q).await
         } else {
-            crate::embedder::embed(&query.q)
+            crate::embedder::embed(&embed_q)
         };
-        // Entity extraction for graph search
+        // Entity extraction for graph search (use raw query — NER has its own tokenizer)
         let extractor = crate::tools::entity_extractor::EntityExtractorTool::new();
         let extraction = extractor.extract(&query.q);
         let entity_texts: Vec<String> = extraction
@@ -553,7 +558,7 @@ pub(crate) async fn search_documents_inner(
         let graph_results = retriever.graph_search(&entity_texts);
         // Hybrid BM25 + vector search
         let hybrid_results = retriever
-            .hybrid_search(&query.q, Some(&query_vector))
+            .hybrid_search(&index_q, Some(&query_vector))
             .unwrap_or_default();
         // 3-way RRF merge
         let k = 60.0_f32;
@@ -734,9 +739,23 @@ pub(crate) async fn chunk_preview_handler(
 
     let chunker = create_chunker(mode.into(), &config);
 
-    let preprocessed = crate::index::apply_text_preprocessing(body.text.clone());
-
     let filename = body.filename.as_deref().unwrap_or("preview");
+    let preview_ct = crate::mime_detect::detect_from_extension(filename);
+    let needs_html_clean = matches!(preview_ct, crate::mime_detect::ContentType::Html);
+    let needs_unicode_clean = matches!(
+        preview_ct,
+        crate::mime_detect::ContentType::Pdf
+            | crate::mime_detect::ContentType::Docx
+            | crate::mime_detect::ContentType::Odt
+            | crate::mime_detect::ContentType::Epub
+            | crate::mime_detect::ContentType::Pptx
+            | crate::mime_detect::ContentType::Html
+    );
+    let preprocessed = crate::index::apply_text_preprocessing(
+        body.text.clone(),
+        needs_html_clean,
+        needs_unicode_clean,
+    );
     let mut chunks = chunker.chunk_text(&preprocessed);
     if config.context_prefix_enabled {
         chunks = chunks

@@ -31,10 +31,6 @@ pub fn ConfigChunker() -> Element {
     // ─── Semantic ─────────────────────────────────────────────
     let mut semantic_threshold = use_signal(|| 0.75f64);
 
-    // ─── Preprocessing ────────────────────────────────────────
-    let mut clean_html = use_signal(|| false);
-    let mut clean_unicode = use_signal(|| false);
-
     // ─── Context Prefix ───────────────────────────────────────
     let mut context_prefix_enabled = use_signal(|| false);
     let mut context_prefix_tokens = use_signal(|| 32usize);
@@ -44,18 +40,8 @@ pub fn ConfigChunker() -> Element {
     let mut pipeline_preset = use_signal(|| "lw_sent_sem".to_string());
 
     // ─── Embedding model ──────────────────────────────────────
-    let mut embed_model = use_signal(|| "bge-small-en-v1.5".to_string());
-    let mut embed_model_pending = use_signal(|| "bge-small-en-v1.5".to_string());
-    let mut embed_dim = use_signal(|| 384usize);
-    let mut embed_tokenizer_ok = use_signal(|| false);
-    let mut embed_model_file_ok = use_signal(|| false);
-    let mut embed_saving = use_signal(|| false);
-    let mut embed_save_msg = use_signal(|| Option::<String>::None);
-
-    // ─── Tokenizer download ───────────────────────────────────
-    let mut tok_downloading = use_signal(|| false);
-    let mut tok_download_msg = use_signal(|| Option::<String>::None);
-    let mut restarting = use_signal(|| false);
+    // ─── Embedding model (display-only reference) ────────────
+    let mut embed_model_label = use_signal(|| "bge-small-en-v1.5".to_string());
 
     // ─── Save ─────────────────────────────────────────────────
     let mut saving = use_signal(|| false);
@@ -68,8 +54,6 @@ pub fn ConfigChunker() -> Element {
     let mut show_max_info = use_signal(|| false);
     let mut show_overlap_info = use_signal(|| false);
     let mut show_semantic_info = use_signal(|| false);
-    let mut show_clean_html_info = use_signal(|| false);
-    let mut show_clean_unicode_info = use_signal(|| false);
     let mut show_prefix_enabled_info = use_signal(|| false);
     let mut show_prefix_tokens_info = use_signal(|| false);
     let mut show_centroid_info = use_signal(|| false);
@@ -86,8 +70,6 @@ pub fn ConfigChunker() -> Element {
                 max_size.set(c.max_size);
                 overlap.set(c.overlap);
                 semantic_threshold.set(c.semantic_similarity_threshold as f64);
-                clean_html.set(c.clean_html);
-                clean_unicode.set(c.clean_unicode);
                 context_prefix_enabled.set(c.context_prefix_enabled);
                 context_prefix_tokens.set(c.context_prefix_tokens);
                 let has_lw  = c.pipeline_stages.split(',').any(|s| s.trim() == "lw");
@@ -99,11 +81,7 @@ pub fn ConfigChunker() -> Element {
                 });
             }
             if let Ok(emb) = api::fetch_embedding_config().await {
-                embed_model.set(emb.model.clone());
-                embed_model_pending.set(emb.model);
-                embed_dim.set(emb.dimension);
-                embed_tokenizer_ok.set(emb.tokenizer_exists);
-                embed_model_file_ok.set(emb.onnx.model_exists);
+                embed_model_label.set(emb.model);
             }
         });
     });
@@ -125,8 +103,8 @@ pub fn ConfigChunker() -> Element {
                 overlap: overlap(),
                 semantic_similarity_threshold: Some(semantic_threshold() as f32),
                 mode: Some(mode()),
-                clean_html: Some(clean_html()),
-                clean_unicode: Some(clean_unicode()),
+                clean_html: None,
+                clean_unicode: None,
                 context_prefix_enabled: Some(context_prefix_enabled()),
                 context_prefix_tokens: Some(context_prefix_tokens()),
                 pipeline_stages: Some(stages),
@@ -176,128 +154,17 @@ pub fn ConfigChunker() -> Element {
             Panel { title: None, refresh: None,
                 div { class: "flex flex-wrap gap-8",
 
-                    // ── Chunking Model board ───────────────────────────
-                    div { class: "rounded border border-gray-600 p-4 flex-1 min-w-52",
-                        span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Chunking Model" }
-                        div { class: "flex flex-col gap-3",
-
-                            // Active model badge
-                            div { class: "flex items-center gap-2 flex-wrap",
-                                span { class: "text-xs text-gray-400", "Active:" }
-                                span { class: "text-xs font-mono text-cyan-300 bg-gray-800 px-2 py-0.5 rounded",
-                                    "{embed_model()}"
-                                }
-                                span { class: "text-xs text-gray-500", "· {embed_dim()} dims" }
+                    // ── Embedding Model board ──────────────────────────
+                    div { class: "rounded border border-gray-600 p-4 flex-none",
+                        span { class: "text-xs text-gray-400 block mb-1", "Embedding Model" }
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-xs font-mono text-cyan-300 bg-gray-800 px-2 py-0.5 rounded",
+                                "{embed_model_label()}"
                             }
-
-                            // Status indicators
-                            div { class: "flex gap-3 text-xs",
-                                div { class: "flex items-center gap-1",
-                                    span {
-                                        class: if embed_model_file_ok() { "text-green-400" } else { "text-red-400" },
-                                        if embed_model_file_ok() { "● model" } else { "○ model" }
-                                    }
-                                }
-                                div { class: "flex items-center gap-1",
-                                    span {
-                                        class: if embed_tokenizer_ok() { "text-green-400" } else { "text-yellow-400" },
-                                        if embed_tokenizer_ok() { "● tokenizer" } else { "○ tokenizer" }
-                                    }
-                                    if !embed_tokenizer_ok() {
-                                        button {
-                                            class: "btn btn-xs text-white ml-1",
-                                            style: "background-color:#7C2A02;border-color:#7C2A02;",
-                                            disabled: tok_downloading(),
-                                            onclick: move |_| {
-                                                spawn(async move {
-                                                    tok_downloading.set(true);
-                                                    tok_download_msg.set(None);
-                                                    match api::download_tokenizer().await {
-                                                        Ok(msg) => {
-                                                            embed_tokenizer_ok.set(true);
-                                                            tok_download_msg.set(Some(msg));
-                                                        }
-                                                        Err(e) => tok_download_msg.set(Some(format!("Error: {e}"))),
-                                                    }
-                                                    tok_downloading.set(false);
-                                                });
-                                            },
-                                            if tok_downloading() { "Downloading…" } else { "Download" }
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(msg) = tok_download_msg() {
-                                div { class: "flex items-center gap-2 flex-wrap",
-                                    span { class: "text-xs text-amber-400 leading-tight", "{msg}" }
-                                    if msg.contains("Restart to activate") {
-                                        button {
-                                            class: "btn btn-xs text-white",
-                                            style: "background-color:#7C2A02;border-color:#7C2A02;",
-                                            disabled: restarting(),
-                                            onclick: move |_| {
-                                                spawn(async move {
-                                                    restarting.set(true);
-                                                    let _ = api::restart_process().await;
-                                                });
-                                            },
-                                            if restarting() { "Restarting…" } else { "Restart" }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Model picker dropdown
-                            div { class: "flex flex-col gap-1",
-                                label { class: "text-xs text-gray-400", "EMBEDDING_MODEL" }
-                                select {
-                                    class: "select select-xs select-bordered bg-gray-700 text-gray-200 w-full",
-                                    value: "{embed_model_pending()}",
-                                    onchange: move |e| {
-                                        embed_save_msg.set(None);
-                                        embed_model_pending.set(e.value());
-                                    },
-                                    option { value: "bge-small-en-v1.5",  "bge-small-en-v1.5 — 384d · 33 MB" }
-                                    option { value: "bge-small-en-v1.5q", "bge-small-en-v1.5q — 384d · 8 MB (INT8)" }
-                                    option { value: "all-minilm-l6-v2",   "all-MiniLM-L6-v2 — 384d · 22 MB" }
-                                    option { value: "bge-base-en-v1.5",   "bge-base-en-v1.5 — 768d · 109 MB ⚠ re-index" }
-                                    option { value: "e5-small-v2",        "e5-small-v2 — 384d · 33 MB" }
-                                }
-                            }
-
-                            // Save button + message
-                            div { class: "flex items-center gap-2 flex-wrap",
-                                button {
-                                    class: "btn btn-xs text-white",
-                                    style: "background-color:#7C2A02;border-color:#7C2A02;",
-                                    disabled: embed_saving() || embed_model_pending() == embed_model(),
-                                    onclick: move |_| {
-                                        let selected = embed_model_pending();
-                                        spawn(async move {
-                                            embed_saving.set(true);
-                                            embed_save_msg.set(None);
-                                            match api::set_embedding_model(&selected).await {
-                                                Ok(msg) => {
-                                                    embed_model.set(selected);
-                                                    embed_save_msg.set(Some(msg));
-                                                }
-                                                Err(e) => embed_save_msg.set(Some(format!("Error: {e}"))),
-                                            }
-                                            embed_saving.set(false);
-                                        });
-                                    },
-                                    if embed_saving() { "Saving…" } else { "Apply" }
-                                }
-                                if let Some(msg) = embed_save_msg() {
-                                    span { class: "text-xs text-amber-400", "{msg}" }
-                                }
-                            }
-
-                            // Dim-change warning shown when bge-base selected
-                            if embed_model_pending() == "bge-base-en-v1.5" && embed_model() != "bge-base-en-v1.5" {
-                                span { class: "text-xs text-amber-400 leading-tight",
-                                    "⚠ 768-dim model — existing index must be deleted and rebuilt after restart."
-                                }
+                            Link {
+                                to: Route::ConfigEmbedding {},
+                                class: "text-xs text-gray-500 hover:text-cyan-400",
+                                "configure →"
                             }
                         }
                     }
@@ -529,53 +396,9 @@ pub fn ConfigChunker() -> Element {
                 }
             }
 
-            // ─── PREPROCESSING ────────────────────────────────────────
+            // ─── CONTEXT PREFIX ───────────────────────────────────────
             Panel { title: None, refresh: None,
                 div { class: "flex flex-wrap gap-8",
-
-                    div { class: "rounded border border-gray-600 p-4 flex-1 min-w-64",
-                        span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Preprocessing" }
-                        div { class: PARAM_COLUMN_CLASS,
-
-                            // clean_html
-                            div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-3",
-                                    input {
-                                        r#type: "checkbox",
-                                        class: PARAM_CHECKBOX_CLASS,
-                                        checked: clean_html(),
-                                        onchange: move |e| clean_html.set(e.checked()),
-                                    }
-                                    label { class: PARAM_LABEL_CLASS, "CHUNK_CLEAN_HTML" }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                        style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| show_clean_html_info.set(true),
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-
-                            // clean_unicode
-                            div { class: PARAM_BLOCK_CLASS,
-                                div { class: "flex items-center gap-3",
-                                    input {
-                                        r#type: "checkbox",
-                                        class: PARAM_CHECKBOX_CLASS,
-                                        checked: clean_unicode(),
-                                        onchange: move |e| clean_unicode.set(e.checked()),
-                                    }
-                                    label { class: PARAM_LABEL_CLASS, "CHUNK_CLEAN_UNICODE" }
-                                    button {
-                                        class: PARAM_ICON_BUTTON_CLASS,
-                                        style: PARAM_ICON_BUTTON_STYLE,
-                                        onclick: move |_| show_clean_unicode_info.set(true),
-                                        InfoIcon {}
-                                    }
-                                }
-                            }
-                        }
-                    }
 
                     // ─── CONTEXT PREFIX ───────────────────────────────────
                     div { class: "rounded border border-gray-600 p-4 flex-1 min-w-64",
@@ -647,9 +470,6 @@ pub fn ConfigChunker() -> Element {
                         div { "CHUNK_OVERLAP={overlap()}" }
                         div { class: "text-gray-500 mt-1", "# Semantic" }
                         div { "SEMANTIC_SIMILARITY_THRESHOLD={semantic_threshold()}" }
-                        div { class: "text-gray-500 mt-1", "# Preprocessing" }
-                        div { "CHUNK_CLEAN_HTML={clean_html()}" }
-                        div { "CHUNK_CLEAN_UNICODE={clean_unicode()}" }
                         div { class: "text-gray-500 mt-1", "# Context prefix" }
                         div { "CHUNK_CONTEXT_PREFIX={context_prefix_enabled()}" }
                         div { "CHUNK_CONTEXT_PREFIX_TOKENS={context_prefix_tokens()}" }
@@ -1109,24 +929,6 @@ pub fn ConfigChunker() -> Element {
                     }
                 }
             }
-        }
-        if show_clean_html_info() {
-            { info_modal("CHUNK_CLEAN_HTML", show_clean_html_info, vec![
-                "Strip HTML tags from document text before chunking.",
-                "When enabled, <tag> and </tag> patterns are removed by a character-scan (no parser). The raw text content is preserved.",
-                "Use this when ingesting web-scraped HTML pages, exported CMS content, or email bodies that contain inline markup.",
-                "The count of stripped tags is recorded in ChunkingStats.html_tags_stripped for observability.",
-                "Default: false.",
-            ]) }
-        }
-        if show_clean_unicode_info() {
-            { info_modal("CHUNK_CLEAN_UNICODE", show_clean_unicode_info, vec![
-                "Normalize common Unicode characters to ASCII equivalents before chunking.",
-                "Replaced characters: non-breaking space (\\u{00A0} → space), zero-width space (\\u{200B} → removed), smart quotes (\\u{2018}/\\u{2019} → '), left/right double quotes (\\u{201C}/\\u{201D} → \"), en-dash (→ -), em-dash (→ --).",
-                "Use this when ingesting Word/PDF exports, CMS content, or copy-pasted text from word processors that insert smart punctuation.",
-                "Prevents tokenizer drift where 'hello' and 'hello' (with curly quotes) become different tokens.",
-                "Default: false.",
-            ]) }
         }
         if show_prefix_enabled_info() {
             { info_modal("CHUNK_CONTEXT_PREFIX", show_prefix_enabled_info, vec![

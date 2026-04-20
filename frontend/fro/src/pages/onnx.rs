@@ -1290,64 +1290,6 @@ pub fn ConfigOnnx() -> Element {
                 }
                 }
 
-                // ═══════════════════════════════════════════════════════════════
-                // Model Info tile (read-only)
-                // ═══════════════════════════════════════════════════════════════
-                Panel { title: None, refresh: None,
-                    div { class: "flex flex-col gap-2",
-                        span { class: "text-base text-gray-100 font-semibold", "Model Info" }
-
-                        div { class: "flex flex-wrap gap-4 items-stretch",
-                            div { class: "rounded border border-gray-600 p-4 w-fit",
-                                span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Embedding Model" }
-                                div { class: "flex flex-wrap gap-5 justify-start",
-                                    div { class: PARAM_COLUMN_CLASS,
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "model_path" }
-                                            div { class: "flex items-center justify-between w-full",
-                                                span { class: "text-gray-200 text-xs font-mono", "{config().model_path}" }
-                                                button {
-                                                    class: PARAM_ICON_BUTTON_CLASS,
-                                                    style: PARAM_ICON_BUTTON_STYLE,
-                                                    onclick: move |_| _show_model_path_info.set(true),
-                                                    title: "Model path",
-                                                    InfoIcon {}
-                                                }
-                                            }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "embedding_dim" }
-                                            div { class: "flex items-center justify-between w-full",
-                                                span { class: "text-gray-200 text-xs", "{config().embedding_dim}" }
-                                                button {
-                                                    class: PARAM_ICON_BUTTON_CLASS,
-                                                    style: PARAM_ICON_BUTTON_STYLE,
-                                                    onclick: move |_| _show_embed_dim_info.set(true),
-                                                    title: "Embedding dimension",
-                                                    InfoIcon {}
-                                                }
-                                            }
-                                        }
-                                        div { class: PARAM_BLOCK_CLASS,
-                                            label { class: PARAM_LABEL_CLASS, "max_length" }
-                                            div { class: "flex items-center justify-between w-full",
-                                                span { class: "text-gray-200 text-xs", "{config().max_length}" }
-                                                button {
-                                                    class: PARAM_ICON_BUTTON_CLASS,
-                                                    style: PARAM_ICON_BUTTON_STYLE,
-                                                    onclick: move |_| _show_max_length_info.set(true),
-                                                    title: "Max length",
-                                                    InfoIcon {}
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
             }
         }
 

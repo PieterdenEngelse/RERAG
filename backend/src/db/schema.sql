@@ -149,3 +149,29 @@ CREATE TABLE IF NOT EXISTS extraction_records (
 );
 
 CREATE INDEX IF NOT EXISTS idx_extraction_records_recorded ON extraction_records(recorded_at DESC);
+
+-- Golden corpus sample: a stable, seeded random subset of the user's actual
+-- chunks captured under one tokenizer. Used as the baseline for tokenizer
+-- diffs (Step 3) so a candidate tokenizer can be evaluated against the same
+-- text the live system already chose to chunk that way.
+CREATE TABLE IF NOT EXISTS golden_sample (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_text          TEXT NOT NULL,
+    baseline_token_count INTEGER NOT NULL,
+    baseline_token_ids  TEXT,            -- JSON array of u32, NULL if heuristic
+    tokenizer_model     TEXT NOT NULL,
+    captured_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    position_in_corpus  INTEGER NOT NULL -- 0-indexed offset of this chunk in the offered stream
+);
+
+CREATE INDEX IF NOT EXISTS idx_golden_sample_position ON golden_sample(position_in_corpus);
+
+-- Single-row meta table tracking the reservoir state across restarts.
+CREATE TABLE IF NOT EXISTS golden_sample_meta (
+    id                  INTEGER PRIMARY KEY CHECK (id = 1),
+    capacity            INTEGER NOT NULL,
+    chunks_seen         INTEGER NOT NULL DEFAULT 0,
+    seed                INTEGER NOT NULL,
+    captured_at         TIMESTAMP,
+    tokenizer_model     TEXT
+);

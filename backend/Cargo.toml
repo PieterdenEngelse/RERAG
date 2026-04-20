@@ -50,6 +50,9 @@ lru = "0.12"
 infer = "0.16"  # MIME type detection from file magic bytes
 zip = "2"        # ZIP archive reading for DOCX/ODT extraction
 calamine = "0.26" # Spreadsheet parsing: XLSX, ODS, CSV
+chardetng = "0.1" # Encoding detection for non-UTF-8 files (Mozilla)
+encoding_rs = "0.8" # Encoding transcoding (Latin-1, Windows-1252, etc.)
+unicode-normalization = "0.1" # NFC/NFKC normalization
 
 # Performance Optimizations (Phase 1)
 lz4_flex = "0.11"           # Fast compression for vectors

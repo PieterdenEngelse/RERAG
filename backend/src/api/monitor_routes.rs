@@ -1031,3 +1031,65 @@ pub(crate) async fn get_parser_stats() -> Result<HttpResponse, Error> {
     let stats = crate::monitoring::get_extraction_stats();
     Ok(HttpResponse::Ok().json(stats))
 }
+
+pub(crate) async fn get_canon_stats() -> Result<HttpResponse, Error> {
+    let stats = crate::monitoring::get_canon_stats();
+    Ok(HttpResponse::Ok().json(stats))
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct GoldenSampleResponse {
+    pub status: Option<crate::db::golden_sample::GoldenSampleStatus>,
+    pub entries: Vec<crate::db::golden_sample::GoldenSampleEntry>,
+}
+
+pub(crate) async fn get_golden_sample(
+    query: actix_web::web::Query<std::collections::HashMap<String, String>>,
+) -> Result<HttpResponse, Error> {
+    let limit = query
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50);
+    let entries = crate::db::golden_sample::list(limit);
+    let status = crate::db::golden_sample::status();
+    Ok(HttpResponse::Ok().json(GoldenSampleResponse { status, entries }))
+}
+
+#[derive(serde::Deserialize, Default)]
+pub(crate) struct RecaptureRequest {
+    #[serde(default)]
+    pub rotate_seed: bool,
+}
+
+pub(crate) async fn post_golden_sample_recapture(
+    body: Option<actix_web::web::Json<RecaptureRequest>>,
+) -> Result<HttpResponse, Error> {
+    let rotate_seed = body.map(|b| b.rotate_seed).unwrap_or(false);
+    let ok = crate::db::golden_sample::recapture(rotate_seed);
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "ok": ok,
+        "rotate_seed": rotate_seed,
+        "note": "Sample cleared. It will repopulate as you ingest documents."
+    })))
+}
+
+/// POST /monitor/tokenizer/diff
+/// Body: { candidate_path: string } OR { candidate_ollama_model: string }
+/// Optional: { limit: number } (defaults to 50, capped at 1000)
+pub(crate) async fn post_tokenizer_diff(
+    body: actix_web::web::Json<crate::tokenizer_diff::DiffRequest>,
+) -> Result<HttpResponse, Error> {
+    let req = body.into_inner();
+    // Run the diff on a blocking thread — GGUF load + per-entry encode are CPU
+    // bound and would block the actix worker otherwise.
+    let result = actix_web::web::block(move || crate::tokenizer_diff::compute_diff(&req)).await;
+    match result {
+        Ok(Ok(report)) => Ok(HttpResponse::Ok().json(report)),
+        Ok(Err(e)) => Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": format!("{:#}", e),
+        }))),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("blocking task failed: {}", e),
+        }))),
+    }
+}

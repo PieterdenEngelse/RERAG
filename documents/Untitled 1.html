@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8"/>
+	<title></title>
+	<meta name="generator" content="LibreOffice 25.8.5.2 (Linux)"/>
+	<meta name="created" content="2026-04-11T12:33:43.136005616"/>
+	<meta name="changed" content="2026-04-13T09:36:54.804119530"/>
+	<style type="text/css">
+		@page { size: 8.5in 11in; margin: 0.79in }
+		p { background: transparent; margin-bottom: 0.1in; line-height: 115%; background: transparent }
+		h2 { margin-top: 0.14in; margin-bottom: 0.08in; background: transparent; page-break-after: avoid }
+		h2.western { font-family: "Liberation Serif", serif; font-size: 18pt; font-weight: bold }
+		h2.cjk { font-family: "Noto Serif CJK SC"; font-size: 18pt; font-weight: bold }
+		h2.ctl { font-size: 18pt; font-family: "Noto Sans Devanagari"; font-weight: bold }
+		h3 { margin-top: 0.1in; margin-bottom: 0.08in; background: transparent; page-break-after: avoid }
+		h3.western { font-family: "Liberation Serif", serif; font-size: 14pt; font-weight: bold }
+		h3.cjk { font-family: "Noto Serif CJK SC"; font-size: 14pt; font-weight: bold }
+		h3.ctl { font-size: 14pt; font-family: "Noto Sans Devanagari"; font-weight: bold }
+		td p { widows: 0; orphans: 0; background: transparent }
+		th p { widows: 0; text-align: center; orphans: 0; font-weight: bold; background: transparent }
+		h4 { margin-top: 0.08in; margin-bottom: 0.08in; background: transparent; page-break-after: avoid }
+		h4.western { font-family: "Liberation Serif", serif; font-size: 12pt; font-weight: bold }
+		h4.cjk { font-family: "Noto Serif CJK SC"; font-size: 12pt; font-weight: bold }
+		h4.ctl { font-size: 12pt; font-family: "Noto Sans Devanagari"; font-weight: bold }
+		a:link { color: #000080; text-decoration: underline }
+		a:visited { color: #800000; text-decoration: underline }
+		strong { font-weight: bold }
+		em { font-style: italic }
+	</style>
+</head>
+<body lang="en-US" link="#000080" vlink="#800000" dir="ltr"><h2 class="western" style="margin-top: 0in; margin-bottom: 0in; line-height: 100%">
+What the threshold controls</h2>
+<p style="line-height: 100%">The threshold defines <strong>how
+different a new segment’s embedding can be from the current chunk
+centroid before you declare a topic shift</strong>.</p>
+<ul>
+	<li><p style="line-height: 100%"><strong>Higher threshold
+	(0.85–0.95)</strong> → stricter → more chunks</p></li>
+	<li><p style="line-height: 100%"><strong>Lower threshold (0.60–0.75)</strong>
+	→ looser → fewer chunks</p></li>
+</ul>
+<p style="line-height: 100%">Cosine similarity ranges from 0–1, so
+this is a <em>semantic distance gate</em>.</p>
+<h2 class="western" style="margin-top: 0in; margin-bottom: 0.2in">How
+to pick a good threshold (practical method)</h2>
+<h3 class="western" style="margin-top: 0in; margin-bottom: 0.2in"><strong>A.
+Start with defaults</strong></h3>
+<p style="line-height: 100%">Most embedding-based chunkers use:</p>
+<ul>
+	<li><p style="line-height: 100%"><strong>0.80–0.85</strong> for
+	general text</p></li>
+	<li><p style="line-height: 100%"><strong>0.75</strong> for narrative
+	text</p></li>
+	<li><p style="line-height: 100%"><strong>0.90</strong> for technical
+	or tightly structured documents</p></li>
+</ul>
+<p style="line-height: 100%">These are good starting points.</p>
+<h3 class="western" style="margin-top: 0in; margin-bottom: 0in; line-height: 100%">
+<strong>B. </strong><strong>Tune based on your embedding model</strong></h3>
+<p style="line-height: 100%">Different models produce different
+similarity distributions.</p>
+<table cellpadding="2" cellspacing="2">
+	<thead>
+		<tr>
+			<th style="border: none; padding: 0in"><p>Model type</p>
+			</th>
+			<th style="border: none; padding: 0in"><p>Typical threshold</p>
+			</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td style="border: none; padding: 0in"><p>OpenAI
+				text-embedding-3-large</p>
+			</td>
+			<td style="border: none; padding: 0in"><p>0.82–0.88</p>
+			</td>
+		</tr>
+		<tr>
+			<td style="border: none; padding: 0in"><p>BGE-large / E5-large</p>
+			</td>
+			<td style="border: none; padding: 0in"><p>0.78–0.85</p>
+			</td>
+		</tr>
+		<tr>
+			<td style="border: none; padding: 0in"><p>MiniLM / small models</p>
+			</td>
+			<td style="border: none; padding: 0in"><p>0.70–0.80</p>
+			</td>
+		</tr>
+	</tbody>
+</table>
+<p style="line-height: 100%">Smaller models → noisier embeddings →
+lower threshold.</p>
+<p style="line-height: 100%"><br/>
+<br/>
+
+</p>
+<h3 class="western" style="line-height: 100%"><strong>C. Tune based
+on your retrieval goals</strong></h3>
+<p style="line-height: 100%">This is the real architectural decision.</p>
+<h4 class="western" style="margin-top: 0in; margin-bottom: 0.1in">If
+you want <strong>tight topical coherence</strong></h4>
+<p style="line-height: 100%">(e.g., GraphRAG, knowledge graphs,
+summarization-first retrieval) → <strong>0.85–0.92</strong></p>
+<h4 class="western" style="margin-top: 0in; margin-bottom: 0.1in">If
+you want <strong>longer, more forgiving chunks</strong></h4>
+<p style="line-height: 100%">(e.g., classic RAG, QA over long docs) →
+<strong>0.75–0.82</strong></p>
+<h4 class="western" style="margin-top: 0in; margin-bottom: 0.1in">If
+your text is <strong>highly narrative</strong></h4>
+<p style="line-height: 100%">→ <strong>0.70–0.78</strong></p>
+<h3 class="western" style="margin-top: 0in; margin-bottom: 0.1in"><strong>D.
+Empirical tuning (best method)</strong></h3>
+<ol>
+	<li><p style="line-height: 100%">Take 20–50 representative
+	documents.</p></li>
+	<li><p style="line-height: 100%">Run chunking with thresholds:</p>
+	<ul>
+		<li><p style="line-height: 100%">0.70</p></li>
+		<li><p style="line-height: 100%">0.80</p></li>
+		<li><p style="line-height: 100%">0.85</p></li>
+		<li><p style="line-height: 100%">0.90</p></li>
+	</ul>
+	<li><p style="line-height: 100%">Inspect chunk boundaries.</p></li>
+	<li><p style="line-height: 100%">Pick the threshold that best
+	matches human intuition.</p></li>
+</ol>
+<p style="line-height: 100%">This is the only reliable method because
+embedding distributions vary.</p>
+<p style="line-height: 100%"><br/>
+<br/>
+
+</p>
+<p style="line-height: 100%; margin-bottom: 0in"><br/>
+
+</p>
+</body>
+</html>
