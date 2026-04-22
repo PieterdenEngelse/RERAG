@@ -2536,25 +2536,29 @@ pub struct TokenizerDiffReport {
 pub async fn compute_tokenizer_diff(
     candidate_path: Option<String>,
     candidate_ollama_model: Option<String>,
+    candidate_llama_cpp: bool,
     limit: Option<usize>,
 ) -> Result<TokenizerDiffReport, String> {
     let body = serde_json::json!({
         "candidate_path": candidate_path,
         "candidate_ollama_model": candidate_ollama_model,
+        "candidate_llama_cpp": if candidate_llama_cpp { Some(true) } else { None::<bool> },
         "limit": limit,
     });
     post_json("/monitor/tokenizer/diff", &body).await
 }
 
-/// Apply an explicit GGUF (path or Ollama model) to the live token counter.
-/// Returns the new tokenizer status on success.
+/// Apply an explicit GGUF (path, Ollama model, or llama.cpp active model) to
+/// the live token counter. Returns the new tokenizer status on success.
 pub async fn swap_tokenizer(
     candidate_path: Option<String>,
     candidate_ollama_model: Option<String>,
+    candidate_llama_cpp: bool,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::json!({
         "candidate_path": candidate_path,
         "candidate_ollama_model": candidate_ollama_model,
+        "candidate_llama_cpp": if candidate_llama_cpp { Some(true) } else { None::<bool> },
     });
     post_json("/sys/tokenizer/swap", &body).await
 }
@@ -3372,6 +3376,14 @@ pub struct StoreRecord {
     pub file: String,
     pub chars_in: u64,
     pub chars_out: u64,
+    #[serde(default)]
+    pub embed_chars_in: u64,
+    #[serde(default)]
+    pub embed_chars_out: u64,
+    #[serde(default)]
+    pub index_chars_in: u64,
+    #[serde(default)]
+    pub index_chars_out: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -3387,6 +3399,167 @@ pub struct CanonStats {
 
 pub async fn fetch_canon_stats() -> Result<CanonStats, String> {
     fetch_json("/monitor/canon/stats").await
+}
+
+// ============ Named Corpora ============
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CorpusEntry {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub doc_count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CorporaListResponse {
+    pub status: String,
+    pub corpora: Vec<CorpusEntry>,
+    pub count: usize,
+}
+
+pub async fn fetch_corpora() -> Result<Vec<CorpusEntry>, String> {
+    let resp: CorporaListResponse = fetch_json("/corpora").await?;
+    Ok(resp.corpora)
+}
+
+pub async fn create_corpus(slug: &str, name: &str) -> Result<CorpusEntry, String> {
+    #[derive(Serialize)]
+    struct Body<'a> { slug: &'a str, name: &'a str }
+    #[derive(Deserialize)]
+    struct Resp { corpus: CorpusEntry }
+    let resp: Resp = post_json("/corpora", &Body { slug, name }).await?;
+    Ok(resp.corpus)
+}
+
+pub async fn delete_corpus(slug: &str) -> Result<(), String> {
+    let url = api_url(&format!("/corpora/{}", slug));
+    let resp = gloo_net::http::Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if (200..=299).contains(&resp.status()) {
+        Ok(())
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("HTTP {} {}", resp.status(), body.trim()))
+    }
+}
+
+pub async fn rename_corpus(slug: &str, new_name: &str) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Body<'a> { name: &'a str }
+    let url = api_url(&format!("/corpora/{}", slug));
+    let body = serde_json::to_string(&Body { name: new_name })
+        .map_err(|e| format!("Encode error: {}", e))?;
+    let response = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("HTTP {} {}", status, text.trim()))
+    }
+}
+
+// ─── Per-corpus settings ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CorpusSettings {
+    pub search_top_k: Option<usize>,
+    pub chunker_mode: Option<String>,
+    pub distance_metric: Option<String>,
+    pub hnsw_ef_construction: Option<usize>,
+    pub hnsw_ef_search: Option<usize>,
+    pub pq_subvectors: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CorpusBuildMeta {
+    pub chunker_mode: Option<String>,
+    pub distance_metric: Option<String>,
+    pub hnsw_ef_construction: Option<usize>,
+    pub hnsw_ef_search: Option<usize>,
+    pub pq_subvectors: Option<usize>,
+    pub built_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CorpusSettingsWithMeta {
+    pub settings: CorpusSettings,
+    pub build_meta: CorpusBuildMeta,
+}
+
+pub async fn fetch_corpus_settings(slug: &str) -> Result<CorpusSettingsWithMeta, String> {
+    #[derive(Deserialize)]
+    struct Resp {
+        settings: CorpusSettings,
+        #[serde(default)]
+        build_meta: CorpusBuildMeta,
+    }
+    let resp: Resp = fetch_json(&format!("/corpora/{}/settings", slug)).await?;
+    Ok(CorpusSettingsWithMeta { settings: resp.settings, build_meta: resp.build_meta })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentMemorySettings {
+    pub distance_metric: Option<String>,
+    pub top_k: Option<usize>,
+}
+
+pub async fn fetch_agent_memory_settings() -> Result<AgentMemorySettings, String> {
+    #[derive(Deserialize)]
+    struct Resp { settings: AgentMemorySettings }
+    let resp: Resp = fetch_json("/agent/memory/settings").await?;
+    Ok(resp.settings)
+}
+
+pub async fn patch_agent_memory_settings(settings: &AgentMemorySettings) -> Result<AgentMemorySettings, String> {
+    let url = api_url("/agent/memory/settings");
+    let body = serde_json::to_string(settings).map_err(|e| format!("Encode error: {}", e))?;
+    let response = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if response.status().is_success() {
+        #[derive(Deserialize)]
+        struct Resp { settings: AgentMemorySettings }
+        let resp: Resp = response.json().await.map_err(|e| format!("Parse error: {}", e))?;
+        Ok(resp.settings)
+    } else {
+        Err(format!("HTTP {}", response.status()))
+    }
+}
+
+pub async fn patch_corpus_settings(slug: &str, settings: &CorpusSettings) -> Result<(), String> {
+    let url = api_url(&format!("/corpora/{}/settings", slug));
+    let body = serde_json::to_string(settings)
+        .map_err(|e| format!("Encode error: {}", e))?;
+    let response = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("HTTP {} {}", status, text.trim()))
+    }
 }
 
 pub async fn update_ner_config(config: NerConfigRequest) -> Result<NerConfigResponse, String> {

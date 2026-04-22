@@ -5,12 +5,16 @@ use std::sync::RwLock;
 
 const STORE_RECORD_CAP: usize = 50;
 
-/// Per-file record for normalize(Store).
-#[derive(Debug, Clone, Serialize)]
+/// Per-file normalization record covering all three levels.
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct StoreRecord {
     pub file: String,
     pub chars_in: u64,
     pub chars_out: u64,
+    pub embed_chars_in: u64,
+    pub embed_chars_out: u64,
+    pub index_chars_in: u64,
+    pub index_chars_out: u64,
 }
 
 /// Per-call-site counters for normalize() and to_index().
@@ -67,6 +71,7 @@ pub fn record_store(file: &str, chars_in: usize, chars_out: usize) {
             file: file.to_string(),
             chars_in: chars_in as u64,
             chars_out: chars_out as u64,
+            ..Default::default()
         });
     }
 }
@@ -86,6 +91,28 @@ pub fn record_index_ingestion(chars_in: usize, chars_out: usize) {
         s.stats.index_ingestion.calls += 1;
         s.stats.index_ingestion.chars_in += chars_in as u64;
         s.stats.index_ingestion.chars_out += chars_out as u64;
+    }
+}
+
+/// Update the embed-level totals for a file already in the record list.
+/// Called once per file after all its chunks have been processed.
+pub fn record_file_embed(file: &str, chars_in: usize, chars_out: usize) {
+    if let Ok(mut s) = STATE.write() {
+        if let Some(rec) = s.store_records.iter_mut().find(|r| r.file == file) {
+            rec.embed_chars_in = chars_in as u64;
+            rec.embed_chars_out = chars_out as u64;
+        }
+    }
+}
+
+/// Update the index-level totals for a file already in the record list.
+/// Called once per file after all its chunks have been processed.
+pub fn record_file_index(file: &str, chars_in: usize, chars_out: usize) {
+    if let Ok(mut s) = STATE.write() {
+        if let Some(rec) = s.store_records.iter_mut().find(|r| r.file == file) {
+            rec.index_chars_in = chars_in as u64;
+            rec.index_chars_out = chars_out as u64;
+        }
     }
 }
 

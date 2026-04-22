@@ -46,6 +46,7 @@ pub(crate) mod helpers;
 use helpers::*;
 pub(crate) mod agent_chat;
 pub(crate) mod config_routes;
+pub(crate) mod corpus_routes;
 pub(crate) mod docker;
 pub(crate) mod memory_routes;
 pub(crate) mod monitor_routes;
@@ -53,13 +54,36 @@ pub(crate) mod training;
 pub(crate) mod upload_search;
 use agent_chat::*;
 use config_routes::*;
+use corpus_routes::*;
 use docker::*;
 use memory_routes::*;
 use monitor_routes::*;
 use training::*;
 use upload_search::*;
 
+/// Legacy relative path — kept so external tooling and tests that reference
+/// `UPLOAD_DIR` by name still compile. At runtime, always use `default_upload_dir()`.
 pub const UPLOAD_DIR: &str = "documents";
+
+static DEFAULT_UPLOAD_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set the upload directory for the default corpus.
+/// Called once at startup (after the file migration) with the PathManager-derived path.
+/// Creates the directory if it does not exist.
+pub fn set_default_upload_dir(path: PathBuf) {
+    let _ = std::fs::create_dir_all(&path);
+    let _ = DEFAULT_UPLOAD_DIR.set(path);
+}
+
+/// Return the upload directory for the default corpus as a `String`.
+/// Falls back to the legacy `"documents"` relative path if `set_default_upload_dir`
+/// has not yet been called (e.g. in unit tests).
+pub fn default_upload_dir() -> String {
+    DEFAULT_UPLOAD_DIR
+        .get()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| UPLOAD_DIR.to_string())
+}
 
 // Phase 15: Global reindex concurrency guard
 static REINDEX_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -118,6 +142,20 @@ pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
 
 pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
     RETRIEVER.get().map(|h| Arc::clone(h))
+}
+
+/// Look up a retriever for a specific corpus slug.
+/// Falls back to the global RETRIEVER for "default" when the registry is not yet populated.
+pub fn get_corpus_retriever(slug: &str) -> Option<Arc<Mutex<Retriever>>> {
+    if let Some(reg) = crate::corpus_registry::get_registry() {
+        if let Some(h) = reg.get(slug) {
+            return Some(h);
+        }
+    }
+    if slug == "default" {
+        return get_retriever_handle();
+    }
+    None
 }
 
 // Global Neo4j client handle (Phase 27)
@@ -762,7 +800,7 @@ pub fn start_api_server(
         );
         let cors = Cors::default()
             .allow_any_origin()
-            .allowed_methods(vec!["GET", "POST", "DELETE"])
+            .allowed_methods(vec!["GET", "POST", "DELETE", "PATCH"])
             .allowed_headers(vec![
                 actix_web::http::header::CONTENT_TYPE,
                 actix_web::http::header::AUTHORIZATION,
@@ -885,6 +923,26 @@ pub fn start_api_server(
                     .route("/ollama", web::get().to(get_ollama_status))
                     .route("/onnx", web::get().to(get_onnx_status)),
             )
+            // ============================================================================
+            // CORPUS ROUTES
+            // ============================================================================
+            .service(
+                web::scope("/corpora")
+                    .route("", web::post().to(create_corpus_handler))
+                    .route("", web::get().to(list_corpora_handler))
+                    .route("/{slug}", web::get().to(get_corpus_handler))
+                    .route("/{slug}", web::patch().to(rename_corpus_handler))
+                    .route("/{slug}", web::delete().to(delete_corpus_handler))
+                    .route("/{slug}/upload", web::post().to(corpus_upload_handler))
+                    .route("/{slug}/documents", web::get().to(corpus_list_documents_handler))
+                    .route("/{slug}/documents/{filename}", web::delete().to(corpus_delete_document_handler))
+                    .route("/{slug}/search", web::get().to(corpus_search_handler))
+                    .route("/{slug}/reindex", web::post().to(corpus_reindex_handler))
+                    .route("/{slug}/settings", web::get().to(get_corpus_settings_handler))
+                    .route("/{slug}/settings", web::patch().to(patch_corpus_settings_handler)),
+            )
+            .route("/agent/memory/settings", web::get().to(get_agent_memory_settings_handler))
+            .route("/agent/memory/settings", web::patch().to(patch_agent_memory_settings_handler))
             // ============================================================================
             // ROOT & CORE ROUTES
             // ============================================================================

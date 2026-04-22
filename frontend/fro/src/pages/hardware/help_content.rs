@@ -57,6 +57,8 @@ pub enum HelpTopic {
     Poll,
     Priority,
     IgnoreEos,
+    // Tile-level overview
+    SamplingParams,
     // DRY sampling
     DryMultiplier,
     DryBase,
@@ -120,6 +122,7 @@ impl HelpTopic {
             Self::Poll => "poll",
             Self::Priority => "priority",
             Self::IgnoreEos => "ignore_eos",
+            Self::SamplingParams => "Sampling Params",
             Self::DryMultiplier => "dry_multiplier",
             Self::DryBase => "dry_base",
             Self::DryAllowedLen => "dry_allowed_length",
@@ -561,6 +564,18 @@ impl HelpTopic {
                 "Notes",
                 "• Useful if a model stops too early.",
                 "• Add stop sequences to avoid runaway generation.",
+            ],
+            Self::SamplingParams => vec![
+                "When a language model generates text, it does not simply pick the single most likely next token. Instead it samples — drawing from a probability distribution over its vocabulary.",
+                "Sampling parameters shape that distribution before the draw happens. They let you trade off between predictability and creativity, and suppress unwanted patterns like repetition.",
+                "",
+                "Use cases",
+                "Factual / RAG answers: low temperature (0.1–0.4), top-p 0.9, no mirostat. The model stays close to what the retrieval context says.",
+                "Creative writing: higher temperature (0.7–1.2), top-p 0.95, repeat penalty on. Gives the model more freedom to surprise.",
+                "Code generation: low temperature (0.1–0.3), deterministic seed. Reproducibility matters more than variety.",
+                "Chat / assistant: moderate temperature (0.5–0.8). Balances coherence with natural-feeling variation.",
+                "",
+                "These settings apply per inference — they do not affect retrieval, chunking, or embedding.",
             ],
             Self::DryMultiplier => vec![
                 "DRY (Don't Repeat Yourself) is a repetition penalty that targets exact repeated sequences rather than just repeated individual tokens.",

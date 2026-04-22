@@ -2,6 +2,7 @@
 pub mod about;
 pub mod config;
 pub mod config_chunker;
+pub mod config_corpus;
 pub mod config_embedding;
 pub mod config_io_uring;
 pub mod docu;
@@ -26,6 +27,7 @@ pub mod train;
 pub use about::About;
 pub use config::Config;
 pub use config_chunker::ConfigChunker;
+pub use config_corpus::ConfigCorpus;
 pub use config_embedding::ConfigEmbedding;
 pub use config_io_uring::ConfigIoUring;
 pub use docu::Docu;

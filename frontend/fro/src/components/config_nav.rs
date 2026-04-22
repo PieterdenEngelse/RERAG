@@ -17,6 +17,7 @@ pub enum ConfigTab {
     Neo4j,
     Terms,
     Other,
+    Corpus,
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -44,6 +45,7 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
         ("Neo4j", Route::ConfigNeo4j {}, ConfigTab::Neo4j),
         ("Terms", Route::ConfigTerms {}, ConfigTab::Terms),
         ("Other", Route::ConfigOther {}, ConfigTab::Other),
+        ("Corpus", Route::ConfigCorpus {}, ConfigTab::Corpus),
     ];
 
     rsx! {

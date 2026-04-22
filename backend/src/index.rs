@@ -18,6 +18,7 @@ pub fn index_all_documents(
     folder: &str,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
+    corpus_slug: &str,
 ) -> Result<(), String> {
     debug!("index_all_documents: scanning folder='{}'", folder);
     let entries =
@@ -90,6 +91,7 @@ pub fn index_all_documents(
                     chunker_mode,
                     chunker,
                     detection_info,
+                    corpus_slug,
                 ) {
                     Ok(chunks) => {
                         debug!(
@@ -128,6 +130,7 @@ pub async fn index_all_documents_async(
     folder: &str,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
+    _corpus_slug: &str,
 ) -> Result<usize, String> {
     use crate::perf::io_uring as async_io;
 
@@ -229,10 +232,11 @@ pub fn index_file(
     path: &Path,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
+    corpus_slug: &str,
 ) -> Result<usize, String> {
     // Get detection info for observability
     let (_, detection_info) = detect_file_type_with_info(path)?;
-    index_file_with_detection(retriever, path, chunker_mode, chunker, detection_info)
+    index_file_with_detection(retriever, path, chunker_mode, chunker, detection_info, corpus_slug)
 }
 
 /// Index pre-read content directly (no file I/O)
@@ -250,22 +254,32 @@ pub fn index_content_direct(
         .unwrap_or("unknown");
 
     let chunk_start = std::time::Instant::now();
+    let mut embed_file_in = 0usize;
+    let mut embed_file_out = 0usize;
     let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            embed_file_in += c.len();
+            embed_file_out += out.len();
             crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
             out
         })
         .collect();
+    let mut index_file_in = 0usize;
+    let mut index_file_out = 0usize;
     let index_chunks: Vec<String> = chunks
         .iter()
         .map(|c| {
             let out = crate::normalizer::to_index(c);
+            index_file_in += c.len();
+            index_file_out += out.len();
             crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
             out
         })
         .collect();
+    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
+    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -321,6 +335,7 @@ pub fn index_content_with_graph(
     content: &str,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
+    corpus_slug: &str,
 ) -> Result<(usize, Vec<(String, String)>), String> {
     let filename = path
         .file_name()
@@ -328,25 +343,35 @@ pub fn index_content_with_graph(
         .unwrap_or("unknown");
 
     let chunk_start = std::time::Instant::now();
+    let mut embed_file_in = 0usize;
+    let mut embed_file_out = 0usize;
     let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            embed_file_in += c.len();
+            embed_file_out += out.len();
             crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
             out
         })
         .collect();
     for c in &chunks {
-        crate::db::golden_sample::offer_chunk(c);
+        crate::db::golden_sample::offer_chunk(c, corpus_slug);
     }
+    let mut index_file_in = 0usize;
+    let mut index_file_out = 0usize;
     let index_chunks: Vec<String> = chunks
         .iter()
         .map(|c| {
             let out = crate::normalizer::to_index(c);
+            index_file_in += c.len();
+            index_file_out += out.len();
             crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
             out
         })
         .collect();
+    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
+    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -414,9 +439,10 @@ pub async fn index_file_async(
     path: &Path,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
+    corpus_slug: &str,
 ) -> Result<usize, String> {
     let (_, detection_info) = detect_file_type_with_info(path)?;
-    index_file_with_detection_async(retriever, path, chunker_mode, chunker, detection_info).await
+    index_file_with_detection_async(retriever, path, chunker_mode, chunker, detection_info, corpus_slug).await
 }
 
 async fn index_file_with_detection_async(
@@ -425,6 +451,7 @@ async fn index_file_with_detection_async(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     detection_info: DetectionInfo,
+    corpus_slug: &str,
 ) -> Result<usize, String> {
     let filename = path
         .file_name()
@@ -451,25 +478,35 @@ async fn index_file_with_detection_async(
     };
 
     let chunk_start = std::time::Instant::now();
+    let mut embed_file_in = 0usize;
+    let mut embed_file_out = 0usize;
     let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(&content), filename)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            embed_file_in += c.len();
+            embed_file_out += out.len();
             crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
             out
         })
         .collect();
     for c in &chunks {
-        crate::db::golden_sample::offer_chunk(c);
+        crate::db::golden_sample::offer_chunk(c, corpus_slug);
     }
+    let mut index_file_in = 0usize;
+    let mut index_file_out = 0usize;
     let index_chunks: Vec<String> = chunks
         .iter()
         .map(|c| {
             let out = crate::normalizer::to_index(c);
+            index_file_in += c.len();
+            index_file_out += out.len();
             crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
             out
         })
         .collect();
+    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
+    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -535,6 +572,7 @@ fn index_file_with_detection(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     detection_info: DetectionInfo,
+    corpus_slug: &str,
 ) -> Result<usize, String> {
     let filename = path
         .file_name()
@@ -556,25 +594,35 @@ fn index_file_with_detection(
     };
 
     let chunk_start = std::time::Instant::now();
+    let mut embed_file_in = 0usize;
+    let mut embed_file_out = 0usize;
     let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(&content), filename)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+            embed_file_in += c.len();
+            embed_file_out += out.len();
             crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
             out
         })
         .collect();
     for c in &chunks {
-        crate::db::golden_sample::offer_chunk(c);
+        crate::db::golden_sample::offer_chunk(c, corpus_slug);
     }
+    let mut index_file_in = 0usize;
+    let mut index_file_out = 0usize;
     let index_chunks: Vec<String> = chunks
         .iter()
         .map(|c| {
             let out = crate::normalizer::to_index(c);
+            index_file_in += c.len();
+            index_file_out += out.len();
             crate::monitoring::record_canon_index_ingestion(c.len(), out.len());
             out
         })
         .collect();
+    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
+    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;

@@ -2,6 +2,7 @@ pub mod path_manager;
 pub mod db {
     pub mod api_keys;
     pub mod chunk_settings;
+    pub mod corpora;
     pub mod extraction_records;
     pub mod golden_sample;
     pub mod llm_settings;
@@ -11,6 +12,7 @@ pub mod db {
     pub mod path_resolver;
     pub mod schema_init;
 }
+pub mod corpus_registry;
 pub mod agent;
 pub mod api;
 pub mod config;

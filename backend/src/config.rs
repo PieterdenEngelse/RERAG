@@ -32,6 +32,40 @@ impl std::str::FromStr for ChunkerMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DistanceMetric {
+    Cosine,
+    DotProduct,
+    Euclidean,
+}
+
+impl Default for DistanceMetric {
+    fn default() -> Self { DistanceMetric::Cosine }
+}
+
+impl std::fmt::Display for DistanceMetric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DistanceMetric::Cosine => write!(f, "cosine"),
+            DistanceMetric::DotProduct => write!(f, "dotproduct"),
+            DistanceMetric::Euclidean => write!(f, "euclidean"),
+        }
+    }
+}
+
+impl std::str::FromStr for DistanceMetric {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "cosine" => Ok(DistanceMetric::Cosine),
+            "dotproduct" | "dot" | "dot_product" => Ok(DistanceMetric::DotProduct),
+            "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
+            other => Err(format!("unknown distance metric: {}", other)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
     // Network

@@ -1,12 +1,10 @@
 //! Embedding model configuration — /config/embedding
 
-use crate::pages::hardware::constants::{PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE};
 use crate::{
     api,
     app::Route,
     components::config_nav::{ConfigNav, ConfigTab},
     components::monitor::*,
-    pages::hardware::components::InfoIcon,
 };
 use dioxus::prelude::*;
 use dioxus_router::Link;

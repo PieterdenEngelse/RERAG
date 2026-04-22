@@ -99,6 +99,37 @@ async fn main() -> std::io::Result<()> {
     ag::monitoring::set_chunking_logging_enabled(config.chunking_log_enabled);
 
     let pm = &config.path_manager;
+
+    // ─────────────────────────────────────────────────────────────
+    // PHASE 2.5: Migrate legacy documents/ dir and set upload path
+    // ─────────────────────────────────────────────────────────────
+    {
+        // Compute target path without triggering create_dir_all (migration must run first).
+        let new_upload_path = pm.data_dir()
+            .join("corpora").join("default").join("documents");
+
+        if !new_upload_path.exists() {
+            let legacy = std::path::Path::new("documents");
+            if legacy.exists() && legacy.is_dir() && !legacy.is_symlink() {
+                match std::fs::rename(legacy, &new_upload_path) {
+                    Ok(()) => {
+                        // Symlink old path back so external tools still work.
+                        #[cfg(unix)]
+                        let _ = std::os::unix::fs::symlink(&new_upload_path, legacy);
+                        info!("corpus migration: moved documents/ → {}", new_upload_path.display());
+                    }
+                    Err(e) => {
+                        // Cross-device rename; create_dir_all will handle the new path.
+                        warn!("corpus migration: rename failed ({}), will create fresh dir", e);
+                    }
+                }
+            }
+        }
+
+        // corpus_upload_dir creates the dir if it doesn't already exist.
+        ag::api::set_default_upload_dir(pm.corpus_upload_dir("default"));
+        info!("📂 Upload dir: {}", ag::api::default_upload_dir());
+    }
     info!("🏠 AG_HOME: {}", pm.base_dir().display());
     debug!("DB path: {}", pm.db_path("documents").display());
     debug!("Index path: {}", pm.index_path("tantivy").display());
@@ -369,6 +400,14 @@ async fn main() -> std::io::Result<()> {
 
     let retriever = Arc::new(Mutex::new(retriever));
     ag::api::set_retriever_handle(Arc::clone(&retriever));
+
+    // Initialize corpus registry and register the default corpus
+    ag::corpus_registry::init(Arc::new(config.path_manager.clone()));
+    if let Some(registry) = ag::corpus_registry::get_registry() {
+        registry.insert("default", Arc::clone(&retriever));
+        info!("✓ Corpus registry initialized (default corpus registered)");
+    }
+
     // Initialize shared EmbeddingService for cached query embedding
     let embedding_svc = std::sync::Arc::new(ag::embedder::EmbeddingService::new(
         ag::embedder::EmbeddingConfig::from_env(),
@@ -394,42 +433,75 @@ async fn main() -> std::io::Result<()> {
         info!("📚 Starting background indexing (non-blocking)...");
 
         let retriever_clone = Arc::clone(&retriever);
-        let upload_dir = ag::api::UPLOAD_DIR.to_string();
+        let upload_dir = ag::api::default_upload_dir();
 
         // Spawn as background task - doesn't block server startup
+        let db_path_for_idx = pm.db_path("documents").to_string_lossy().to_string();
+        let pm_for_idx = config.path_manager.clone();
         tokio::task::spawn_blocking(move || {
             let indexing_start = Instant::now();
             debug!("Background indexing task started");
-
-            // Mark indexing as started for health status
             ag::monitoring::mark_indexing_started();
 
+            // Index default corpus
             match retriever_clone.lock() {
                 Ok(mut ret) => {
-                    // Call indexing synchronously within the async task
-                    let chunker = index::default_chunker(config.chunker_mode);
+                    // Check for per-corpus chunker override on default
+                    let effective_mode = rusqlite::Connection::open(&db_path_for_idx)
+                        .ok()
+                        .and_then(|conn| ag::db::corpora::get_corpus_settings(&conn, "default").ok())
+                        .and_then(|s| s.chunker_mode)
+                        .and_then(|m| m.parse::<ag::config::ChunkerMode>().ok())
+                        .unwrap_or(config.chunker_mode);
+                    let chunker = index::default_chunker(effective_mode);
                     if let Err(e) = index::index_all_documents(
                         &mut *ret,
                         &upload_dir,
-                        config.chunker_mode,
+                        effective_mode,
                         chunker.as_ref(),
+                        "default",
                     ) {
-                        error!("Background indexing failed: {}", e);
+                        error!("Background indexing (default) failed: {}", e);
                     } else {
-                        let duration_ms = indexing_start.elapsed().as_millis() as u64;
-                        info!(duration_ms = duration_ms, "✓ Background indexing completed");
                         metrics::refresh_retriever_gauges(&ret);
                     }
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to acquire retriever lock for background indexing: {}",
-                        e
-                    );
+                Err(e) => error!("Failed to acquire retriever lock for background indexing: {}", e),
+            }
+
+            // Index non-default corpora
+            if let Ok(conn) = rusqlite::Connection::open(&db_path_for_idx) {
+                if let Ok(corpora) = ag::db::corpora::list_corpora(&conn) {
+                    for corpus in corpora.iter().filter(|c| c.slug != "default") {
+                        let slug = &corpus.slug;
+                        let corpus_dir = pm_for_idx.corpus_upload_dir(slug).to_string_lossy().to_string();
+                        let effective_mode = ag::db::corpora::get_corpus_settings(&conn, slug)
+                            .ok()
+                            .and_then(|s| s.chunker_mode)
+                            .and_then(|m| m.parse::<ag::config::ChunkerMode>().ok())
+                            .unwrap_or(config.chunker_mode);
+                        if let Some(handle) = ag::corpus_registry::get_registry()
+                            .and_then(|reg| reg.get_or_create(slug).ok())
+                        {
+                            if let Ok(mut ret) = handle.lock() {
+                                let chunker = index::default_chunker(effective_mode);
+                                if let Err(e) = index::index_all_documents(
+                                    &mut *ret,
+                                    &corpus_dir,
+                                    effective_mode,
+                                    chunker.as_ref(),
+                                    slug,
+                                ) {
+                                    error!("Background indexing ({}) failed: {}", slug, e);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // Mark indexing as finished for health status
+            let duration_ms = indexing_start.elapsed().as_millis() as u64;
+            info!(duration_ms = duration_ms, "✓ Background indexing completed (all corpora)");
             ag::monitoring::mark_indexing_finished();
         });
     }
@@ -438,12 +510,35 @@ async fn main() -> std::io::Result<()> {
     // PHASE 7.5: Start File Watcher for Auto-Indexing
     // ─────────────────────────────────────────────────────────────
 
-    let file_watcher_config = ag::file_watcher::FileWatcherConfig::from_env();
+    let db_path_str = pm.db_path("documents").to_string_lossy().to_string();
+
+    // Start file watcher for the default corpus
+    let file_watcher_dir = ag::api::default_upload_dir();
+    let mut file_watcher_config = ag::file_watcher::FileWatcherConfig::from_env();
+    file_watcher_config.corpus_slug = "default".to_string();
+    file_watcher_config.db_path = db_path_str.clone();
     let _file_watcher_handle = ag::file_watcher::start_file_watcher(
-        ag::api::UPLOAD_DIR,
+        &file_watcher_dir,
         Arc::clone(&retriever),
-        file_watcher_config,
+        file_watcher_config.clone(),
     );
+
+    // Start file watchers for non-default corpora
+    if let Ok(conn) = rusqlite::Connection::open(&db_path_str) {
+        if let Ok(corpora) = ag::db::corpora::list_corpora(&conn) {
+            for corpus in corpora.into_iter().filter(|c| c.slug != "default") {
+                let slug = corpus.slug.clone();
+                let corpus_dir = pm.corpus_upload_dir(&slug).to_string_lossy().to_string();
+                if let Some(handle) = ag::corpus_registry::get_registry()
+                    .and_then(|reg| reg.get_or_create(&slug).ok())
+                {
+                    let mut cfg = file_watcher_config.clone();
+                    cfg.corpus_slug = slug.clone();
+                    ag::file_watcher::start_file_watcher(&corpus_dir, handle, cfg);
+                }
+            }
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 8: Start Server Immediately (Server Ready Before Indexing Done)

@@ -156,7 +156,7 @@ A high rate means the model is not reliably producing tool-call JSON.
 Fallback responses include "mode": "agentic_fallback" and a
 "fallback_reason" field."#;
 
-/// Tool Performance panel tooltip
+#[allow(dead_code)]
 const TOOL_PERF_INFO_TOOLTIP: &str = r#"TOOL PERFORMANCE
 
 Tracks every tool invocation made by the agent across all modes.
@@ -176,7 +176,7 @@ Rig Agentic tool calls (search_documents, recall_memory, store_memory,
 search_knowledge_graph) are recorded here alongside Classic pipeline tools.
 Check the Rig Agentic Mode section above for Rig-specific fallback stats."#;
 
-/// Memory Statistics panel tooltip
+#[allow(dead_code)]
 const MEMORY_STATS_INFO_TOOLTIP: &str = r#"MEMORY STATISTICS
 
 The agent uses SQLite (agent.db) as its memory store. Three types of memory
@@ -199,7 +199,7 @@ STORAGE
 All memory is local to agent.db (SQLite). No external service required.
 LanceDB handles the vector embeddings for RAG Memories separately."#;
 
-/// Recent Reflections panel tooltip
+#[allow(dead_code)]
 const REFLECTIONS_INFO_TOOLTIP: &str = r#"RECENT REFLECTIONS
 
 After a configurable number of episodes the agent reviews its own recent
@@ -220,7 +220,7 @@ Each reflection shows a type badge, timestamp, and insight text. Failure
 reflections are most actionable — they surface gaps in the knowledge base
 or queries that consistently produce low-confidence answers."#;
 
-/// Agent vs Tools explanation tooltip
+#[allow(dead_code)]
 const AGENT_INFO_TOOLTIP: &str = r#"AGENT vs AGENT TOOLS
 
 ┌─────────────────────────────────────────────────────────────┐

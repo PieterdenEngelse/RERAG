@@ -2,7 +2,7 @@ use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigChunker, ConfigEmbedding, ConfigHardware, ConfigIoUring, ConfigMemories,
+    About, Config, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigHardware, ConfigIoUring, ConfigMemories,
     ConfigNeo4j, ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, ConfigTerms, Docu,
     DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
     DocuEmbeddings, DocuEntitiesProduction, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
@@ -68,6 +68,8 @@ pub enum Route {
         ConfigIoUring {},
         #[route("/config/chunker")]
         ConfigChunker {},
+        #[route("/config/corpus")]
+        ConfigCorpus {},
         #[route("/config/ner")]
         ConfigNer {},
         #[route("/config/embedding")]
@@ -173,6 +175,16 @@ pub struct ClearChat(pub bool);
 /// Signal indicating the LLM runtime is intentionally stopped (e.g., during bulk uploads)
 #[derive(Clone, Copy, Default)]
 pub struct RuntimeSuspended(pub bool);
+
+/// The currently active corpus slug (default = "default")
+#[derive(Clone, Default)]
+pub struct ActiveCorpus(pub String);
+
+impl ActiveCorpus {
+    pub fn slug(&self) -> &str {
+        if self.0.is_empty() { "default" } else { &self.0 }
+    }
+}
 
 /// Global page error state - pages report their API errors here
 /// The header status light uses this to show red when any page has errors
@@ -290,6 +302,7 @@ pub fn App() -> Element {
     use_context_provider(|| Signal::new(RuntimeSuspended(false))); // LLM runtime suspended flag
     use_context_provider(|| Signal::new(PageErrors::default())); // Global page errors state
     use_context_provider(|| Signal::new(RuntimeContext::new())); // Shared runtime context
+    use_context_provider(|| Signal::new(ActiveCorpus::default())); // Active corpus
 
     rsx! {
         document::Link { rel: "icon", href: asset!("/assets/favicon.ico") }
@@ -302,7 +315,7 @@ pub fn App() -> Element {
 #[component]
 fn Layout() -> Element {
     let is_dark = use_context::<Signal<bool>>();
-    let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
+    let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
     // Initialize RuntimeContext from API on first load
     {

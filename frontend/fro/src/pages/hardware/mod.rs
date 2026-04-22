@@ -121,6 +121,7 @@ pub fn ConfigHardware() -> Element {
     let sampling_loading = use_signal(|| false);
     let sampling_error = use_signal(|| Option::<String>::None);
 
+    let show_sampling_params_info = use_signal(|| false);
     let show_temperature_info = use_signal(|| false);
     let show_top_k_info = use_signal(|| false);
     let show_top_p_info = use_signal(|| false);
@@ -616,6 +617,7 @@ pub fn ConfigHardware() -> Element {
     let mut reload_info_signal = show_reload_info.clone();
     let mut rope_tuning_info_signal = show_rope_tuning_info.clone();
     let mut quantization_info_signal = show_quantization_info.clone();
+    let mut sampling_params_info_signal = show_sampling_params_info.clone();
     let mut temperature_info_signal = show_temperature_info.clone();
     let mut top_k_info_signal = show_top_k_info.clone();
     let mut top_p_info_signal = show_top_p_info.clone();
@@ -1714,6 +1716,13 @@ pub fn ConfigHardware() -> Element {
                                     "4. Sampling Params"
                                 }
                                 span { class: "text-xs text-gray-500 italic", "(per inference)" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| sampling_params_info_signal.set(true),
+                                    title: "What is sampling?",
+                                    InfoIcon {}
+                                }
                             }
                             if sampling_loading() {
                                 div { class: "text-xs text-gray-400", "Loading sampling config…" }
@@ -3195,6 +3204,15 @@ pub fn ConfigHardware() -> Element {
             }
         }
         // Sampling parameter help modals
+        if show_sampling_params_info() {
+            {
+                info_modal(
+                    HelpTopic::SamplingParams.title(),
+                    show_sampling_params_info,
+                    HelpTopic::SamplingParams.paragraphs(),
+                )
+            }
+        }
         if show_temperature_info() {
             {
                 info_modal(

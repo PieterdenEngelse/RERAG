@@ -25,11 +25,25 @@ fn InfoIcon() -> Element {
 #[component]
 pub fn MonitorTip() -> Element {
     let mut show_tip_info = use_signal(|| false);
+    let mut tip_tab = use_signal(|| 0u8);
     let mut show_parser_info = use_signal(|| false);
     let mut show_preprocessing_info = use_signal(|| false);
     let mut show_nfc_info = use_signal(|| false);
     let mut show_nfkc_info = use_signal(|| false);
     let mut show_nfkc_punct_info = use_signal(|| false);
+    let mut show_store_target_info = use_signal(|| false);
+    let mut show_format_cleanup_info = use_signal(|| false);
+    let mut show_dedupe_pdf_info = use_signal(|| false);
+    let mut show_noise_nodes_info = use_signal(|| false);
+    let mut show_boilerplate_nodes_info = use_signal(|| false);
+    let mut show_kg_info = use_signal(|| false);
+    let mut show_mojibake_info = use_signal(|| false);
+    let mut show_clustering_info = use_signal(|| false);
+    let mut show_centroid_info = use_signal(|| false);
+    let mut show_pq_training_info = use_signal(|| false);
+    let mut show_emdash_info = use_signal(|| false);
+    let mut show_ligature_info = use_signal(|| false);
+    let mut show_extractors_info = use_signal(|| false);
     let mut show_chunker_info = use_signal(|| false);
     let mut parser_stats: Signal<Option<Result<ParserStats, String>>> = use_signal(|| None);
     let mut chunking_stats: Signal<Option<Result<Vec<ChunkingStatsSnapshot>, String>>> = use_signal(|| None);
@@ -296,44 +310,483 @@ pub fn MonitorTip() -> Element {
                             }
                         }
 
-                        // Scrollable body — 4-column grid, one column per layer
-                        div { class: "flex-1 overflow-y-auto min-h-0",
+                        // Tab bar
+                        div { class: "flex border-b border-gray-700 shrink-0 px-4 gap-1",
+                            button {
+                                class: if tip_tab() == 0 { "px-3 py-2 text-xs font-medium text-sky-400 border-b-2 border-sky-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(0),
+                                "0 · Parser"
+                            }
+                            button {
+                                class: if tip_tab() == 1 { "px-3 py-2 text-xs font-medium text-amber-400 border-b-2 border-amber-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(1),
+                                "1 · Canonicalization"
+                            }
+                            button {
+                                class: if tip_tab() == 2 { "px-3 py-2 text-xs font-medium text-emerald-400 border-b-2 border-emerald-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(2),
+                                "2 · Typography & Tag Cleanup"
+                            }
+                            button {
+                                class: if tip_tab() == 3 { "px-3 py-2 text-xs font-medium text-violet-400 border-b-2 border-violet-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(3),
+                                "3 · Orchestration"
+                            }
+                            button {
+                                class: if tip_tab() == 4 { "px-3 py-2 text-xs font-medium text-gray-200 border-b-2 border-gray-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(4),
+                                "Pipeline Flow"
+                            }
+                        }
 
-                            // Intro
-                            div { class: "px-6 py-3 text-xs text-gray-400",
-                                "Four components that together form the ingestion pipeline: "
-                                span { class: "text-sky-400 font-semibold", "Parser" }
-                                ", "
-                                span { class: "text-amber-400 font-semibold", "Canonicalization" }
-                                ", "
-                                span { class: "text-emerald-400 font-semibold", "Typography & Tag Cleanup" }
-                                ", "
-                                span { class: "text-violet-400 font-semibold", "Orchestration" }
-                                ". Canonicalization is not a single discrete stage — it is applied at multiple points around Typography & Tag Cleanup."
+                        // Tab content — overflow-y-auto so Pipeline Flow tab can scroll if needed
+                        div { class: "flex-1 overflow-y-auto min-h-0 px-6 py-4 text-xs text-gray-300",
+
+                            // Intro (shown on all tabs except Pipeline)
+                            if tip_tab() != 4 {
+                                div { class: "text-xs text-gray-300 mb-3",
+                                    "Four components that together form the ingestion pipeline: "
+                                    span { class: "text-sky-400 font-semibold underline cursor-pointer hover:text-sky-300", onclick: move |_| tip_tab.set(0), "Parser" }
+                                    ", "
+                                    span { class: "text-amber-400 font-semibold underline cursor-pointer hover:text-amber-300", onclick: move |_| tip_tab.set(1), "Canonicalization" }
+                                    ", "
+                                    span { class: "text-emerald-400 font-semibold underline cursor-pointer hover:text-emerald-300", onclick: move |_| tip_tab.set(2), "Typography & Tag Cleanup" }
+                                    ", "
+                                    span { class: "text-violet-400 font-semibold underline cursor-pointer hover:text-violet-300", onclick: move |_| tip_tab.set(3), "Orchestration" }
+                                    ". Canonicalization is not a single discrete stage — it is applied at multiple points around Typography & Tag Cleanup."
+                                }
                             }
 
-                            // 4-column layer grid
-                            div { class: "grid grid-cols-4 divide-x divide-gray-700 border-t border-gray-700",
-
-                                // ── 0. Parser ──
-                                div { class: "px-4 py-3 text-xs text-gray-300 space-y-2",
+                            // ── Tab 0: Parser ──
+                            if tip_tab() == 0 {
+                                div { class: "space-y-2",
                                     h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "0 · Parser" }
-                                    p { class: "text-gray-400", "Entry point. Reads raw bytes and converts them to plain text via format-specific extractors (PDF, HTML, DOCX, XLSX, EPUB, PPTX, text/code). Nothing downstream receives input if this fails." }
+                                    p { class: "text-gray-400",
+                                        "Entry point. Reads raw bytes and converts them to plain text via "
+                                        span {
+                                            class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                            onclick: move |_| show_extractors_info.set(!show_extractors_info()),
+                                            "format-specific extractors"
+                                        }
+                                        " (PDF, HTML, DOCX, XLSX, EPUB, PPTX, text/code). Nothing downstream receives input if this fails."
+                                    }
+                                    if show_extractors_info() {
+                                        div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-1.5",
+                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_extractors_info.set(false), "✕" }
+                                            }
+                                            // PDF — full width, complex
+                                            div {
+                                                p { class: "text-gray-200 font-semibold", "PDF — three-level cascade" }
+                                                ol { class: "ml-3 list-decimal list-outside text-gray-400 space-y-0.5",
+                                                    li { span { class: "font-mono text-gray-200", "pdftotext" } " (poppler-utils, " span { class: "font-mono", "-layout -enc UTF-8" } ") — best quality, handles multi-column layouts and complex fonts." }
+                                                    li { span { class: "font-mono text-gray-200", "pdf_extract" } " (Rust crate) — pure-Rust fallback when poppler absent." }
+                                                    li { span { class: "font-mono text-gray-200", "pdftoppm" } " + " span { class: "font-mono text-gray-200", "tesseract" } " — OCR last resort for scanned/image PDFs (300 dpi). Requires both on PATH." }
+                                                }
+                                                p { class: "text-gray-500 mt-0.5",
+                                                    span {
+                                                        class: "font-mono text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                        onclick: move |_| show_dedupe_pdf_info.set(!show_dedupe_pdf_info()),
+                                                        "dedupe_pdf_noise"
+                                                    }
+                                                    " strips lines appearing 4+ times and ≤80 chars (headers/footers)."
+                                                }
+                                                if show_dedupe_pdf_info() {
+                                                    div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
+                                                        div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                            button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_dedupe_pdf_info.set(false), "✕" }
+                                                        }
+                                                        p { "A heuristic pass that removes repeated boilerplate PDFs accumulate across pages — things like page headers, footers, running titles, and page numbers. These appear on every page, so in a 20-page PDF they repeat 20 times. Without this pass they pollute the index: a search for \"architecture\" starts matching chapter headers instead of content, and the LLM gets context stuffed with repeated boilerplate instead of substance." }
+                                                        p { class: "text-gray-200 font-semibold pt-1", "The two-part heuristic" }
+                                                        ul { class: "ml-3 space-y-1 list-disc list-outside text-gray-400",
+                                                            li { span { class: "text-gray-200 font-medium", "4+ repetitions — " } "a line appearing that many times is almost certainly structural, not content. Real sentences rarely repeat verbatim across a document." }
+                                                            li { span { class: "text-gray-200 font-medium", "≤80 chars — " } "actual content tends to be longer. This guard prevents accidentally removing a short sentence that genuinely repeats (e.g. a refrain in a poem, a repeated warning in a manual)." }
+                                                        }
+                                                        p { class: "text-gray-500 italic", "Not perfect — a long footer survives, a short genuine refrain gets stripped — but it's a cheap, zero-dependency pass that handles the majority of noisy PDFs." }
+                                                    }
+                                                }
+                                            }
+                                            // 2-column grid for the rest
+                                            div { class: "grid grid-cols-2 gap-x-4 gap-y-1.5",
+                                                div {
+                                                    p { class: "text-gray-200 font-semibold", "HTML" }
+                                                    p { class: "text-gray-400", "Custom smart extractor — strips tags, decodes entities." }
+                                                }
+                                                div {
+                                                    p { class: "text-gray-200 font-semibold", "DOCX / ODT" }
+                                                    p { class: "text-gray-400", "ZIP archive → reads " span { class: "font-mono", "word/document.xml" } " / " span { class: "font-mono", "content.xml" } " → char-by-char tag stripper." }
+                                                }
+                                                div {
+                                                    p { class: "text-gray-200 font-semibold", "XLSX / ODS" }
+                                                    p { class: "text-gray-400", span { class: "font-mono", "calamine" } " crate — all sheets, cells → tab-separated rows, " span { class: "font-mono", "[Sheet: name]" } " headers for multi-sheet files." }
+                                                }
+                                                div {
+                                                    p { class: "text-gray-200 font-semibold", "EPUB" }
+                                                    p { class: "text-gray-400", "ZIP → all " span { class: "font-mono", ".xhtml/.html/.htm" } " entries → tag-strip → concatenate." }
+                                                }
+                                                div {
+                                                    p { class: "text-gray-200 font-semibold", "PPTX" }
+                                                    p { class: "text-gray-400", "ZIP → " span { class: "font-mono", "ppt/slides/slide*.xml" } " → tag-strip → concatenate." }
+                                                }
+                                                div {
+                                                    p { class: "text-gray-200 font-semibold", "Text / code / CSV / JSON / XML" }
+                                                    p { class: "text-gray-400", span { class: "font-mono", "detect_and_decode" } " — charset detection + UTF-8 decode." }
+                                                }
+                                            }
+                                            p { class: "text-gray-500 italic", "Every format then goes through Format cleanup → normalize(Store)." }
+                                        }
+                                    }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                         li { "Failed parse → zero chunks, zero vectors." }
-                                        li { "Format extractors preserve semantic structure." }
+                                        li {
+                                            span {
+                                                class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                onclick: move |_| show_extractors_info.set(!show_extractors_info()),
+                                                "Format-specific extractors"
+                                            }
+                                            " preserve linear reading order and document boundaries (sheet names, slide sequence)."
+                                        }
+                                        li { "Headings, tables, and emphasis are not preserved — all text is flattened to plain text." }
                                         li { "OCR fallback (300 dpi) recovers scanned PDFs." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Graph" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                         li { "Empty parse → no graph nodes for that document." }
-                                        li { "PDF header/footer dedup prevents noise nodes." }
+                                        li {
+                                            span {
+                                                class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                onclick: move |_| show_dedupe_pdf_info.set(!show_dedupe_pdf_info()),
+                                                "PDF header/footer dedup"
+                                            }
+                                            " prevents "
+                                            span {
+                                                class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                onclick: move |_| show_noise_nodes_info.set(!show_noise_nodes_info()),
+                                                "noise nodes"
+                                            }
+                                            " in the "
+                                            span {
+                                                class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                onclick: move |_| show_kg_info.set(!show_kg_info()),
+                                                "knowledge graph"
+                                            }
+                                            "."
+                                        }
+                                        if show_noise_nodes_info() {
+                                            div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
+                                                div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_noise_nodes_info.set(false), "✕" }
+                                                }
+                                                p { "Every chunk becomes a node in the "
+                                                    span {
+                                                        class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                        onclick: move |_| show_kg_info.set(!show_kg_info()),
+                                                        "knowledge graph"
+                                                    }
+                                                    " (when Neo4j is enabled). Without dedup, every page header and footer becomes a chunk, and each chunk becomes a node — so a 20-page PDF produces 20 identical nodes for " span { class: "font-mono", "\"Chapter 3 — Architecture\"" } " and 20 more for " span { class: "font-mono", "\"© 2024 Acme Corp\"" } " (when they are in a header or footer)." }
+                                                p { "These noise nodes are structurally meaningless — they carry no content, but they connect to real content nodes via co-occurrence edges. Graph traversal and entity extraction then has to wade through dozens of "
+                                                    span {
+                                                        class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                        onclick: move |_| show_boilerplate_nodes_info.set(!show_boilerplate_nodes_info()),
+                                                        "boilerplate nodes"
+                                                    }
+                                                    " to reach the actual knowledge."
+                                                }
+                                                if show_boilerplate_nodes_info() {
+                                                    div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-1.5 mt-1",
+                                                        div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                            button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_boilerplate_nodes_info.set(false), "✕" }
+                                                        }
+                                                        p { "Boilerplate nodes are graph nodes that originate from repeated, non‑informative text such as:" }
+                                                        ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                            li { "page headers (" span { class: "font-mono", "Chapter 3 — Architecture" } ")" }
+                                                            li { "page footers (" span { class: "font-mono", "© 2024 Acme Corp" } ")" }
+                                                            li { "navigation elements (" span { class: "font-mono", "Table of Contents" } ", " span { class: "font-mono", "Page 12 of 200" } ")" }
+                                                            li { "standard disclaimers" }
+                                                            li { "document metadata that appears on every page" }
+                                                        }
+                                                        p { class: "text-gray-200 italic", "They are syntactically present but semantically empty." }
+                                                    }
+                                                }
+                                                p { "They also corrupt "
+                                                    span {
+                                                        class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                        onclick: move |_| show_pq_training_info.set(!show_pq_training_info()),
+                                                        "Product Quantization codebook training"
+                                                    }
+                                                    " — boilerplate text produces real embeddings, so noise nodes pull PQ centroids toward meaningless content. The codebook then encodes genuine content chunks less accurately, degrading vector search recall."
+                                                }
+                                                if show_pq_training_info() {
+                                                    div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
+                                                        div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                            button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_pq_training_info.set(false), "✕" }
+                                                        }
+                                                        p { span { class: "text-gray-200 font-medium", "Product Quantization (PQ)" } " compresses embedding vectors to ~1/32 of their original size. A 384-dim f32 vector (1536 bytes) becomes 48 bytes — one byte per subvector." }
+                                                        p { class: "text-gray-200 font-medium pt-1", "Training" }
+                                                        p { "Training builds a " span { class: "font-mono text-gray-200", "PQCodebook" } " — a lookup table of centroids. It runs once over all stored vectors:" }
+                                                        ol { class: "ml-3 space-y-1 list-decimal list-outside text-gray-400",
+                                                            li { "Split each 384-dim vector into " span { class: "font-mono", "num_subvectors" } " (default 48) equal sub-vectors of 8 dims each." }
+                                                            li { "For each subspace, run k-means over all sub-vectors to find 256 centroids. Each centroid is the average position of the vectors assigned to it. Centroids are initialised from the first 256 vectors in the corpus, then refined over several iterations." }
+                                                            li { "Store the resulting " span { class: "font-mono", "num_subvectors × 256" } " centroid table as the codebook." }
+                                                        }
+                                                        p { class: "text-gray-200 font-medium pt-1", "Encoding (after training)" }
+                                                        p { class: "text-gray-400", "Each new vector is encoded by finding the nearest centroid in each subspace and storing its index (0–255) as one byte. At search time, distances are approximated from the codebook without decompressing." }
+                                                        p { class: "text-gray-200 font-medium pt-1", "Why boilerplate corrupts training" }
+                                                        p { class: "text-gray-400", "A centroid is the average of all vectors assigned to it. Boilerplate embeddings — which cluster tightly around phrases like " span { class: "font-mono", "\"© 2024 Acme Corp\"" } " — also get assigned to centroids and pull the average toward themselves. The centroid moves away from where it would have settled with content-only training." }
+                                                        p { class: "text-gray-400", "At encode time, genuine content vectors get assigned to a centroid that no longer accurately represents them. Two chunks that should be close in vector space may get encoded to the same centroid ID; two dissimilar chunks may get IDs that happen to be near each other. Either way the distance estimates used at search time are wrong." }
+                                                        p { class: "text-gray-200 italic", "Training is done once at reindex time — the damage is baked into the codebook until the next reindex." }
+                                                    }
+                                                }
+                                                p { class: "text-gray-200 italic", "Noise nodes are a graph problem caused by a parsing problem — deduplication at the parser stage is cheaper than filtering them out of the graph later." }
+                                            }
+                                        }
+                                        if show_kg_info() {
+                                            div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2 mt-1",
+                                                div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_kg_info.set(false), "✕" }
+                                                }
+                                                p { class: "text-gray-200 font-semibold", "What Is a Knowledge Graph?" }
+                                                p { "A knowledge graph is a structured representation of information as a network of entities and relationships." }
+                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    li { span { class: "text-gray-200 font-medium", "Nodes" } " represent entities (people, places, concepts, documents)." }
+                                                    li { span { class: "text-gray-200 font-medium", "Edges" } " represent relationships between them (" span { class: "font-mono", "works at" } ", " span { class: "font-mono", "located in" } ", " span { class: "font-mono", "mentions" } ", " span { class: "font-mono", "depends on" } ")." }
+                                                }
+                                                p { class: "text-gray-200 font-semibold pt-1", "Why Knowledge Graphs for RAG?" }
+                                                p { "Standard RAG retrieves isolated chunks. Knowledge graphs add structure:" }
+                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    li { span { class: "text-gray-200 font-medium", "Multi-hop reasoning" } " — follow relationships across documents." }
+                                                    li { span { class: "text-gray-200 font-medium", "Entity disambiguation" } " — distinguish same-name entities by context." }
+                                                    li { span { class: "text-gray-200 font-medium", "Cross-document connections" } " — link related chunks via shared entities." }
+                                                    li { span { class: "text-gray-200 font-medium", "Structural context" } " — understand how concepts relate, not just what they are." }
+                                                }
+                                                p { class: "text-gray-200 font-semibold pt-1", "In the AG System" }
+                                                p { "AG uses a two-tier graph architecture:" }
+                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    li { span { class: "font-mono text-gray-200", "Neo4j" } " — ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph." }
+                                                    li { span { class: "font-mono text-gray-200", "Petgraph" } " — runtime graph queries. Loads an exported JSON snapshot from Neo4j into RAM for fast, in-process traversal." }
+                                                }
+                                                p { class: "text-gray-200 italic", "Neo4j never runs at query time. All runtime graph traversal goes through petgraph — nanoseconds with no network overhead." }
+                                            }
+                                        }
                                     }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Clustering" }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
+                                        span {
+                                            class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                            onclick: move |_| show_clustering_info.set(!show_clustering_info()),
+                                            "Clustering"
+                                        }
+                                    }
+                                    if show_clustering_info() {
+                                        div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2 mb-1",
+                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_clustering_info.set(false), "✕" }
+                                            }
+
+                                            // 1. What clustering is
+                                            p { class: "text-gray-200 font-semibold", "1 · What clustering is" }
+                                            p { "Clustering groups embedding vectors so that semantically similar chunks end up together. It's unsupervised: no labels, no supervision — just geometry in vector space." }
+                                            p { "In a GraphRAG pipeline, clustering is the backbone of:" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { "topic‑level summaries" }
+                                                li { "hierarchical retrieval" }
+                                                li { "global graph coherence" }
+                                                li { "PQ codebook stability" }
+                                                li { "deduplication and noise filtering" }
+                                            }
+                                            p { class: "text-gray-200 italic", "Cluster quality → summary quality → global search quality." }
+
+                                            // 2. Why parse quality sets the ceiling
+                                            p { class: "text-gray-200 font-semibold pt-1", "2 · Why parse quality sets the ceiling on cluster coherence" }
+                                            p { "Clustering can only be as good as the text fed into the embedding model. If parsing is sloppy:" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { "broken sentences" }
+                                                li { "duplicated boilerplate" }
+                                                li { "HTML artifacts" }
+                                                li { "OCR noise" }
+                                                li { "mojibake" }
+                                            }
+                                            p { "…then embeddings scatter → clusters smear → summaries degrade." }
+
+                                            // 3. Why encoding detection prevents mojibake fragmentation
+                                            p { class: "text-gray-200 font-semibold pt-1", "3 · Why encoding detection prevents mojibake fragmentation" }
+                                            p { "Mojibake = garbled text caused by decoding bytes with the wrong encoding (e.g., " span { class: "font-mono", "CafÃ©" } " instead of " span { class: "font-mono", "Café" } ", " span { class: "font-mono", "â€œHelloâ€" } " instead of " span { class: "font-mono", "\u{201c}Hello\u{201d}" } ")." }
+                                            p { "Mojibake breaks characters into multiple meaningless tokens, which:" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { "distort embeddings" }
+                                                li { "scatter chunks across clusters" }
+                                                li { "pollute "
+                                                    span {
+                                                        class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                        onclick: move |_| show_centroid_info.set(!show_centroid_info()),
+                                                        "centroids"
+                                                    }
+                                                }
+                                                li { "degrade PQ codebooks" }
+                                            }
+                                            p { "Encoding detection ensures clean Unicode before tokenization." }
+
+                                            // 4. How clusters are defined and made
+                                            p { class: "text-gray-200 font-semibold pt-1", "4 · How clusters are defined and made" }
+                                            p { "A cluster is a region in embedding space where vectors are closer to each other than to vectors in other regions, with internal density and separation from others by lower‑density areas or distance boundaries. Different algorithms define \"region\" differently." }
+
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.1 · k‑means — clusters = Voronoi cells around "
+                                                span {
+                                                    class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                    onclick: move |_| show_centroid_info.set(!show_centroid_info()),
+                                                    "centroids"
+                                                }
+                                            }
+                                            if show_centroid_info() {
+                                                div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
+                                                    div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                        button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_centroid_info.set(false), "✕" }
+                                                    }
+                                                    p { "A centroid is the center point of a cluster — the average position of all vectors assigned to that cluster." }
+                                                    p { "In embedding‑space terms, it's the mean vector: " span { class: "font-mono text-gray-200", "μ = (1/N) Σ xᵢ" } " where " span { class: "font-mono", "xᵢ" } " is an embedding vector, " span { class: "font-mono", "N" } " the cluster size, and " span { class: "font-mono", "μ" } " the centroid." }
+                                                    p { class: "text-gray-200 font-semibold pt-0.5", "Intuitively" }
+                                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                        li { "the semantic center of gravity of a cluster" }
+                                                        li { "the point that best represents the \"topic\" of that cluster" }
+                                                        li { "the anchor around which all cluster members are grouped" }
+                                                    }
+                                                    p { "If you average all embeddings of \"Rust async networking,\" the centroid becomes the prototype of that topic." }
+                                                    p { class: "text-gray-200 font-semibold pt-0.5", "Why centroids matter" }
+                                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                        li { "cluster boundaries (in k‑means they define Voronoi cells)" }
+                                                        li { "which cluster a new point belongs to (nearest centroid)" }
+                                                        li { "how stable a cluster is (centroid drift = instability)" }
+                                                        li { "how summaries are generated (centroid ≈ semantic center)" }
+                                                    }
+                                                    p { "In PQ codebooks, centroids are even more literal: they are the codebook entries." }
+                                                    p { class: "text-gray-200 font-semibold pt-0.5", "How centroids are used in k‑means" }
+                                                    ol { class: "ml-3 space-y-0.5 list-decimal list-outside text-gray-400",
+                                                        li { "Start with k initial centroids" }
+                                                        li { "Assign each vector to the nearest centroid" }
+                                                        li { "Recompute each centroid as the mean of its assigned vectors" }
+                                                        li { "Repeat until centroids stop moving" }
+                                                    }
+                                                    p { class: "text-gray-200 font-semibold pt-0.5", "Not all algorithms use centroids" }
+                                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                        li { span { class: "font-mono text-gray-200", "k‑means" } " → centroids exist and define clusters" }
+                                                        li { span { class: "font-mono text-gray-200", "GMM" } " → centroids exist as Gaussian means" }
+                                                        li { span { class: "font-mono text-gray-200", "DBSCAN / HDBSCAN" } " → no centroids; clusters are density regions" }
+                                                        li { "Hierarchical clustering → no centroids; clusters are tree nodes" }
+                                                    }
+                                                    p { class: "text-gray-200 italic", "\"Centroid\" is algorithm‑specific." }
+                                                }
+                                            }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { span { class: "text-gray-200", "Definition: " } "A cluster is the set of points closest to a centroid." }
+                                                li { span { class: "text-gray-200", "Formation: " } "pick k centroids → assign points to nearest → recompute centroids → repeat." }
+                                                li { span { class: "text-gray-200", "Overlap: " } "❌ No — hard partitions." }
+                                            }
+
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.2 · DBSCAN — clusters = dense regions separated by sparse regions" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { span { class: "text-gray-200", "Definition: " } "A cluster is a connected component of high‑density points." }
+                                                li { span { class: "text-gray-200", "Formation: " } "identify core points (≥ min_samples neighbors) → expand outward → mark unreachable points as noise." }
+                                                li { span { class: "text-gray-200", "Overlap: " } "❌ No — boundaries are fuzzy and shapes are irregular." }
+                                            }
+
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.3 · HDBSCAN — clusters = stable density regions across scales" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { span { class: "text-gray-200", "Definition: " } "A cluster is a persistent dense region that remains stable across multiple density thresholds." }
+                                                li { span { class: "text-gray-200", "Formation: " } "build MST of distances → condense into hierarchy → extract stable regions." }
+                                                li { span { class: "text-gray-200", "Overlap: " } "❌ No — but clusters can be nested (hierarchical)." }
+                                            }
+
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.4 · Gaussian Mixture Models (GMM) — clusters = overlapping probability distributions" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { span { class: "text-gray-200", "Definition: " } "Each cluster is a Gaussian distribution in embedding space." }
+                                                li { span { class: "text-gray-200", "Formation: " } "EM algorithm fits multiple Gaussians." }
+                                                li { span { class: "text-gray-200", "Overlap: " } "✅ Yes — soft clustering. A point can be 70% cluster A, 20% B, 10% C." }
+                                            }
+
+                                            // 5. Absolute or overlapping?
+                                            p { class: "text-gray-200 font-semibold pt-1", "5 · So are clusters absolute or overlapping?" }
+                                            div { class: "overflow-x-auto",
+                                                table { class: "text-xs w-full border-collapse",
+                                                    thead {
+                                                        tr { class: "border-b border-gray-700",
+                                                            th { class: "text-left text-gray-200 pr-4 pb-1", "Algorithm" }
+                                                            th { class: "text-left text-gray-200 pr-4 pb-1", "Overlap" }
+                                                            th { class: "text-left text-gray-200 pr-4 pb-1", "Membership" }
+                                                            th { class: "text-left text-gray-200 pb-1", "Notes" }
+                                                        }
+                                                    }
+                                                    tbody { class: "text-gray-400",
+                                                        tr { class: "border-b border-gray-800",
+                                                            td { class: "font-mono pr-4 py-0.5", "k‑means" }
+                                                            td { class: "pr-4 py-0.5", "❌ No" }
+                                                            td { class: "pr-4 py-0.5", "Hard" }
+                                                            td { class: "py-0.5", "Voronoi cells" }
+                                                        }
+                                                        tr { class: "border-b border-gray-800",
+                                                            td { class: "font-mono pr-4 py-0.5", "DBSCAN" }
+                                                            td { class: "pr-4 py-0.5", "❌ No" }
+                                                            td { class: "pr-4 py-0.5", "Hard" }
+                                                            td { class: "py-0.5", "Density islands; noise allowed" }
+                                                        }
+                                                        tr { class: "border-b border-gray-800",
+                                                            td { class: "font-mono pr-4 py-0.5", "HDBSCAN" }
+                                                            td { class: "pr-4 py-0.5", "❌ No" }
+                                                            td { class: "pr-4 py-0.5", "Hard + hierarchy" }
+                                                            td { class: "py-0.5", "Nested clusters possible" }
+                                                        }
+                                                        tr {
+                                                            td { class: "font-mono pr-4 py-0.5", "GMM" }
+                                                            td { class: "pr-4 py-0.5", "✅ Yes" }
+                                                            td { class: "pr-4 py-0.5", "Soft" }
+                                                            td { class: "py-0.5", "Probabilistic membership" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            p { "In most GraphRAG pipelines (k‑means or HDBSCAN): clusters do not overlap, but semantic boundaries are fuzzy, and cluster meaning is not absolute — it depends on embedding quality." }
+
+                                            // 6. Pipeline summary
+                                            p { class: "text-gray-200 font-semibold pt-1", "6 · Pipeline summary (GraphRAG‑style)" }
+                                            ol { class: "ml-3 space-y-0.5 list-decimal list-outside text-gray-400",
+                                                li { "Clean + normalize text" }
+                                                li { "Detect encoding → prevent mojibake" }
+                                                li { "Chunk" }
+                                                li { "Embed" }
+                                                li { "Cluster (k‑means / HDBSCAN)" }
+                                                li { "Summarize clusters" }
+                                                li { "Build graph edges" }
+                                                li { "Use summaries for global retrieval" }
+                                            }
+                                            p { class: "text-gray-200 italic", "Cluster quality → summary quality → retrieval quality." }
+                                        }
+                                    }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                         li { "Parse quality sets the ceiling on cluster coherence." }
-                                        li { "Encoding detection prevents mojibake token fragmentation." }
+                                        li { "Encoding detection prevents "
+                                            span {
+                                                class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                                onclick: move |_| show_mojibake_info.set(!show_mojibake_info()),
+                                                "mojibake"
+                                            }
+                                            " token fragmentation."
+                                        }
+                                        if show_mojibake_info() {
+                                            div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2 mt-1",
+                                                div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_mojibake_info.set(false), "✕" }
+                                                }
+                                                p { span { class: "text-gray-200 font-semibold", "Mojibake" } " = garbled, unreadable text caused by using the wrong character encoding. It happens when bytes written in one encoding (e.g., UTF‑8) are interpreted as another (e.g., Latin‑1)." }
+                                                p { class: "text-gray-200 font-semibold pt-1", "What mojibake actually is" }
+                                                p { "Mojibake (Japanese: 文字化け, \"character transformation\") refers to text that turns into nonsense symbols because software decodes it with the wrong encoding." }
+                                                p { "Examples:" }
+                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    li { span { class: "font-mono text-gray-200", "CafÃ©" } " instead of " span { class: "font-mono text-gray-200", "Café" } }
+                                                    li { span { class: "font-mono text-gray-200", "â€œHelloâ€" } " instead of " span { class: "font-mono text-gray-200", "\u{201c}Hello\u{201d}" } }
+                                                    li { "Japanese text turning into " span { class: "font-mono text-gray-200", "æ–‡åŒ–ã" } }
+                                                }
+                                                p { "This happens when the byte sequence is correct, but the decoder guesses the wrong character set. For example, UTF‑8 bytes interpreted as Windows‑1252 produce systematic corruption." }
+                                            }
+                                        }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Summarization" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -346,18 +799,116 @@ pub fn MonitorTip() -> Element {
                                         li { "Empty parse → document silently absent from all results." }
                                         li { "Format drift shifts text quality across the entire index." }
                                     }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
+                                        span {
+                                            class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
+                                            onclick: move |_| show_format_cleanup_info.set(!show_format_cleanup_info()),
+                                            "Format cleanup"
+                                        }
+                                    }
+                                    p { class: "text-gray-400", "Runs immediately after format extraction, before Store normalization. Two passes, each applied only to the formats that need it." }
+                                    if show_format_cleanup_info() {
+                                        div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2",
+                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_format_cleanup_info.set(false), "✕" }
+                                            }
+                                            p { "Removes artifacts that are byproducts of the source format, not the content itself. The extractor gives you text, format cleanup gives you " span { class: "italic", "clean" } " text." }
+                                            p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 1 — HTML tag stripping" }
+                                            p { class: "text-gray-400", "HTML only. The extractor preserves markup to avoid losing structure; this pass removes all tags and decodes HTML entities, leaving only the text nodes." }
+                                            p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
+                                            p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
+                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                li { "Curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight ASCII ' \"" }
+                                                li { "Em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \"" }
+                                                li { "Non-breaking hyphen (\u{2011}) → \"-\"" }
+                                                li { "Ellipsis (\u{2026}) → \"...\"" }
+                                                li { "PDF ligatures (ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ) → letter pairs (fi fl ff ffi ffl st)" }
+                                            }
+                                            p { class: "text-gray-500 pt-1", "Runs before NFC so the canonicalizer sees consistent input regardless of source format." }
+                                            p { class: "text-gray-500", "Text and code skip both passes — they arrive as clean UTF-8 with no format artifacts." }
+                                        }
+                                    }
                                     p { class: "italic text-gray-300 pt-1", "The unseeable first cause of retrieval quality." }
                                 }
+                            }
 
-                                // ── 1. Canonicalization ──
-                                div { class: "px-4 py-3 text-xs text-gray-300 space-y-2",
+                            // ── Tab 1: Canonicalization ──
+                            if tip_tab() == 1 {
+                                div { class: "space-y-2",
                                     h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "1 · Canonicalization" }
                                     p { class: "text-gray-400", "Three targets, applied at different stages. Each target is a strict superset of the previous." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
-                                        "Store  —  "
+                                        span {
+                                            class: "text-amber-400 underline cursor-pointer hover:text-amber-300",
+                                            onclick: move |_| show_store_target_info.set(!show_store_target_info()),
+                                            "Store"
+                                        }
+                                        "  —  "
                                         a { href: "https://unicode.org/reports/tr15/#NFC", target: "_blank", class: "text-amber-400 hover:text-amber-300 underline", "NFC" }
                                         " + whitespace"
+                                    }
+                                    if show_store_target_info() {
+                                        div { class: "rounded bg-gray-900 border border-amber-800 p-3 text-xs text-gray-300 space-y-2",
+                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_store_target_info.set(false), "✕" }
+                                            }
+                                            p { "\"Store\" is the first of three normalization targets in the TIP canonicalization stage. It's not a data structure — it's the label for how text is normalized when it's being written to disk (stored/persisted)." }
+                                            p { class: "text-gray-400 pt-1", "The three targets are a hierarchy of increasing aggressiveness:" }
+                                            ol { class: "ml-3 space-y-1.5 list-decimal list-outside text-gray-400",
+                                                li {
+                                                    span { class: "text-gray-200 font-semibold", "Store" }
+                                                    " — NFC + whitespace collapse. Applied after text extraction, before chunking. The text that ends up persisted to disk and shown to users. Conservative: only unifies byte-level encodings of the same character (e.g. é as U+00E9 vs e+combining accent → both become U+00E9), leaving curly quotes, "
+                                                    span {
+                                                        class: "text-amber-400 underline cursor-pointer hover:text-amber-300",
+                                                        onclick: move |_| show_emdash_info.set(!show_emdash_info()),
+                                                        "em-dashes"
+                                                    }
+                                                    ", "
+                                                    span {
+                                                        class: "text-amber-400 underline cursor-pointer hover:text-amber-300",
+                                                        onclick: move |_| show_ligature_info.set(!show_ligature_info()),
+                                                        "ligatures"
+                                                    }
+                                                    " intact."
+                                                    if show_emdash_info() {
+                                                        div { class: "rounded bg-gray-900 border border-amber-800 p-3 text-xs text-gray-300 space-y-2 mt-2",
+                                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_emdash_info.set(false), "✕" }
+                                                            }
+                                                            p { "The long dash character — like the one in this sentence. Unicode U+2014. Used in prose for parenthetical asides or breaks in thought. Named \"em\" because it is roughly the width of the letter M." }
+                                                            p { "The en-dash (U+2013) is the shorter sibling — used for ranges like \"pages 10–20\"." }
+                                                            p { class: "text-gray-400", "NFC leaves both untouched. The "
+                                                                span { class: "text-amber-400 font-medium", "Format cleanup" }
+                                                                " step folds em/en-dashes to \" - \", but that happens before Store normalization. If a document reaches NFC with an em-dash still in it, NFC will not touch it."
+                                                            }
+                                                        }
+                                                    }
+                                                    if show_ligature_info() {
+                                                        div { class: "rounded bg-gray-900 border border-amber-800 p-3 text-xs text-gray-300 space-y-2 mt-2",
+                                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
+                                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_ligature_info.set(false), "✕" }
+                                                            }
+                                                            p { "Typographic letter combinations encoded as a single Unicode character by PDF and publishing tools. Instead of two separate characters f + i, some fonts encode them as the single character " span { class: "font-mono", "ﬁ" } " (U+FB01)." }
+                                                            p { class: "text-gray-400 font-mono", "ﬁ (fi)  ·  ﬂ (fl)  ·  ﬀ (ff)  ·  ﬃ (ffi)  ·  ﬄ (ffl)  ·  ﬆ (st)" }
+                                                            p { class: "text-gray-400", "NFC leaves ligatures intact — they are single canonical code points, not encoding variants. It is the "
+                                                                span { class: "text-amber-400 font-medium", "Embed" }
+                                                                " step (NFKC) that folds them into their letter pairs, so the embedder sees \"fi\" not \"ﬁ\"."
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                li {
+                                                    span { class: "text-gray-200 font-semibold", "Embed" }
+                                                    " — NFKC + whitespace. More aggressive: also folds compatibility equivalents (ﬁ→fi, ①→1, ａｂｃ→abc). Applied to each chunk before the embedder so vectors don't diverge on visually-identical content encoded differently."
+                                                }
+                                                li {
+                                                    span { class: "text-gray-200 font-semibold", "Index" }
+                                                    " — NFKC + whitespace + punct canonicalization. Most aggressive: also normalizes smart quotes to ASCII, em-dashes to -, etc. Applied to Tantivy BM25 chunks and matched at query time."
+                                                }
+                                            }
+                                            p { class: "text-gray-500 pt-1 italic", "So when the modal says \"Store — NFC + whitespace\", it means: this is the normalization form used for the copy that gets persisted to disk." }
+                                        }
                                     }
                                     p { class: "text-gray-400", "Applied after extraction, before chunking. Persisted to disk and shown to users." }
                                     p { class: "text-gray-400", "NFC = canonical composition. It only normalizes canonical equivalences — different byte encodings of the same character — leaving typography intact. Example: \"é\" can be stored as a single code point (U+00E9) or as \"e\" + combining accent (U+0301). NFC rewrites both to U+00E9. Curly quotes, em-dashes, ligatures, and other typographic characters are left untouched." }
@@ -393,9 +944,11 @@ pub fn MonitorTip() -> Element {
                                     }
                                     p { class: "italic text-gray-300 pt-1", "The stability layer of the entire RAG system." }
                                 }
+                            }
 
-                                // ── 2. Typography & Tag Cleanup ──
-                                div { class: "px-4 py-3 text-xs text-gray-300 space-y-2",
+                            // ── Tab 2: Typography & Tag Cleanup ──
+                            if tip_tab() == 2 {
+                                div { class: "space-y-2",
                                     h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "2 · Typography & Tag Cleanup" }
                                     p { class: "text-gray-400", "Structures canonicalised text into semantic units for embedding, indexing, and retrieval. Includes chunking, segmentation, and boilerplate removal." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
@@ -429,9 +982,11 @@ pub fn MonitorTip() -> Element {
                                     }
                                     p { class: "italic text-gray-300 pt-1", "The semantic structuring layer of RAG." }
                                 }
+                            }
 
-                                // ── 3. Orchestration ──
-                                div { class: "px-4 py-3 text-xs text-gray-300 space-y-2",
+                            // ── Tab 3: Orchestration ──
+                            if tip_tab() == 3 {
+                                div { class: "space-y-2",
                                     h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "3 · Orchestration" }
                                     p { class: "text-gray-400", "Coordinates the three prior layers into a deterministic, reproducible ingestion flow. Defines configuration, execution order, and output formats." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
@@ -464,12 +1019,21 @@ pub fn MonitorTip() -> Element {
                                 }
                             }
 
-                            // Pipeline flow
-                            div { class: "border-t border-gray-700 px-6 py-3",
+                            // ── Tab 4: Pipeline Flow ──
+                            if tip_tab() == 4 {
+                                div { class: "space-y-4",
+                                div { class: "flex justify-end -mt-1 -mr-1",
+                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_tip_info.set(false), "✕" }
+                                }
                                 h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2", "Pipeline flow" }
                                 pre { class: "text-xs font-mono leading-snug text-gray-400",
                                     span { class: "text-sky-400", "Parser" }
                                     "  →  raw text\n  │\n  ▼\n"
+                                    span { class: "text-sky-300", "Format cleanup" }
+                                    "    HTML tag stripping (HTML only)  ·  Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
+                                    "  │  unicode: curly quotes → straight  ·  em/en-dash → \" - \"  ·  ellipsis → \"...\"\n"
+                                    "  │           PDF ligatures (ﬁ ﬂ ﬀ) → letter pairs\n"
+                                    "  │\n  ▼\n"
                                     span { class: "text-amber-400", "normalize(Store)" }
                                     "   NFC + whitespace collapse\n"
                                     "  │  strips : U+00AD (soft-hyphen)  ·  U+200B–D (zero-width)  ·  U+2060  ·  U+FEFF\n"
@@ -507,10 +1071,8 @@ pub fn MonitorTip() -> Element {
                                     "  └──► raw               →  NER  →  graph search ────────────────┘\n"
                                     "         NER receives raw query — has its own tokenizer"
                                 }
-                            }
-
                             // Summary table
-                            div { class: "border-t border-gray-700 px-6 py-3",
+                            div { class: "border-t border-gray-700 pt-3 mt-2",
                                 table { class: "w-full text-xs border-collapse",
                                     thead {
                                         tr { class: "border-b border-gray-600",
@@ -541,6 +1103,8 @@ pub fn MonitorTip() -> Element {
                                             td { class: "py-1.5 text-gray-400", "Deterministic indexing, reproducible retrieval, stable summaries" }
                                         }
                                     }
+                                }
+                            }
                                 }
                             }
                         }

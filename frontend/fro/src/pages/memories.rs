@@ -407,6 +407,21 @@ pub fn ConfigMemories() -> Element {
     let mut show_list_modal = use_signal(|| Option::<String>::None);
     let mut refresh_counter = use_signal(|| 0u32);
 
+    // Agent memory vector store settings
+    let mut mem_metric = use_signal(|| String::new());
+    let mut mem_top_k_str = use_signal(|| String::new());
+    let mut mem_saving = use_signal(|| false);
+    let mut mem_save_msg = use_signal(|| Option::<String>::None);
+    let mut show_mem_metric_info = use_signal(|| false);
+    let mut show_mem_top_k_info = use_signal(|| false);
+
+    use_future(move || async move {
+        if let Ok(s) = api::fetch_agent_memory_settings().await {
+            mem_metric.set(s.distance_metric.unwrap_or_default());
+            mem_top_k_str.set(s.top_k.map(|v| v.to_string()).unwrap_or_default());
+        }
+    });
+
     // Load data - runs on mount and when refresh_counter changes
     let counter_val = refresh_counter();
     let mut page_errors = use_context::<Signal<PageErrors>>();
@@ -694,6 +709,119 @@ pub fn ConfigMemories() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // ── Agent Memory Vector Store Settings ───────────────────────────
+        Panel { title: Some("Agent Memory Store".into()), refresh: None::<String>,
+            div { class: "text-xs text-gray-400 mb-3",
+                "Settings for the vector store used by the agent to retrieve RAG memories. Independent of per-corpus settings."
+            }
+            div { class: "flex items-end gap-4 w-full flex-wrap",
+                div { class: "flex flex-col gap-1 w-fit",
+                    div { class: "flex items-center gap-1",
+                        label { class: "text-xs text-gray-400 shrink-0", "Distance metric" }
+                        button {
+                            class: "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80",
+                            style: "background-color:#7C2A02;border:1px solid #7C2A02;",
+                            onclick: move |_| show_mem_metric_info.set(!show_mem_metric_info()),
+                            svg {
+                                class: INFO_ICON_SVG_CLASS,
+                                xmlns: "http://www.w3.org/2000/svg",
+                                fill: "none",
+                                view_box: "0 0 24 24",
+                                stroke: "currentColor",
+                                stroke_width: "1.5",
+                                circle { cx: "12", cy: "12", r: "9" }
+                                line { x1: "12", y1: "8", x2: "12", y2: "14", stroke_width: "1.5" }
+                                circle { cx: "12", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                            }
+                        }
+                    }
+                    select {
+                        class: "select select-sm select-bordered bg-gray-700 text-gray-200",
+                        value: mem_metric(),
+                        onchange: move |evt| mem_metric.set(evt.value()),
+                        option { value: "", "— cosine (default) —" }
+                        option { value: "cosine", "cosine" }
+                        option { value: "dot_product", "dot product" }
+                        option { value: "euclidean", "euclidean" }
+                    }
+                }
+                div { class: "flex flex-col gap-1",
+                    div { class: "flex items-center gap-1",
+                        label { class: "text-xs text-gray-400 shrink-0", "Recall top-k" }
+                        button {
+                            class: "w-6 h-6 min-w-6 min-h-6 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80",
+                            style: "background-color:#7C2A02;border:1px solid #7C2A02;",
+                            onclick: move |_| show_mem_top_k_info.set(!show_mem_top_k_info()),
+                            svg {
+                                class: INFO_ICON_SVG_CLASS,
+                                xmlns: "http://www.w3.org/2000/svg",
+                                fill: "none",
+                                view_box: "0 0 24 24",
+                                stroke: "currentColor",
+                                stroke_width: "1.5",
+                                circle { cx: "12", cy: "12", r: "9" }
+                                line { x1: "12", y1: "8", x2: "12", y2: "14", stroke_width: "1.5" }
+                                circle { cx: "12", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                            }
+                        }
+                    }
+                    input {
+                        r#type: "number",
+                        class: "input input-sm input-bordered bg-gray-700 text-gray-200 w-20",
+                        placeholder: "5",
+                        value: mem_top_k_str(),
+                        onchange: move |evt| mem_top_k_str.set(evt.value()),
+                    }
+                }
+            }
+            if show_mem_metric_info() {
+                div { class: "rounded bg-gray-800 border border-gray-600 p-3 text-xs text-gray-300 space-y-1 mt-2",
+                    p { "Similarity function used when recalling agent memories by vector similarity." }
+                    p { span { class: "text-gray-200 font-medium", "cosine — " } "angle between vectors, ignoring magnitude. Default and recommended." }
+                    p { span { class: "text-gray-200 font-medium", "dot product — " } "raw inner product. Only meaningful if embeddings are pre-normalized." }
+                    p { span { class: "text-gray-200 font-medium", "euclidean — " } "straight-line distance. Can underperform in high dimensions." }
+                    p { class: "text-gray-500", "Agent memory uses brute-force search, not HNSW — ef_construction, ef_search, and PQ do not apply here." }
+                }
+            }
+            if show_mem_top_k_info() {
+                div { class: "rounded bg-gray-800 border border-gray-600 p-3 text-xs text-gray-300 space-y-1 mt-2",
+                    p { "How many memory items are retrieved when the agent recalls relevant memories for a query. Default: 5." }
+                    p { "Higher values give the agent more context but increase prompt size. Diminishing returns above ~10." }
+                }
+            }
+            div { class: "flex items-center gap-3 pt-2",
+                button {
+                    class: "btn btn-sm",
+                    style: "background-color:#7C2A02; border-color:#7C2A02; color:white;",
+                    disabled: mem_saving(),
+                    onclick: move |_| {
+                        mem_saving.set(true);
+                        mem_save_msg.set(None);
+                        let metric_val = mem_metric();
+                        let top_k = mem_top_k_str().parse::<usize>().ok();
+                        spawn(async move {
+                            let settings = api::AgentMemorySettings {
+                                distance_metric: if metric_val.is_empty() { None } else { Some(metric_val) },
+                                top_k,
+                            };
+                            match api::patch_agent_memory_settings(&settings).await {
+                                Ok(_) => mem_save_msg.set(Some("Saved".into())),
+                                Err(e) => mem_save_msg.set(Some(format!("Error: {}", e))),
+                            }
+                            mem_saving.set(false);
+                        });
+                    },
+                    if mem_saving() { "Saving…" } else { "Save" }
+                }
+                if let Some(msg) = mem_save_msg() {
+                    span {
+                        class: if msg.starts_with("Error") { "text-xs text-red-400" } else { "text-xs text-green-400" },
+                        "{msg}"
                     }
                 }
             }

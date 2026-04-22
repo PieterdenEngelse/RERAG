@@ -83,7 +83,7 @@ fn capacity_from_env() -> usize {
 /// Offer a chunk to the reservoir. Cheap when the sample is full and the
 /// reservoir decides not to keep this one (just a counter bump + RNG roll).
 /// More expensive when we keep it, since we tokenize and write to SQLite.
-pub fn offer_chunk(chunk_text: &str) {
+pub fn offer_chunk(chunk_text: &str, corpus_slug: &str) {
     let Some(mutex) = DB_CONN.get() else { return };
     let Ok(conn) = mutex.lock() else { return };
 
@@ -140,14 +140,15 @@ pub fn offer_chunk(chunk_text: &str) {
         match decision {
             KeepDecision::Append => {
                 let _ = conn.execute(
-                    "INSERT INTO golden_sample (chunk_text, baseline_token_count, baseline_token_ids, tokenizer_model, position_in_corpus)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO golden_sample (chunk_text, baseline_token_count, baseline_token_ids, tokenizer_model, position_in_corpus, corpus_slug)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         chunk_text,
                         baseline_token_count as i64,
                         baseline_token_ids,
                         tokenizer_model,
                         position as i64,
+                        corpus_slug,
                     ],
                 );
             }
@@ -162,14 +163,16 @@ pub fn offer_chunk(chunk_text: &str) {
                     let _ = conn.execute(
                         "UPDATE golden_sample
                          SET chunk_text = ?1, baseline_token_count = ?2, baseline_token_ids = ?3,
-                             tokenizer_model = ?4, captured_at = CURRENT_TIMESTAMP, position_in_corpus = ?5
-                         WHERE id = ?6",
+                             tokenizer_model = ?4, captured_at = CURRENT_TIMESTAMP, position_in_corpus = ?5,
+                             corpus_slug = ?6
+                         WHERE id = ?7",
                         params![
                             chunk_text,
                             baseline_token_count as i64,
                             baseline_token_ids,
                             tokenizer_model,
                             position as i64,
+                            corpus_slug,
                             rid,
                         ],
                     );

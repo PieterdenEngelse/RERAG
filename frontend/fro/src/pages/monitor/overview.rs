@@ -24,6 +24,7 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 #[derive(Clone, Default)]
+#[allow(dead_code)]
 struct OverviewState {
     loading: bool,
     error: Option<String>,

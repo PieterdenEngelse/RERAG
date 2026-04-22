@@ -1,5 +1,5 @@
 use crate::api::{self, RagMemoryItem};
-use crate::app::ShowRagInfo;
+use crate::app::{ActiveCorpus, ShowRagInfo};
 use crate::components::BackendSelector;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
@@ -33,6 +33,17 @@ pub fn HomeSettingsBoards(
     selected_model: Signal<String>,
 ) -> Element {
     let mut show_no_tools_msg = use_signal(|| false);
+    let mut active_corpus = use_context::<Signal<ActiveCorpus>>();
+    let mut corpora = use_signal(|| Vec::<api::CorpusEntry>::new());
+    let mut show_corpus_info = use_signal(|| false);
+    // use_resource re-runs when active_corpus changes, refreshing the list
+    // so newly created corpora appear without a page reload.
+    let _corpus_res = use_resource(move || async move {
+        let _ = active_corpus.read().slug().to_string(); // reactive dep
+        if let Ok(list) = api::fetch_corpora().await {
+            corpora.set(list);
+        }
+    });
 
     let model_supports_tools = {
         let model = selected_model().to_lowercase();
@@ -380,9 +391,90 @@ pub fn HomeSettingsBoards(
                         }
                     }
 
-                    // Row 2: RAG Add's (own row)
+                    // Row 2: Corpus + RAG Add's side by side
                     div {
                         class: "flex justify-center gap-4 w-full",
+
+                        // Corpus board (same width as Runtime)
+                        div {
+                            class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
+                            style: "min-width: 12rem;",
+                            div {
+                                class: "flex items-center gap-2",
+                                label {
+                                    class: "font-medium text-center",
+                                    style: "color: white; font-size: 1.1rem;",
+                                    "Corpus"
+                                }
+                                button {
+                                    class: "shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80 pointer-events-auto",
+                                    style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                                    onclick: move |evt| { evt.stop_propagation(); show_corpus_info.set(true); },
+                                    title: "Info about corpora",
+                                    svg {
+                                        class: INFO_ICON_SVG_CLASS,
+                                        view_box: "0 0 20 20",
+                                        fill: "none",
+                                        stroke: "#026B7C",
+                                        stroke_width: "1.5",
+                                        circle { cx: "10", cy: "10", r: "9" }
+                                        line { x1: "10", y1: "8", x2: "10", y2: "14" }
+                                        circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
+                                    }
+                                }
+                            }
+                            if show_corpus_info() {
+                                div {
+                                    class: "fixed inset-0 z-50 flex items-center justify-center",
+                                    style: "background: rgba(0,0,0,0.6);",
+                                    onclick: move |_| show_corpus_info.set(false),
+                                    div {
+                                        class: "bg-base-200 rounded-2xl p-6 max-w-sm w-full mx-4 text-left",
+                                        onclick: move |evt| evt.stop_propagation(),
+                                        h3 { class: "text-lg font-bold mb-3", "Corpus" }
+                                        p { class: "text-sm text-gray-300 mb-3",
+                                            "A corpus is a named, isolated collection of documents. Each corpus has its own Tantivy index, upload directory, and vector store — so documents in one corpus never pollute search results in another."
+                                        }
+                                        h4 { class: "text-sm font-semibold text-gray-100 mb-1", "Active corpus" }
+                                        p { class: "text-sm text-gray-300 mb-3",
+                                            "The active corpus is the one used by the chat window on the home page for retrieval. It is highlighted with an orange border. To switch, create a second corpus and click \"Use\" on the one you want to activate. The selection persists in your browser session."
+                                        }
+                                        h4 { class: "text-sm font-semibold text-gray-100 mb-1", "default" }
+                                        p { class: "text-sm text-gray-300 mb-3",
+                                            "The default corpus always exists and cannot be deleted. It maps to the same Tantivy index and upload dir that existed before corpora were introduced, so existing documents are automatically in it."
+                                        }
+                                        h4 { class: "text-sm font-semibold text-gray-100 mb-1", "Slug rules" }
+                                        p { class: "text-sm text-gray-300 mb-4",
+                                            "Slugs are 1–64 characters, lowercase alphanumeric and hyphens, starting and ending with an alphanumeric character. The slug is permanent — rename only changes the display name."
+                                        }
+                                        button {
+                                            class: "btn btn-sm w-full",
+                                            style: "background-color:#7C2A02; border-color:#7C2A02; color:white;",
+                                            onclick: move |_| show_corpus_info.set(false),
+                                            "Got it"
+                                        }
+                                    }
+                                }
+                            }
+                            select {
+                                class: "select select-sm select-bordered bg-gray-700 text-gray-200 w-full",
+                                value: active_corpus.read().slug().to_string(),
+                                onchange: move |evt| active_corpus.with_mut(|ac| ac.0 = evt.value()),
+                                for corpus in corpora.read().clone() {
+                                    option {
+                                        value: "{corpus.slug}",
+                                        selected: corpus.slug == active_corpus.read().slug(),
+                                        "{corpus.slug}"
+                                    }
+                                }
+                            }
+                            p {
+                                class: "text-xs text-gray-400 mt-1",
+                                "Active: {active_corpus.read().slug()}"
+                            }
+                        }
+
+                        // RAG Add's board
                         div {
                             class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
                             style: "min-width: calc(12rem + 2cm); padding-left: calc(1.25rem + 1cm); padding-right: calc(1.25rem + 1cm);",

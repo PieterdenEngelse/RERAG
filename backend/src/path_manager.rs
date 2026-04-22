@@ -114,6 +114,39 @@ impl PathManager {
     pub fn cache_path(&self, key: &str) -> PathBuf {
         self.cache_dir.join(key)
     }
+
+    /// Tantivy index directory for a named corpus.
+    /// The 'default' corpus uses the legacy `index/tantivy` path for zero-migration.
+    /// All other corpora land in `index/{slug}`.
+    pub fn corpus_index_dir(&self, slug: &str) -> PathBuf {
+        let p = if slug == "default" {
+            self.index_dir.join("tantivy")
+        } else {
+            self.index_dir.join(slug)
+        };
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    /// Upload directory for a named corpus (absolute path).
+    /// All corpora store documents at `{data_dir}/corpora/{slug}/documents/`.
+    pub fn corpus_upload_dir(&self, slug: &str) -> PathBuf {
+        let p = self.data_dir.join("corpora").join(slug).join("documents");
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    /// Vector store JSON file for a named corpus.
+    /// The 'default' corpus reuses the existing `data/vectors.json` for zero-migration.
+    pub fn corpus_vector_file(&self, slug: &str) -> PathBuf {
+        if slug == "default" {
+            self.data_dir.join("vectors.json")
+        } else {
+            let dir = self.data_dir.join("corpora").join(slug);
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join("vectors.json")
+        }
+    }
 }
 
 impl Default for PathManager {

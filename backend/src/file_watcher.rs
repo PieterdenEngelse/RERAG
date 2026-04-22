@@ -21,8 +21,12 @@ pub struct FileWatcherConfig {
     pub enabled: bool,
     /// Debounce duration to avoid processing the same file multiple times
     pub debounce_ms: u64,
-    /// Chunker mode to use for indexing
+    /// Global fallback chunker mode (used when no per-corpus override is set)
     pub chunker_mode: ChunkerMode,
+    /// Corpus slug this watcher is responsible for
+    pub corpus_slug: String,
+    /// Path to the documents SQLite DB (for per-corpus chunker lookup)
+    pub db_path: String,
 }
 
 impl FileWatcherConfig {
@@ -30,12 +34,14 @@ impl FileWatcherConfig {
         Self {
             enabled: std::env::var("FILE_WATCHER_ENABLED")
                 .map(|v| v.to_lowercase() == "true" || v == "1")
-                .unwrap_or(true), // Enabled by default
+                .unwrap_or(true),
             debounce_ms: std::env::var("FILE_WATCHER_DEBOUNCE_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500),
             chunker_mode: ChunkerMode::from_env(),
+            corpus_slug: "default".to_string(),
+            db_path: String::new(),
         }
     }
 }
@@ -165,8 +171,21 @@ async fn run_watcher(
             // Index the file
             match retriever.lock() {
                 Ok(mut ret) => {
-                    let chunker = index::default_chunker(config.chunker_mode);
-                    match index::index_file(&mut *ret, &path, config.chunker_mode, chunker.as_ref())
+                    // Look up per-corpus chunker mode; fall back to global.
+                    let effective_mode = if !config.db_path.is_empty() {
+                        rusqlite::Connection::open(&config.db_path)
+                            .ok()
+                            .and_then(|conn| {
+                                crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug).ok()
+                            })
+                            .and_then(|s| s.chunker_mode)
+                            .and_then(|m| m.parse::<ChunkerMode>().ok())
+                            .unwrap_or(config.chunker_mode)
+                    } else {
+                        config.chunker_mode
+                    };
+                    let chunker = index::default_chunker(effective_mode);
+                    match index::index_file(&mut *ret, &path, effective_mode, chunker.as_ref(), &config.corpus_slug)
                     {
                         Ok(chunks) => {
                             info!(

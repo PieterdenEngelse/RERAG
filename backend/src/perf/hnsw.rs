@@ -9,6 +9,7 @@
 //! - Memory: ~1.5x the vector data
 //! - Recall: >95% at default settings
 
+use crate::config::DistanceMetric;
 use instant_distance::{Builder, HnswMap, Search};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,55 +17,73 @@ use tracing::{debug, info};
 
 /// HNSW Index for fast approximate nearest neighbor search
 pub struct HnswIndex {
-    /// The HNSW graph structure
     map: Option<HnswMap<Point, String>>,
-    /// Document ID to vector mapping for retrieval
     doc_vectors: HashMap<String, Vec<f32>>,
-    /// Dimension of vectors
     dimension: usize,
-    /// Whether the index needs rebuilding
     dirty: bool,
+    pub metric: DistanceMetric,
+    pub ef_construction: usize,
+    pub ef_search: usize,
 }
 
-/// Point wrapper for instant-distance
+/// Point wrapper — carries the distance metric so instant-distance dispatches correctly.
 #[derive(Clone)]
-struct Point(Vec<f32>);
+struct Point {
+    data: Vec<f32>,
+    metric: DistanceMetric,
+}
 
 impl instant_distance::Point for Point {
     fn distance(&self, other: &Self) -> f32 {
-        // Use cosine distance (1 - cosine_similarity)
-        let dot: f32 = self.0.iter().zip(other.0.iter()).map(|(a, b)| a * b).sum();
-        let norm_a: f32 = self.0.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = other.0.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm_a == 0.0 || norm_b == 0.0 {
-            1.0
-        } else {
-            1.0 - (dot / (norm_a * norm_b))
+        match self.metric {
+            DistanceMetric::Cosine => {
+                let dot: f32 = self.data.iter().zip(other.data.iter()).map(|(a, b)| a * b).sum();
+                let na: f32 = self.data.iter().map(|x| x * x).sum::<f32>().sqrt();
+                let nb: f32 = other.data.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if na == 0.0 || nb == 0.0 { 1.0 } else { 1.0 - (dot / (na * nb)) }
+            }
+            DistanceMetric::DotProduct => {
+                let dot: f32 = self.data.iter().zip(other.data.iter()).map(|(a, b)| a * b).sum();
+                1.0 - dot // distance = 1 - similarity
+            }
+            DistanceMetric::Euclidean => {
+                self.data.iter().zip(other.data.iter())
+                    .map(|(a, b)| (a - b) * (a - b))
+                    .sum::<f32>()
+                    .sqrt()
+            }
         }
     }
 }
 
 impl HnswIndex {
-    /// Create a new empty HNSW index
     pub fn new(dimension: usize) -> Self {
+        Self::with_params(dimension, DistanceMetric::Cosine, 100, 100)
+    }
+
+    pub fn with_params(
+        dimension: usize,
+        metric: DistanceMetric,
+        ef_construction: usize,
+        ef_search: usize,
+    ) -> Self {
         Self {
             map: None,
             doc_vectors: HashMap::new(),
             dimension,
             dirty: false,
+            metric,
+            ef_construction,
+            ef_search,
         }
     }
 
-    /// Create index from existing vectors
     pub fn from_vectors(vectors: &[(String, Vec<f32>)]) -> Self {
         let dimension = vectors.first().map(|(_, v)| v.len()).unwrap_or(384);
         let mut index = Self::new(dimension);
-
         for (doc_id, vector) in vectors {
             index.add(doc_id.clone(), vector.clone());
         }
-
         index.build();
         index
     }
@@ -99,15 +118,19 @@ impl HnswIndex {
             "Building HNSW index"
         );
 
+        let metric = self.metric;
         let points: Vec<Point> = self
             .doc_vectors
             .values()
-            .map(|vec| Point(vec.clone()))
+            .map(|vec| Point { data: vec.clone(), metric })
             .collect();
 
         let values: Vec<String> = self.doc_vectors.keys().cloned().collect();
 
-        let hnsw = Builder::default().build(points, values);
+        let hnsw = Builder::default()
+            .ef_construction(self.ef_construction)
+            .ef_search(self.ef_search)
+            .build(points, values);
         self.map = Some(hnsw);
         self.dirty = false;
 
@@ -132,7 +155,7 @@ impl HnswIndex {
             None => return Vec::new(),
         };
 
-        let query_point = Point(query.to_vec());
+        let query_point = Point { data: query.to_vec(), metric: self.metric };
         let mut search = Search::default();
 
         let results: Vec<(String, f32)> = map

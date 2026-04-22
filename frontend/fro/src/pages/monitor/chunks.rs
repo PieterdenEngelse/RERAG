@@ -37,8 +37,10 @@ pub fn MonitorChunks() -> Element {
     let mut show_info = use_signal(|| false);
     let mut show_shimmytok = use_signal(|| false);
     let mut show_canon_info = use_signal(|| false);
+    let mut show_file_norm_info = use_signal(|| false);
     let mut show_mode_info = use_signal(|| false);
     let mut show_golden_info = use_signal(|| false);
+    let mut show_seed_info = use_signal(|| false);
     let mut show_recapture_info = use_signal(|| false);
     let mut recapture_msg = use_signal(|| None::<String>);
     let mut error = use_signal(|| None::<String>);
@@ -401,7 +403,7 @@ pub fn MonitorChunks() -> Element {
 
                         // Picker
                         div { class: "p-3 rounded bg-gray-900/40 border border-gray-700 mb-3",
-                            div { class: "flex items-center gap-2 mb-2",
+                            div { class: "flex items-center gap-2 mb-3",
                                 h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide", "Candidate" }
                                 button {
                                     class: "w-5 h-5 min-w-5 min-h-5 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80",
@@ -419,62 +421,124 @@ pub fn MonitorChunks() -> Element {
                                     }
                                 }
                             }
-                            div { class: "flex items-center gap-4 mb-2 text-sm text-gray-300",
-                                label { class: "flex items-center gap-1 cursor-pointer",
+
+                            // Runtime candidates
+                            p { class: "text-xs text-gray-500 uppercase tracking-wide mb-2", "Runtime" }
+                            div { class: "flex flex-col gap-2 mb-4",
+                                // Ollama
+                                div { class: "flex items-stretch gap-2",
+                                    label { class: "flex items-center gap-2 w-24 shrink-0",
+                                        input {
+                                            r#type: "radio",
+                                            name: "candidate-kind",
+                                            checked: kind == "ollama",
+                                            onchange: move |_| candidate_kind.set("ollama"),
+                                        }
+                                        span { class: "text-sm text-gray-300", "Ollama" }
+                                    }
+                                    input {
+                                        r#type: "text",
+                                        class: "input input-sm bg-gray-800 text-gray-200 border-gray-600 flex-1 font-mono text-xs",
+                                        disabled: kind != "ollama",
+                                        placeholder: "phi:latest",
+                                        value: if kind == "ollama" { "{input_text}" } else { "" },
+                                        oninput: move |e| candidate_input.set(e.value()),
+                                    }
+                                    button {
+                                        class: "btn btn-sm bg-blue-700 hover:bg-blue-600 text-white border-blue-600",
+                                        disabled: is_loading || kind != "ollama" || input_text.trim().is_empty() || golden_size == 0,
+                                        onclick: move |_| async move {
+                                            let trimmed = candidate_input().trim().to_string();
+                                            if trimmed.is_empty() { return; }
+                                            diff_loading.set(true);
+                                            diff_error.set(None);
+                                            diff_report.set(None);
+                                            expanded_entry.set(None);
+                                            match api::compute_tokenizer_diff(None, Some(trimmed), false, Some(50)).await {
+                                                Ok(r) => diff_report.set(Some(r)),
+                                                Err(e) => diff_error.set(Some(e)),
+                                            }
+                                            diff_loading.set(false);
+                                        },
+                                        if is_loading && kind == "ollama" { "Running…" } else { "Run diff" }
+                                    }
+                                }
+                                // llama.cpp
+                                div { class: "flex items-center gap-2",
+                                    label { class: "flex items-center gap-2 w-24 shrink-0",
+                                        input {
+                                            r#type: "radio",
+                                            name: "candidate-kind",
+                                            checked: kind == "llama_cpp",
+                                            onchange: move |_| {
+                                                candidate_kind.set("llama_cpp");
+                                                candidate_input.set(String::new());
+                                            },
+                                        }
+                                        span { class: "text-sm text-gray-300", "llama.cpp" }
+                                    }
+                                    span { class: "text-xs text-gray-500 flex-1", "Resolved from ~/.config/ag/llama-server.env" }
+                                    button {
+                                        class: "btn btn-sm bg-blue-700 hover:bg-blue-600 text-white border-blue-600",
+                                        disabled: is_loading || kind != "llama_cpp" || golden_size == 0,
+                                        onclick: move |_| async move {
+                                            diff_loading.set(true);
+                                            diff_error.set(None);
+                                            diff_report.set(None);
+                                            expanded_entry.set(None);
+                                            match api::compute_tokenizer_diff(None, None, true, Some(50)).await {
+                                                Ok(r) => diff_report.set(Some(r)),
+                                                Err(e) => diff_error.set(Some(e)),
+                                            }
+                                            diff_loading.set(false);
+                                        },
+                                        if is_loading && kind == "llama_cpp" { "Running…" } else { "Run diff" }
+                                    }
+                                }
+                            }
+
+                            // GGUF file — advanced
+                            p { class: "text-xs text-gray-500 uppercase tracking-wide mb-2", "GGUF file" }
+                            div { class: "flex items-stretch gap-2",
+                                label { class: "flex items-center gap-2 w-24 shrink-0",
                                     input {
                                         r#type: "radio",
                                         name: "candidate-kind",
                                         checked: kind == "path",
                                         onchange: move |_| candidate_kind.set("path"),
                                     }
-                                    span { "GGUF path" }
+                                    span { class: "text-sm text-gray-300", "Path" }
                                 }
-                                label { class: "flex items-center gap-1 cursor-pointer",
-                                    input {
-                                        r#type: "radio",
-                                        name: "candidate-kind",
-                                        checked: kind == "ollama",
-                                        onchange: move |_| candidate_kind.set("ollama"),
-                                    }
-                                    span { "Ollama model" }
-                                }
-                            }
-                            div { class: "flex items-stretch gap-2",
                                 input {
                                     r#type: "text",
                                     class: "input input-sm bg-gray-800 text-gray-200 border-gray-600 flex-1 font-mono text-xs",
-                                    placeholder: if kind == "path" { "/absolute/path/to/model.gguf" } else { "phi:latest" },
-                                    value: "{input_text}",
+                                    disabled: kind != "path",
+                                    placeholder: "/absolute/path/to/model.gguf",
+                                    value: if kind == "path" { "{input_text}" } else { "" },
                                     oninput: move |e| candidate_input.set(e.value()),
                                 }
                                 button {
                                     class: "btn btn-sm bg-blue-700 hover:bg-blue-600 text-white border-blue-600",
-                                    disabled: is_loading || input_text.trim().is_empty() || golden_size == 0,
+                                    disabled: is_loading || kind != "path" || input_text.trim().is_empty() || golden_size == 0,
                                     onclick: move |_| async move {
                                         let trimmed = candidate_input().trim().to_string();
-                                        if trimmed.is_empty() {
-                                            return;
-                                        }
+                                        if trimmed.is_empty() { return; }
                                         diff_loading.set(true);
                                         diff_error.set(None);
                                         diff_report.set(None);
                                         expanded_entry.set(None);
-                                        let (path, ollama) = if candidate_kind() == "path" {
-                                            (Some(trimmed), None)
-                                        } else {
-                                            (None, Some(trimmed))
-                                        };
-                                        match api::compute_tokenizer_diff(path, ollama, Some(50)).await {
+                                        match api::compute_tokenizer_diff(Some(trimmed), None, false, Some(50)).await {
                                             Ok(r) => diff_report.set(Some(r)),
                                             Err(e) => diff_error.set(Some(e)),
                                         }
                                         diff_loading.set(false);
                                     },
-                                    if is_loading { "Running…" } else { "Run diff" }
+                                    if is_loading && kind == "path" { "Running…" } else { "Run diff" }
                                 }
                             }
+
                             if golden_size == 0 {
-                                p { class: "text-xs text-yellow-300 mt-2",
+                                p { class: "text-xs text-yellow-300 mt-3",
                                     "The golden sample is empty. Ingest a document first so there's a baseline to diff against."
                                 }
                             }
@@ -653,12 +717,15 @@ pub fn MonitorChunks() -> Element {
                                         swap_loading.set(true);
                                         swap_msg.set(Some("Swapping tokenizer…".into()));
                                         let trimmed = candidate_input().trim().to_string();
-                                        let (path, ollama) = if candidate_kind() == "path" {
-                                            (Some(trimmed), None)
+                                        let kind_now = candidate_kind();
+                                        let (path, ollama, llama_cpp) = if kind_now == "path" {
+                                            (Some(trimmed), None, false)
+                                        } else if kind_now == "ollama" {
+                                            (None, Some(trimmed), false)
                                         } else {
-                                            (None, Some(trimmed))
+                                            (None, None, true)
                                         };
-                                        match api::swap_tokenizer(path, ollama).await {
+                                        match api::swap_tokenizer(path, ollama, llama_cpp).await {
                                             Ok(_) => swap_msg.set(Some(
                                                 "Swap accepted. The live tokenizer is now the candidate. Re-capture the golden sample so the new baseline reflects this tokenizer.".into(),
                                             )),
@@ -944,8 +1011,8 @@ pub fn MonitorChunks() -> Element {
                         table { class: "table table-xs w-full text-gray-300",
                             thead {
                                 tr {
-                                    th { class: "text-gray-400", "Call site" }
-                                    th { class: "text-gray-400 text-right", "Calls" }
+                                    th { class: "text-gray-400", "Step" }
+                                    th { class: "text-gray-400 text-right", "Times run" }
                                     th { class: "text-gray-400 text-right", "Chars in" }
                                     th { class: "text-gray-400 text-right", "Chars out" }
                                     th { class: "text-gray-400 text-right", "Δ%" }
@@ -954,11 +1021,11 @@ pub fn MonitorChunks() -> Element {
                             tbody {
                                 {
                                     let rows: &[(&str, &api::CallSiteStats)] = &[
-                                        ("store · ingestion", &cs.store_ingestion),
-                                        ("embed · ingestion", &cs.embed_ingestion),
-                                        ("index · ingestion", &cs.index_ingestion),
-                                        ("embed · query",     &cs.embed_query),
-                                        ("index · query",     &cs.index_query),
+                                        ("save · upload",            &cs.store_ingestion),
+                                        ("vectorise · upload",       &cs.embed_ingestion),
+                                        ("keyword search · upload",  &cs.index_ingestion),
+                                        ("vectorise · search",       &cs.embed_query),
+                                        ("keyword search · search",  &cs.index_query),
                                     ];
                                     rsx! {
                                         for (label, site) in rows.iter() {
@@ -992,41 +1059,90 @@ pub fn MonitorChunks() -> Element {
                             }
                         }
                     }
-                    // Per-file store records
+                    // Per-file normalization records
                     if !cs.store_records.is_empty() {
-                        div { class: "mt-4",
-                            p { class: "text-xs text-gray-500 mb-2", "Recent files (store normalization)" }
-                            div { class: "overflow-x-auto",
-                                table { class: "table table-xs w-full text-gray-300",
-                                    thead {
-                                        tr {
-                                            th { class: "text-gray-400", "File" }
-                                            th { class: "text-gray-400 text-right", "Chars in" }
-                                            th { class: "text-gray-400 text-right", "Chars out" }
-                                            th { class: "text-gray-400 text-right", "Δ%" }
+                        {
+                            let delta = |i: u64, o: u64| -> f64 {
+                                if i > 0 { (i as i64 - o as i64) as f64 / i as f64 * 100.0 } else { 0.0 }
+                            };
+                            let delta_fmt = |pct: f64| -> (&'static str, String) {
+                                if pct.abs() < 0.1 { ("text-gray-400", format!("{:+.1}%", pct)) }
+                                else if pct > 0.0   { ("text-yellow-400", format!("{:+.1}%", pct)) }
+                                else                { ("text-green-400",  format!("{:+.1}%", pct)) }
+                            };
+                            // Show embed/index columns only when divergence from store exceeds 0.5% for any file.
+                            let show_detail = cs.store_records.iter().any(|r| {
+                                let s = delta(r.chars_in, r.chars_out);
+                                let e = delta(r.embed_chars_in, r.embed_chars_out);
+                                let ix = delta(r.index_chars_in, r.index_chars_out);
+                                (e - s).abs() > 0.5 || (ix - s).abs() > 0.5
+                            });
+                            rsx! {
+                                div { class: "mt-4",
+                                    div { class: "flex items-center gap-2 mb-2",
+                                        p { class: "text-xs text-gray-500",
+                                            if show_detail { "Recent files — save / vectorise / keyword-search" }
+                                            else { "Recent files" }
+                                        }
+                                        button {
+                                            class: "w-4 h-4 min-w-4 min-h-4 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80",
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_file_norm_info.set(true),
+                                            title: "About per-file normalization columns",
+                                            svg {
+                                                class: "w-3 h-3 text-white",
+                                                view_box: "0 0 20 20",
+                                                fill: "none",
+                                                stroke: "currentColor",
+                                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                            }
                                         }
                                     }
-                                    tbody {
-                                        for rec in cs.store_records.iter() {
-                                            {
-                                                let delta_pct = if rec.chars_in > 0 {
-                                                    let diff = rec.chars_in as i64 - rec.chars_out as i64;
-                                                    diff as f64 / rec.chars_in as f64 * 100.0
-                                                } else { 0.0 };
-                                                let (delta_str, delta_cls) = if delta_pct.abs() < 0.1 {
-                                                    (format!("{:+.1}%", delta_pct), "text-gray-400")
-                                                } else if delta_pct > 0.0 {
-                                                    (format!("{:+.1}%", delta_pct), "text-yellow-400")
-                                                } else {
-                                                    (format!("{:+.1}%", delta_pct), "text-green-400")
-                                                };
-                                                let file_short = rec.file.rsplit('/').next().unwrap_or(&rec.file);
-                                                rsx! {
-                                                    tr { class: "hover:bg-gray-800/50",
-                                                        td { class: "max-w-48 truncate text-xs", title: "{rec.file}", "{file_short}" }
-                                                        td { class: "text-right font-mono text-xs", "{rec.chars_in}" }
-                                                        td { class: "text-right font-mono text-xs", "{rec.chars_out}" }
-                                                        td { class: "text-right font-mono text-xs {delta_cls}", "{delta_str}" }
+                                    div { class: "overflow-x-auto",
+                                        table { class: "table table-xs w-full text-gray-300",
+                                            thead {
+                                                tr {
+                                                    th { class: "text-gray-400", "File" }
+                                                    if show_detail {
+                                                        th { class: "text-gray-400 text-right", "Save Δ%" }
+                                                        th { class: "text-gray-400 text-right", "Vectorise Δ%" }
+                                                        th { class: "text-gray-400 text-right", "Keyword Δ%" }
+                                                    } else {
+                                                        th { class: "text-gray-400 text-right", "Chars in" }
+                                                        th { class: "text-gray-400 text-right", "Chars out" }
+                                                        th { class: "text-gray-400 text-right", "Δ%" }
+                                                    }
+                                                }
+                                            }
+                                            tbody {
+                                                for rec in cs.store_records.iter() {
+                                                    {
+                                                        let file_short = rec.file.rsplit('/').next().unwrap_or(&rec.file).to_string();
+                                                        let file_full = rec.file.clone();
+                                                        let s_pct = delta(rec.chars_in, rec.chars_out);
+                                                        let e_pct = delta(rec.embed_chars_in, rec.embed_chars_out);
+                                                        let ix_pct = delta(rec.index_chars_in, rec.index_chars_out);
+                                                        let (s_cls, s_str) = delta_fmt(s_pct);
+                                                        let (e_cls, e_str) = delta_fmt(e_pct);
+                                                        let (ix_cls, ix_str) = delta_fmt(ix_pct);
+                                                        let chars_in = rec.chars_in;
+                                                        let chars_out = rec.chars_out;
+                                                        rsx! {
+                                                            tr { class: "hover:bg-gray-800/50",
+                                                                td { class: "max-w-48 truncate text-xs", title: "{file_full}", "{file_short}" }
+                                                                if show_detail {
+                                                                    td { class: "text-right font-mono text-xs {s_cls}", "{s_str}" }
+                                                                    td { class: "text-right font-mono text-xs {e_cls}", "{e_str}" }
+                                                                    td { class: "text-right font-mono text-xs {ix_cls}", "{ix_str}" }
+                                                                } else {
+                                                                    td { class: "text-right font-mono text-xs", "{chars_in}" }
+                                                                    td { class: "text-right font-mono text-xs", "{chars_out}" }
+                                                                    td { class: "text-right font-mono text-xs {s_cls}", "{s_str}" }
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1096,6 +1212,53 @@ pub fn MonitorChunks() -> Element {
                 }
             }
 
+            // Per-file normalization columns info modal
+            if show_file_norm_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_file_norm_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-[580px] max-h-[92vh] flex flex-col shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between mb-4 shrink-0",
+                            h2 { class: "text-lg font-semibold text-gray-100", "Per-file Normalization" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                onclick: move |_| show_file_norm_info.set(false),
+                                "x"
+                            }
+                        }
+                        div { class: "text-sm text-gray-300 space-y-3 overflow-y-auto",
+                            p { "Each uploaded document is cleaned up at three stages before it enters the search engine. This table tracks how much each stage shrinks the text." }
+                            p { class: "font-semibold text-gray-200", "The three stages" }
+                            p {
+                                span { class: "font-mono text-gray-100", "save " }
+                                "— Applied once to the full extracted text before it is split into chunks. Preserves the text as-is for display. Near-zero Δ% is normal."
+                            }
+                            p {
+                                span { class: "font-mono text-gray-100", "vectorise " }
+                                "— Applied to each chunk before converting it to a vector for semantic search. Collapses compatibility characters (e.g. the ligature "
+                                span { class: "font-mono text-gray-100", "ﬁ → fi" }
+                                ", fullwidth letters). A higher Δ% than save means the document contains such characters."
+                            }
+                            p {
+                                span { class: "font-mono text-gray-100", "keyword search " }
+                                "— Applied to each chunk before adding it to the keyword search index. Also normalises punctuation. Usually slightly higher Δ% than vectorise."
+                            }
+                            p { class: "font-semibold text-gray-200", "When the extra columns appear" }
+                            p {
+                                "The vectorise and keyword-search columns are hidden when all files show less than "
+                                span { class: "font-mono text-gray-100", "0.5%" }
+                                " difference between the save Δ% and the other two. For clean documents that threshold is never crossed — the extra columns would just be noise. For scanned PDFs, documents with typographic ligatures, or East Asian text, the difference is real and the columns expand automatically."
+                            }
+                            p { class: "text-xs text-gray-500 mt-2",
+                                "A positive Δ% means characters were collapsed (text got shorter). A negative Δ% means the text got longer — rare, but possible with some character forms."
+                            }
+                        }
+                    }
+                }
+            }
+
             // Canon stats info modal
             if show_canon_info() {
                 div {
@@ -1113,37 +1276,37 @@ pub fn MonitorChunks() -> Element {
                             }
                         }
                         div { class: "text-sm text-gray-300 space-y-3",
-                            p { "AG applies three levels of Unicode normalization depending on where text is used:" }
+                            p { "AG cleans up text differently depending on what it will be used for. The table shows how much each cleaning step shrinks the text." }
                             div { class: "overflow-x-auto",
                                 table { class: "table table-xs w-full text-gray-300 mt-2",
                                     thead {
                                         tr {
-                                            th { class: "text-gray-400", "Target" }
+                                            th { class: "text-gray-400", "Step" }
                                             th { class: "text-gray-400", "Unicode" }
-                                            th { class: "text-gray-400", "Use" }
+                                            th { class: "text-gray-400", "When" }
                                         }
                                     }
                                     tbody {
                                         tr {
-                                            td { class: "font-mono", "Store" }
+                                            td { class: "font-mono", "save" }
                                             td { "NFC" }
-                                            td { class: "text-gray-400 text-xs", "User-visible text — preserves typography" }
+                                            td { class: "text-gray-400 text-xs", "Saving text for display — preserves typography" }
                                         }
                                         tr {
-                                            td { class: "font-mono", "Embed" }
+                                            td { class: "font-mono", "vectorise" }
                                             td { "NFKC" }
-                                            td { class: "text-gray-400 text-xs", "Embeddings / NER — strips compatibility variants" }
+                                            td { class: "text-gray-400 text-xs", "Converting to vectors for semantic search — strips compatibility variants" }
                                         }
                                         tr {
-                                            td { class: "font-mono", "Index" }
+                                            td { class: "font-mono", "keyword search" }
                                             td { "NFKC + punct" }
-                                            td { class: "text-gray-400 text-xs", "BM25 field — also canonicalises punctuation" }
+                                            td { class: "text-gray-400 text-xs", "Building the keyword search index — also normalises punctuation" }
                                         }
                                     }
                                 }
                             }
-                            p { "The Δ% column shows how much the normalizer shrinks text. A positive Δ means some characters were collapsed (e.g. compatibility ligatures like \"ﬁ\" → \"fi\"). Near-zero Δ is normal for clean UTF-8 input." }
-                            p { "Store records show the last 50 ingested files so you can spot encoding outliers." }
+                            p { "The Δ% column shows how much the cleaning step shrinks the text. A positive Δ means some characters were collapsed (e.g. the ligature \"ﬁ\" → \"fi\"). Near-zero Δ is normal for clean documents." }
+                            p { "The file table below shows the last 50 uploaded files so you can spot documents with unusual encoding." }
                         }
                     }
                 }
@@ -1237,7 +1400,15 @@ pub fn MonitorChunks() -> Element {
                             }
                         }
                         div { class: "text-sm text-gray-300 space-y-3 overflow-y-auto",
-                            p { "The golden sample is a stable, seeded (a fixed initial value for the random generator, so the selection is repeatable) random subset of your actual corpus chunks. It serves as the baseline for comparing tokenizers — when you want to evaluate a candidate tokenizer, AG re-tokenizes these exact chunks with it and reports how the output drifts from this baseline." }
+                            p {
+                                "The golden sample is a stable, "
+                                span {
+                                    class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
+                                    onclick: move |_| show_seed_info.set(true),
+                                    "seeded"
+                                }
+                                " (a fixed initial value for the random generator, so the selection is repeatable) random subset of your actual corpus chunks. It serves as the baseline for comparing tokenizers — when you want to evaluate a candidate tokenizer, AG re-tokenizes these exact chunks with it and reports how the output drifts from this baseline."
+                            }
                             p { class: "font-semibold text-gray-200", "How chunks are selected" }
                             p { "Reservoir sampling: every chunk produced by an ingest is offered to the reservoir, which keeps the first N (capacity) and then probabilistically replaces older entries as new ones arrive. The result is a uniform random sample over all chunks the system has ever seen, without needing to know the corpus size in advance." }
                             p { "The seed is stored alongside the sample so the selection is reproducible. The seed rotates on explicit re-capture (so a re-capture doesn't deterministically reproduce the prior selection)." }
@@ -1252,6 +1423,53 @@ pub fn MonitorChunks() -> Element {
                             p { "The sample fills opportunistically as you ingest. On a fresh install with no ingests, the sample is empty. On an existing corpus that has been quiet for a while, the sample reflects whatever was ingested up to that point — re-capture won't refill it until you ingest again." }
                             p { class: "text-xs text-gray-400 mt-2",
                                 "Operational consequence: a small or empty sample means the diff engine has less data to compare against. The diff is still valid, just noisier. Aim for at least 50 chunks before trusting a tokenizer comparison."
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Seed explanation modal
+            if show_seed_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_seed_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-[620px] max-h-[92vh] flex flex-col shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between mb-4 shrink-0",
+                            h2 { class: "text-lg font-semibold text-gray-100", "Why a fixed seed?" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                onclick: move |_| show_seed_info.set(false),
+                                "x"
+                            }
+                        }
+                        div { class: "text-sm text-gray-300 space-y-3 overflow-y-auto",
+                            p { "Without a seed, every time you restart the server and re-ingest the same documents, the reservoir could pick a completely different 100 chunks as the \"golden sample\" — making comparisons meaningless because you'd be comparing two different baselines." }
+                            p { "With a fixed seed, the same chunk at the same position in the corpus always gets the same keep/replace decision. The sample is stable across restarts." }
+                            p { class: "font-semibold text-gray-200", "How the seed is determined" }
+                            p {
+                                "It's a hardcoded constant: "
+                                span { class: "font-mono text-gray-100", "DEFAULT_SEED = 0xA60D5A_4_AEu64" }
+                                ", written directly into the source. There's no derivation — it's just a fixed hex literal baked at compile time."
+                            }
+                            p {
+                                "That value is inserted into the "
+                                span { class: "font-mono text-gray-100", "golden_sample_meta" }
+                                " table on first init ("
+                                span { class: "font-mono text-gray-100", "INSERT OR IGNORE" }
+                                "), so it persists in SQLite across restarts. But the constant itself was chosen once and never changes unless you edit the source or override via a future env var (there's no "
+                                span { class: "font-mono text-gray-100", "GOLDEN_SAMPLE_SEED" }
+                                " env var — only "
+                                span { class: "font-mono text-gray-100", "GOLDEN_SAMPLE_SIZE" }
+                                " is configurable)."
+                            }
+                            p { class: "font-semibold text-gray-200", "The seed's narrow role" }
+                            p {
+                                "At position n, the per-chunk RNG state is "
+                                span { class: "font-mono text-gray-100", "seed.wrapping_add(n).wrapping_add(1)" }
+                                ", making the reservoir decision for each chunk position reproducible across restarts without persisting RNG state in the DB."
                             }
                         }
                     }

@@ -227,6 +227,11 @@ pub struct Retriever {
     use_io_uring: bool,
     /// Content lookup: doc_id -> content for O(1) vector result resolution
     doc_id_to_content: HashMap<String, String>,
+    // Per-corpus settings
+    pub distance_metric: crate::config::DistanceMetric,
+    pub hnsw_ef_construction: usize,
+    pub hnsw_ef_search: usize,
+    pub pq_subvectors: usize,
 }
 
 /// SIMD-accelerated cosine similarity (4-8x faster than scalar)
@@ -306,6 +311,7 @@ pub async fn reindex_atomic(
         upload_dir,
         crate::config::ChunkerMode::Fixed,
         chunker.as_ref(),
+        "default",
     )
     .await
     .map_err(|e| RetrieverError::IndexError(e))?;
@@ -559,6 +565,10 @@ impl Retriever {
             // Phase 22: io_uring availability
             use_io_uring: crate::perf::io_uring::is_available(),
             doc_id_to_content: HashMap::new(),
+            distance_metric: crate::config::DistanceMetric::Cosine,
+            hnsw_ef_construction: 100,
+            hnsw_ef_search: 100,
+            pq_subvectors: 48,
         };
 
         // Now load from the CORRECT path - use auto-detection for rkyv/JSON
@@ -994,19 +1004,32 @@ impl Retriever {
             }
         }
 
-        // Fallback to linear scan with SIMD-accelerated cosine similarity
+        // Fallback to linear scan using the per-corpus distance metric.
+        let metric = self.distance_metric;
+        let score_fn = move |a: &[f32], b: &[f32]| -> f32 {
+            match metric {
+                crate::config::DistanceMetric::Cosine => cosine_similarity(a, b),
+                crate::config::DistanceMetric::DotProduct => {
+                    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+                }
+                crate::config::DistanceMetric::Euclidean => {
+                    let dist: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt();
+                    1.0 / (1.0 + dist) // convert to similarity
+                }
+            }
+        };
         let use_parallel = self.vectors.len() > 1000;
         let mut similarities: Vec<(usize, f32)> = if use_parallel {
             self.vectors
                 .par_iter()
                 .enumerate()
-                .map(|(idx, vec)| (idx, cosine_similarity(query_vector, vec)))
+                .map(|(idx, vec)| (idx, score_fn(query_vector, vec)))
                 .collect()
         } else {
             self.vectors
                 .iter()
                 .enumerate()
-                .map(|(idx, vec)| (idx, cosine_similarity(query_vector, vec)))
+                .map(|(idx, vec)| (idx, score_fn(query_vector, vec)))
                 .collect()
         };
         similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1020,7 +1043,12 @@ impl Retriever {
         }
         info!("Building HNSW index for {} vectors...", self.vectors.len());
         let dim = self.vectors.first().map(|v| v.len()).unwrap_or(384);
-        let mut hnsw = crate::perf::hnsw::HnswIndex::new(dim);
+        let mut hnsw = crate::perf::hnsw::HnswIndex::with_params(
+            dim,
+            self.distance_metric,
+            self.hnsw_ef_construction,
+            self.hnsw_ef_search,
+        );
 
         // Add all vectors with their doc_ids
         for (doc_id, &idx) in &self.doc_id_to_vector_idx {
@@ -2683,8 +2711,7 @@ impl Retriever {
             })
             .collect();
 
-        // Build PQ index with 48 subvectors for 384-dim vectors
-        let pq = crate::perf::product_quantization::PQIndex::build(&vectors_with_ids, 48);
+        let pq = crate::perf::product_quantization::PQIndex::build(&vectors_with_ids, self.pq_subvectors);
 
         self.pq_index = Some(pq);
         info!("PQ index built successfully");

@@ -1,0 +1,1 @@
+on http://localhost:1789/monitor there is an info button on file i/o.  i want it to open http://localhost:1789/docu/index/io-uring

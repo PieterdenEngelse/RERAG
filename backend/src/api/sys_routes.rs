@@ -842,38 +842,40 @@ pub fn reload_token_counter() {
 pub struct TokenizerSwapRequest {
     pub candidate_path: Option<String>,
     pub candidate_ollama_model: Option<String>,
+    pub candidate_llama_cpp: Option<bool>,
 }
 
 /// POST /sys/tokenizer/swap
-/// Apply an explicit GGUF (by path or Ollama model) to the live token counter
-/// without touching the configured backend. Used by the Step 4 compare/swap
-/// UI to accept a candidate after reviewing the diff.
+/// Apply an explicit GGUF (by path, Ollama model, or llama.cpp active model)
+/// to the live token counter without touching the configured backend.
 pub async fn swap_tokenizer(body: web::Json<TokenizerSwapRequest>) -> impl Responder {
     let req = body.into_inner();
-    let candidate = match (req.candidate_path, req.candidate_ollama_model) {
-        (Some(_), Some(_)) => {
+    let llama_cpp = req.candidate_llama_cpp.unwrap_or(false);
+    let sources = [
+        req.candidate_path.is_some(),
+        req.candidate_ollama_model.is_some(),
+        llama_cpp,
+    ]
+    .iter()
+    .filter(|&&v| v)
+    .count();
+    if sources > 1 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "error": "Specify exactly one of candidate_path, candidate_ollama_model, or candidate_llama_cpp",
+        }));
+    }
+    let candidate = if let Some(p) = req.candidate_path {
+        let pb = std::path::PathBuf::from(&p);
+        if !pb.exists() {
             return HttpResponse::BadRequest().json(serde_json::json!({
                 "status": "error",
-                "error": "Specify either candidate_path or candidate_ollama_model, not both",
+                "error": format!("candidate_path does not exist: {}", p),
             }));
         }
-        (None, None) => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "status": "error",
-                "error": "Must specify candidate_path or candidate_ollama_model",
-            }));
-        }
-        (Some(p), None) => {
-            let pb = std::path::PathBuf::from(&p);
-            if !pb.exists() {
-                return HttpResponse::BadRequest().json(serde_json::json!({
-                    "status": "error",
-                    "error": format!("candidate_path does not exist: {}", p),
-                }));
-            }
-            pb
-        }
-        (None, Some(m)) => match crate::gguf_tokenizer::resolve_ollama_gguf_path(&m) {
+        pb
+    } else if let Some(m) = req.candidate_ollama_model {
+        match crate::gguf_tokenizer::resolve_ollama_gguf_path(&m) {
             Ok(p) => p,
             Err(e) => {
                 return HttpResponse::BadRequest().json(serde_json::json!({
@@ -881,7 +883,22 @@ pub async fn swap_tokenizer(body: web::Json<TokenizerSwapRequest>) -> impl Respo
                     "error": format!("Failed to resolve Ollama model {:?}: {:#}", m, e),
                 }));
             }
-        },
+        }
+    } else if llama_cpp {
+        match crate::gguf_tokenizer::resolve_llama_server_gguf_path() {
+            Ok(p) => p,
+            Err(e) => {
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "status": "error",
+                    "error": format!("Failed to resolve llama.cpp model: {:#}", e),
+                }));
+            }
+        }
+    } else {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "error": "Must specify candidate_path, candidate_ollama_model, or candidate_llama_cpp",
+        }));
     };
 
     let handle = match crate::api::get_token_counter() {

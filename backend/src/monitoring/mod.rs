@@ -50,6 +50,8 @@ pub use crate::monitoring::metrics::{
 pub use canon_stats::{
     get_stats as get_canon_stats, record_embed_ingestion as record_canon_embed_ingestion,
     record_embed_query as record_canon_embed_query,
+    record_file_embed as record_canon_file_embed,
+    record_file_index as record_canon_file_index,
     record_index_ingestion as record_canon_index_ingestion,
     record_index_query as record_canon_index_query, record_store as record_canon_store, CanonStats,
     CallSiteStats,

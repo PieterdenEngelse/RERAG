@@ -9,6 +9,7 @@ use super::*;
 #[derive(serde::Deserialize)]
 pub struct SearchQuery {
     pub q: String,
+    pub corpus: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -28,7 +29,8 @@ pub(crate) async fn upload_document_inner(
     config: web::Data<ApiConfig>,
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    fs::create_dir_all(UPLOAD_DIR).ok();
+    let upload_dir = default_upload_dir();
+    fs::create_dir_all(&upload_dir).ok();
     let mut uploaded_files = Vec::new();
 
     while let Some(item) = payload.next().await {
@@ -63,7 +65,7 @@ pub(crate) async fn upload_document_inner(
             )));
         }
 
-        let filepath = format!("{}/{}", UPLOAD_DIR, filename);
+        let filepath = format!("{}/{}", upload_dir, filename);
         let mut f = web::block(move || std::fs::File::create(&filepath)).await??;
         while let Some(chunk) = field.next().await {
             let data = chunk?;
@@ -89,7 +91,7 @@ pub(crate) async fn upload_document_inner(
             let mut file_contents: Vec<(String, std::path::PathBuf, Option<String>)> = Vec::new();
 
             for filename in &uploaded_files {
-                let path = Path::new(UPLOAD_DIR).join(filename);
+                let path = Path::new(&upload_dir).join(filename);
                 // Use io_uring async read
                 let content = index::extract_text_async(&path).await;
                 file_contents.push((filename.clone(), path, content));
@@ -113,6 +115,7 @@ pub(crate) async fn upload_document_inner(
                                     &content,
                                     config.chunker_mode,
                                     chunker.as_ref(),
+                                    "default",
                                 ) {
                                     Ok((chunk_count, graph_chunks)) => {
                                         indexed_files.push(json!({
@@ -185,7 +188,7 @@ pub(crate) async fn upload_document_inner(
 pub async fn list_documents() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let mut files = Vec::new();
-    if let Ok(entries) = fs::read_dir(UPLOAD_DIR) {
+    if let Ok(entries) = fs::read_dir(default_upload_dir()) {
         for entry in entries.flatten() {
             if entry.path().is_file() {
                 if let Some(filename) = entry.file_name().to_str() {
@@ -205,7 +208,7 @@ pub async fn list_documents() -> Result<HttpResponse, Error> {
 pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let filename = path.into_inner();
-    let filepath = format!("{}/{}", UPLOAD_DIR, filename);
+    let filepath = format!("{}/{}", default_upload_dir(), filename);
 
     match fs::remove_file(&filepath) {
         Ok(_) => {
@@ -261,12 +264,14 @@ pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpRespons
 
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
+        let upload_dir = default_upload_dir();
         let chunker = crate::index::default_chunker(config.chunker_mode);
         let res = index::index_all_documents(
             &mut *retriever,
-            UPLOAD_DIR,
+            &upload_dir,
             config.chunker_mode,
             chunker.as_ref(),
+            "default",
         );
         let duration_ms = start.elapsed().as_millis() as u64;
         let vectors = retriever.metrics.total_vectors as u64;
@@ -355,6 +360,7 @@ pub(crate) fn launch_async_reindex_job(
     let jobs_map = jobs.clone();
     let retriever_handle = RETRIEVER.get().map(|h| Arc::clone(h));
     let config_clone = config.clone();
+    let upload_dir_for_job = default_upload_dir();
 
     actix_web::rt::spawn(async move {
         let start = std::time::Instant::now();
@@ -375,9 +381,10 @@ pub(crate) fn launch_async_reindex_job(
             let chunker = crate::index::default_chunker(config_clone.chunker_mode);
             let res = index::index_all_documents(
                 &mut *retriever,
-                UPLOAD_DIR,
+                &upload_dir_for_job,
                 config_clone.chunker_mode,
                 chunker.as_ref(),
+                "default",
             );
 
             let mut job = jobs_map
@@ -533,7 +540,9 @@ pub(crate) async fn search_documents_inner(
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let start = std::time::Instant::now();
-    if let Some(retriever) = RETRIEVER.get() {
+    let corpus_slug = query.corpus.as_deref().unwrap_or("default");
+    let retriever_handle = get_corpus_retriever(corpus_slug);
+    if let Some(retriever) = retriever_handle {
         // Normalize query for each use: Embed for vector search, Index for BM25
         let embed_q = crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
         crate::monitoring::record_canon_embed_query(query.q.len(), embed_q.len());

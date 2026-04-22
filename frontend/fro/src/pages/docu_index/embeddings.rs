@@ -23,9 +23,9 @@ pub fn DocuEmbeddings() -> Element {
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
                             h3 { class: "text-sm font-bold text-white mb-1", "What Is an Embedding?" }
                             p { class: "text-xs text-gray-300 mb-1",
-                                "An embedding maps a complex object (word, sentence, image, user) to a "
-                                strong { "dense, fixed-length numerical vector" }
-                                ". Distances and directions between vectors correspond to semantic relationships."
+                                "An embedding maps any tokenizable unit — from a character or subword to a full sentence, document, image, or user profile — into a "
+                                strong { "dense, fixed‑length numerical vector" }
+                                ". Distances and directions in this vector space encode semantic, syntactic, or structural relationships, so similar units lie close together and meaningful transformations correspond to consistent geometric patterns."
                             }
                             div { class: "bg-gray-700 rounded p-2 text-center",
                                 code { class: "text-sm text-blue-300", "v ∈ ℝⁿ" }

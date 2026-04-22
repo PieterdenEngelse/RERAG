@@ -159,9 +159,9 @@ pub fn Home() -> Element {
 
     // Chat mode: "rag", "llm", or "hybrid"
     let chat_mode = use_signal(|| "auto".to_string());
-    let mut show_tune_panel = use_signal(|| false);
+    let show_tune_panel = use_signal(|| false);
     let mut show_tune_info = use_signal(|| false);
-    let mut rag_priority_override = use_signal(|| Option::<f64>::None);
+    let rag_priority_override = use_signal(|| Option::<f64>::None);
 
     let mut show_delete_memories_modal = use_signal(|| false);
     let mut rag_memories = use_signal(|| Vec::<RagMemoryItem>::new());
@@ -174,6 +174,7 @@ pub fn Home() -> Element {
     // Info panel state (global context)
     let mut show_info = use_context::<Signal<ShowRagInfo>>();
     let mut runtime_suspended = use_context::<Signal<crate::app::RuntimeSuspended>>();
+    let active_corpus = use_context::<Signal<crate::app::ActiveCorpus>>();
 
     // Clear chat signal (triggered by Home link in header)
     let clear_chat = use_context::<Signal<ClearChat>>();
@@ -224,22 +225,17 @@ pub fn Home() -> Element {
     let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
     // Track last seen context to detect external changes only
-    let mut last_ctx_backend = use_signal(String::new);
     let mut last_ctx_model = use_signal(String::new);
 
     // Watch RuntimeContext for changes from OTHER pages (not our own changes)
     {
         let mut current_backend = current_backend.clone();
-        let mut selected_model = selected_model.clone();
-        let mut available_models = available_models.clone();
-        let mut models_loading = models_loading.clone();
-        let mut last_ctx_backend = last_ctx_backend.clone();
-        let mut last_ctx_model = last_ctx_model.clone();
+        let available_models = available_models.clone();
+        let models_loading = models_loading.clone();
         let runtime_ctx = runtime_ctx.clone();
         use_effect(move || {
             let ctx = runtime_ctx();
             let ctx_backend = ctx.configured_backend.clone();
-            let ctx_model = ctx.configured_model.clone();
 
             // Always sync when local differs from context
             if !ctx_backend.is_empty() && ctx_backend != current_backend() {
@@ -302,7 +298,7 @@ pub fn Home() -> Element {
             }
         });
     }
-    let mut show_backend_info = use_signal(|| false);
+    let show_backend_info = use_signal(|| false);
 
     // Load documents on mount
     use_effect(move || {
@@ -446,9 +442,9 @@ pub fn Home() -> Element {
             // Check if this is a chat command - route to backend
             if is_chat_command(&user_input) {
                 let body = if let Some(p) = rag_priority_override() {
-                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p, "corpus": active_corpus.read().slug() })
                 } else {
-                    serde_json::json!({ "query": user_input, "mode": mode })
+                    serde_json::json!({ "query": user_input, "mode": mode, "corpus": active_corpus.read().slug() })
                 };
                 let request = gloo_net::http::Request::post(&backend_agent_url())
                     .header("Content-Type", "application/json")
@@ -712,9 +708,9 @@ pub fn Home() -> Element {
             spawn(async move {
                 if is_chat_command(&user_input) {
                     let body = if let Some(p) = rag_priority_override() {
-                        serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                        serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p, "corpus": active_corpus.read().slug() })
                     } else {
-                        serde_json::json!({ "query": user_input, "mode": mode })
+                        serde_json::json!({ "query": user_input, "mode": mode, "corpus": active_corpus.read().slug() })
                     };
                     let request = gloo_net::http::Request::post(&backend_agent_url())
                         .header("Content-Type", "application/json")
@@ -777,9 +773,9 @@ pub fn Home() -> Element {
                 let msg_index = messages().len() - 1;
 
                 let body = if let Some(p) = rag_priority_override() {
-                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p })
+                    serde_json::json!({ "query": user_input, "mode": mode, "rag_priority": p, "corpus": active_corpus.read().slug() })
                 } else {
-                    serde_json::json!({ "query": user_input, "mode": mode })
+                    serde_json::json!({ "query": user_input, "mode": mode, "corpus": active_corpus.read().slug() })
                 };
 
                 let window = web_sys::window().unwrap();
@@ -996,8 +992,8 @@ pub fn Home() -> Element {
         HomeSettingsBoards {
             current_backend: current_backend,
             on_backend_changed: {
-                let mut available_models = available_models.clone();
-                let mut models_loading = models_loading.clone();
+                let available_models = available_models.clone();
+                let models_loading = models_loading.clone();
                 move |backend: String| {
                     let mut available_models = available_models.clone();
                     let mut models_loading = models_loading.clone();

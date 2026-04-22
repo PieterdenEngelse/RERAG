@@ -17,16 +17,18 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::db::golden_sample;
-use crate::gguf_tokenizer::{resolve_ollama_gguf_path, GgufTokenCounter, TokenCounter};
+use crate::gguf_tokenizer::{
+    resolve_llama_server_gguf_path, resolve_ollama_gguf_path, GgufTokenCounter, TokenCounter,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiffRequest {
-    /// Absolute path to a candidate GGUF file. Mutually exclusive with
-    /// `candidate_ollama_model`.
+    /// Absolute path to a candidate GGUF file.
     pub candidate_path: Option<String>,
     /// Ollama model tag (e.g. `phi:latest`) — resolved to its blob path.
-    /// Mutually exclusive with `candidate_path`.
     pub candidate_ollama_model: Option<String>,
+    /// Use the active llama.cpp model (resolved via ~/.config/ag/llama-server.env).
+    pub candidate_llama_cpp: Option<bool>,
     /// Max number of per-entry diffs to include in the response. Aggregate
     /// stats are always computed over all entries with baseline IDs.
     /// Defaults to 50.
@@ -109,23 +111,38 @@ fn common_suffix_len(a: &[u32], b: &[u32], cap: usize) -> usize {
 
 /// Resolve a [`DiffRequest`] to an absolute candidate GGUF path.
 pub fn resolve_candidate_path(req: &DiffRequest) -> Result<PathBuf> {
-    match (&req.candidate_path, &req.candidate_ollama_model) {
-        (Some(_), Some(_)) => Err(anyhow!(
-            "Specify either candidate_path or candidate_ollama_model, not both"
-        )),
-        (None, None) => Err(anyhow!(
-            "Must specify candidate_path or candidate_ollama_model"
-        )),
-        (Some(p), None) => {
-            let pb = PathBuf::from(p);
-            if !pb.exists() {
-                return Err(anyhow!("candidate_path does not exist: {}", p));
-            }
-            Ok(pb)
-        }
-        (None, Some(m)) => resolve_ollama_gguf_path(m)
-            .with_context(|| format!("Failed to resolve Ollama model {:?}", m)),
+    let llama_cpp = req.candidate_llama_cpp.unwrap_or(false);
+    let sources = [
+        req.candidate_path.is_some(),
+        req.candidate_ollama_model.is_some(),
+        llama_cpp,
+    ]
+    .iter()
+    .filter(|&&v| v)
+    .count();
+    if sources > 1 {
+        return Err(anyhow!(
+            "Specify exactly one of candidate_path, candidate_ollama_model, or candidate_llama_cpp"
+        ));
     }
+    if let Some(p) = &req.candidate_path {
+        let pb = PathBuf::from(p);
+        if !pb.exists() {
+            return Err(anyhow!("candidate_path does not exist: {}", p));
+        }
+        return Ok(pb);
+    }
+    if let Some(m) = &req.candidate_ollama_model {
+        return resolve_ollama_gguf_path(m)
+            .with_context(|| format!("Failed to resolve Ollama model {:?}", m));
+    }
+    if llama_cpp {
+        return resolve_llama_server_gguf_path()
+            .context("Failed to resolve llama.cpp model path");
+    }
+    Err(anyhow!(
+        "Must specify candidate_path, candidate_ollama_model, or candidate_llama_cpp"
+    ))
 }
 
 /// Run the diff. Loads the candidate tokenizer fresh — does not touch the
@@ -303,12 +320,14 @@ mod tests {
         let req = DiffRequest {
             candidate_path: None,
             candidate_ollama_model: None,
+            candidate_llama_cpp: None,
             limit: None,
         };
         assert!(resolve_candidate_path(&req).is_err());
         let req = DiffRequest {
             candidate_path: Some("/x".into()),
             candidate_ollama_model: Some("y".into()),
+            candidate_llama_cpp: None,
             limit: None,
         };
         assert!(resolve_candidate_path(&req).is_err());

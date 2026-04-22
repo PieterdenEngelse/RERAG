@@ -1,4 +1,4 @@
--- ag/db/schema.sql v13.1.2
+-- ag/db/schema.sql v14.0.0
 -- Embedded in schema_init.rs via include_str!
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -136,7 +136,20 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 INSERT OR IGNORE INTO schema_migrations (version, description) VALUES
-    ('13.1.2', 'Agentic RAG with PathManager');
+    ('13.1.2', 'Agentic RAG with PathManager'),
+    ('14.0.0', 'Named corpora: corpus registry, per-corpus document isolation'),
+    ('15.0.0', 'Per-corpus settings: search_top_k, chunker_mode, hybrid_weight');
+
+-- Named corpora registry
+CREATE TABLE IF NOT EXISTS corpora (
+    id         TEXT PRIMARY KEY,
+    slug       TEXT NOT NULL UNIQUE,
+    name       TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Corpus membership columns are added via run_v14_migration() in schema_init.rs
+-- because ALTER TABLE ADD COLUMN is not idempotent across SQLite versions.
 
 CREATE TABLE IF NOT EXISTS extraction_records (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,

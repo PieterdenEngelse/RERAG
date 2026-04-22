@@ -193,6 +193,7 @@ pub struct AgentRequest {
     pub top_k: usize,
     #[serde(default)]
     pub mode: ChatMode,
+    pub corpus: Option<String>,
 }
 
 // Simple query variant for GET /agent/chat
@@ -203,6 +204,7 @@ pub struct AgentQueryParams {
     pub top_k: usize,
     #[serde(default)]
     pub mode: ChatMode,
+    pub corpus: Option<String>,
 }
 
 pub(crate) fn default_top_k() -> usize {
@@ -1136,7 +1138,8 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
         return Ok(HttpResponse::Ok().json(response));
     }
 
-    if let Some(retriever) = RETRIEVER.get() {
+    let corpus_slug = req.corpus.as_deref().unwrap_or("default").to_string();
+    if let Some(retriever) = get_corpus_retriever(&corpus_slug) {
         // Convert ChatMode to AgentMode
         let agent_mode = match req.mode {
             ChatMode::Rag => crate::agent::AgentMode::Rag,
@@ -1148,7 +1151,6 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
         };
         let query_clone = req.query.clone();
         let top_k = req.top_k;
-        let retriever_clone = Arc::clone(retriever);
 
         // Get current chat settings
         let chat_settings = get_current_chat_settings();
@@ -1158,7 +1160,7 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
             let agent = Agent::new(
                 "default",
                 path_resolver::agent_db_path_str(),
-                retriever_clone,
+                retriever,
             )
             .with_settings(chat_settings);
             agent.run_with_mode(&query_clone, top_k, agent_mode)
@@ -1316,7 +1318,8 @@ pub(crate) async fn run_agent_get(
         return Ok(HttpResponse::Ok().json(response));
     }
 
-    if let Some(retriever) = RETRIEVER.get() {
+    let corpus_slug = query.corpus.as_deref().unwrap_or("default").to_string();
+    if let Some(retriever) = get_corpus_retriever(&corpus_slug) {
         // Convert ChatMode to AgentMode
         let agent_mode = match query.mode {
             ChatMode::Rag => crate::agent::AgentMode::Rag,
@@ -1328,7 +1331,6 @@ pub(crate) async fn run_agent_get(
         };
         let query_str = query.query.clone();
         let top_k = query.top_k;
-        let retriever_clone = Arc::clone(retriever);
 
         // Get current chat settings
         let chat_settings = get_current_chat_settings();
@@ -1338,7 +1340,7 @@ pub(crate) async fn run_agent_get(
             let agent = Agent::new(
                 "default",
                 path_resolver::agent_db_path_str(),
-                retriever_clone,
+                retriever,
             )
             .with_settings(chat_settings);
             agent.run_with_mode(&query_str, top_k, agent_mode)
@@ -1698,6 +1700,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
     use futures_util::stream::StreamExt;
 
     let request_id = generate_request_id();
+    let stream_corpus_slug = req.corpus.as_deref().unwrap_or("default").to_string();
 
     // For commands, redirect to non-streaming endpoint (commands don't benefit from streaming)
     if parse_chat_command(&req.query).is_some() {
@@ -1875,16 +1878,15 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                 // Re-set agent_mode so the rest of the function handles it
                 let _ = agent_mode; // silence unused warning
                                     // Run Hybrid inline as fallback
-                if let Some(retriever) = RETRIEVER.get() {
+                if let Some(retriever) = get_corpus_retriever(&stream_corpus_slug) {
                     let query_clone = req.query.clone();
                     let top_k = req.top_k;
-                    let retriever_clone = Arc::clone(retriever);
                     let chat_settings = get_current_chat_settings();
                     let resp = web::block(move || {
                         let agent = Agent::new(
                             "default",
                             path_resolver::agent_db_path_str(),
-                            retriever_clone,
+                            retriever,
                         )
                         .with_settings(chat_settings);
                         agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Hybrid)
@@ -1928,17 +1930,16 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         agent_mode,
         crate::agent::AgentMode::Rag | crate::agent::AgentMode::RagStrict
     ) {
-        if let Some(retriever) = RETRIEVER.get() {
+        if let Some(retriever) = get_corpus_retriever(&stream_corpus_slug) {
             let query_clone = req.query.clone();
             let top_k = req.top_k;
-            let retriever_clone = Arc::clone(retriever);
             let chat_settings = get_current_chat_settings();
 
             let resp = web::block(move || {
                 let agent = Agent::new(
                     "default",
                     path_resolver::agent_db_path_str(),
-                    retriever_clone,
+                    retriever,
                 )
                 .with_settings(chat_settings);
                 agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Rag)
@@ -1973,7 +1974,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto
     ) {
         let search_start = std::time::Instant::now();
-        if let Some(retriever) = RETRIEVER.get() {
+        if let Some(retriever) = get_corpus_retriever(&stream_corpus_slug) {
             if let Ok(mut r) = retriever.lock() {
                 if let Ok(mut results) = r.hybrid_search(&req.query, None) {
                     let search_time = search_start.elapsed().as_millis() as u64;

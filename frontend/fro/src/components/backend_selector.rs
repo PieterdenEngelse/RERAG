@@ -16,7 +16,7 @@ pub fn BackendSelector(
     let mut save_status = use_signal(|| "Save".to_string());
     let mut show_backend_info = use_signal(|| false);
     // Use shared runtime context
-    let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
+    let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
     // Fetch active backend once on mount — broadcast handles cross-tab updates
     {
