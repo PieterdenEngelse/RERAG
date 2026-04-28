@@ -157,19 +157,63 @@ pub trait Chunker {
     }
 }
 
-pub struct FixedChunker;
+pub struct FixedChunker {
+    config: ChunkerConfig,
+}
+
+impl FixedChunker {
+    pub fn new(config: ChunkerConfig) -> Self {
+        Self { config }
+    }
+}
 
 impl Chunker for FixedChunker {
+    /// Accumulate paragraphs (double-newline separated) into token-budget windows.
+    /// Flushes at target_size on a paragraph boundary; hard-flushes at max_size.
+    /// Structural boundaries (headers, atomic blocks) are already handled upstream
+    /// by chunk_ir, so this only needs to enforce the size budget.
     fn chunk_text(&self, text: &str) -> Vec<String> {
-        text.lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(|l| l.to_string())
-            .collect()
+        let mut chunks = Vec::new();
+        let mut current = String::new();
+        let mut current_tokens = 0usize;
+
+        for para in text.split("\n\n") {
+            let para = para.trim();
+            if para.is_empty() {
+                continue;
+            }
+            let para_tokens = estimate_token_count(para);
+
+            // Hard flush: adding this paragraph would exceed max_size.
+            if !current.is_empty() && current_tokens + para_tokens > self.config.max_size {
+                chunks.push(current.trim().to_string());
+                current.clear();
+                current_tokens = 0;
+            }
+
+            if !current.is_empty() {
+                current.push_str("\n\n");
+            }
+            current.push_str(para);
+            current_tokens += para_tokens;
+
+            // Soft flush: at or past target on a paragraph boundary.
+            if current_tokens >= self.config.target_size {
+                chunks.push(current.trim().to_string());
+                current.clear();
+                current_tokens = 0;
+            }
+        }
+
+        if !current.trim().is_empty() {
+            chunks.push(current.trim().to_string());
+        }
+
+        chunks.into_iter().filter(|c| !c.is_empty()).collect()
     }
 
     fn stats(&self) -> Option<ChunkingStats> {
-        None // Fixed chunker doesn't track per-run stats; filled in by index layer
+        None
     }
 }
 
@@ -596,7 +640,7 @@ impl Chunker for PipelineChunker {
 
 pub fn create_chunker(mode: ChunkerMode, config: &ChunkerConfig) -> Box<dyn Chunker> {
     match mode {
-        ChunkerMode::Fixed => Box::new(FixedChunker),
+        ChunkerMode::Fixed => Box::new(FixedChunker::new(config.clone())),
         ChunkerMode::Lightweight => Box::new(LightweightAdaptiveChunker::new(config.clone())),
         ChunkerMode::Semantic => Box::new(SemanticAdaptiveChunker::new(config.clone())),
         ChunkerMode::Sentence => Box::new(SentenceChunker::new(config.clone())),
