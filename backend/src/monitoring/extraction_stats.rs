@@ -37,8 +37,7 @@ pub struct ExtractionStats {
     pub recent_files: Vec<FileRecord>,
 }
 
-static STATS: Lazy<RwLock<ExtractionStats>> =
-    Lazy::new(|| RwLock::new(ExtractionStats::default()));
+static STATS: Lazy<RwLock<ExtractionStats>> = Lazy::new(|| RwLock::new(ExtractionStats::default()));
 
 /// Called at startup to seed in-memory stats from SQLite history.
 pub fn load_history() {

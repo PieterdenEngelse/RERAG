@@ -105,8 +105,11 @@ async fn main() -> std::io::Result<()> {
     // ─────────────────────────────────────────────────────────────
     {
         // Compute target path without triggering create_dir_all (migration must run first).
-        let new_upload_path = pm.data_dir()
-            .join("corpora").join("default").join("documents");
+        let new_upload_path = pm
+            .data_dir()
+            .join("corpora")
+            .join("default")
+            .join("documents");
 
         if !new_upload_path.exists() {
             let legacy = std::path::Path::new("documents");
@@ -116,11 +119,17 @@ async fn main() -> std::io::Result<()> {
                         // Symlink old path back so external tools still work.
                         #[cfg(unix)]
                         let _ = std::os::unix::fs::symlink(&new_upload_path, legacy);
-                        info!("corpus migration: moved documents/ → {}", new_upload_path.display());
+                        info!(
+                            "corpus migration: moved documents/ → {}",
+                            new_upload_path.display()
+                        );
                     }
                     Err(e) => {
                         // Cross-device rename; create_dir_all will handle the new path.
-                        warn!("corpus migration: rename failed ({}), will create fresh dir", e);
+                        warn!(
+                            "corpus migration: rename failed ({}), will create fresh dir",
+                            e
+                        );
                     }
                 }
             }
@@ -395,6 +404,34 @@ async fn main() -> std::io::Result<()> {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // PHASE 5.7: Initialize External Document Extractors (Docling)
+    // ─────────────────────────────────────────────────────────────
+
+    {
+        let enabled = std::env::var("DOCLING_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if enabled {
+            let url = std::env::var("DOCLING_URL")
+                .unwrap_or_else(|_| "http://localhost:5001".to_string());
+            info!("🔬 Connecting to Docling sidecar at {}", url);
+            let ext = ag::extractor::DoclingExtractor::new(url);
+            match ext.health_check() {
+                Ok(()) => {
+                    ag::extractor::init_registry(vec![Box::new(ext)]);
+                    info!("✅ Docling extractor registered (PDF/DOCX/PPTX structural extraction)");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Docling sidecar unreachable — falling back to built-in extraction");
+                }
+            }
+        } else {
+            debug!("Docling extraction disabled (set DOCLING_ENABLED=true to enable)");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // PHASE 6: Prepare Retriever for API
     // ─────────────────────────────────────────────────────────────
 
@@ -449,7 +486,9 @@ async fn main() -> std::io::Result<()> {
                     // Check for per-corpus chunker override on default
                     let effective_mode = rusqlite::Connection::open(&db_path_for_idx)
                         .ok()
-                        .and_then(|conn| ag::db::corpora::get_corpus_settings(&conn, "default").ok())
+                        .and_then(|conn| {
+                            ag::db::corpora::get_corpus_settings(&conn, "default").ok()
+                        })
                         .and_then(|s| s.chunker_mode)
                         .and_then(|m| m.parse::<ag::config::ChunkerMode>().ok())
                         .unwrap_or(config.chunker_mode);
@@ -466,7 +505,10 @@ async fn main() -> std::io::Result<()> {
                         metrics::refresh_retriever_gauges(&ret);
                     }
                 }
-                Err(e) => error!("Failed to acquire retriever lock for background indexing: {}", e),
+                Err(e) => error!(
+                    "Failed to acquire retriever lock for background indexing: {}",
+                    e
+                ),
             }
 
             // Index non-default corpora
@@ -474,7 +516,10 @@ async fn main() -> std::io::Result<()> {
                 if let Ok(corpora) = ag::db::corpora::list_corpora(&conn) {
                     for corpus in corpora.iter().filter(|c| c.slug != "default") {
                         let slug = &corpus.slug;
-                        let corpus_dir = pm_for_idx.corpus_upload_dir(slug).to_string_lossy().to_string();
+                        let corpus_dir = pm_for_idx
+                            .corpus_upload_dir(slug)
+                            .to_string_lossy()
+                            .to_string();
                         let effective_mode = ag::db::corpora::get_corpus_settings(&conn, slug)
                             .ok()
                             .and_then(|s| s.chunker_mode)
@@ -501,7 +546,10 @@ async fn main() -> std::io::Result<()> {
             }
 
             let duration_ms = indexing_start.elapsed().as_millis() as u64;
-            info!(duration_ms = duration_ms, "✓ Background indexing completed (all corpora)");
+            info!(
+                duration_ms = duration_ms,
+                "✓ Background indexing completed (all corpora)"
+            );
             ag::monitoring::mark_indexing_finished();
         });
     }

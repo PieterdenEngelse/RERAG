@@ -176,7 +176,8 @@ async fn run_watcher(
                         rusqlite::Connection::open(&config.db_path)
                             .ok()
                             .and_then(|conn| {
-                                crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug).ok()
+                                crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug)
+                                    .ok()
                             })
                             .and_then(|s| s.chunker_mode)
                             .and_then(|m| m.parse::<ChunkerMode>().ok())
@@ -185,8 +186,13 @@ async fn run_watcher(
                         config.chunker_mode
                     };
                     let chunker = index::default_chunker(effective_mode);
-                    match index::index_file(&mut *ret, &path, effective_mode, chunker.as_ref(), &config.corpus_slug)
-                    {
+                    match index::index_file(
+                        &mut *ret,
+                        &path,
+                        effective_mode,
+                        chunker.as_ref(),
+                        &config.corpus_slug,
+                    ) {
                         Ok(chunks) => {
                             info!(
                                 "✅ Auto-indexed {} ({} chunks)",

@@ -1157,12 +1157,8 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
 
         // Run agent in blocking thread pool to avoid blocking async runtime
         let resp = web::block(move || {
-            let agent = Agent::new(
-                "default",
-                path_resolver::agent_db_path_str(),
-                retriever,
-            )
-            .with_settings(chat_settings);
+            let agent = Agent::new("default", path_resolver::agent_db_path_str(), retriever)
+                .with_settings(chat_settings);
             agent.run_with_mode(&query_clone, top_k, agent_mode)
         })
         .await
@@ -1337,12 +1333,8 @@ pub(crate) async fn run_agent_get(
 
         // Run agent in blocking thread pool to avoid blocking async runtime
         let resp = web::block(move || {
-            let agent = Agent::new(
-                "default",
-                path_resolver::agent_db_path_str(),
-                retriever,
-            )
-            .with_settings(chat_settings);
+            let agent = Agent::new("default", path_resolver::agent_db_path_str(), retriever)
+                .with_settings(chat_settings);
             agent.run_with_mode(&query_str, top_k, agent_mode)
         })
         .await
@@ -1883,12 +1875,9 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                     let top_k = req.top_k;
                     let chat_settings = get_current_chat_settings();
                     let resp = web::block(move || {
-                        let agent = Agent::new(
-                            "default",
-                            path_resolver::agent_db_path_str(),
-                            retriever,
-                        )
-                        .with_settings(chat_settings);
+                        let agent =
+                            Agent::new("default", path_resolver::agent_db_path_str(), retriever)
+                                .with_settings(chat_settings);
                         agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Hybrid)
                     })
                     .await
@@ -1936,12 +1925,8 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
             let chat_settings = get_current_chat_settings();
 
             let resp = web::block(move || {
-                let agent = Agent::new(
-                    "default",
-                    path_resolver::agent_db_path_str(),
-                    retriever,
-                )
-                .with_settings(chat_settings);
+                let agent = Agent::new("default", path_resolver::agent_db_path_str(), retriever)
+                    .with_settings(chat_settings);
                 agent.run_with_mode(&query_clone, top_k, crate::agent::AgentMode::Rag)
             })
             .await

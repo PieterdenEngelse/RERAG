@@ -12,11 +12,11 @@
 //! - Requires MONITORING_ENABLED=true environment variable
 pub mod alerting_hooks;
 pub mod canon_stats;
-pub mod extraction_stats;
 pub mod chunking_stats;
 pub mod config;
 pub mod config_phase15;
 pub mod distributed_tracing;
+pub mod extraction_stats;
 pub mod handlers;
 pub mod health;
 pub mod histogram_config;
@@ -47,27 +47,26 @@ pub use crate::monitoring::metrics::{
     RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_TOTAL, REGISTRY, REINDEX_FAILURE_TOTAL,
     REINDEX_SUCCESS_TOTAL, SEARCH_LATENCY_MS, STARTUP_DURATION_MS, VECTORS_TOTAL,
 };
+pub use alerting_hooks::{AlertingHooksConfig, ReindexCompletionEvent};
 pub use canon_stats::{
     get_stats as get_canon_stats, record_embed_ingestion as record_canon_embed_ingestion,
-    record_embed_query as record_canon_embed_query,
-    record_file_embed as record_canon_file_embed,
+    record_embed_query as record_canon_embed_query, record_file_embed as record_canon_file_embed,
     record_file_index as record_canon_file_index,
     record_index_ingestion as record_canon_index_ingestion,
-    record_index_query as record_canon_index_query, record_store as record_canon_store, CanonStats,
-    CallSiteStats,
+    record_index_query as record_canon_index_query, record_store as record_canon_store,
+    CallSiteStats, CanonStats,
 };
-pub use extraction_stats::{
-    get_stats as get_extraction_stats, load_history as load_extraction_history,
-    record_format as record_extraction_format, record_ocr_attempted, record_ocr_no_pages,
-    record_ocr_no_text, record_ocr_ok, record_ocr_unavailable, ExtractionStats, FileRecord,
-};
-pub use alerting_hooks::{AlertingHooksConfig, ReindexCompletionEvent};
 pub use chunking_stats::{
     chunking_logging_enabled, chunking_snapshot_history, latest_chunking_snapshot,
     record_chunking_snapshot, set_chunking_history_capacity, set_chunking_logging_enabled,
     ChunkingStatsSnapshot, DetectionInfo,
 };
 pub use config::MonitoringConfig;
+pub use extraction_stats::{
+    get_stats as get_extraction_stats, load_history as load_extraction_history,
+    record_format as record_extraction_format, record_ocr_attempted, record_ocr_no_pages,
+    record_ocr_no_text, record_ocr_ok, record_ocr_unavailable, ExtractionStats, FileRecord,
+};
 pub use health::HealthStatus;
 pub use histogram_config::HistogramBuckets;
 pub use resource_attribution::{start_resource_attribution, ResourceAttributionConfig};

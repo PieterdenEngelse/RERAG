@@ -1,0 +1,199 @@
+// src/doc_ir.rs — Shared Intermediate Representation for all document extractors.
+//
+// Every extractor (built-in or external) converts its native format into DocIR.
+// The chunker consumes DocIR instead of flat text, so it can respect structural
+// boundaries (headers flush chunks, tables and code blocks are never split).
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum BlockType {
+    Text,
+    Header { level: u8 },
+    Table { rows: usize, cols: usize },
+    Code { language: Option<String> },
+    List { ordered: bool },
+    Image { alt: Option<String> },
+    Formula,
+    Caption,
+    Footnote,
+    PageBreak,
+}
+
+impl BlockType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            BlockType::Text => "Text",
+            BlockType::Header { .. } => "Header",
+            BlockType::Table { .. } => "Table",
+            BlockType::Code { .. } => "Code",
+            BlockType::List { .. } => "List",
+            BlockType::Image { .. } => "Image",
+            BlockType::Formula => "Formula",
+            BlockType::Caption => "Caption",
+            BlockType::Footnote => "Footnote",
+            BlockType::PageBreak => "PageBreak",
+        }
+    }
+
+    /// Atomic blocks are emitted as a single chunk and never split.
+    pub fn is_atomic(&self) -> bool {
+        matches!(
+            self,
+            BlockType::Table { .. }
+                | BlockType::Code { .. }
+                | BlockType::Formula
+                | BlockType::Image { .. }
+        )
+    }
+
+    /// Strong-boundary blocks always flush pending text and start a new accumulation.
+    pub fn is_strong_boundary(&self) -> bool {
+        matches!(self, BlockType::Header { .. } | BlockType::PageBreak)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundingBox {
+    pub page: u32,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocBlock {
+    pub id: String,
+    pub block_type: BlockType,
+    /// Canonical plain text — always populated.
+    pub text: String,
+    /// Optional richer representation (Markdown for headers / code / tables).
+    pub markdown: Option<String>,
+    /// Spatial position; populated by external extractors (Docling, etc.).
+    pub bbox: Option<BoundingBox>,
+    /// Page number shortcut.
+    pub page: Option<u32>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DocBlock {
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            block_type: BlockType::Text,
+            text: content.into(),
+            markdown: None,
+            bbox: None,
+            page: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn header(level: u8, content: impl Into<String>) -> Self {
+        let t: String = content.into();
+        let hashes = "#".repeat(level as usize);
+        let md = format!("{} {}", hashes, t);
+        Self {
+            id: Uuid::new_v4().to_string(),
+            block_type: BlockType::Header { level },
+            text: t,
+            markdown: Some(md),
+            bbox: None,
+            page: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn code(language: Option<String>, content: impl Into<String>) -> Self {
+        let t: String = content.into();
+        let lang = language.as_deref().unwrap_or("").to_string();
+        let md = format!("```{}\n{}\n```", lang, t);
+        Self {
+            id: Uuid::new_v4().to_string(),
+            block_type: BlockType::Code { language },
+            text: t,
+            markdown: Some(md),
+            bbox: None,
+            page: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn table(rows: usize, cols: usize, content: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            block_type: BlockType::Table { rows, cols },
+            text: content.into(),
+            markdown: None,
+            bbox: None,
+            page: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Text used for embedding: markdown when available (richer for models), else plain text.
+    pub fn embed_text(&self) -> &str {
+        self.markdown.as_deref().unwrap_or(&self.text)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocIR {
+    pub source: String,
+    pub content_type: String,
+    pub blocks: Vec<DocBlock>,
+    pub page_count: Option<u32>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DocIR {
+    pub fn new(source: impl Into<String>, content_type: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            content_type: content_type.into(),
+            blocks: Vec::new(),
+            page_count: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Push a block, silently dropping empty non-atomic blocks.
+    pub fn push(&mut self, block: DocBlock) {
+        if !block.text.trim().is_empty() || block.block_type.is_atomic() {
+            self.blocks.push(block);
+        }
+    }
+
+    /// Stamp every block with an extractor label (e.g. "builtin/pdf", "docling").
+    /// Called after IR construction so `chunk_ir` picks up the provenance.
+    pub fn tag_extractor(&mut self, label: &str) {
+        for block in &mut self.blocks {
+            block.metadata.insert("extractor".to_string(), label.to_string());
+        }
+    }
+
+    /// Flatten all blocks to plain text (for Store normalization / metrics).
+    pub fn to_plain_text(&self) -> String {
+        self.blocks
+            .iter()
+            .filter(|b| !b.text.is_empty())
+            .map(|b| b.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+}
+
+/// Metadata attached to each chunk produced by `chunk_ir()`.
+/// Survives the chunking boundary so search results can carry provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChunkMeta {
+    /// Dominant block type of the source content ("Text", "Header", "Table", …).
+    pub block_type: String,
+    /// Page number of the first block in the chunk's source accumulation.
+    pub page: Option<u32>,
+    /// Extractor that produced the source DocIR ("builtin", "docling", "unstructured").
+    pub extractor: String,
+}

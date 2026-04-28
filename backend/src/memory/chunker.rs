@@ -68,7 +68,9 @@ impl SourceType {
             ContentType::Code(_) => SourceType::Code,
             ContentType::Json => SourceType::Json,
             ContentType::Xml => SourceType::Xml,
-            ContentType::Docx | ContentType::Odt | ContentType::Epub | ContentType::Pptx => SourceType::Text,
+            ContentType::Docx | ContentType::Odt | ContentType::Epub | ContentType::Pptx => {
+                SourceType::Text
+            }
             ContentType::Xlsx | ContentType::Ods | ContentType::Csv => SourceType::Text,
             ContentType::Binary => SourceType::Binary,
             ContentType::Unknown => SourceType::Text, // Default to text
@@ -184,8 +186,8 @@ impl ChunkerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(32usize);
 
-        let pipeline_stages = env::var("PIPELINE_STAGES")
-            .unwrap_or_else(|_| DEFAULT_PIPELINE_STAGES.to_string());
+        let pipeline_stages =
+            env::var("PIPELINE_STAGES").unwrap_or_else(|_| DEFAULT_PIPELINE_STAGES.to_string());
 
         Self {
             target_size,

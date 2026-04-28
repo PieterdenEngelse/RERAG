@@ -545,7 +545,20 @@ pub fn embed_batch(texts: &[String]) -> Vec<EmbeddingVector> {
     crate::monitoring::metrics::observe_embedding_batch_size(texts.len());
     let start = std::time::Instant::now();
     let runtime = global_runtime();
-    let result = runtime.embed_batch_owned(texts.iter().map(|s| s.to_string()).collect());
+    // Borrow as &str slices — avoids cloning every string into a new Vec<String>.
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let result = match &runtime.backend {
+        EmbeddingBackend::Onnx { inner } => {
+            let mut guard = inner.lock();
+            match guard.embed(&refs) {
+                Ok(vectors) => vectors,
+                Err(err) => {
+                    warn!("ONNX batch embed failed: {err}");
+                    texts.iter().map(|_| vec![0.0; runtime.dim]).collect()
+                }
+            }
+        }
+    };
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     crate::monitoring::metrics::observe_embedding_latency_ms(duration_ms);
     result

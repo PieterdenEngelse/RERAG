@@ -1,5 +1,6 @@
 use crate::cache::redis_cache::RedisCache;
 use crate::perf::io_uring as async_io;
+use std::hash::{Hash, Hasher};
 use fs2;
 use lru::LruCache;
 use memmap2::Mmap;
@@ -227,11 +228,25 @@ pub struct Retriever {
     use_io_uring: bool,
     /// Content lookup: doc_id -> content for O(1) vector result resolution
     doc_id_to_content: HashMap<String, String>,
+    /// Block-provenance metadata keyed by chunk_id (persisted alongside vectors).
+    doc_id_to_meta: HashMap<String, crate::doc_ir::ChunkMeta>,
+    /// Reverse map: hash(content) -> chunk_id.
+    /// Storing the hash instead of the full string saves O(avg_chunk_len) bytes per chunk.
+    content_to_chunk_id: HashMap<u64, String>,
     // Per-corpus settings
     pub distance_metric: crate::config::DistanceMetric,
     pub hnsw_ef_construction: usize,
     pub hnsw_ef_search: usize,
     pub pq_subvectors: usize,
+}
+
+/// Fast, stable content fingerprint used as the key in `content_to_chunk_id`.
+/// Using a hash instead of the full string saves avg_chunk_len bytes per entry.
+#[inline]
+fn content_hash(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 /// SIMD-accelerated cosine similarity (4-8x faster than scalar)
@@ -565,6 +580,8 @@ impl Retriever {
             // Phase 22: io_uring availability
             use_io_uring: crate::perf::io_uring::is_available(),
             doc_id_to_content: HashMap::new(),
+            doc_id_to_meta: HashMap::new(),
+            content_to_chunk_id: HashMap::new(),
             distance_metric: crate::config::DistanceMetric::Cosine,
             hnsw_ef_construction: 100,
             hnsw_ef_search: 100,
@@ -582,6 +599,7 @@ impl Retriever {
             info!("Loaded existing vectors from {}", vector_file_path_owned);
             retriever.metrics.total_vectors = retriever.vectors.len();
         }
+        retriever.load_chunk_meta();
 
         if let Ok(reader) = retriever.index.reader() {
             let searcher = reader.searcher();
@@ -604,6 +622,7 @@ impl Retriever {
                                 .unwrap_or("")
                                 .to_string();
                             if !did.is_empty() && !cnt.is_empty() {
+                                retriever.content_to_chunk_id.insert(content_hash(&cnt), did.clone());
                                 retriever.doc_id_to_content.insert(did, cnt);
                             }
                         }
@@ -851,6 +870,8 @@ impl Retriever {
         doc.add_text(self.content_field, content);
         self.doc_id_to_content
             .insert(doc_id.to_string(), content.to_string());
+        self.content_to_chunk_id
+            .insert(content_hash(content), doc_id.to_string());
         if let Some(writer) = &mut self.index_writer {
             writer.add_document(doc)?;
             Ok(())
@@ -983,6 +1004,7 @@ impl Retriever {
             } else {
                 debug!("Auto-saved vectors (rkyv) after {} documents", count);
                 self.documents_since_save.store(0, Ordering::SeqCst);
+                self.save_chunk_meta();
             }
         }
     }
@@ -1013,7 +1035,12 @@ impl Retriever {
                     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
                 }
                 crate::config::DistanceMetric::Euclidean => {
-                    let dist: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt();
+                    let dist: f32 = a
+                        .iter()
+                        .zip(b.iter())
+                        .map(|(x, y)| (x - y) * (x - y))
+                        .sum::<f32>()
+                        .sqrt();
                     1.0 / (1.0 + dist) // convert to similarity
                 }
             }
@@ -1156,6 +1183,66 @@ impl Retriever {
         self.doc_id_to_content.get(doc_id).cloned()
     }
 
+    /// Look up block provenance metadata for a content string (reverse map).
+    pub fn meta_for_content(&self, content: &str) -> Option<&crate::doc_ir::ChunkMeta> {
+        let chunk_id = self.content_to_chunk_id.get(&content_hash(content))?;
+        self.doc_id_to_meta.get(chunk_id)
+    }
+
+    /// Aggregate block-type and extractor distribution across all indexed chunks.
+    pub fn chunk_meta_distribution(
+        &self,
+    ) -> (
+        std::collections::HashMap<String, usize>,
+        std::collections::HashMap<String, usize>,
+        usize,
+    ) {
+        let mut block_types: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut extractors: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for meta in self.doc_id_to_meta.values() {
+            *block_types.entry(meta.block_type.clone()).or_insert(0) += 1;
+            *extractors.entry(meta.extractor.clone()).or_insert(0) += 1;
+        }
+        let total = self.doc_id_to_meta.len();
+        (block_types, extractors, total)
+    }
+
+    fn meta_file_path(&self) -> String {
+        self.vector_file_path.replace(".json", ".meta.json")
+    }
+
+    pub fn save_chunk_meta(&self) {
+        let path = self.meta_file_path();
+        match serde_json::to_string(&self.doc_id_to_meta) {
+            Ok(json) => {
+                if let Err(e) = fs::write(&path, json) {
+                    tracing::warn!("Failed to save chunk meta to '{}': {}", path, e);
+                }
+            }
+            Err(e) => tracing::warn!("Failed to serialize chunk meta: {}", e),
+        }
+    }
+
+    pub fn load_chunk_meta(&mut self) {
+        let path = self.meta_file_path();
+        match fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(map) => {
+                    self.doc_id_to_meta = map;
+                    debug!(
+                        "Loaded {} chunk meta entries from '{}'",
+                        self.doc_id_to_meta.len(),
+                        path
+                    );
+                }
+                Err(e) => tracing::warn!("Failed to parse chunk meta from '{}': {}", path, e),
+            },
+            Err(_) => {} // file absent on first run — silent
+        }
+    }
+
     pub fn rerank_by_similarity(&self, _query: &str, candidates: &Vec<String>) -> Vec<String> {
         let mut results = candidates.clone();
         results.reverse();
@@ -1215,6 +1302,8 @@ impl Retriever {
         let mut index_writer = self.index.writer(256_000_000)?;
         index_writer.add_document(doc)?;
         index_writer.commit()?;
+        self.content_to_chunk_id
+            .insert(content_hash(content), doc_id.to_string());
         self.clear_cache();
         self.metrics.total_documents_indexed += 1;
         Ok(())
@@ -1226,6 +1315,7 @@ impl Retriever {
         }
         let rkyv_path = self.vector_file_path.replace(".json", ".rkyv");
         self.save_vectors_rkyv(&rkyv_path)?;
+        self.save_chunk_meta();
         Ok(())
     }
 
@@ -1890,10 +1980,14 @@ impl Retriever {
         &mut self,
         chunk_id: &str,
         chunk_text: &str,
-        vector: &Vec<f32>,
+        vector: Vec<f32>,
+        meta: Option<crate::doc_ir::ChunkMeta>,
     ) -> Result<(), RetrieverError> {
         self.add_document(chunk_id, chunk_id, chunk_text)?;
-        self.add_vector_with_id(chunk_id.to_string(), vector.clone());
+        self.add_vector_with_id(chunk_id.to_string(), vector);
+        if let Some(m) = meta {
+            self.doc_id_to_meta.insert(chunk_id.to_string(), m);
+        }
         Ok(())
     }
 
@@ -2711,7 +2805,10 @@ impl Retriever {
             })
             .collect();
 
-        let pq = crate::perf::product_quantization::PQIndex::build(&vectors_with_ids, self.pq_subvectors);
+        let pq = crate::perf::product_quantization::PQIndex::build(
+            &vectors_with_ids,
+            self.pq_subvectors,
+        );
 
         self.pq_index = Some(pq);
         info!("PQ index built successfully");

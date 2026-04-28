@@ -56,6 +56,92 @@ impl ChunkingStats {
     }
 }
 
+/// IR-aware chunking: atomic blocks (Table, Code, Formula) are emitted as single
+/// chunks; header blocks flush pending text and lead the next accumulation;
+/// everything else is passed through the underlying chunker unchanged.
+///
+/// Returns `(chunk_text, ChunkMeta)` pairs so block provenance survives into
+/// the index and search results.  When a chunker splits one accumulation into
+/// several chunks, all share the same meta (page + type of the first block).
+pub fn chunk_ir(
+    ir: &crate::doc_ir::DocIR,
+    chunker: &dyn Chunker,
+) -> Vec<(String, crate::doc_ir::ChunkMeta)> {
+    use crate::doc_ir::ChunkMeta;
+
+    let mut result: Vec<(String, ChunkMeta)> = Vec::new();
+    let mut pending = String::new();
+    let mut pending_meta = ChunkMeta::default();
+
+    let block_extractor = |block: &crate::doc_ir::DocBlock| -> String {
+        block
+            .metadata
+            .get("extractor")
+            .cloned()
+            .unwrap_or_else(|| "builtin".into())
+    };
+
+    for block in &ir.blocks {
+        if block.block_type.is_atomic() {
+            // Flush accumulated text first
+            if !pending.trim().is_empty() {
+                for text in chunker.chunk_text(pending.trim()) {
+                    result.push((text, pending_meta.clone()));
+                }
+                pending.clear();
+                pending_meta = ChunkMeta::default();
+            }
+            let text = block.embed_text().trim().to_string();
+            if !text.is_empty() {
+                let meta = ChunkMeta {
+                    block_type: block.block_type.name().to_string(),
+                    page: block.page,
+                    extractor: block_extractor(block),
+                };
+                result.push((text, meta));
+            }
+        } else if block.block_type.is_strong_boundary() {
+            // Flush, then start fresh accumulation with the header leading
+            if !pending.trim().is_empty() {
+                for text in chunker.chunk_text(pending.trim()) {
+                    result.push((text, pending_meta.clone()));
+                }
+                pending.clear();
+            }
+            let header = block.embed_text().trim().to_string();
+            pending_meta = ChunkMeta {
+                block_type: block.block_type.name().to_string(),
+                page: block.page,
+                extractor: block_extractor(block),
+            };
+            if !header.is_empty() {
+                pending.push_str(&header);
+            }
+        } else {
+            if pending.is_empty() {
+                // First text block in a new accumulation — claim its meta.
+                pending_meta = ChunkMeta {
+                    block_type: block.block_type.name().to_string(),
+                    page: block.page,
+                    extractor: block_extractor(block),
+                };
+            }
+            if !pending.is_empty() {
+                pending.push_str("\n\n");
+            }
+            pending.push_str(block.text.trim());
+        }
+    }
+
+    if !pending.trim().is_empty() {
+        for text in chunker.chunk_text(pending.trim()) {
+            result.push((text, pending_meta.clone()));
+        }
+    }
+
+    result
+}
+
 pub trait Chunker {
     fn chunk_text(&self, text: &str) -> Vec<String>;
 
@@ -491,9 +577,7 @@ impl Chunker for PipelineChunker {
                     .flat_map(|s| self.sentence.chunk_text(&s))
                     .collect(),
                 // Semantic — receives all upstream chunks at once for centroid loop
-                (PipelineStage::Semantic, Some(segs)) => {
-                    self.semantic.chunk_from_segments(segs)
-                }
+                (PipelineStage::Semantic, Some(segs)) => self.semantic.chunk_from_segments(segs),
             });
         }
 

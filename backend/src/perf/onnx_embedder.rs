@@ -234,25 +234,22 @@ impl OnnxTokenizer {
     /// truncated to `max_length`.
     fn encode(&self, text: &str, max_length: usize) -> (Vec<i64>, Vec<i64>) {
         match self {
-            OnnxTokenizer::Real(tok) => {
-                match tok.encode(text, true) {
-                    Ok(enc) => {
-                        let mut ids: Vec<i64> =
-                            enc.get_ids().iter().map(|&x| x as i64).collect();
-                        let mut mask: Vec<i64> =
-                            enc.get_attention_mask().iter().map(|&x| x as i64).collect();
-                        ids.truncate(max_length);
-                        mask.truncate(max_length);
-                        ids.resize(max_length, 0);
-                        mask.resize(max_length, 0);
-                        (ids, mask)
-                    }
-                    Err(e) => {
-                        tracing::warn!("Tokenization failed: {e}; returning blank encoding");
-                        (vec![0i64; max_length], vec![0i64; max_length])
-                    }
+            OnnxTokenizer::Real(tok) => match tok.encode(text, true) {
+                Ok(enc) => {
+                    let mut ids: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
+                    let mut mask: Vec<i64> =
+                        enc.get_attention_mask().iter().map(|&x| x as i64).collect();
+                    ids.truncate(max_length);
+                    mask.truncate(max_length);
+                    ids.resize(max_length, 0);
+                    mask.resize(max_length, 0);
+                    (ids, mask)
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("Tokenization failed: {e}; returning blank encoding");
+                    (vec![0i64; max_length], vec![0i64; max_length])
+                }
+            },
             OnnxTokenizer::Simple(st) => st.encode_i64(text),
         }
     }
@@ -371,11 +368,8 @@ impl OnnxEmbedder {
         builder = builder
             .with_deterministic_compute(config.deterministic_compute)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        if config.denormal_as_zero {
-            builder = builder
-                .with_denormal_as_zero()
-                .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
-        }
+        // with_denormal_as_zero was removed in ORT rc.12; skip if not available.
+        let _ = config.denormal_as_zero;
         builder = builder
             .with_quant_qdq(config.enable_quant_qdq)
             .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
@@ -403,7 +397,7 @@ impl OnnxEmbedder {
         }
         if config.use_device_allocator_for_initializers {
             builder = builder
-                .with_device_allocator_for_initializers()
+                .with_device_allocated_initializers()
                 .map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
         }
         builder = builder
@@ -505,13 +499,11 @@ impl OnnxEmbedder {
         let shape = vec![batch_size as i64, seq_len as i64];
 
         // Create tensors using Tensor::from_array
-        let input_ids_tensor =
-            Tensor::from_array((shape.clone(), all_input_ids))
-                .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+        let input_ids_tensor = Tensor::from_array((shape.clone(), all_input_ids))
+            .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
-        let attention_mask_tensor =
-            Tensor::from_array((shape.clone(), all_attention_mask))
-                .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
+        let attention_mask_tensor = Tensor::from_array((shape.clone(), all_attention_mask))
+            .map_err(|e| OnnxError::InferenceFailed(e.to_string()))?;
 
         // Run inference — conditionally include token_type_ids (all zeros)
         let outputs = if self.needs_token_type_ids {

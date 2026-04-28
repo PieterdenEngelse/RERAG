@@ -1037,6 +1037,20 @@ pub(crate) async fn get_canon_stats() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(stats))
 }
 
+pub(crate) async fn get_chunk_meta_stats() -> Result<HttpResponse, Error> {
+    let (block_types, extractors, total) = if let Some(retriever) = RETRIEVER.get() {
+        retriever.lock().unwrap().chunk_meta_distribution()
+    } else {
+        Default::default()
+    };
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "block_types": block_types,
+        "extractors": extractors,
+        "total": total,
+    })))
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct GoldenSampleResponse {
     pub status: Option<crate::db::golden_sample::GoldenSampleStatus>,

@@ -152,30 +152,37 @@ pub fn SearchBar() -> Element {
                         div {
                             key: "{idx}",
                             class: "p-4 bg-white dark:bg-gray-800 border border-gray-200
-                                   dark:border-gray-700 rounded-lg shadow-sm hover:shadow-md 
+                                   dark:border-gray-700 rounded-lg shadow-sm hover:shadow-md
                                    transition-shadow",
 
-                            // Score badge
+                            // Provenance row
                             div {
-                                class: "flex items-center justify-between mb-2",
+                                class: "flex items-center gap-2 mb-2 flex-wrap",
 
                                 span {
-                                    class: "text-xs font-medium px-2 py-1 bg-indigo-100
-                                           dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 
-                                           rounded",
-                                    "Score: {result.score:.2}"
+                                    class: "text-xs font-medium px-2 py-0.5 rounded bg-indigo-900 text-indigo-200",
+                                    "{result.block_type}"
                                 }
 
-                                span {
-                                    class: "text-xs text-gray-500 dark:text-gray-400",
-                                    "📄 {result.document}"
+                                if let Some(page) = result.page {
+                                    span {
+                                        class: "text-xs text-gray-400",
+                                        "p.{page}"
+                                    }
+                                }
+
+                                if result.extractor != "builtin" {
+                                    span {
+                                        class: "text-xs px-2 py-0.5 rounded bg-amber-900 text-amber-200",
+                                        "{result.extractor}"
+                                    }
                                 }
                             }
 
-                            // Content
+                            // Text
                             p {
-                                class: "text-gray-800 dark:text-gray-200 leading-relaxed",
-                                "{result.content}"
+                                class: "text-gray-800 dark:text-gray-200 leading-relaxed text-sm",
+                                "{result.text}"
                             }
                         }
                     }

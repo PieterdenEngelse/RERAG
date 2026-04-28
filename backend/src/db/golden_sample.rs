@@ -229,8 +229,12 @@ pub fn status() -> Option<GoldenSampleStatus> {
 }
 
 pub fn list(limit: usize) -> Vec<GoldenSampleEntry> {
-    let Some(mutex) = DB_CONN.get() else { return vec![] };
-    let Ok(conn) = mutex.lock() else { return vec![] };
+    let Some(mutex) = DB_CONN.get() else {
+        return vec![];
+    };
+    let Ok(conn) = mutex.lock() else {
+        return vec![];
+    };
     let limit = limit.clamp(1, 1000) as i64;
     let mut stmt = match conn.prepare(
         "SELECT id, chunk_text, baseline_token_count, baseline_token_ids,
@@ -263,10 +267,14 @@ pub fn list(limit: usize) -> Vec<GoldenSampleEntry> {
 /// the next ingest. Optionally rotates the seed so re-captures don't deterministically
 /// reproduce the prior selection.
 pub fn recapture(rotate_seed: bool) -> bool {
-    let Some(mutex) = DB_CONN.get() else { return false };
+    let Some(mutex) = DB_CONN.get() else {
+        return false;
+    };
     let Ok(conn) = mutex.lock() else { return false };
     let new_seed: i64 = if rotate_seed {
-        Utc::now().timestamp_nanos_opt().unwrap_or(DEFAULT_SEED as i64)
+        Utc::now()
+            .timestamp_nanos_opt()
+            .unwrap_or(DEFAULT_SEED as i64)
     } else {
         DEFAULT_SEED as i64
     };
@@ -275,7 +283,10 @@ pub fn recapture(rotate_seed: bool) -> bool {
         "UPDATE golden_sample_meta SET chunks_seen = 0, seed = ?1, captured_at = NULL, tokenizer_model = NULL WHERE id = 1",
         params![new_seed],
     );
-    info!(rotate_seed = rotate_seed, "golden_sample: recapture requested — sample cleared, will repopulate on next ingest");
+    info!(
+        rotate_seed = rotate_seed,
+        "golden_sample: recapture requested — sample cleared, will repopulate on next ingest"
+    );
     true
 }
 
@@ -286,7 +297,8 @@ mod tests {
 
     fn fresh_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("../db/schema.sql")).unwrap();
+        conn.execute_batch(include_str!("../db/schema.sql"))
+            .unwrap();
         conn
     }
 

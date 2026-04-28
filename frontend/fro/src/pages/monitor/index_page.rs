@@ -1548,6 +1548,15 @@ pub fn MonitorIndex() -> Element {
                                                     match file_data.read_bytes().await {
                                                         Ok(contents) => {
                                                             match api::upload_document(&file_name, &contents).await {
+                                                                Ok(resp) if !resp.index_errors.is_empty() => {
+                                                                    let mut s = state.write();
+                                                                    s.upload_failed_files += 1;
+                                                                    let err_text = resp.index_errors.iter()
+                                                                        .map(|e| e.error.as_str())
+                                                                        .collect::<Vec<_>>()
+                                                                        .join("; ");
+                                                                    s.upload_message = Some(format!("{}: {}", file_name, err_text));
+                                                                }
                                                                 Ok(_) => {
                                                                     let mut s = state.write();
                                                                     s.upload_completed_files += 1;

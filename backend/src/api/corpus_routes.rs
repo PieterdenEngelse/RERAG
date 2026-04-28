@@ -92,7 +92,12 @@ pub async fn get_corpus_handler(
         Some(c) => {
             let dir = config.path_manager.corpus_upload_dir(&c.slug);
             let doc_count = std::fs::read_dir(&dir)
-                .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_file())
+                        .count()
+                })
                 .unwrap_or(0);
             Ok(HttpResponse::Ok().json(json!({
                 "status": "ok",
@@ -110,7 +115,9 @@ pub async fn rename_corpus_handler(
     let slug = slug.into_inner();
     let conn = open_db(&config)?;
     match corpora::rename_corpus(&conn, &slug, &body.name) {
-        Ok(()) => Ok(HttpResponse::Ok().json(json!({ "status": "ok", "slug": slug, "name": body.name }))),
+        Ok(()) => {
+            Ok(HttpResponse::Ok().json(json!({ "status": "ok", "slug": slug, "name": body.name })))
+        }
         Err(CorporaError::NotFound(_)) => Ok(corpus_not_found(&slug)),
         Err(e) => Ok(HttpResponse::InternalServerError()
             .json(json!({ "status": "error", "message": e.to_string() }))),
@@ -162,8 +169,7 @@ pub async fn get_corpus_settings_handler(
         Some(_) => {
             let settings = corpora::get_corpus_settings(&conn, &slug)
                 .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
-            let build_meta = corpora::get_corpus_build_meta(&conn, &slug)
-                .unwrap_or_default();
+            let build_meta = corpora::get_corpus_build_meta(&conn, &slug).unwrap_or_default();
             Ok(HttpResponse::Ok().json(json!({
                 "status": "ok",
                 "slug": slug,
@@ -191,14 +197,27 @@ pub async fn patch_corpus_settings_handler(
             // Apply scalar settings immediately to the live retriever.
             if let Some(handle) = get_corpus_retriever(&slug) {
                 if let Ok(mut ret) = handle.lock() {
-                    if let Some(top_k) = body.search_top_k { ret.set_search_top_k(top_k); }
-                    if let Some(metric) = body.distance_metric { ret.distance_metric = metric; }
-                    if let Some(ef_c) = body.hnsw_ef_construction { ret.hnsw_ef_construction = ef_c; }
-                    if let Some(ef_s) = body.hnsw_ef_search { ret.hnsw_ef_search = ef_s; }
-                    if let Some(pq) = body.pq_subvectors { ret.pq_subvectors = pq; }
+                    if let Some(top_k) = body.search_top_k {
+                        ret.set_search_top_k(top_k);
+                    }
+                    if let Some(metric) = body.distance_metric {
+                        ret.distance_metric = metric;
+                    }
+                    if let Some(ef_c) = body.hnsw_ef_construction {
+                        ret.hnsw_ef_construction = ef_c;
+                    }
+                    if let Some(ef_s) = body.hnsw_ef_search {
+                        ret.hnsw_ef_search = ef_s;
+                    }
+                    if let Some(pq) = body.pq_subvectors {
+                        ret.pq_subvectors = pq;
+                    }
                 }
             }
-            Ok(HttpResponse::Ok().json(json!({ "status": "ok", "slug": slug, "settings": &*body })))
+            Ok(
+                HttpResponse::Ok()
+                    .json(json!({ "status": "ok", "slug": slug, "settings": &*body })),
+            )
         }
     }
 }
@@ -245,7 +264,8 @@ pub async fn corpus_delete_document_handler(
                     }
                 }
             }
-            Ok(HttpResponse::Ok().json(json!({ "status": "ok", "deleted": filename, "corpus": slug })))
+            Ok(HttpResponse::Ok()
+                .json(json!({ "status": "ok", "deleted": filename, "corpus": slug })))
         }
         Err(_) => Ok(HttpResponse::NotFound()
             .json(json!({ "status": "error", "message": "File not found" }))),
@@ -274,8 +294,7 @@ pub(crate) async fn corpus_upload_handler(
             .to_string();
 
         let filepath = upload_dir.join(&filename);
-        let mut f =
-            web::block(move || std::fs::File::create(&filepath)).await??;
+        let mut f = web::block(move || std::fs::File::create(&filepath)).await??;
         while let Some(chunk) = field.next().await {
             let data = chunk?;
             f = web::block(move || f.write_all(&data).map(|_| f)).await??;
@@ -307,25 +326,30 @@ pub(crate) async fn corpus_upload_handler(
             let mut file_contents = Vec::new();
             for filename in &uploaded_files {
                 let path = upload_dir.join(filename);
-                let content = crate::index::extract_text_async(&path).await;
-                file_contents.push((filename.clone(), path, content));
+                let ir = crate::index::extract_ir_async(&path).await;
+                file_contents.push((filename.clone(), path, ir));
             }
             match handle.lock() {
                 Ok(mut retriever) => {
-                    for (filename, path, content_opt) in file_contents {
-                        match content_opt {
-                            Some(content) => match crate::index::index_content_with_graph(
+                    for (filename, path, ir_opt) in file_contents {
+                        match ir_opt {
+                            Some(ir) => match crate::index::index_content_with_graph(
                                 &mut *retriever,
                                 &path,
-                                &content,
+                                &ir,
                                 effective_chunker_mode,
                                 chunker.as_ref(),
                                 &slug,
                             ) {
-                                Ok((n, _)) => indexed_files
+                                Ok((n, _)) if n > 0 => indexed_files
                                     .push(json!({ "file": filename, "chunks_indexed": n })),
-                                Err(e) => index_errors
-                                    .push(json!({ "file": filename, "error": e })),
+                                Ok(_) => index_errors.push(json!({
+                                    "file": filename,
+                                    "error": "Extraction returned no text — file is absent from the search index. Check the Parser tile: if status is 'empty', the PDF may be image-only (install pdftotext / tesseract) or use the Docling sidecar.",
+                                })),
+                                Err(e) => {
+                                    index_errors.push(json!({ "file": filename, "error": e }))
+                                }
                             },
                             None => index_errors.push(json!({
                                 "file": filename,
@@ -335,10 +359,14 @@ pub(crate) async fn corpus_upload_handler(
                     }
                     let _ = retriever.commit();
                 }
-                Err(_) => index_errors.push(json!({ "file": null, "error": "Failed to lock retriever" })),
+                Err(_) => {
+                    index_errors.push(json!({ "file": null, "error": "Failed to lock retriever" }))
+                }
             }
         } else {
-            index_errors.push(json!({ "file": null, "error": format!("No retriever for corpus '{}'", slug) }));
+            index_errors.push(
+                json!({ "file": null, "error": format!("No retriever for corpus '{}'", slug) }),
+            );
         }
     }
 
@@ -369,10 +397,7 @@ pub async fn corpus_search_handler(
         }
     };
 
-    let embed_q = crate::normalizer::normalize(
-        &query.q,
-        crate::normalizer::NormalizeTarget::Embed,
-    );
+    let embed_q = crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
     let index_q = crate::normalizer::to_index(&embed_q);
     let query_vector = if let Some(svc) = get_embedding_service() {
         svc.embed_query(&embed_q).await
@@ -405,8 +430,7 @@ pub async fn corpus_reindex_handler(
         if h.is_some() {
             h
         } else {
-            crate::corpus_registry::get_registry()
-                .and_then(|reg| reg.get_or_create(&slug).ok())
+            crate::corpus_registry::get_registry().and_then(|reg| reg.get_or_create(&slug).ok())
         }
     };
     let handle = match handle {
@@ -436,15 +460,13 @@ pub async fn corpus_reindex_handler(
     };
     let chunker = crate::index::default_chunker(effective_chunker_mode);
     let result = match handle.lock() {
-        Ok(mut retriever) => {
-            crate::index::index_all_documents(
-                &mut *retriever,
-                &upload_dir,
-                effective_chunker_mode,
-                chunker.as_ref(),
-                &slug,
-            )
-        }
+        Ok(mut retriever) => crate::index::index_all_documents(
+            &mut *retriever,
+            &upload_dir,
+            effective_chunker_mode,
+            chunker.as_ref(),
+            &slug,
+        ),
         Err(_) => Err("Failed to lock retriever".to_string()),
     };
     match result {
@@ -453,8 +475,12 @@ pub async fn corpus_reindex_handler(
             if let Ok(conn) = open_db(&config) {
                 let settings = corpora::get_corpus_settings(&conn, &slug).unwrap_or_default();
                 let meta = corpora::CorpusBuildMeta {
-                    chunker_mode: settings.chunker_mode.or_else(|| Some(format!("{:?}", config.chunker_mode).to_lowercase())),
-                    distance_metric: settings.distance_metric.map(|m| format!("{:?}", m).to_lowercase()),
+                    chunker_mode: settings
+                        .chunker_mode
+                        .or_else(|| Some(format!("{:?}", config.chunker_mode).to_lowercase())),
+                    distance_metric: settings
+                        .distance_metric
+                        .map(|m| format!("{:?}", m).to_lowercase()),
                     hnsw_ef_construction: settings.hnsw_ef_construction.or(Some(100)),
                     hnsw_ef_search: settings.hnsw_ef_search.or(Some(100)),
                     pq_subvectors: settings.pq_subvectors.or(Some(48)),
@@ -468,8 +494,9 @@ pub async fn corpus_reindex_handler(
                 "message": "Reindex complete",
             })))
         }
-        Err(e) => Ok(HttpResponse::InternalServerError()
-            .json(json!({ "status": "error", "message": e }))),
+        Err(e) => Ok(
+            HttpResponse::InternalServerError().json(json!({ "status": "error", "message": e }))
+        ),
     }
 }
 

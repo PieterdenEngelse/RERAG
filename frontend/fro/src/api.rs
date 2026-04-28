@@ -143,9 +143,10 @@ pub struct IoUringIoStats {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResult {
-    pub content: String,
-    pub score: f32,
-    pub document: String,
+    pub text: String,
+    pub block_type: String,
+    pub page: Option<u32>,
+    pub extractor: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -3399,6 +3400,19 @@ pub struct CanonStats {
 
 pub async fn fetch_canon_stats() -> Result<CanonStats, String> {
     fetch_json("/monitor/canon/stats").await
+}
+
+// ============ DocIR / Chunk Metadata Stats ============
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ChunkMetaStats {
+    pub block_types: std::collections::HashMap<String, u32>,
+    pub extractors: std::collections::HashMap<String, u32>,
+    pub total: u32,
+}
+
+pub async fn fetch_chunk_meta_stats() -> Result<ChunkMetaStats, String> {
+    fetch_json("/monitor/chunk-meta/stats").await
 }
 
 // ============ Named Corpora ============

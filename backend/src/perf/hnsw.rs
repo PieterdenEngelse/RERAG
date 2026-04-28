@@ -37,21 +37,36 @@ impl instant_distance::Point for Point {
     fn distance(&self, other: &Self) -> f32 {
         match self.metric {
             DistanceMetric::Cosine => {
-                let dot: f32 = self.data.iter().zip(other.data.iter()).map(|(a, b)| a * b).sum();
+                let dot: f32 = self
+                    .data
+                    .iter()
+                    .zip(other.data.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
                 let na: f32 = self.data.iter().map(|x| x * x).sum::<f32>().sqrt();
                 let nb: f32 = other.data.iter().map(|x| x * x).sum::<f32>().sqrt();
-                if na == 0.0 || nb == 0.0 { 1.0 } else { 1.0 - (dot / (na * nb)) }
+                if na == 0.0 || nb == 0.0 {
+                    1.0
+                } else {
+                    1.0 - (dot / (na * nb))
+                }
             }
             DistanceMetric::DotProduct => {
-                let dot: f32 = self.data.iter().zip(other.data.iter()).map(|(a, b)| a * b).sum();
+                let dot: f32 = self
+                    .data
+                    .iter()
+                    .zip(other.data.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
                 1.0 - dot // distance = 1 - similarity
             }
-            DistanceMetric::Euclidean => {
-                self.data.iter().zip(other.data.iter())
-                    .map(|(a, b)| (a - b) * (a - b))
-                    .sum::<f32>()
-                    .sqrt()
-            }
+            DistanceMetric::Euclidean => self
+                .data
+                .iter()
+                .zip(other.data.iter())
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum::<f32>()
+                .sqrt(),
         }
     }
 }
@@ -122,7 +137,10 @@ impl HnswIndex {
         let points: Vec<Point> = self
             .doc_vectors
             .values()
-            .map(|vec| Point { data: vec.clone(), metric })
+            .map(|vec| Point {
+                data: vec.clone(),
+                metric,
+            })
             .collect();
 
         let values: Vec<String> = self.doc_vectors.keys().cloned().collect();
@@ -155,7 +173,10 @@ impl HnswIndex {
             None => return Vec::new(),
         };
 
-        let query_point = Point { data: query.to_vec(), metric: self.metric };
+        let query_point = Point {
+            data: query.to_vec(),
+            metric: self.metric,
+        };
         let mut search = Search::default();
 
         let results: Vec<(String, f32)> = map

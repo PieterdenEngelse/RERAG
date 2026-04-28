@@ -2,6 +2,7 @@
 // Upload, reindex, search, rerank, summarize endpoints
 
 use super::*;
+use futures::future::join_all;
 
 // Rate limiting is enforced by middleware (see monitoring/rate_limit_middleware.rs).
 // The per-handler token-bucket implementation was removed to avoid double-limiting.
@@ -86,72 +87,90 @@ pub(crate) async fn upload_document_inner(
                 "error": "Reindex already in progress; automatic indexing skipped",
             }));
         } else if let Some(handle) = RETRIEVER.get() {
-            // Phase 1: Read all files asynchronously using io_uring (outside mutex)
-            // This is where io_uring provides 2-3x speedup on Linux
-            let mut file_contents: Vec<(String, std::path::PathBuf, Option<String>)> = Vec::new();
+            // Phase 1: Extract all files concurrently (outside mutex, I/O-bound)
+            let file_contents: Vec<(String, std::path::PathBuf, Option<crate::doc_ir::DocIR>)> =
+                join_all(uploaded_files.iter().map(|filename| {
+                    let path = Path::new(&upload_dir).join(filename);
+                    let fname = filename.clone();
+                    async move {
+                        let ir = index::extract_ir_async(&path).await;
+                        (fname, path, ir)
+                    }
+                }))
+                .await;
 
-            for filename in &uploaded_files {
-                let path = Path::new(&upload_dir).join(filename);
-                // Use io_uring async read
-                let content = index::extract_text_async(&path).await;
-                file_contents.push((filename.clone(), path, content));
+            // Phase 2a: Chunk + embed (CPU-bound, offloaded to thread pool)
+            let chunker_mode = config.chunker_mode;
+            let mut prepared_docs: Vec<(String, std::path::PathBuf, index::PreparedDoc)> =
+                Vec::new();
+            for (filename, path, ir_opt) in file_contents {
+                match ir_opt {
+                    Some(ir) => {
+                        let path_clone = path.clone();
+                        let prepared = tokio::task::spawn_blocking(move || {
+                            let chunker = crate::index::default_chunker(chunker_mode);
+                            index::prepare_doc(
+                                &path_clone,
+                                &ir,
+                                chunker_mode,
+                                chunker.as_ref(),
+                                "default",
+                            )
+                        })
+                        .await
+                        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+                        prepared_docs.push((filename, path, prepared));
+                    }
+                    None => index_errors.push(json!({
+                        "file": filename,
+                        "error": "Failed to extract document IR from file",
+                    })),
+                }
             }
 
-            // Phase 2: Index with mutex (brief lock, no I/O)
-            // Collect chunks for graph indexing (done outside mutex)
+            // Phase 2b: Write to index (brief mutex — only vector/Tantivy inserts)
             let mut graph_index_tasks: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
 
             match handle.lock() {
                 Ok(mut retriever) => {
-                    let chunker = crate::index::default_chunker(config.chunker_mode);
-
-                    for (filename, path, content_opt) in file_contents {
-                        match content_opt {
-                            Some(content) => {
-                                // Index the pre-read content and get chunks for graph
-                                match index::index_content_with_graph(
-                                    &mut *retriever,
-                                    &path,
-                                    &content,
-                                    config.chunker_mode,
-                                    chunker.as_ref(),
-                                    "default",
-                                ) {
-                                    Ok((chunk_count, graph_chunks)) => {
-                                        indexed_files.push(json!({
-                                            "file": filename.clone(),
-                                            "chunks_indexed": chunk_count,
-                                            "io_backend": io_backend,
-                                        }));
-                                        // Queue for graph indexing (outside mutex)
-                                        if !graph_chunks.is_empty() {
-                                            graph_index_tasks.push((
-                                                filename.clone(),
-                                                path.to_string_lossy().to_string(),
-                                                graph_chunks,
-                                            ));
-                                        }
+                    // One shared Tantivy writer for the whole batch.
+                    if let Err(e) = retriever.begin_batch() {
+                        index_errors
+                            .push(json!({ "file": null, "error": format!("begin_batch: {e}") }));
+                    } else {
+                        for (filename, path, prepared) in prepared_docs {
+                            match index::index_prepared_doc(&mut *retriever, prepared) {
+                                Ok((chunk_count, graph_chunks)) if chunk_count > 0 => {
+                                    indexed_files.push(json!({
+                                        "file": filename.clone(),
+                                        "chunks_indexed": chunk_count,
+                                        "io_backend": io_backend,
+                                    }));
+                                    if !graph_chunks.is_empty() {
+                                        graph_index_tasks.push((
+                                            filename.clone(),
+                                            path.to_string_lossy().to_string(),
+                                            graph_chunks,
+                                        ));
                                     }
-                                    Err(err) => index_errors.push(json!({
-                                        "file": filename,
-                                        "error": err,
-                                    })),
                                 }
-                            }
-                            None => {
-                                index_errors.push(json!({
+                                Ok((_, _)) => index_errors.push(json!({
                                     "file": filename,
-                                    "error": "Failed to extract text from file",
-                                }));
+                                    "error": "Extraction returned no text — file is absent from the search index. Check the Parser tile: if status is 'empty', the PDF may be image-only (install pdftotext / tesseract) or use the Docling sidecar.",
+                                })),
+                                Err(err) => index_errors.push(json!({
+                                    "file": filename,
+                                    "error": err,
+                                })),
                             }
                         }
-                    }
 
-                    if let Err(err) = retriever.commit() {
-                        index_errors.push(json!({
-                            "file": null,
-                            "error": format!("commit failed: {}", err),
-                        }));
+                        if let Err(err) = retriever.commit() {
+                            index_errors.push(json!({
+                                "file": null,
+                                "error": format!("commit failed: {}", err),
+                            }));
+                        }
                     }
                 }
                 Err(_) => {
@@ -544,7 +563,8 @@ pub(crate) async fn search_documents_inner(
     let retriever_handle = get_corpus_retriever(corpus_slug);
     if let Some(retriever) = retriever_handle {
         // Normalize query for each use: Embed for vector search, Index for BM25
-        let embed_q = crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
+        let embed_q =
+            crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
         crate::monitoring::record_canon_embed_query(query.q.len(), embed_q.len());
         let index_q = crate::normalizer::to_index(&embed_q);
         crate::monitoring::record_canon_index_query(embed_q.len(), index_q.len());
@@ -581,7 +601,21 @@ pub(crate) async fn search_documents_inner(
         }
         let mut merged: Vec<(String, f32)> = score_map.into_iter().collect();
         merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let results: Vec<String> = merged.into_iter().take(10).map(|(c, _)| c).collect();
+        let top: Vec<String> = merged.into_iter().take(10).map(|(c, _)| c).collect();
+
+        let results: Vec<serde_json::Value> = top
+            .iter()
+            .map(|content| {
+                let meta = retriever.meta_for_content(content);
+                json!({
+                    "text": content,
+                    "block_type": meta.map(|m| m.block_type.as_str()).unwrap_or("Text"),
+                    "page": meta.and_then(|m| m.page),
+                    "extractor": meta.map(|m| m.extractor.as_str()).unwrap_or("builtin"),
+                })
+            })
+            .collect();
+
         let elapsed = start.elapsed().as_millis() as u64;
 
         // Record tool execution

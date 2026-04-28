@@ -41,8 +41,8 @@ impl CorpusRegistry {
         }
         let index_dir = self.pm.corpus_index_dir(slug);
         let vector_file = self.pm.corpus_vector_file(slug);
-        let mut retriever = Retriever::new_with_paths(index_dir, vector_file)
-            .map_err(|e| e.to_string())?;
+        let mut retriever =
+            Retriever::new_with_paths(index_dir, vector_file).map_err(|e| e.to_string())?;
         // Apply per-corpus settings (best-effort — don't fail if DB unavailable).
         let db_path = self.pm.db_path("documents");
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
@@ -65,7 +65,8 @@ impl CorpusRegistry {
             }
         }
         let handle = Arc::new(Mutex::new(retriever));
-        self.retrievers.insert(slug.to_string(), Arc::clone(&handle));
+        self.retrievers
+            .insert(slug.to_string(), Arc::clone(&handle));
         info!("corpus_registry: created retriever for slug='{}'", slug);
         Ok(handle)
     }

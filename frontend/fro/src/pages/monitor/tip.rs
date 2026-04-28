@@ -1,4 +1,4 @@
-use crate::api::{fetch_canon_stats, fetch_chunking_stats, fetch_parser_stats, CanonStats, CallSiteStats, ChunkingStatsSnapshot, FileRecord, ParserStats, StoreRecord};
+use crate::api::{fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_parser_stats, CanonStats, CallSiteStats, ChunkMetaStats, ChunkingStatsSnapshot, FileRecord, ParserStats, StoreRecord};
 use crate::app::Route;
 use crate::components::monitor::*;
 use crate::pages::hardware::constants::{
@@ -45,9 +45,11 @@ pub fn MonitorTip() -> Element {
     let mut show_ligature_info = use_signal(|| false);
     let mut show_extractors_info = use_signal(|| false);
     let mut show_chunker_info = use_signal(|| false);
+    let mut show_docir_info = use_signal(|| false);
     let mut parser_stats: Signal<Option<Result<ParserStats, String>>> = use_signal(|| None);
     let mut chunking_stats: Signal<Option<Result<Vec<ChunkingStatsSnapshot>, String>>> = use_signal(|| None);
     let mut canon_stats: Signal<Option<Result<CanonStats, String>>> = use_signal(|| None);
+    let mut chunk_meta_stats: Signal<Option<Result<ChunkMetaStats, String>>> = use_signal(|| None);
 
     use_future(move || async move {
         loop {
@@ -56,6 +58,7 @@ pub fn MonitorTip() -> Element {
                 fetch_chunking_stats(20).await.map(|r| r.snapshots)
             ));
             canon_stats.set(Some(fetch_canon_stats().await));
+            chunk_meta_stats.set(Some(fetch_chunk_meta_stats().await));
             TimeoutFuture::new(5_000).await;
         }
     });
@@ -189,6 +192,93 @@ pub fn MonitorTip() -> Element {
                 // arrow
                 div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
 
+                // ── DocIR ──
+                div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
+                    div { class: "flex items-center justify-between mb-3",
+                        div { class: "flex items-center gap-2",
+                            h3 { class: "text-sm font-semibold text-gray-200", "DocIR" }
+                            button {
+                                class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
+                                onclick: move |_| show_docir_info.set(true),
+                                title: "About DocIR structured extraction",
+                                InfoIcon {}
+                            }
+                        }
+                        span { class: "text-xs text-gray-400", "corpus · live" }
+                    }
+                    match &*chunk_meta_stats.read() {
+                        Some(Ok(stats)) if stats.total == 0 => rsx! {
+                            p { class: "text-xs text-gray-500 pt-2", "Upload a document to see block structure." }
+                        },
+                        Some(Ok(stats)) => {
+                            let max_bt = stats.block_types.values().copied().max().unwrap_or(1) as f64;
+                            let mut bt_sorted: Vec<(&String, &u32)> = stats.block_types.iter().collect();
+                            bt_sorted.sort_by(|a, b| b.1.cmp(a.1));
+                            let mut ex_sorted: Vec<(&String, &u32)> = stats.extractors.iter().collect();
+                            ex_sorted.sort_by(|a, b| b.1.cmp(a.1));
+                            rsx! {
+                                div { class: "space-y-3 overflow-y-auto",
+                                    div { class: "space-y-1",
+                                        for (name, count) in bt_sorted.iter() {
+                                            {
+                                                let bar_pct = (**count as f64 / max_bt * 100.0) as u32;
+                                                let color = match name.as_str() {
+                                                    "Header"  => "bg-sky-600",
+                                                    "Table"   => "bg-emerald-600",
+                                                    "Code"    => "bg-violet-600",
+                                                    "Formula" => "bg-amber-600",
+                                                    "Image"   => "bg-pink-600",
+                                                    _         => "bg-gray-600",
+                                                };
+                                                let label_color = match name.as_str() {
+                                                    "Header"  => "text-sky-300",
+                                                    "Table"   => "text-emerald-300",
+                                                    "Code"    => "text-violet-300",
+                                                    "Formula" => "text-amber-300",
+                                                    "Image"   => "text-pink-300",
+                                                    _         => "text-gray-400",
+                                                };
+                                                rsx! {
+                                                    div { class: "flex items-center gap-1.5",
+                                                        span { class: "text-xs font-mono w-16 shrink-0 {label_color}", "{name}" }
+                                                        div { class: "flex-1 bg-gray-700 rounded-full h-1",
+                                                            div { class: "{color} h-1 rounded-full", style: "width:{bar_pct}%" }
+                                                        }
+                                                        span { class: "text-xs text-gray-400 w-8 text-right shrink-0", "{count}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "pt-1 border-t border-gray-700 space-y-0.5",
+                                        for (name, count) in ex_sorted.iter() {
+                                            {
+                                                let c = match name.as_str() {
+                                                    "docling"      => "text-amber-300",
+                                                    "unstructured" => "text-sky-300",
+                                                    _              => "text-gray-500",
+                                                };
+                                                rsx! {
+                                                    div { class: "flex items-center justify-between",
+                                                        span { class: "text-xs font-mono {c}", "{name}" }
+                                                        span { class: "text-xs text-gray-400", "{count}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                        None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                    }
+                }
+
+                // arrow
+                div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
+
                 // ── Chunker ──
                 div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
                     div { class: "flex items-center justify-between mb-3",
@@ -289,6 +379,92 @@ pub fn MonitorTip() -> Element {
                 }
             }
 
+            // ── DocIR info modal ──────────────────────────────────────────────
+            if show_docir_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_docir_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[680px] max-h-[85vh] flex flex-col shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "Document IR — Structured Extraction" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_docir_info.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div { class: "flex-1 overflow-y-auto min-h-0 px-6 py-4 text-xs text-gray-300 space-y-3",
+                            p {
+                                "Before chunking, every document is parsed into a typed "
+                                span { class: "font-semibold text-gray-100", "Document IR" }
+                                " — a sequence of blocks, each with a type, page number, and extractor label."
+                            }
+                            div { class: "rounded bg-gray-900 border border-gray-700 p-3 space-y-1.5",
+                                p { class: "text-gray-200 font-semibold mb-1", "Block types" }
+                                div { class: "grid grid-cols-2 gap-x-4 gap-y-1",
+                                    div { span { class: "text-sky-300 font-mono", "Header" } " — section heading; flushes the current text accumulation and starts a new chunk boundary" }
+                                    div { span { class: "text-gray-300 font-mono", "Text" } " — body paragraph; appended to the running accumulation, inherits the first block's meta" }
+                                    div { span { class: "text-emerald-300 font-mono", "Table" } " — atomic; always gets its own chunk so rows are never split across chunk boundaries" }
+                                    div { span { class: "text-violet-300 font-mono", "Code" } " — atomic; fenced as a single chunk regardless of length" }
+                                    div { span { class: "text-amber-300 font-mono", "Formula" } " — atomic; LaTeX/MathML expressions stay intact" }
+                                    div { span { class: "text-pink-300 font-mono", "Image" } " — atomic; alt-text or caption stored as the chunk content" }
+                                    div { span { class: "text-gray-300 font-mono", "List" } " — accumulated like text; ordered/unordered flag carried in metadata" }
+                                    div { span { class: "text-gray-400 font-mono", "Caption / Footnote" } " — treated as text, associated with the nearest structural block" }
+                                }
+                            }
+                            p {
+                                span { class: "font-semibold text-gray-100", "Why it matters for retrieval: " }
+                                "A Table that spans 400 tokens is retrieved as a unit — no half-row splits. Headers provide context for the text that follows. Page numbers survive from source document through to search results, enabling citations. The extractor label tells you which path produced the structure."
+                            }
+                            p {
+                                span { class: "font-semibold text-gray-100", "Accumulation policy: " }
+                                "Text blocks merge into a running buffer until the chunker's token limit is reached. Atomic blocks (Table, Code, Formula, Image) always flush the buffer first, then emit as their own chunk. Headers flush the buffer and set the metadata context for the next accumulation — so the heading's block_type propagates to the following paragraph chunks."
+                            }
+                            div { class: "rounded bg-gray-900 border border-gray-700 p-3 space-y-1.5",
+                                p { class: "text-gray-200 font-semibold mb-1", "Extractor labels" }
+                                div { class: "space-y-1 text-gray-400",
+                                    div {
+                                        span { class: "font-mono text-amber-300", "docling" }
+                                        " — Docling sidecar ("
+                                        span { class: "font-mono text-gray-200", "DOCLING_ENABLED=true" }
+                                        "). ML-based layout analysis for PDF: detects reading order, table boundaries, and structure that isn't encoded in the file format."
+                                    }
+                                    div {
+                                        span { class: "font-mono text-gray-300", "builtin/pdf" }
+                                        " — built-in PDF path (pdftotext → pdf_extract → OCR cascade). Used when Docling is off or unavailable."
+                                    }
+                                    div {
+                                        span { class: "font-mono text-gray-300", "builtin/docx · builtin/epub · builtin/pptx · builtin/odt" }
+                                        " — structured Rust extractors that parse the XML/ZIP format directly to produce typed blocks (heading styles → Header blocks, etc.)."
+                                    }
+                                    div {
+                                        span { class: "font-mono text-gray-300", "builtin/markdown · builtin/html · builtin/code" }
+                                        " — lightweight parsers for text-native formats where structure is explicit in the syntax."
+                                    }
+                                    div {
+                                        span { class: "font-mono text-gray-300", "builtin/spreadsheet · builtin/text" }
+                                        " — flat-text fallback: content extracted as a single Text block with no structural decomposition."
+                                    }
+                                }
+                            }
+                        }
+
+                        div { class: "px-6 py-3 border-t border-gray-700 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_docir_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── TIP info modal ──────────────────────────────────────────────
             if show_tip_info() {
                 div {
@@ -313,54 +489,59 @@ pub fn MonitorTip() -> Element {
                         // Tab bar
                         div { class: "flex border-b border-gray-700 shrink-0 px-4 gap-1",
                             button {
-                                class: if tip_tab() == 0 { "px-3 py-2 text-xs font-medium text-sky-400 border-b-2 border-sky-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                class: if tip_tab() == 0 { "px-3 py-2 text-xs font-medium text-gray-200 border-b-2 border-gray-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(0),
-                                "0 · Parser"
-                            }
-                            button {
-                                class: if tip_tab() == 1 { "px-3 py-2 text-xs font-medium text-amber-400 border-b-2 border-amber-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
-                                onclick: move |_| tip_tab.set(1),
-                                "1 · Canonicalization"
-                            }
-                            button {
-                                class: if tip_tab() == 2 { "px-3 py-2 text-xs font-medium text-emerald-400 border-b-2 border-emerald-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
-                                onclick: move |_| tip_tab.set(2),
-                                "2 · Typography & Tag Cleanup"
-                            }
-                            button {
-                                class: if tip_tab() == 3 { "px-3 py-2 text-xs font-medium text-violet-400 border-b-2 border-violet-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
-                                onclick: move |_| tip_tab.set(3),
-                                "3 · Orchestration"
-                            }
-                            button {
-                                class: if tip_tab() == 4 { "px-3 py-2 text-xs font-medium text-gray-200 border-b-2 border-gray-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
-                                onclick: move |_| tip_tab.set(4),
                                 "Pipeline Flow"
+                            }
+                            button {
+                                class: if tip_tab() == 1 { "px-3 py-2 text-xs font-medium text-sky-400 border-b-2 border-sky-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(1),
+                                "1 · Parser"
+                            }
+                            button {
+                                class: if tip_tab() == 2 { "px-3 py-2 text-xs font-medium text-amber-400 border-b-2 border-amber-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(2),
+                                "2 · Canonicalization"
+                            }
+                            button {
+                                class: if tip_tab() == 3 { "px-3 py-2 text-xs font-medium text-emerald-400 border-b-2 border-emerald-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(3),
+                                "3 · Typography & Tag Cleanup"
+                            }
+                            button {
+                                class: if tip_tab() == 4 { "px-3 py-2 text-xs font-medium text-violet-400 border-b-2 border-violet-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(4),
+                                "4 · Orchestration"
+                            }
+                            button {
+                                class: if tip_tab() == 5 { "px-3 py-2 text-xs font-medium text-rose-400 border-b-2 border-rose-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
+                                onclick: move |_| tip_tab.set(5),
+                                "5 · DocIR"
                             }
                         }
 
                         // Tab content — overflow-y-auto so Pipeline Flow tab can scroll if needed
                         div { class: "flex-1 overflow-y-auto min-h-0 px-6 py-4 text-xs text-gray-300",
 
-                            // Intro (shown on all tabs except Pipeline)
-                            if tip_tab() != 4 {
+                            // Intro (shown on non-Pipeline-Flow, non-DocIR tabs)
+                            if tip_tab() != 0 && tip_tab() != 5 {
                                 div { class: "text-xs text-gray-300 mb-3",
                                     "Four components that together form the ingestion pipeline: "
-                                    span { class: "text-sky-400 font-semibold underline cursor-pointer hover:text-sky-300", onclick: move |_| tip_tab.set(0), "Parser" }
+                                    span { class: "text-sky-400 font-semibold underline cursor-pointer hover:text-sky-300", onclick: move |_| tip_tab.set(1), "Parser" }
                                     ", "
-                                    span { class: "text-amber-400 font-semibold underline cursor-pointer hover:text-amber-300", onclick: move |_| tip_tab.set(1), "Canonicalization" }
+                                    span { class: "text-amber-400 font-semibold underline cursor-pointer hover:text-amber-300", onclick: move |_| tip_tab.set(2), "Canonicalization" }
                                     ", "
-                                    span { class: "text-emerald-400 font-semibold underline cursor-pointer hover:text-emerald-300", onclick: move |_| tip_tab.set(2), "Typography & Tag Cleanup" }
+                                    span { class: "text-emerald-400 font-semibold underline cursor-pointer hover:text-emerald-300", onclick: move |_| tip_tab.set(3), "Typography & Tag Cleanup" }
                                     ", "
-                                    span { class: "text-violet-400 font-semibold underline cursor-pointer hover:text-violet-300", onclick: move |_| tip_tab.set(3), "Orchestration" }
+                                    span { class: "text-violet-400 font-semibold underline cursor-pointer hover:text-violet-300", onclick: move |_| tip_tab.set(4), "Orchestration" }
                                     ". Canonicalization is not a single discrete stage — it is applied at multiple points around Typography & Tag Cleanup."
                                 }
                             }
 
-                            // ── Tab 0: Parser ──
-                            if tip_tab() == 0 {
+                            // ── Tab 1: Parser ──
+                            if tip_tab() == 1 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "0 · Parser" }
+                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "1 · Parser" }
                                     p { class: "text-gray-400",
                                         "Entry point. Reads raw bytes and converts them to plain text via "
                                         span {
@@ -436,7 +617,9 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-500 italic", "Every format then goes through Format cleanup → normalize(Store)." }
                                         }
                                     }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
+                                        a { href: "http://localhost:1789/docu/index/embeddings", class: "text-sky-400 hover:text-sky-300 underline", "Embeddings" }
+                                    }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                         li { "Failed parse → zero chunks, zero vectors." }
                                         li {
@@ -761,7 +944,7 @@ pub fn MonitorTip() -> Element {
                                         }
                                     }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                        li { "Parse quality sets the ceiling on cluster coherence." }
+                                        li { "Parse quality sets the ceiling on cluster coherence (because embeddings cannot recover meaning that was destroyed or corrupted before they were created)." }
                                         li { "Encoding detection prevents "
                                             span {
                                                 class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
@@ -808,34 +991,44 @@ pub fn MonitorTip() -> Element {
                                     }
                                     p { class: "text-gray-400", "Runs immediately after format extraction, before Store normalization. Two passes, each applied only to the formats that need it." }
                                     if show_format_cleanup_info() {
-                                        div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2",
-                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_format_cleanup_info.set(false), "✕" }
+                                        div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                                            onclick: move |_| show_format_cleanup_info.set(false),
+                                            div { class: "bg-gray-800 border border-sky-900 rounded-lg p-4 text-xs text-gray-300 space-y-2 max-w-md w-full mx-4",
+                                                onclick: move |e| e.stop_propagation(),
+                                                div { class: "flex items-center justify-between -mt-1 -mr-1 mb-1",
+                                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "Format Cleanup" }
+                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_format_cleanup_info.set(false), "✕" }
+                                                }
+                                                p { "Removes artifacts that are byproducts of the source format, not the content itself. The extractor gives you text, format cleanup gives you " span { class: "italic", "clean" } " text." }
+                                                p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 1 — HTML tag stripping" }
+                                                p { class: "text-gray-400", "HTML only. The extractor preserves markup to avoid losing structure; this pass removes all tags and decodes HTML entities, leaving only the text nodes." }
+                                                p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
+                                                p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
+                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    li { "Curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight ASCII ' \"" }
+                                                    li { "Em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \"" }
+                                                    li { "Non-breaking hyphen (\u{2011}) → \"-\"" }
+                                                    li { "Ellipsis (\u{2026}) → \"...\"" }
+                                                    li { "PDF ligatures (ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ) → letter pairs (fi fl ff ffi ffl st)" }
+                                                }
+                                                p { class: "text-gray-300 pt-1", "Runs before NFC so the canonicalizer sees consistent input regardless of source format." }
+                                                p { class: "text-gray-300", "Text and code skip both passes — they arrive as clean UTF-8 with no format artifacts." }
+                                                div { class: "ml-3 mt-1 text-gray-400 space-y-0.5",
+                                                    p { class: "font-mono text-gray-400", ".txt, .md, .rs, .py, .json, .yaml, etc." }
+                                                    p { "Already UTF‑8, already plain text" }
+                                                    p { "No markup, no ligatures, no publishing‑tool artifacts" }
+                                                }
                                             }
-                                            p { "Removes artifacts that are byproducts of the source format, not the content itself. The extractor gives you text, format cleanup gives you " span { class: "italic", "clean" } " text." }
-                                            p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 1 — HTML tag stripping" }
-                                            p { class: "text-gray-400", "HTML only. The extractor preserves markup to avoid losing structure; this pass removes all tags and decodes HTML entities, leaving only the text nodes." }
-                                            p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
-                                            p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                                li { "Curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight ASCII ' \"" }
-                                                li { "Em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \"" }
-                                                li { "Non-breaking hyphen (\u{2011}) → \"-\"" }
-                                                li { "Ellipsis (\u{2026}) → \"...\"" }
-                                                li { "PDF ligatures (ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ) → letter pairs (fi fl ff ffi ffl st)" }
-                                            }
-                                            p { class: "text-gray-500 pt-1", "Runs before NFC so the canonicalizer sees consistent input regardless of source format." }
-                                            p { class: "text-gray-500", "Text and code skip both passes — they arrive as clean UTF-8 with no format artifacts." }
                                         }
                                     }
                                     p { class: "italic text-gray-300 pt-1", "The unseeable first cause of retrieval quality." }
                                 }
                             }
 
-                            // ── Tab 1: Canonicalization ──
-                            if tip_tab() == 1 {
+                            // ── Tab 2: Canonicalization ──
+                            if tip_tab() == 2 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "1 · Canonicalization" }
+                                    h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "2 · Canonicalization" }
                                     p { class: "text-gray-400", "Three targets, applied at different stages. Each target is a strict superset of the previous." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
@@ -946,10 +1139,10 @@ pub fn MonitorTip() -> Element {
                                 }
                             }
 
-                            // ── Tab 2: Typography & Tag Cleanup ──
-                            if tip_tab() == 2 {
+                            // ── Tab 3: Typography & Tag Cleanup ──
+                            if tip_tab() == 3 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "2 · Typography & Tag Cleanup" }
+                                    h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "3 · Typography & Tag Cleanup" }
                                     p { class: "text-gray-400", "Structures canonicalised text into semantic units for embedding, indexing, and retrieval. Includes chunking, segmentation, and boilerplate removal." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -984,10 +1177,10 @@ pub fn MonitorTip() -> Element {
                                 }
                             }
 
-                            // ── Tab 3: Orchestration ──
-                            if tip_tab() == 3 {
+                            // ── Tab 4: Orchestration ──
+                            if tip_tab() == 4 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "3 · Orchestration" }
+                                    h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "4 · Orchestration" }
                                     p { class: "text-gray-400", "Coordinates the three prior layers into a deterministic, reproducible ingestion flow. Defines configuration, execution order, and output formats." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -1019,8 +1212,84 @@ pub fn MonitorTip() -> Element {
                                 }
                             }
 
-                            // ── Tab 4: Pipeline Flow ──
-                            if tip_tab() == 4 {
+                            // ── Tab 5: DocIR ──
+                            if tip_tab() == 5 {
+                                div { class: "space-y-3",
+                                    h3 { class: "text-xs font-bold text-rose-400 uppercase tracking-wide", "5 · Document IR — Structured Extraction" }
+                                    p { class: "text-gray-300",
+                                        "Before chunking, every document is parsed into a "
+                                        span { class: "font-semibold text-gray-100", "Document Intermediate Representation (DocIR)" }
+                                        " — a typed sequence of blocks. Each block carries a type, page number, and the name of the extractor that produced it. The chunker consumes DocIR instead of flat text."
+                                    }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Block types and chunking rules" }
+                                    div { class: "rounded bg-gray-900 border border-gray-700 p-3 space-y-1.5 text-gray-300",
+                                        div { class: "grid grid-cols-2 gap-x-4 gap-y-1.5",
+                                            div {
+                                                span { class: "font-mono text-sky-300", "Header" }
+                                                " — strong boundary: flushes the current text accumulation, starts a fresh chunk. The header's metadata (page, extractor) becomes the context for the following text."
+                                            }
+                                            div {
+                                                span { class: "font-mono text-gray-300", "Text / List / Caption / Footnote" }
+                                                " — appended to the running buffer. The first block in the accumulation donates its metadata to all chunks produced from it."
+                                            }
+                                            div {
+                                                span { class: "font-mono text-emerald-300", "Table" }
+                                                " — atomic: buffer is flushed first, then the whole table becomes exactly one chunk. Rows are never split."
+                                            }
+                                            div {
+                                                span { class: "font-mono text-violet-300", "Code" }
+                                                " — atomic: fenced as a single chunk regardless of length."
+                                            }
+                                            div {
+                                                span { class: "font-mono text-amber-300", "Formula" }
+                                                " — atomic: LaTeX/MathML expressions stay intact."
+                                            }
+                                            div {
+                                                span { class: "font-mono text-pink-300", "Image" }
+                                                " — atomic: alt-text or caption is the chunk content."
+                                            }
+                                        }
+                                    }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Why it improves RAG" }
+                                    ul { class: "ml-3 space-y-1 list-disc list-outside text-gray-400",
+                                        li { span { class: "text-gray-200", "Precision retrieval: " } "a Table is retrieved as a complete object — no partial rows, no split formulas." }
+                                        li { span { class: "text-gray-200", "Header context: " } "the section heading's metadata propagates forward into paragraph chunks, so the retriever knows which section a chunk belongs to." }
+                                        li { span { class: "text-gray-200", "Citations: " } "page numbers survive from source → DocIR block → chunk → search result." }
+                                        li { span { class: "text-gray-200", "Extractor provenance: " } "the "
+                                            span { class: "font-mono text-amber-300", "extractor" }
+                                            " field tells the retriever whether structure came from the built-in parser or a sidecar service like Docling."
+                                        }
+                                    }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Extractor labels" }
+                                    ul { class: "ml-3 space-y-1 list-disc list-outside text-gray-400",
+                                        li {
+                                            span { class: "font-mono text-amber-300", "docling" }
+                                            " — Docling sidecar (enable with "
+                                            span { class: "font-mono text-gray-200", "DOCLING_ENABLED=true" }
+                                            "). ML layout analysis for PDFs: reading order, table boundaries, structure not encoded in the file format."
+                                        }
+                                        li {
+                                            span { class: "font-mono text-gray-300", "builtin/pdf" }
+                                            " — built-in PDF cascade (pdftotext → pdf_extract → OCR). Used when Docling is off or unavailable."
+                                        }
+                                        li {
+                                            span { class: "font-mono text-gray-300", "builtin/docx · /epub · /pptx · /odt" }
+                                            " — structured Rust parsers that map XML/ZIP format features to typed DocIR blocks."
+                                        }
+                                        li {
+                                            span { class: "font-mono text-gray-300", "builtin/markdown · /html · /code" }
+                                            " — lightweight parsers for text-native formats with explicit structure syntax."
+                                        }
+                                        li {
+                                            span { class: "font-mono text-gray-300", "builtin/spreadsheet · /text" }
+                                            " — flat-text fallback: single Text block, no structural decomposition."
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── Tab 0: Pipeline Flow ──
+                            if tip_tab() == 0 {
                                 div { class: "space-y-4",
                                 div { class: "flex justify-end -mt-1 -mr-1",
                                     button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_tip_info.set(false), "✕" }

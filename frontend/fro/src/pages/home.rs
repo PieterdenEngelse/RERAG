@@ -1173,6 +1173,13 @@ pub fn Home() -> Element {
                                                         match file_data.read_bytes().await {
                                                             Ok(contents) => {
                                                                 match api::upload_document(&file_name, &contents).await {
+                                                                    Ok(resp) if !resp.index_errors.is_empty() => {
+                                                                        let err_text = resp.index_errors.iter()
+                                                                            .map(|e| e.error.as_str())
+                                                                            .collect::<Vec<_>>()
+                                                                            .join("; ");
+                                                                        upload_status.set(Some(format!("✗ {}: {}", file_name, err_text)));
+                                                                    }
                                                                     Ok(_resp) => {
                                                                         success_count += 1;
                                                                     }

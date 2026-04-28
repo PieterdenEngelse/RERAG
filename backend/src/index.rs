@@ -3,9 +3,9 @@ use crate::embedder;
 use crate::memory::chunker_factory::{create_chunker, Chunker};
 use crate::mime_detect::{detect_content_type, ContentType};
 use crate::monitoring::{
-    record_canon_store, record_extraction_format, record_ocr_attempted, record_ocr_no_pages, record_ocr_no_text,
-    record_ocr_ok, record_ocr_unavailable, DetectionInfo, EXTRACTION_CHARS_TOTAL,
-    EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL,
+    record_canon_store, record_extraction_format, record_ocr_attempted, record_ocr_no_pages,
+    record_ocr_no_text, record_ocr_ok, record_ocr_unavailable, DetectionInfo,
+    EXTRACTION_CHARS_TOTAL, EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL,
 };
 use crate::retriever::Retriever;
 use std::collections::HashMap;
@@ -236,7 +236,14 @@ pub fn index_file(
 ) -> Result<usize, String> {
     // Get detection info for observability
     let (_, detection_info) = detect_file_type_with_info(path)?;
-    index_file_with_detection(retriever, path, chunker_mode, chunker, detection_info, corpus_slug)
+    index_file_with_detection(
+        retriever,
+        path,
+        chunker_mode,
+        chunker,
+        detection_info,
+        corpus_slug,
+    )
 }
 
 /// Index pre-read content directly (no file I/O)
@@ -304,7 +311,7 @@ pub fn index_content_direct(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], vector, None) {
             warn!(
                 "index_content_direct: Failed to index chunk {}: {}",
                 chunk_id, e
@@ -329,23 +336,46 @@ pub fn index_content_direct(
 
 /// Index content and return chunks for knowledge graph integration
 /// Returns (chunk_count, Vec<(chunk_id, chunk_content)>)
-pub fn index_content_with_graph(
-    retriever: &mut Retriever,
+/// All per-document work that does NOT need the retriever lock:
+/// chunking, normalisation, and embedding.
+pub struct PreparedDoc {
+    pub filename: String,
+    /// Embed-normalised chunks (used for HNSW/vector store).
+    pub chunks: Vec<String>,
+    /// Index-normalised chunks (used for Tantivy full-text).
+    pub index_chunks: Vec<String>,
+    pub chunk_metas: Vec<crate::doc_ir::ChunkMeta>,
+    pub embeddings: Vec<crate::embedder::EmbeddingVector>,
+    pub chunker_mode: ChunkerMode,
+    pub chunk_duration_ms: u64,
+    pub embed_duration_ms: u64,
+    pub chunker_stats: Option<crate::memory::chunker_factory::ChunkingStats>,
+}
+
+/// Phase 1 of indexing: chunk + embed, no retriever needed.
+/// Call this before acquiring the retriever mutex so searches are not blocked
+/// during the (slow) ONNX embedding pass.
+pub fn prepare_doc(
     path: &Path,
-    content: &str,
+    ir: &crate::doc_ir::DocIR,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     corpus_slug: &str,
-) -> Result<(usize, Vec<(String, String)>), String> {
+) -> PreparedDoc {
     let filename = path
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
 
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
     let mut embed_file_out = 0usize;
-    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename)
+    let (raw_texts, chunk_metas): (Vec<String>, Vec<crate::doc_ir::ChunkMeta>) =
+        crate::memory::chunker_factory::chunk_ir(ir, chunker)
+            .into_iter()
+            .unzip();
+    let chunks: Vec<String> = apply_context_prefix(raw_texts, &filename)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
@@ -370,38 +400,70 @@ pub fn index_content_with_graph(
             out
         })
         .collect();
-    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
-    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
+    crate::monitoring::record_canon_file_embed(&filename, embed_file_in, embed_file_out);
+    crate::monitoring::record_canon_file_index(&filename, index_file_in, index_file_out);
     let chunk_duration = chunk_start.elapsed();
-    let mut ok = 0usize;
-    let mut total_tokens = 0usize;
-    let mut graph_chunks = Vec::new();
 
     let embed_start = std::time::Instant::now();
     let embeddings = embedder::embed_batch(&chunks);
     let embed_duration = embed_start.elapsed();
     debug!(
-        "index_content_with_graph: embedding completed for '{}' chunks={} duration_ms={}",
+        "prepare_doc: embedded '{}' chunks={} ms={}",
         filename,
         chunks.len(),
         embed_duration.as_millis()
     );
 
+    PreparedDoc {
+        chunker_stats: chunker.stats(),
+        filename,
+        chunks,
+        index_chunks,
+        chunk_metas,
+        embeddings,
+        chunker_mode,
+        chunk_duration_ms: chunk_duration.as_millis() as u64,
+        embed_duration_ms: embed_duration.as_millis() as u64,
+    }
+}
+
+/// Phase 2 of indexing: write pre-computed chunks+embeddings into the retriever.
+/// The caller must hold the retriever lock (begin_batch before, commit after).
+pub fn index_prepared_doc(
+    retriever: &mut Retriever,
+    prepared: PreparedDoc,
+) -> Result<(usize, Vec<(String, String)>), String> {
+    let PreparedDoc {
+        filename,
+        chunks,
+        index_chunks,
+        chunk_metas,
+        embeddings,
+        chunker_mode,
+        chunk_duration_ms,
+        embed_duration_ms,
+        chunker_stats,
+    } = prepared;
+
     if embeddings.len() != chunks.len() {
         return Err("embedding batch size mismatch".into());
     }
 
+    let mut ok = 0usize;
+    let mut total_tokens = 0usize;
+    let mut graph_chunks = Vec::new();
+
     for (i, vector) in embeddings.into_iter().enumerate() {
         let chunk = &chunks[i];
         let chunk_id = format!("{}#{}", filename, i);
-
         total_tokens += chunk.split_whitespace().count();
-
-        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
-            warn!(
-                "index_content_with_graph: Failed to index chunk {}: {}",
-                chunk_id, e
-            );
+        if let Err(e) = retriever.index_chunk(
+            &chunk_id,
+            &index_chunks[i],
+            vector,
+            chunk_metas.get(i).cloned(),
+        ) {
+            warn!("index_prepared_doc: failed chunk {}: {}", chunk_id, e);
         } else {
             ok += 1;
             graph_chunks.push((chunk_id, chunk.clone()));
@@ -409,27 +471,36 @@ pub fn index_content_with_graph(
     }
 
     info!(
-        "index_content_with_graph: file='{}' mode={:?} chunks={} tokens={} chunk_ms={} embed_ms={}",
-        filename,
-        chunker_mode,
-        ok,
-        total_tokens,
-        chunk_duration.as_millis(),
-        embed_duration.as_millis()
+        "index_prepared_doc: file='{}' mode={:?} chunks={} tokens={} chunk_ms={} embed_ms={}",
+        filename, chunker_mode, ok, total_tokens, chunk_duration_ms, embed_duration_ms,
     );
 
     let mut snap = crate::monitoring::ChunkingStatsSnapshot::new(
-        filename,
+        &filename,
         chunker_mode,
         ok,
         total_tokens,
-        chunk_duration.as_millis() as u64,
-        chunker.stats(),
+        chunk_duration_ms,
+        chunker_stats,
     );
     snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
     crate::monitoring::record_chunking_snapshot(snap);
 
     Ok((ok, graph_chunks))
+}
+
+/// Convenience wrapper: chunk + embed + index in one call (holds retriever for the full duration).
+/// Prefer `prepare_doc` + `index_prepared_doc` when the retriever is behind a mutex.
+pub fn index_content_with_graph(
+    retriever: &mut Retriever,
+    path: &Path,
+    ir: &crate::doc_ir::DocIR,
+    chunker_mode: ChunkerMode,
+    chunker: &dyn Chunker,
+    corpus_slug: &str,
+) -> Result<(usize, Vec<(String, String)>), String> {
+    let prepared = prepare_doc(path, ir, chunker_mode, chunker, corpus_slug);
+    index_prepared_doc(retriever, prepared)
 }
 
 /// Async version of index_file using io_uring for 2-3x faster file reads
@@ -442,7 +513,15 @@ pub async fn index_file_async(
     corpus_slug: &str,
 ) -> Result<usize, String> {
     let (_, detection_info) = detect_file_type_with_info(path)?;
-    index_file_with_detection_async(retriever, path, chunker_mode, chunker, detection_info, corpus_slug).await
+    index_file_with_detection_async(
+        retriever,
+        path,
+        chunker_mode,
+        chunker,
+        detection_info,
+        corpus_slug,
+    )
+    .await
 }
 
 async fn index_file_with_detection_async(
@@ -465,22 +544,32 @@ async fn index_file_with_detection_async(
         crate::perf::io_uring::backend_name()
     );
 
-    // Use async io_uring-backed file read
-    let content = match extract_text_async(path).await {
-        Some(text) => text,
+    // Use async io_uring-backed file read, then produce IR
+    let ir = match extract_ir_async(path).await {
+        Some(ir) => ir,
         None => {
             warn!(
-                "index_file_async: extract_text returned None for '{}'",
+                "index_file_async: extract_ir returned None for '{}'",
                 filename
             );
             return Err("extract_text failed".into());
         }
     };
+    {
+        let flat = ir.to_plain_text();
+        let norm = crate::normalizer::normalize(&flat, crate::normalizer::NormalizeTarget::Store);
+        record_canon_store(filename, flat.len(), norm.len());
+    }
 
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
     let mut embed_file_out = 0usize;
-    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(&content), filename)
+    let (raw_texts, chunk_metas): (Vec<String>, Vec<crate::doc_ir::ChunkMeta>) =
+        crate::memory::chunker_factory::chunk_ir(&ir, chunker)
+            .into_iter()
+            .unzip();
+    let prefixed = apply_context_prefix(raw_texts, filename);
+    let chunks: Vec<String> = prefixed
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
@@ -531,7 +620,7 @@ async fn index_file_with_detection_async(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], vector, chunk_metas.get(i).cloned()) {
             warn!(
                 "index_file_async: Failed to index chunk {}: {}",
                 chunk_id, e
@@ -585,18 +674,29 @@ fn index_file_with_detection(
         detection_info.chosen_strategy
     );
 
-    let content = match extract_text(path) {
-        Some(text) => text,
+    let ir = match extract_ir(path) {
+        Some(ir) => ir,
         None => {
-            warn!("index_file: extract_text returned None for '{}'", filename);
+            warn!("index_file: extract_ir returned None for '{}'", filename);
             return Err("extract_text failed".into());
         }
     };
+    // Record Store-normalization metrics on the flattened text (backward compat).
+    {
+        let flat = ir.to_plain_text();
+        let norm = crate::normalizer::normalize(&flat, crate::normalizer::NormalizeTarget::Store);
+        record_canon_store(filename, flat.len(), norm.len());
+    }
 
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
     let mut embed_file_out = 0usize;
-    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(&content), filename)
+    let (raw_texts, chunk_metas): (Vec<String>, Vec<crate::doc_ir::ChunkMeta>) =
+        crate::memory::chunker_factory::chunk_ir(&ir, chunker)
+            .into_iter()
+            .unzip();
+    let prefixed = apply_context_prefix(raw_texts, filename);
+    let chunks: Vec<String> = prefixed
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
@@ -647,7 +747,7 @@ fn index_file_with_detection(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], &vector) {
+        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], vector, chunk_metas.get(i).cloned()) {
             warn!("index_file: Failed to index chunk {}: {}", chunk_id, e);
         } else {
             ok += 1;
@@ -774,7 +874,9 @@ fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo
 /// Extract text content from a file based on its detected type
 fn extract_text(path: &Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;
-    extract_text_from_bytes(path, bytes)
+    let filename = path.file_name().and_then(|n| n.to_str());
+    let ct = detect_content_type(&bytes, filename);
+    extract_text_from_bytes(path, bytes, ct)
 }
 
 /// Async version of extract_text using io_uring for 2-3x faster file reads
@@ -782,8 +884,801 @@ pub async fn extract_text_async(path: &Path) -> Option<String> {
     use crate::perf::io_uring as async_io;
 
     let bytes = async_io::read_file(path).await.ok()?;
-    extract_text_from_bytes(path, bytes)
+    let filename = path.file_name().and_then(|n| n.to_str());
+    let ct = detect_content_type(&bytes, filename.as_deref());
+    extract_text_from_bytes(path, bytes, ct)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IR extraction — returns a typed DocIR instead of flat text.
+// The pipeline: extract_ir() → chunk_ir() → normalize(Embed) → embed → index.
+// Formats with known structure (Markdown, HTML, Code) get typed blocks.
+// All other formats fall back to extract_text_from_bytes() wrapped in a single
+// Text block, so downstream chunking behaves exactly as before.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sync IR extractor: reads bytes, tries external extractors first, then built-in.
+fn extract_ir(path: &Path) -> Option<crate::doc_ir::DocIR> {
+    let bytes = fs::read(path).ok()?;
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let ct = detect_content_type(&bytes, Some(filename));
+
+    // Try registered external extractors (Docling, etc.)
+    if let Some(reg) = crate::extractor::global_registry() {
+        if reg.has_handler(&ct) {
+            if let Some(ir) = reg.extract(&bytes, filename, &ct) {
+                return Some(ir);
+            }
+        }
+    }
+
+    extract_ir_from_bytes_typed(path, bytes, ct)
+}
+
+/// Async IR extractor: io_uring read, then external extractors, then built-in.
+pub async fn extract_ir_async(path: &Path) -> Option<crate::doc_ir::DocIR> {
+    use crate::perf::io_uring as async_io;
+    let bytes = async_io::read_file(path).await.ok()?;
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let ct = detect_content_type(&bytes, Some(&filename));
+
+    // Offload blocking HTTP call to thread pool.
+    // Move `bytes` into the extractor rather than cloning — saves one full copy of the
+    // file in RAM. If the external extractor fails we re-read from disk for the fallback
+    // (one extra disk read is cheaper than holding two copies of a large file).
+    if let Some(reg) = crate::extractor::global_registry() {
+        if reg.has_handler(&ct) {
+            let fname = filename.clone();
+            let ct_clone = ct.clone();
+            let path_buf = path.to_path_buf();
+            let ir_opt =
+                tokio::task::spawn_blocking(move || reg.extract(&bytes, &fname, &ct_clone))
+                    .await
+                    .ok()
+                    .flatten();
+            if let Some(ir) = ir_opt {
+                return Some(ir);
+            }
+            // External extractor failed — re-read for built-in fallback.
+            let bytes = async_io::read_file(&path_buf).await.ok()?;
+            let ct2 = detect_content_type(&bytes, Some(&filename));
+            return tokio::task::spawn_blocking(move || {
+                extract_ir_from_bytes_typed(&path_buf, bytes, ct2)
+            })
+            .await
+            .ok()
+            .flatten();
+        }
+    }
+
+    // Built-in extraction is blocking (subprocess calls for PDF, ONNX for others).
+    let path_buf = path.to_path_buf();
+    tokio::task::spawn_blocking(move || extract_ir_from_bytes_typed(&path_buf, bytes, ct))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Core IR dispatch: typed extraction for structured formats, flat-text fallback for others.
+/// Accepts an already-detected `ContentType` so callers don't pay for a second magic-bytes scan.
+fn extract_ir_from_bytes_typed(
+    path: &Path,
+    bytes: Vec<u8>,
+    content_type: crate::mime_detect::ContentType,
+) -> Option<crate::doc_ir::DocIR> {
+    use crate::doc_ir::{DocBlock, DocIR};
+    use crate::mime_detect::ContentType;
+
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    match content_type {
+        ContentType::Markdown => {
+            let raw = detect_and_decode(&bytes)?;
+            let mut ir = extract_ir_from_markdown(&raw, filename);
+            ir.tag_extractor("builtin/markdown");
+            Some(ir)
+        }
+        ContentType::Html => {
+            let mut ir = extract_ir_from_html(&bytes, filename);
+            ir.tag_extractor("builtin/html");
+            Some(ir)
+        }
+        ContentType::Code(ref lang) => {
+            let raw = detect_and_decode(&bytes)?;
+            let language = Some(format!("{:?}", lang).to_lowercase());
+            let mut ir = DocIR::new(filename, "code");
+            ir.push(DocBlock::code(language, raw));
+            ir.tag_extractor("builtin/code");
+            Some(ir)
+        }
+        // Structured extraction in Rust — no sidecar needed.
+        // Structure is explicit in the file format (heading styles, XML elements).
+        ContentType::Docx => {
+            extract_ir_from_docx(&bytes, filename)
+                .map(|mut ir| { ir.tag_extractor("builtin/docx"); ir })
+                .or_else(|| flat_text_ir(path, bytes, ContentType::Docx, "builtin/docx"))
+        }
+        ContentType::Odt => {
+            extract_ir_from_docx(&bytes, filename)
+                .map(|mut ir| { ir.tag_extractor("builtin/odt"); ir })
+                .or_else(|| flat_text_ir(path, bytes, ContentType::Odt, "builtin/odt"))
+        }
+        ContentType::Epub => {
+            extract_ir_from_epub(&bytes, filename)
+                .map(|mut ir| { ir.tag_extractor("builtin/epub"); ir })
+                .or_else(|| flat_text_ir(path, bytes, ContentType::Epub, "builtin/epub"))
+        }
+        ContentType::Pptx => {
+            extract_ir_from_pptx(&bytes, filename)
+                .map(|mut ir| { ir.tag_extractor("builtin/pptx"); ir })
+                .or_else(|| flat_text_ir(path, bytes, ContentType::Pptx, "builtin/pptx"))
+        }
+        ContentType::Pdf => flat_text_ir(path, bytes, ContentType::Pdf, "builtin/pdf"),
+        ContentType::Xlsx => flat_text_ir(path, bytes, ContentType::Xlsx, "builtin/spreadsheet"),
+        ContentType::Ods => flat_text_ir(path, bytes, ContentType::Ods, "builtin/spreadsheet"),
+        ContentType::Csv => flat_text_ir(path, bytes, ContentType::Csv, "builtin/spreadsheet"),
+        ContentType::Xml => flat_text_ir(path, bytes, ContentType::Xml, "builtin/text"),
+        ContentType::Json => flat_text_ir(path, bytes, ContentType::Json, "builtin/text"),
+        ct => flat_text_ir(path, bytes, ct, "builtin/text"),
+    }
+}
+
+/// Fallback: run the existing flat-text extractor and wrap result in a single Text block.
+fn flat_text_ir(
+    path: &Path,
+    bytes: Vec<u8>,
+    content_type: ContentType,
+    format: &str,
+) -> Option<crate::doc_ir::DocIR> {
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let text = extract_text_from_bytes(path, bytes, content_type)?;
+    let mut ir = crate::doc_ir::DocIR::new(filename, "text");
+    ir.push(crate::doc_ir::DocBlock::text(text));
+    ir.tag_extractor(format);
+    Some(ir)
+}
+
+/// Parse Markdown text into typed DocIR blocks.
+/// Handles: ATX headers (# through ######), fenced code blocks (``` and ~~~),
+/// pipe-delimited tables, and plain text paragraphs.
+fn extract_ir_from_markdown(text: &str, source: &str) -> crate::doc_ir::DocIR {
+    use crate::doc_ir::{DocBlock, DocIR};
+
+    let mut ir = DocIR::new(source, "markdown");
+    let mut pending = String::new();
+    let mut lines = text.lines().peekable();
+
+    while let Some(line) = lines.next() {
+        // Fenced code block
+        let fence = if line.starts_with("```") {
+            Some("```")
+        } else if line.starts_with("~~~") {
+            Some("~~~")
+        } else {
+            None
+        };
+        if let Some(fence_str) = fence {
+            ir_push_text(&mut ir, &mut pending);
+            let lang_str = line.trim_start_matches(fence_str).trim();
+            let lang = if lang_str.is_empty() {
+                None
+            } else {
+                Some(lang_str.to_string())
+            };
+            let mut code = String::new();
+            for code_line in lines.by_ref() {
+                if code_line.starts_with(fence_str) {
+                    break;
+                }
+                if !code.is_empty() {
+                    code.push('\n');
+                }
+                code.push_str(code_line);
+            }
+            ir.push(DocBlock::code(lang, code));
+            continue;
+        }
+
+        // ATX header (1–6 hashes followed by a space)
+        let hash_count = line.len() - line.trim_start_matches('#').len();
+        if hash_count >= 1 && hash_count <= 6 && line.chars().nth(hash_count) == Some(' ') {
+            let content = line[hash_count + 1..].trim();
+            ir_push_text(&mut ir, &mut pending);
+            if !content.is_empty() {
+                ir.push(DocBlock::header(hash_count as u8, content));
+            }
+            continue;
+        }
+
+        // Pipe-delimited table — collect all contiguous table rows
+        if line.trim_start().starts_with('|') {
+            ir_push_text(&mut ir, &mut pending);
+            let mut table_lines: Vec<String> = vec![line.to_string()];
+            while lines
+                .peek()
+                .map_or(false, |l| l.trim_start().starts_with('|'))
+            {
+                table_lines.push(lines.next().unwrap().to_string());
+            }
+            // Strip GFM separator lines (|---|---|)
+            let content_rows: Vec<&str> = table_lines
+                .iter()
+                .filter(|l| !l.replace(['|', '-', ':', ' '], "").trim().is_empty())
+                .map(String::as_str)
+                .collect();
+            if !content_rows.is_empty() {
+                let rows = content_rows.len();
+                let cols = content_rows[0]
+                    .split('|')
+                    .filter(|s| !s.trim().is_empty())
+                    .count();
+                ir.push(DocBlock::table(rows, cols, content_rows.join("\n")));
+            }
+            continue;
+        }
+
+        // Plain text — accumulate
+        if !pending.is_empty() {
+            pending.push('\n');
+        }
+        pending.push_str(line);
+    }
+    ir_push_text(&mut ir, &mut pending);
+    ir
+}
+
+/// Parse HTML bytes into typed DocIR blocks.
+/// Extracts h1–h6 headers, pre/code blocks, and table content as typed blocks;
+/// everything else becomes plain Text.
+fn extract_ir_from_html(bytes: &[u8], source: &str) -> crate::doc_ir::DocIR {
+    use crate::doc_ir::{DocBlock, DocIR};
+
+    let raw = match detect_and_decode(bytes) {
+        Some(s) => s,
+        None => return DocIR::new(source, "html"),
+    };
+    let cleaned = remove_html_blocks(&raw, &["script", "style", "head"]);
+
+    let mut ir = DocIR::new(source, "html");
+    let mut pending_text = String::new();
+
+    // Context tracks what structured block we are currently inside.
+    #[derive(PartialEq)]
+    enum Ctx {
+        Header(u8),
+        Code,
+        Table,
+    }
+    let mut ctx: Option<Ctx> = None;
+    let mut ctx_buf = String::new();
+    let mut in_tag = false;
+    let mut tag_buf = String::new();
+    let mut depth: usize = 0; // nesting depth inside current ctx block
+
+    for ch in cleaned.chars() {
+        if ch == '<' {
+            in_tag = true;
+            tag_buf.clear();
+            continue;
+        }
+        if ch == '>' && in_tag {
+            in_tag = false;
+            let raw_tag = tag_buf.trim();
+            let is_close = raw_tag.starts_with('/');
+            let tag_name = raw_tag
+                .trim_start_matches('/')
+                .split(|c: char| c.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            let tag_name = tag_name.trim_end_matches('/'); // self-closing
+
+            match tag_name {
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                    let level = tag_name[1..].parse::<u8>().unwrap_or(1);
+                    if !is_close && ctx.is_none() {
+                        ir_push_html_text(&mut ir, &mut pending_text);
+                        ctx = Some(Ctx::Header(level));
+                        ctx_buf.clear();
+                        depth = 0;
+                    } else if is_close {
+                        if let Some(Ctx::Header(lvl)) = ctx.take() {
+                            let t = ctx_buf.split_whitespace().collect::<Vec<_>>().join(" ");
+                            if !t.is_empty() {
+                                ir.push(DocBlock::header(lvl, t));
+                            }
+                            ctx_buf.clear();
+                        }
+                    }
+                }
+                "pre" | "code" => {
+                    if !is_close && ctx.is_none() {
+                        ir_push_html_text(&mut ir, &mut pending_text);
+                        ctx = Some(Ctx::Code);
+                        ctx_buf.clear();
+                        depth = 0;
+                    } else if is_close {
+                        if let Some(Ctx::Code) = ctx {
+                            if depth == 0 {
+                                ctx = None;
+                                let t = ctx_buf.trim().to_string();
+                                if !t.is_empty() {
+                                    ir.push(DocBlock::code(None, t));
+                                }
+                                ctx_buf.clear();
+                            } else {
+                                depth -= 1;
+                            }
+                        }
+                    }
+                }
+                "table" => {
+                    if !is_close && ctx.is_none() {
+                        ir_push_html_text(&mut ir, &mut pending_text);
+                        ctx = Some(Ctx::Table);
+                        ctx_buf.clear();
+                        depth = 0;
+                    } else if is_close {
+                        if let Some(Ctx::Table) = ctx {
+                            if depth == 0 {
+                                ctx = None;
+                                let t = ctx_buf.split_whitespace().collect::<Vec<_>>().join(" ");
+                                if !t.is_empty() {
+                                    ir.push(DocBlock::table(0, 0, t));
+                                }
+                                ctx_buf.clear();
+                            } else {
+                                depth -= 1;
+                            }
+                        }
+                    } else if !is_close {
+                        if ctx.is_some() {
+                            depth += 1;
+                        }
+                    }
+                }
+                "p" | "div" | "section" | "article" => {
+                    if is_close && ctx.is_none() && !pending_text.trim().is_empty() {
+                        pending_text.push('\n');
+                    }
+                }
+                _ => {}
+            }
+            tag_buf.clear();
+            continue;
+        }
+        if in_tag {
+            tag_buf.push(ch);
+            continue;
+        }
+        if ctx.is_some() {
+            ctx_buf.push(ch);
+        } else {
+            pending_text.push(ch);
+        }
+    }
+
+    ir_push_html_text(&mut ir, &mut pending_text);
+    ir
+}
+
+/// Flush accumulated plain text as a DocBlock::text, then clear the buffer.
+fn ir_push_text(ir: &mut crate::doc_ir::DocIR, pending: &mut String) {
+    let t = pending.trim().to_string();
+    if !t.is_empty() {
+        ir.push(crate::doc_ir::DocBlock::text(t));
+    }
+    pending.clear();
+}
+
+/// Flush HTML plain-text (collapse whitespace, decode entities).
+fn ir_push_html_text(ir: &mut crate::doc_ir::DocIR, pending: &mut String) {
+    let decoded = decode_html_entities(pending);
+    let t = decoded.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !t.is_empty() {
+        ir.push(crate::doc_ir::DocBlock::text(t));
+    }
+    pending.clear();
+}
+
+// ── DOCX IR extractor ─────────────────────────────────────────────────────────
+//
+// Parses word/document.xml using quick-xml to extract typed blocks:
+//   w:pStyle Heading1–6 → Header   (always starts a new chunk)
+//   w:tbl               → Table    (atomic, never split)
+//   everything else     → Text     (accumulated for the chunker)
+
+fn extract_ir_from_docx(bytes: &[u8], source: &str) -> Option<crate::doc_ir::DocIR> {
+    use std::io::Read;
+
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut entry = archive.by_name("word/document.xml").ok()?;
+    let mut xml = String::new();
+    entry.read_to_string(&mut xml).ok()?;
+
+    let mut ir = crate::doc_ir::DocIR::new(source, "docx");
+    parse_docx_xml(&xml, &mut ir);
+    Some(ir)
+}
+
+fn parse_docx_xml(xml: &str, ir: &mut crate::doc_ir::DocIR) {
+    use crate::doc_ir::DocBlock;
+    use quick_xml::{events::Event, Reader};
+
+    let mut reader = Reader::from_str(xml);
+
+    let mut tbl_depth: usize = 0; // nesting depth inside w:tbl (tables can nest)
+    let mut in_para = false; // currently inside w:p
+    let mut in_ppr = false; // currently inside w:pPr
+    let mut in_run = false; // currently inside w:r
+    let mut in_t = false; // currently inside w:t
+    let mut para_style: Option<String> = None;
+    let mut para_buf = String::new();
+    let mut table_text = String::new();
+    let mut table_rows = 0usize;
+    let mut pending = String::new(); // accumulated normal-paragraph text
+
+    loop {
+        match reader.read_event() {
+            // Start tags: open structural elements and set state flags.
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"tbl" => {
+                        if tbl_depth == 0 {
+                            docx_flush(ir, &mut pending);
+                            table_text.clear();
+                            table_rows = 0;
+                        }
+                        tbl_depth += 1;
+                    }
+                    b"tr" if tbl_depth > 0 => table_rows += 1,
+                    b"tc" if tbl_depth > 0 => {
+                        if !table_text.is_empty()
+                            && !table_text.ends_with('\n')
+                            && !table_text.ends_with('\t')
+                        {
+                            table_text.push('\t');
+                        }
+                    }
+                    b"p" if !in_para => {
+                        in_para = true;
+                        in_ppr = false;
+                        in_run = false;
+                        in_t = false;
+                        para_style = None;
+                        para_buf.clear();
+                    }
+                    b"pPr" if in_para => in_ppr = true,
+                    b"r" if in_para => in_run = true,
+                    b"t" if in_run => in_t = true,
+                    _ => {}
+                }
+            }
+            // Empty (self-closing) tags: only capture attributes, never set open flags.
+            Ok(Event::Empty(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"pStyle" if in_ppr => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    para_style = Some(v.into_owned());
+                                }
+                            }
+                        }
+                    }
+                    b"br" | b"tab" if in_run => para_buf.push(' '),
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"tbl" if tbl_depth > 0 => {
+                        tbl_depth -= 1;
+                        if tbl_depth == 0 {
+                            let text = table_text.trim().to_string();
+                            if !text.is_empty() {
+                                let rows = table_rows;
+                                let cols = text
+                                    .lines()
+                                    .map(|l| l.split('\t').count())
+                                    .max()
+                                    .unwrap_or(1);
+                                ir.push(DocBlock::table(rows, cols, text));
+                            }
+                            table_text.clear();
+                            table_rows = 0;
+                        }
+                    }
+                    b"tr" if tbl_depth > 0 => {
+                        if !table_text.ends_with('\n') {
+                            table_text.push('\n');
+                        }
+                    }
+                    b"p" if in_para => {
+                        let text = para_buf.trim().to_string();
+                        if !text.is_empty() {
+                            if tbl_depth > 0 {
+                                if !table_text.is_empty()
+                                    && !table_text.ends_with('\t')
+                                    && !table_text.ends_with('\n')
+                                {
+                                    table_text.push(' ');
+                                }
+                                table_text.push_str(&text);
+                            } else if let Some(level) = docx_heading_level(&para_style) {
+                                docx_flush(ir, &mut pending);
+                                ir.push(DocBlock::header(level, text));
+                            } else {
+                                if !pending.is_empty() {
+                                    pending.push('\n');
+                                }
+                                pending.push_str(&text);
+                            }
+                        }
+                        in_para = false;
+                        in_ppr = false;
+                        in_run = false;
+                        in_t = false;
+                        para_buf.clear();
+                        para_style = None;
+                    }
+                    b"pPr" => in_ppr = false,
+                    b"r" => {
+                        in_run = false;
+                        in_t = false;
+                    }
+                    b"t" => in_t = false,
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_t && in_para {
+                    if let Ok(text) = e.decode() {
+                        para_buf.push_str(&text);
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+
+    docx_flush(ir, &mut pending);
+}
+
+fn docx_heading_level(style: &Option<String>) -> Option<u8> {
+    let s = style.as_deref()?;
+    let lower = s.to_lowercase();
+    if let Some(rest) = lower.strip_prefix("heading") {
+        return rest
+            .trim_matches(|c: char| !c.is_ascii_digit())
+            .parse::<u8>()
+            .ok()
+            .filter(|&l| l >= 1 && l <= 6);
+    }
+    match lower.as_str() {
+        "title" => Some(1),
+        "subtitle" => Some(2),
+        _ => None,
+    }
+}
+
+fn docx_flush(ir: &mut crate::doc_ir::DocIR, pending: &mut String) {
+    let t = pending.trim().to_string();
+    if !t.is_empty() {
+        ir.push(crate::doc_ir::DocBlock::text(t));
+    }
+    pending.clear();
+}
+
+// ── EPUB IR extractor ─────────────────────────────────────────────────────────
+//
+// EPUBs are ZIP archives of XHTML spine items.  Re-use the HTML IR extractor
+// per item and merge all blocks into a single IR — so headings, code blocks,
+// and tables in an e-book chapter land as typed blocks, not flat text.
+
+fn extract_ir_from_epub(bytes: &[u8], source: &str) -> Option<crate::doc_ir::DocIR> {
+    use std::io::Read;
+
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut ir = crate::doc_ir::DocIR::new(source, "epub");
+
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|e| e.name().to_string()))
+        .filter(|n| n.ends_with(".xhtml") || n.ends_with(".html") || n.ends_with(".htm"))
+        .collect();
+
+    for name in &names {
+        if let Ok(mut entry) = archive.by_name(name) {
+            let mut buf: Vec<u8> = Vec::new();
+            if entry.read_to_end(&mut buf).is_ok() {
+                let sub = extract_ir_from_html(&buf, name);
+                for block in sub.blocks {
+                    ir.blocks.push(block);
+                }
+            }
+        }
+    }
+
+    if ir.blocks.is_empty() {
+        None
+    } else {
+        Some(ir)
+    }
+}
+
+// ── PPTX IR extractor ────────────────────────────────────────────────────────
+//
+// Each slide's title shape (ph type="title") becomes a Header; body text and
+// all other shapes become Text.  Slide numbers provide natural section order.
+
+fn extract_ir_from_pptx(bytes: &[u8], source: &str) -> Option<crate::doc_ir::DocIR> {
+    use std::io::Read;
+
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut ir = crate::doc_ir::DocIR::new(source, "pptx");
+
+    let mut slide_names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|e| e.name().to_string()))
+        .filter(|n| n.starts_with("ppt/slides/slide") && n.ends_with(".xml"))
+        .collect();
+    // Sort slide1.xml < slide2.xml … (lexicographic is correct here)
+    slide_names.sort_by(|a, b| {
+        let num = |s: &str| -> usize {
+            s.trim_start_matches("ppt/slides/slide")
+                .trim_end_matches(".xml")
+                .parse()
+                .unwrap_or(0)
+        };
+        num(a).cmp(&num(b))
+    });
+
+    for name in &slide_names {
+        if let Ok(mut entry) = archive.by_name(name) {
+            let mut xml = String::new();
+            if entry.read_to_string(&mut xml).is_ok() {
+                parse_pptx_slide(&xml, &mut ir);
+            }
+        }
+    }
+
+    if ir.blocks.is_empty() {
+        None
+    } else {
+        Some(ir)
+    }
+}
+
+fn parse_pptx_slide(xml: &str, ir: &mut crate::doc_ir::DocIR) {
+    use crate::doc_ir::DocBlock;
+    use quick_xml::{events::Event, Reader};
+
+    // Two-pass approach: collect shape ph_type + text content per shape,
+    // then emit blocks.  A shape is a <p:sp> element.
+    let mut reader = Reader::from_str(xml);
+
+    let mut in_sp = false; // inside a shape
+    let mut ph_type: Option<String> = None; // placeholder type for current shape
+    let mut in_nvsppr = false; // inside p:nvSpPr (for ph detection)
+    let mut in_txbody = false; // inside p:txBody
+    let mut in_para = false; // inside a:p
+    let mut in_run = false; // inside a:r
+    let mut in_t = false; // inside a:t
+    let mut shape_buf = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"sp" => {
+                        in_sp = true;
+                        ph_type = None;
+                        shape_buf.clear();
+                        in_nvsppr = false;
+                        in_txbody = false;
+                    }
+                    b"nvSpPr" if in_sp => in_nvsppr = true,
+                    b"ph" if in_nvsppr => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"type" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    ph_type = Some(v.into_owned());
+                                }
+                            }
+                        }
+                        // ph with no type attribute = body placeholder
+                        if ph_type.is_none() {
+                            ph_type = Some("body".to_string());
+                        }
+                    }
+                    b"txBody" if in_sp => in_txbody = true,
+                    b"p" if in_txbody => {
+                        in_para = true;
+                        in_run = false;
+                        in_t = false;
+                    }
+                    b"r" if in_para => in_run = true,
+                    b"t" if in_run => in_t = true,
+                    b"br" if in_para => shape_buf.push('\n'),
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"sp" if in_sp => {
+                        let text = shape_buf.trim().to_string();
+                        if !text.is_empty() {
+                            let is_title = ph_type
+                                .as_deref()
+                                .map(|t| matches!(t, "title" | "ctrTitle" | "subTitle"))
+                                .unwrap_or(false);
+                            if is_title {
+                                ir.push(DocBlock::header(1, text));
+                            } else {
+                                ir.push(DocBlock::text(text));
+                            }
+                        }
+                        in_sp = false;
+                        in_nvsppr = false;
+                        in_txbody = false;
+                        in_para = false;
+                        in_run = false;
+                        in_t = false;
+                        shape_buf.clear();
+                    }
+                    b"nvSpPr" => in_nvsppr = false,
+                    b"txBody" => in_txbody = false,
+                    b"p" if in_para => {
+                        if !shape_buf.ends_with('\n') {
+                            shape_buf.push('\n');
+                        }
+                        in_para = false;
+                        in_run = false;
+                        in_t = false;
+                    }
+                    b"r" => {
+                        in_run = false;
+                        in_t = false;
+                    }
+                    b"t" => in_t = false,
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_t {
+                    if let Ok(text) = e.decode() {
+                        shape_buf.push_str(&text);
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Strip HTML/XML tags from text, returning (clean_text, tag_count).
 pub fn strip_html_tags(text: &str) -> (String, usize) {
@@ -810,11 +1705,13 @@ pub fn strip_html_tags(text: &str) -> (String, usize) {
     )
 }
 
-
-/// Common text extraction logic from bytes
-fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
-    let filename = path.file_name().and_then(|n| n.to_str());
-    let content_type = detect_content_type(&bytes, filename);
+/// Common text extraction logic from bytes.
+/// `content_type` must already be detected by the caller — avoids a second magic-bytes scan.
+fn extract_text_from_bytes(
+    path: &Path,
+    bytes: Vec<u8>,
+    content_type: ContentType,
+) -> Option<String> {
 
     let format_label = match &content_type {
         ContentType::Pdf => "pdf",
@@ -848,20 +1745,15 @@ fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
 
     let result = match content_type {
         ContentType::Pdf => {
-            debug!("extract_text: PDF detected, trying pdftotext → pdf-extract → OCR");
-            let text = extract_text_from_pdf_pdftotext(path).or_else(|| {
-                match pdf_extract::extract_text(path) {
-                    Ok(t) if !t.trim().is_empty() => Some(t),
-                    Ok(_) => {
-                        debug!("extract_text: pdf-extract found no text layer — trying OCR");
-                        extract_text_from_pdf_ocr(path)
-                    }
-                    Err(e) => {
-                        warn!("extract_text: pdf-extract failed ({}), trying OCR", e);
-                        extract_text_from_pdf_ocr(path)
-                    }
-                }
-            });
+            // PDF extraction only uses path — drop the bytes clone immediately to free memory.
+            drop(bytes);
+            debug!("extract_text: PDF detected, trying pdftotext → OCR");
+            let file_bytes = path.metadata().map(|m| m.len()).unwrap_or(0);
+            // pdf-extract is removed: it loads the full PDF DOM in-process and OOMs on
+            // files >~10 MB with complex fonts or embedded images. pdftotext handles
+            // text-layer PDFs better anyway; OCR covers image-only ones.
+            let text = extract_text_from_pdf_pdftotext(path)
+                .or_else(|| extract_text_from_pdf_ocr(path, file_bytes));
             text.map(dedupe_pdf_noise)
         }
         ContentType::Html => {
@@ -902,14 +1794,19 @@ fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
             debug!("extract_text: Binary file detected, skipping");
             None
         }
-        _ => {
-            detect_and_decode(&bytes)
-        }
+        _ => detect_and_decode(&bytes),
     }
     .map(|text| {
         let preprocessed = apply_text_preprocessing(text, needs_html_clean, needs_unicode_clean);
-        let normalized = crate::normalizer::normalize(&preprocessed, crate::normalizer::NormalizeTarget::Store);
-        record_canon_store(path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"), preprocessed.len(), normalized.len());
+        let normalized =
+            crate::normalizer::normalize(&preprocessed, crate::normalizer::NormalizeTarget::Store);
+        record_canon_store(
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown"),
+            preprocessed.len(),
+            normalized.len(),
+        );
         normalized
     });
 
@@ -1091,7 +1988,11 @@ fn extract_text_from_epub(bytes: &[u8]) -> Option<String> {
             }
         }
     }
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Extract text from a PPTX file.
@@ -1117,7 +2018,11 @@ fn extract_text_from_pptx(bytes: &[u8]) -> Option<String> {
             }
         }
     }
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// OCR fallback for scanned/image-only PDFs.
@@ -1126,8 +2031,22 @@ fn extract_text_from_pptx(bytes: &[u8]) -> Option<String> {
 /// then `tesseract` OCRs each image and concatenates the results.
 ///
 /// Gracefully returns `None` if either tool is absent, with a one-time warning.
-fn extract_text_from_pdf_ocr(path: &Path) -> Option<String> {
+fn extract_text_from_pdf_ocr(path: &Path, file_bytes: u64) -> Option<String> {
     use std::process::Command;
+
+    // Skip OCR for large files — rendering many pages as PPM eats ~6 MB/page.
+    const OCR_MAX_BYTES: u64 = 25 * 1024 * 1024; // 25 MB
+    if file_bytes > OCR_MAX_BYTES {
+        warn!(
+            "extract_text: skipping OCR for large file ({:.1} MB > 25 MB limit)",
+            file_bytes as f64 / 1_048_576.0
+        );
+        record_ocr_unavailable();
+        let _ = EXTRACTION_OCR_TOTAL
+            .get_metric_with_label_values(&["skipped_large"])
+            .map(|c| c.inc());
+        return None;
+    }
 
     // Check both tools are on PATH before doing any work
     let has_pdftoppm = Command::new("pdftoppm").arg("-v").output().is_ok();
@@ -1151,12 +2070,13 @@ fn extract_text_from_pdf_ocr(path: &Path) -> Option<String> {
         .get_metric_with_label_values(&["attempted"])
         .map(|c| c.inc());
 
-    // Render PDF pages to PPM images in a temp directory (150 dpi — fast + legible)
+    // Render PDF pages to PPM images in a temp directory.
+    // 150 DPI: letter page ≈ 6 MB uncompressed; capped at 20 pages (~120 MB peak).
     let tmp = tempfile::tempdir().ok()?;
     let prefix = tmp.path().join("pg");
 
     let render = Command::new("pdftoppm")
-        .args(["-r", "300", path.to_str()?, prefix.to_str()?])
+        .args(["-r", "150", "-l", "20", path.to_str()?, prefix.to_str()?])
         .output()
         .ok()?;
 
@@ -1240,7 +2160,11 @@ fn extract_text_from_pdf_pdftotext(path: &Path) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if text.trim().is_empty() { None } else { Some(text) }
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Remove repeated short lines that are likely PDF page headers/footers.
@@ -1272,7 +2196,10 @@ fn dedupe_pdf_noise(text: String) -> String {
         .collect();
     let removed = lines.len() - filtered.len();
     if removed > 0 {
-        debug!("dedupe_pdf_noise: removed {} repeated header/footer lines", removed);
+        debug!(
+            "dedupe_pdf_noise: removed {} repeated header/footer lines",
+            removed
+        );
     }
     filtered.join("\n")
 }
@@ -1296,9 +2223,14 @@ fn remove_html_blocks(html: &str, block_tags: &[&str]) -> String {
         let close_pat = format!("</{}>", tag);
         loop {
             let lower = result.to_lowercase();
-            let Some(start) = lower.find(&open_pat) else { break };
+            let Some(start) = lower.find(&open_pat) else {
+                break;
+            };
             // find '>' to end the opening tag
-            let tag_end = lower[start..].find('>').map(|i| start + i + 1).unwrap_or(start + open_pat.len());
+            let tag_end = lower[start..]
+                .find('>')
+                .map(|i| start + i + 1)
+                .unwrap_or(start + open_pat.len());
             if let Some(close_off) = lower[tag_end..].find(&close_pat) {
                 let end = tag_end + close_off + close_pat.len();
                 result.replace_range(start..end, " ");
@@ -1377,7 +2309,9 @@ pub fn detect_and_decode(bytes: &[u8]) -> Option<String> {
     // BOM detection
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         // UTF-8 BOM
-        return std::str::from_utf8(&bytes[3..]).ok().map(|s| s.to_string())
+        return std::str::from_utf8(&bytes[3..])
+            .ok()
+            .map(|s| s.to_string())
             .or_else(|| Some(String::from_utf8_lossy(&bytes[3..]).into_owned()));
     }
     if bytes.starts_with(&[0xFF, 0xFE]) {

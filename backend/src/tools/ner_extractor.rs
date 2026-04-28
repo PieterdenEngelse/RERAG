@@ -61,14 +61,15 @@ fn get_or_init_runtime() -> &'static Mutex<Option<NerRuntime>> {
 
         let _ = ort::init().with_name("ner").commit();
 
-        let session =
-            match ort::session::Session::builder().and_then(|b| b.commit_from_file(&model_path)) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(error = %e, "Failed to load NER model");
-                    return Mutex::new(None);
-                }
-            };
+        let session = match ort::session::Session::builder()
+            .and_then(|mut b| b.commit_from_file(&model_path))
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "Failed to load NER model");
+                return Mutex::new(None);
+            }
+        };
 
         let tokenizer = match tokenizers::Tokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,

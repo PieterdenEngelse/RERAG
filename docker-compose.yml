@@ -10,6 +10,9 @@
 #     - neo4j     :7474 (browser), :7687 (bolt) - Knowledge Graph
 #     - redis     :6379                          - L3 Cache
 #
+#   Extractors (optional):
+#     - docling   :5001  - Structural PDF/DOCX/PPTX extraction (set DOCLING_ENABLED=true)
+#
 #   Observability (optional):
 #     - prometheus :9090  - Metrics collection
 #     - grafana    :3001  - Dashboards (3001 because Qodo uses 3000)
@@ -21,6 +24,7 @@
 #   docker compose up -d                        # All services
 #   docker compose --profile core up -d         # Just Neo4j + Redis
 #   docker compose --profile observability up -d # Just observability stack
+#   docker compose --profile docling up -d      # Docling extractor sidecar
 
 services:
   # ═══════════════════════════════════════════════════════════════
@@ -232,6 +236,31 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # ═══════════════════════════════════════════════════════════════
+  # DOCLING EXTRACTOR (Structural PDF/DOCX/PPTX extraction)
+  # ═══════════════════════════════════════════════════════════════
+  #
+  # Enable with:
+  #   docker compose --profile docling up -d
+  # Then set DOCLING_ENABLED=true DOCLING_URL=http://localhost:5001 in .env
+
+  docling:
+    build:
+      context: ./docling_sidecar
+    container_name: ag-docling
+    restart: unless-stopped
+    profiles: ["docling"]
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
 
 volumes:
   neo4j-data:
