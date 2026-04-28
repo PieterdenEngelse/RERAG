@@ -807,9 +807,17 @@ pub fn start_api_server(
             ])
             .max_age(3600);
 
+        let upload_max_bytes = std::env::var("UPLOAD_MAX_MB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(150)
+            * 1024
+            * 1024;
+
         App::new()
             .app_data(web::Data::new(api_config.clone()))
             .app_data(rate_limit_state_data.clone())
+            .app_data(web::PayloadConfig::default().limit(upload_max_bytes))
             .wrap(cors)
             .wrap(crate::trace_middleware::TraceMiddleware::new())
             .wrap(
@@ -934,15 +942,33 @@ pub fn start_api_server(
                     .route("/{slug}", web::patch().to(rename_corpus_handler))
                     .route("/{slug}", web::delete().to(delete_corpus_handler))
                     .route("/{slug}/upload", web::post().to(corpus_upload_handler))
-                    .route("/{slug}/documents", web::get().to(corpus_list_documents_handler))
-                    .route("/{slug}/documents/{filename}", web::delete().to(corpus_delete_document_handler))
+                    .route(
+                        "/{slug}/documents",
+                        web::get().to(corpus_list_documents_handler),
+                    )
+                    .route(
+                        "/{slug}/documents/{filename}",
+                        web::delete().to(corpus_delete_document_handler),
+                    )
                     .route("/{slug}/search", web::get().to(corpus_search_handler))
                     .route("/{slug}/reindex", web::post().to(corpus_reindex_handler))
-                    .route("/{slug}/settings", web::get().to(get_corpus_settings_handler))
-                    .route("/{slug}/settings", web::patch().to(patch_corpus_settings_handler)),
+                    .route(
+                        "/{slug}/settings",
+                        web::get().to(get_corpus_settings_handler),
+                    )
+                    .route(
+                        "/{slug}/settings",
+                        web::patch().to(patch_corpus_settings_handler),
+                    ),
             )
-            .route("/agent/memory/settings", web::get().to(get_agent_memory_settings_handler))
-            .route("/agent/memory/settings", web::patch().to(patch_agent_memory_settings_handler))
+            .route(
+                "/agent/memory/settings",
+                web::get().to(get_agent_memory_settings_handler),
+            )
+            .route(
+                "/agent/memory/settings",
+                web::patch().to(patch_agent_memory_settings_handler),
+            )
             // ============================================================================
             // ROOT & CORE ROUTES
             // ============================================================================
@@ -955,8 +981,14 @@ pub fn start_api_server(
             .route("/chunk/preview", web::post().to(chunk_preview_handler))
             .route("/config/embedding", web::get().to(get_embedding_config))
             .route("/config/embedding", web::post().to(set_embedding_config))
-            .route("/config/embedding-model", web::post().to(set_embedding_model))
-            .route("/config/embedding/download-tokenizer", web::post().to(download_tokenizer))
+            .route(
+                "/config/embedding-model",
+                web::post().to(set_embedding_model),
+            )
+            .route(
+                "/config/embedding/download-tokenizer",
+                web::post().to(download_tokenizer),
+            )
             .route("/config/llm", web::get().to(get_llm_config))
             .route("/config/llm", web::post().to(commit_llm_config))
             .route("/config/prompt_caching", web::get().to(get_prompt_caching))
@@ -1012,6 +1044,7 @@ pub fn start_api_server(
             .route("/monitor/logs/recent", web::get().to(get_recent_logs))
             .route("/monitor/parser/stats", web::get().to(get_parser_stats))
             .route("/monitor/canon/stats", web::get().to(get_canon_stats))
+            .route("/monitor/chunk-meta/stats", web::get().to(get_chunk_meta_stats))
             .route("/monitor/golden-sample", web::get().to(get_golden_sample))
             .route(
                 "/monitor/golden-sample/recapture",
