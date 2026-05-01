@@ -432,6 +432,30 @@ async fn main() -> std::io::Result<()> {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // PHASE 5.8: Native In-Process PDF Extractor (layout_ml feature)
+    // ─────────────────────────────────────────────────────────────
+
+    #[cfg(feature = "layout_ml")]
+    {
+        let enabled = std::env::var("LAYOUT_ML_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if enabled {
+            // Pre-warm models on a blocking thread so they're ready before first upload.
+            tokio::task::spawn_blocking(|| {
+                ag::pdf::layout_model::LayoutModel::load_or_heuristic();
+                ag::pdf::table_model::TableModel::load_or_text();
+            });
+            let native = ag::pdf::native_extractor::NativePdfExtractor;
+            ag::extractor::init_registry(vec![Box::new(native)]);
+            info!("✅ NativePdfExtractor registered (native in-process PDF extraction)");
+        } else {
+            debug!("Native PDF extraction disabled (set LAYOUT_ML_ENABLED=true to enable)");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // PHASE 6: Prepare Retriever for API
     // ─────────────────────────────────────────────────────────────
 

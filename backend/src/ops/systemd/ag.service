@@ -26,10 +26,15 @@ EnvironmentFile=-%h/.config/ag/ag.env
 # Environment=RATE_LIMIT_ROUTES_FILE=%h/.config/ag/rl-routes.yaml
 
 # Binary path (per-user install)
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 10); do ss -tlnp | grep -q :3010 || exit 0; sleep 1; done; fuser -k 3010/tcp 2>/dev/null; sleep 1'
 ExecStart=%h/.local/bin/ag
+StandardOutput=journal
+StandardError=journal
 
 Restart=on-failure
 RestartSec=2
+KillMode=control-group
+TimeoutStopSec=15
 
 # Resource/FD limits
 LimitNOFILE=65536

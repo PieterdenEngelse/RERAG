@@ -175,6 +175,12 @@ io_uring = ["tokio-uring"]
 # Neo4j Knowledge Graph for GraphRAG (multi-hop reasoning)
 neo4j = ["neo4rs", "deadpool"]
 
+# Native in-process PDF extraction: lopdf (bboxes) + extractous (fallback) + heuristic classifier
+# ORT-based layout model (PubLayNet DETR) is a planned upgrade — see layout_model.rs TODO.
+# Enable with: cargo build --features layout_ml
+# Activate at runtime with: LAYOUT_ML_ENABLED=true
+layout_ml = ["extractous", "lopdf", "ort", "pdfium-render", "image"]
+
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
@@ -193,3 +199,21 @@ harness = false
 # On Windows, the hash-based fallback embedder is used automatically
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 fastembed = { version = "5.8.1", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }
+
+# Native PDF extraction pipeline — lopdf (word bboxes) + extractous (text fallback)
+[target.'cfg(not(target_os = "windows"))'.dependencies.extractous]
+version = "0.3"
+optional = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies.lopdf]
+version = "0.33"
+optional = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies.pdfium-render]
+version = "0.8"
+features = ["image"]
+optional = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies.image]
+version = "0.25"
+optional = true

@@ -128,6 +128,9 @@ pub struct OnnxConfig {
     pub independent_thread_pool: bool,
     /// Stop inheriting execution providers registered on the Environment
     pub no_env_execution_providers: bool,
+    /// Number of document chunks sent to ONNX per inference pass.
+    /// Lower = less RAM (attention is O(batch×heads×seq²)); higher = faster throughput.
+    pub embedding_batch_size: usize,
 }
 
 impl Default for OnnxConfig {
@@ -158,11 +161,12 @@ impl Default for OnnxConfig {
             enable_aot_inlining: true,
             disabled_optimizers: Vec::new(),
             use_device_allocator_for_initializers: false,
-            allow_inter_op_spinning: true,
-            allow_intra_op_spinning: true,
+            allow_inter_op_spinning: false,
+            allow_intra_op_spinning: false,
             use_prepacking: true,
             independent_thread_pool: false,
             no_env_execution_providers: false,
+            embedding_batch_size: 32,
         }
     }
 }

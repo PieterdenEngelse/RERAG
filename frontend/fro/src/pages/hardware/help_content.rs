@@ -283,7 +283,9 @@ impl HelpTopic {
             ],
             Self::NumCtx => vec![
                 "Maximum context window size in tokens.",
-                "Larger values allow longer conversations but require more memory.",
+                "For llama-server (llama.cpp): this is a startup flag, not a runtime parameter. llama-server does not accept a per-request context override via its OpenAI-compatible API. The value here is reflected in the startup command shown on this page — copy that command and restart llama-server to change it.",
+                "For Ollama: this value is sent as options.num_ctx on every request, so Ollama honours it without a restart.",
+                "Larger values allow longer conversations but increase KV-cache memory proportionally. A 32k context uses roughly 16× more KV memory than a 2048 context for the same model.",
             ],
             Self::Numa => vec![
                 "NUMA is a memory architecture design used in multi-processor systems where memory access time depends on the memory location relative to the processor.",
@@ -466,11 +468,11 @@ impl HelpTopic {
                 "Useful for maintaining system prompts or important context.",
             ],
             Self::StopSequences => vec![
-                "Strings that signal the model to stop generating.",
-                "When the model outputs any of these sequences, generation stops immediately.",
-                "Enter multiple sequences separated by commas.",
-                "Common examples: </s>, <|endoftext|>, <|end|>, ###, [DONE]",
-                "Useful for controlling output format and preventing runaway generation.",
+                "Strings that tell the model to stop generating. When the model outputs any of these sequences, generation halts immediately — the stop string itself is not included in the output.",
+                "Enter multiple sequences separated by commas. Example: </s>, ###, <|end|>",
+                "Works for both llama-server and Ollama backends — sent as a per-request parameter on every inference call.",
+                "Common use cases: preventing the model from continuing past a known end-of-answer marker, enforcing structured output boundaries, or stopping at role separators in chat templates.",
+                "Leave blank to let the model run until max_tokens or its built-in EOS token.",
             ],
             Self::Quantization => vec![
                 "Quantization reduces model precision to save memory. Lower bits = smaller size but slightly reduced quality.",

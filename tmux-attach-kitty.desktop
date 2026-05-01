@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Attach tmux main (Kitty)
-Comment=Auto-attach to tmux session main at login
-Exec=kitty bash -lc 'tmux attach -t main || tmux new -s main'
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=10

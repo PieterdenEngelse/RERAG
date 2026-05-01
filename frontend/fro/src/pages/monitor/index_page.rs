@@ -168,7 +168,9 @@ pub fn MonitorIndex() -> Element {
     let chunk_info_open = use_signal(|| false);
     let mut reindex_control_info_open = use_signal(|| false);
     let show_lora_info = use_signal(|| false);
+    let mut show_snapshot_info = use_signal(|| false);
     let mut show_chunking_logging_info = use_signal(|| false);
+    let mem_info = use_signal(|| Option::<api::MemoryInfo>::None);
     let show_synthetic_qa_examples = use_signal(|| false);
     let mut show_synthetic_qa_info = use_signal(|| false);
 
@@ -241,6 +243,7 @@ pub fn MonitorIndex() -> Element {
 
     {
         let mut state = state.clone();
+        let mem_info = mem_info.clone();
         use_future(move || async move {
             loop {
                 let status_result = api::fetch_export_snapshot_status().await;
@@ -293,6 +296,11 @@ pub fn MonitorIndex() -> Element {
                 // Also fetch synthetic QA status
                 if let Ok(qa_status) = api::fetch_synthetic_qa_status().await {
                     state.write().synthetic_qa_status = Some(qa_status);
+                }
+
+                // Fetch memory usage for the auto-export indicator
+                if let Ok(mem) = api::fetch_memory().await {
+                    mem_info.clone().set(Some(mem));
                 }
 
                 TimeoutFuture::new(5_000).await;
@@ -548,6 +556,19 @@ pub fn MonitorIndex() -> Element {
     let job_rows = jobs.read().clone();
     let latest_job = job_rows.first().cloned();
 
+    let mem_bar = mem_info().map(|mem| {
+        let pct = mem.usage_percent.min(100.0);
+        let bar_color = if pct >= 85.0 {
+            "background-color:#ef4444;"
+        } else if pct >= 70.0 {
+            "background-color:#eab308;"
+        } else {
+            "background-color:#22c55e;"
+        };
+        let used_gb = mem.used_memory_bytes as f64 / 1_073_741_824.0;
+        (pct, bar_color, used_gb, mem.total_memory_gb)
+    });
+
     let lora_status = snapshot.lora_status.clone();
     let lora_running = lora_status.as_ref().map(|s| s.running).unwrap_or(false);
     let lora_last_error = lora_status
@@ -593,6 +614,16 @@ pub fn MonitorIndex() -> Element {
 
 
             Panel { title: Some("Current Snapshot".into()), refresh: Some("10s".into()),
+                div { class: "flex items-center gap-2 mb-2 mx-4",
+                    h3 { class: "text-sm font-semibold text-gray-200", "Index state" }
+                    button {
+                        class: QUICK_ACTION_INFO_BUTTON_CLASS,
+                        style: PARAM_ICON_BUTTON_STYLE,
+                        onclick: move |_| show_snapshot_info.set(true),
+                        title: "What does this snapshot show?",
+                        InfoIcon {}
+                    }
+                }
                 div { class: "relative rounded border border-slate-700 bg-slate-900/40 p-4 mx-4",
                     if info_snapshot.loading {
                         div { class: "text-sm text-gray-400", "Loading index info…" }
@@ -859,6 +890,24 @@ pub fn MonitorIndex() -> Element {
                                     }
                                     span { class: "text-xs text-gray-300", "Enable automatic export when uploads complete" }
                                 }
+                                // Memory usage indicator — shown only when auto-export is on
+                                if snapshot.lora_auto_enabled {
+                                    if let Some((pct, bar_color, used_gb, total_gb)) = mem_bar.clone() {
+                                        div { class: "space-y-0.5",
+                                            div { class: "flex justify-between text-[10px] text-gray-400",
+                                                span { "RAM" }
+                                                span { "{used_gb:.1} / {total_gb:.1} GB  ({pct:.0}%)" }
+                                            }
+                                            div { class: "w-full h-1.5 rounded bg-gray-700",
+                                                div {
+                                                    class: "h-1.5 rounded",
+                                                    style: "{bar_color}width:{pct:.1}%",
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 div { class: "space-y-1",
                                     label { class: "text-[11px] text-gray-400", "Debounce (ms)" }
                                     input {
@@ -1282,7 +1331,22 @@ pub fn MonitorIndex() -> Element {
                                 }
                             }
                             div { class: "space-y-4 text-[13px] text-slate-300",
-                                div { class: "space-y-1",
+                                div { class: "space-y-2",
+                                    p {
+                                        span { class: "text-white font-semibold", "LoRA (Low-Rank Adaptation) " }
+                                        "is a fine-tuning technique. Fine-tuning means updating a language model's weights so it learns from your data. Full fine-tuning updates all parameters — expensive. LoRA freezes the original model and inserts small trainable "
+                                        span { class: "text-white font-semibold", "adapter matrices" }
+                                        " at key layers. Only those adapters are trained. They are \"low-rank\" — two small matrices whose product approximates the full weight update — so they are fast to train and small to store."
+                                    }
+                                    p {
+                                        "In ag, when documents are uploaded they go through the ingestion pipeline and become searchable (RAG). LoRA export is the parallel "
+                                        span { class: "text-white font-semibold", "training path" }
+                                        ": it takes those indexed chunks, generates synthetic question-answer pairs from each one, and packages them as JSONL training examples. A fine-tuning job then trains LoRA adapters on those examples. The result is a model that has "
+                                        span { class: "text-white font-semibold", "internalized" }
+                                        " your corpus as weights — it knows your domain without retrieving at inference time."
+                                    }
+                                }
+                                div { class: "border-t border-slate-700 pt-3 space-y-1",
                                     p {
                                         "This board controls the entire LoRA snapshot pipeline. It talks to "
                                         code { "/training/export_snapshot" }
@@ -1348,6 +1412,74 @@ pub fn MonitorIndex() -> Element {
                                         li { code { "POST /training/export_snapshot/filter" } }
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Current Snapshot Info Modal
+                    if show_snapshot_info() {
+                        div {
+                            class: "fixed inset-0 z-40 bg-black/70 backdrop-blur-sm",
+                            onclick: move |_| show_snapshot_info.set(false)
+                        }
+                        div {
+                            class: "fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[95%] max-w-2xl rounded-xl border border-slate-700 bg-slate-950/95 p-6 shadow-2xl text-sm text-slate-200 space-y-4 max-h-[85vh] overflow-y-auto",
+                            onclick: move |evt| evt.stop_propagation(),
+                            div { class: "flex items-start justify-between gap-4",
+                                div {
+                                    div { class: "text-base font-semibold text-white", "Current Snapshot" }
+                                    div { class: "text-xs text-slate-400", "from GET /index/info · refreshes every 10s" }
+                                }
+                                button {
+                                    class: "text-slate-400 hover:text-red-400 text-xl leading-none",
+                                    onclick: move |_| show_snapshot_info.set(false),
+                                    "×"
+                                }
+                            }
+                            div { class: "space-y-3 text-[13px] text-slate-300",
+                                p {
+                                    "This panel shows a point-in-time read of the two storage layers the search engine uses: the "
+                                    span { class: "text-white font-semibold", "Tantivy full-text index" }
+                                    " and the "
+                                    span { class: "text-white font-semibold", "vector store" }
+                                    ". It tells you what the backend currently has indexed — the numbers here are what will be searched when a query arrives."
+                                }
+                                div { class: "grid grid-cols-1 md:grid-cols-2 gap-3",
+                                    div { class: "bg-slate-900 rounded p-3 space-y-1",
+                                        div { class: "text-white font-semibold text-xs", "Document Chunks" }
+                                        p { "Number of text chunks stored in the Tantivy index. A single uploaded file becomes multiple chunks depending on the active chunker and chunk size. This number grows with each upload or reindex." }
+                                    }
+                                    div { class: "bg-slate-900 rounded p-3 space-y-1",
+                                        div { class: "text-white font-semibold text-xs", "Vectors" }
+                                        p {
+                                            "Number of embedding vectors in the vector store. Each chunk produces one vector. In a healthy index, this number equals Document Chunks. A mismatch means some chunks are missing embeddings — a reindex will fix it."
+                                        }
+                                    }
+                                    div { class: "bg-slate-900 rounded p-3 space-y-1",
+                                        div { class: "text-white font-semibold text-xs", "Mode" }
+                                        p { "The chunker that was active when documents were last indexed. "
+                                            code { class: "text-green-300", "fixed" }
+                                            " splits by token budget, "
+                                            code { class: "text-green-300", "lightweight" }
+                                            " splits by line/paragraph, "
+                                            code { class: "text-green-300", "semantic" }
+                                            " splits at topic boundaries. Changing the mode requires a full reindex to take effect."
+                                        }
+                                    }
+                                    div { class: "bg-slate-900 rounded p-3 space-y-1",
+                                        div { class: "text-white font-semibold text-xs", "Index in RAM" }
+                                        p { "Whether the Tantivy reader has the index segments memory-mapped. When true, search hits are served from RAM — lower latency. When false, reads go through the OS page cache or disk." }
+                                    }
+                                }
+                                p { class: "text-xs text-slate-400",
+                                    "If the panel shows a warning, it usually means vectors and document counts are out of sync. Run a reindex from the Reindex Control section below to reconcile them."
+                                }
+                            }
+                            button {
+                                class: "btn btn-sm w-full mt-2",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_snapshot_info.set(false),
+                                "Got it"
                             }
                         }
                     }

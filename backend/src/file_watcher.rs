@@ -143,16 +143,17 @@ async fn run_watcher(
                 continue;
             }
 
-            // Debounce: skip if we processed this file recently
+            // Debounce: always record the latest event time so that bursts of
+            // writes (each 500 ms apart) don't all slip through the window.
             let path_str = path.to_string_lossy().to_string();
             let now = std::time::Instant::now();
-            if let Some(last_processed) = recent_files.get(&path_str) {
-                if now.duration_since(*last_processed) < debounce_duration {
+            let last = recent_files.insert(path_str.clone(), now);
+            if let Some(last_event) = last {
+                if now.duration_since(last_event) < debounce_duration {
                     debug!("Debouncing file: {}", path.display());
                     continue;
                 }
             }
-            recent_files.insert(path_str.clone(), now);
 
             // Clean up old entries from recent_files
             recent_files.retain(|_, v| now.duration_since(*v) < Duration::from_secs(60));

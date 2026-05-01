@@ -44,6 +44,10 @@ fn onnx_defaults() -> api::OnnxConfigInfo {
         use_prepacking: true,
         independent_thread_pool: false,
         no_env_execution_providers: false,
+        embedding_batch_size: 32,
+        layout_ml_compiled: false,
+        layout_ml_enabled: false,
+        layout_model_ready: false,
     }
 }
 
@@ -98,6 +102,8 @@ pub fn ConfigOnnx() -> Element {
     let mut _show_model_path_info = use_signal(|| false);
     let mut _show_embed_dim_info = use_signal(|| false);
     let mut _show_max_length_info = use_signal(|| false);
+    let mut show_embed_batch_size_info = use_signal(|| false);
+    let mut show_layout_ml_info = use_signal(|| false);
     // Session Options (read-only / advanced)
     let mut show_exec_order_info = use_signal(|| false);
     let mut show_create_thread_info = use_signal(|| false);
@@ -190,6 +196,7 @@ pub fn ConfigOnnx() -> Element {
                 use_prepacking: Some(current.use_prepacking),
                 independent_thread_pool: Some(current.independent_thread_pool),
                 no_env_execution_providers: Some(current.no_env_execution_providers),
+                embedding_batch_size: Some(current.embedding_batch_size),
                 ..Default::default()
             };
 
@@ -236,6 +243,46 @@ pub fn ConfigOnnx() -> Element {
                         }
                     }
 
+                }
+
+                // ═══════════════════════════════════════════════════════════════
+                // LAYOUT ML STATUS TILE
+                // ═══════════════════════════════════════════════════════════════
+                Panel { title: None, refresh: None,
+                    div { class: "flex flex-col gap-2",
+                        div { class: "flex items-center gap-2 mb-1",
+                            span { class: "text-base text-gray-100 font-semibold", "Native PDF Extraction" }
+                            button {
+                                class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
+                                onclick: move |_| show_layout_ml_info.set(true),
+                                crate::pages::hardware::components::InfoIcon {}
+                            }
+                        }
+                        div { class: "grid grid-cols-3 gap-2 text-xs",
+                            div { class: "bg-gray-800 rounded p-2",
+                                div { class: "text-gray-400 mb-1", "Feature compiled" }
+                                div {
+                                    class: if config().layout_ml_compiled { "text-green-400 font-semibold" } else { "text-gray-500" },
+                                    if config().layout_ml_compiled { "yes" } else { "no (build without layout_ml)" }
+                                }
+                            }
+                            div { class: "bg-gray-800 rounded p-2",
+                                div { class: "text-gray-400 mb-1", "Enabled" }
+                                div {
+                                    class: if config().layout_ml_enabled { "text-green-400 font-semibold" } else { "text-gray-500" },
+                                    if config().layout_ml_enabled { "yes (LAYOUT_ML_ENABLED=true)" } else { "no (set LAYOUT_ML_ENABLED=true)" }
+                                }
+                            }
+                            div { class: "bg-gray-800 rounded p-2",
+                                div { class: "text-gray-400 mb-1", "Layout model" }
+                                div {
+                                    class: if config().layout_model_ready { "text-green-400 font-semibold" } else { "text-yellow-400" },
+                                    if config().layout_model_ready { "ORT (PubLayNet)" } else { "heuristic only" }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // ═══════════════════════════════════════════════════════════════
@@ -587,6 +634,33 @@ pub fn ConfigOnnx() -> Element {
                                         InfoIcon {}
                                     }
                                 }
+                            }
+
+                            // embedding_batch_size
+                            div { class: PARAM_BLOCK_CLASS,
+                                label { class: PARAM_LABEL_CLASS, "embedding_batch_size" }
+                                div { class: "flex items-center justify-between w-full",
+                                    input {
+                                        r#type: "number",
+                                        min: "1",
+                                        max: "512",
+                                        class: PARAM_NUMBER_INPUT_CLASS,
+                                        value: "{config().embedding_batch_size}",
+                                        oninput: move |e| {
+                                            if let Ok(v) = e.value().parse::<usize>() {
+                                                config.write().embedding_batch_size = v.max(1);
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_embed_batch_size_info.set(true),
+                                        title: "Embedding batch size",
+                                        InfoIcon {}
+                                    }
+                                }
+                                span { class: "text-gray-500 text-xs italic", "live — no restart needed" }
                             }
                         }
 
@@ -1539,6 +1613,26 @@ pub fn ConfigOnnx() -> Element {
         }
         if show_dead_bytes_info() {
             { info_modal(OnnxHelpTopic::MaxDeadBytesPerChunk.title(), show_dead_bytes_info, OnnxHelpTopic::MaxDeadBytesPerChunk.paragraphs()) }
+        }
+        if show_embed_batch_size_info() {
+            { info_modal("Embedding Batch Size", show_embed_batch_size_info, vec![
+                "Controls how many document chunks are sent to the ONNX model in a single inference pass.",
+                "ONNX attention is O(batch × heads × seq²) in memory. For a model with 12 attention heads and 512-token sequences, a batch of 500 chunks needs hundreds of GB of intermediate tensors — crashing the process.",
+                "Lower values (8–16) protect against OOM when indexing large or image-heavy PDFs. Higher values (32–128) give better GPU/CPU utilisation once you have enough RAM.",
+                "This setting takes effect immediately — no restart required. The default is 32, which is safe for most laptops and desktop machines.",
+            ]) }
+
+        if show_layout_ml_info() {
+            { info_modal("Native PDF Extraction", show_layout_ml_info, vec![
+                "The native PDF extraction pipeline runs entirely in-process — no Python sidecar required.",
+                "Stage 1 uses lopdf to walk the PDF content stream and extract word tokens with bounding boxes (x0, y0, x1, y1 normalised to 0–1000). A fallback to extractous handles malformed PDFs where lopdf cannot parse the content stream.",
+                "Stage 2 classifies regions using LayoutXLM (via candle). When the LayoutXLM model is not downloaded, a pure-Rust heuristic classifier takes over: it groups words into lines by y-proximity, then scores each line for title capitalisation, footer position, table pipe characters, and list bullet markers.",
+                "Stage 3 detects table structure. The ORT TableFormer model (microsoft/table-transformer-structure-recognition) is the primary path; text-mode clustering fills in until page image rendering is available.",
+                "Stage 4 assembles DocIR: Titles, SectionHeaders, Tables, Figures, Captions, and Lists are mapped to typed DocBlocks. Footer and noise regions are dropped.",
+                "To activate: set LAYOUT_ML_ENABLED=true. The heuristic classifier works immediately with no download. To use the candle LayoutXLM path: find a fine-tuned checkpoint on huggingface.co (search 'layoutxlm document layout') that has config.json, tokenizer.json, and model.safetensors with a 13-class document-layout classifier head. Set LAYOUT_ML_MODEL_ID=owner/repo-name — the server downloads the weights automatically on first startup and caches them to ~/.cache/huggingface/hub/. Any load failure falls back to heuristic automatically.",
+                "Priority: Docling sidecar (if running) > NativePdfExtractor > built-in pdftotext.",
+            ]) }
+        }
         }
     }
 }

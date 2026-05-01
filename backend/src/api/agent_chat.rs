@@ -2255,20 +2255,34 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
             }
         }
         crate::db::param_hardware::BackendType::LlamaCpp => {
-            // llama-server: OpenAI-compatible streaming
+            // llama-server: OpenAI-compatible streaming + llama.cpp sampler extensions
             let llama_url = hardware_config.llama_server_url.clone();
             let mut messages = Vec::new();
             if !system_prompt.is_empty() {
                 messages.push(serde_json::json!({"role": "system", "content": system_prompt}));
             }
             messages.push(serde_json::json!({"role": "user", "content": prompt}));
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "model": final_model,
                 "messages": messages,
                 "stream": true,
                 "temperature": config.temperature,
-                "max_tokens": config.max_tokens
+                "max_tokens": config.max_tokens,
+                "top_p": config.top_p,
+                "top_k": config.top_k,
+                "min_p": config.min_p,
+                "frequency_penalty": config.frequency_penalty,
+                "presence_penalty": config.presence_penalty,
+                "repeat_penalty": config.repeat_penalty,
+                "typical_p": config.typical_p,
+                "tfs_z": config.tfs_z
             });
+            if let Some(seed) = config.seed {
+                body["seed"] = serde_json::json!(seed);
+            }
+            if !config.stop_sequences.is_empty() {
+                body["stop"] = serde_json::json!(config.stop_sequences);
+            }
             (format!("{}/v1/chat/completions", llama_url), body)
         }
         _ => {

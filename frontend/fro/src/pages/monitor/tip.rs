@@ -90,219 +90,215 @@ pub fn MonitorTip() -> Element {
 
             // Pipeline layout: Parser → Typography & Tag Cleanup → Canonicalize NFC → Chunker → ┬ Canonicalize NFKC
             //                                                                                    └ Canonicalize NFKC+punct
-            div { class: "flex gap-2 items-stretch",
+            div { class: "flex gap-2 items-stretch flex-wrap",
 
-                // ── Parser ──
-                div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
-                    div { class: "flex items-center justify-between mb-3",
-                        div { class: "flex items-center gap-2",
-                            h3 { class: "text-sm font-semibold text-gray-200", "Parser" }
-                            button {
-                                class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                onclick: move |_| show_parser_info.set(true),
-                                title: "About the Parser",
-                                InfoIcon {}
+                // ── Parser unit ──
+                div { class: "shrink-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 min-w-0",
+                        div { class: "flex items-center justify-between mb-3",
+                            div { class: "flex items-center gap-2",
+                                h3 { class: "text-sm font-semibold text-gray-200", "Parser" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_parser_info.set(true),
+                                    title: "About the Parser",
+                                    InfoIcon {}
+                                }
                             }
+                            span { class: "text-xs text-gray-400", "7 days" }
                         }
-                        span { class: "text-xs text-gray-400", "7 days" }
+                        match &*parser_stats.read() {
+                            Some(Ok(stats)) => rsx! { ParserStatsView { stats: stats.clone() } },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                        }
                     }
-                    match &*parser_stats.read() {
-                        Some(Ok(stats)) => rsx! { ParserStatsView { stats: stats.clone() } },
-                        Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                        None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
-                    }
+                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                // arrow
-                div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
-
-                // ── Typography & Tag Cleanup ──
-                div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
-                    div { class: "flex items-center justify-between mb-3",
-                        div { class: "flex items-center gap-2",
-                            h3 { class: "text-sm font-semibold text-gray-200", "Typography & Tag Cleanup" }
-                            button {
-                                class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                onclick: move |_| show_preprocessing_info.set(true),
-                                title: "About Typography & Tag Cleanup",
-                                InfoIcon {}
+                // ── Typography unit ──
+                div { class: "flex-1 min-w-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                        div { class: "flex items-center justify-between mb-3",
+                            div { class: "flex items-center gap-2",
+                                h3 { class: "text-sm font-semibold text-gray-200", "Typography & Tag Cleanup" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_preprocessing_info.set(true),
+                                    title: "About Typography & Tag Cleanup",
+                                    InfoIcon {}
+                                }
                             }
                         }
-                        span { class: "text-xs text-gray-400", "format-keyed" }
+                        div { class: "text-xs text-gray-400 space-y-2",
+                            div { class: "flex items-start gap-2",
+                                span { class: "text-cyan-400 font-mono shrink-0", "HTML" }
+                                span { "strip tags" }
+                            }
+                            div { class: "flex items-start gap-2",
+                                span { class: "text-amber-400 font-mono shrink-0", "PDF" }
+                                span { "unicode fix" }
+                            }
+                            div { class: "flex items-start gap-2",
+                                span { class: "text-amber-400 font-mono shrink-0", "DOCX" }
+                                span { "unicode fix" }
+                            }
+                            div { class: "flex items-start gap-2",
+                                span { class: "text-amber-400 font-mono shrink-0", "ODT" }
+                                span { "unicode fix" }
+                            }
+                            div { class: "flex items-start gap-2",
+                                span { class: "text-amber-400 font-mono shrink-0", "EPUB" }
+                                span { "unicode fix" }
+                            }
+                            div { class: "flex items-start gap-2",
+                                span { class: "text-amber-400 font-mono shrink-0", "PPTX" }
+                                span { "unicode fix" }
+                            }
+                            div { class: "flex items-start gap-2 pt-1 border-t border-gray-700",
+                                span { class: "text-gray-500 font-mono shrink-0", "TXT/MD" }
+                                span { class: "text-gray-500", "pass-through" }
+                            }
+                        }
                     }
-                    div { class: "text-xs text-gray-400 space-y-2",
-                        div { class: "flex items-start gap-2",
-                            span { class: "text-cyan-400 font-mono shrink-0", "HTML" }
-                            span { "strip tags" }
-                        }
-                        div { class: "flex items-start gap-2",
-                            span { class: "text-amber-400 font-mono shrink-0", "PDF" }
-                            span { "unicode fix" }
-                        }
-                        div { class: "flex items-start gap-2",
-                            span { class: "text-amber-400 font-mono shrink-0", "DOCX" }
-                            span { "unicode fix" }
-                        }
-                        div { class: "flex items-start gap-2",
-                            span { class: "text-amber-400 font-mono shrink-0", "ODT" }
-                            span { "unicode fix" }
-                        }
-                        div { class: "flex items-start gap-2",
-                            span { class: "text-amber-400 font-mono shrink-0", "EPUB" }
-                            span { "unicode fix" }
-                        }
-                        div { class: "flex items-start gap-2",
-                            span { class: "text-amber-400 font-mono shrink-0", "PPTX" }
-                            span { "unicode fix" }
-                        }
-                        div { class: "flex items-start gap-2 pt-1 border-t border-gray-700",
-                            span { class: "text-gray-500 font-mono shrink-0", "TXT/MD" }
-                            span { class: "text-gray-500", "pass-through" }
-                        }
-                    }
+                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                // arrow
-                div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
-
-                // ── Canonicalize NFC ──
-                div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
-                    div { class: "flex items-center justify-between mb-3",
-                        div { class: "flex items-center gap-2",
-                            h3 { class: "text-sm font-semibold text-gray-200", "Canonicalize NFC" }
-                            button {
-                                class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                onclick: move |_| show_nfc_info.set(true),
-                                title: "About NFC canonicalization",
-                                InfoIcon {}
+                // ── NFC unit ──
+                div { class: "flex-1 min-w-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                        div { class: "flex items-center justify-between mb-3",
+                            div { class: "flex items-center gap-2",
+                                h3 { class: "text-sm font-semibold text-gray-200", "Canonicalize NFC" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_nfc_info.set(true),
+                                    title: "About NFC canonicalization",
+                                    InfoIcon {}
+                                }
                             }
                         }
-                        span { class: "text-xs text-gray-400", "NFC + whitespace" }
+                        match &*canon_stats.read() {
+                            Some(Ok(stats)) => rsx! { StoreRecordsView { records: stats.store_records.clone() } },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                        }
                     }
-                    match &*canon_stats.read() {
-                        Some(Ok(stats)) => rsx! { StoreRecordsView { records: stats.store_records.clone() } },
-                        Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                        None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
-                    }
+                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                // arrow
-                div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
-
-                // ── DocIR ──
-                div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
-                    div { class: "flex items-center justify-between mb-3",
-                        div { class: "flex items-center gap-2",
-                            h3 { class: "text-sm font-semibold text-gray-200", "DocIR" }
-                            button {
-                                class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                onclick: move |_| show_docir_info.set(true),
-                                title: "About DocIR structured extraction",
-                                InfoIcon {}
+                // ── DocIR unit ──
+                div { class: "flex-1 min-w-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                        div { class: "flex items-center justify-between mb-3",
+                            div { class: "flex items-center gap-2",
+                                h3 { class: "text-sm font-semibold text-gray-200", "DocIR" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_docir_info.set(true),
+                                    title: "About DocIR structured extraction",
+                                    InfoIcon {}
+                                }
                             }
                         }
-                        span { class: "text-xs text-gray-400", "corpus · live" }
-                    }
-                    match &*chunk_meta_stats.read() {
-                        Some(Ok(stats)) if stats.total == 0 => rsx! {
-                            p { class: "text-xs text-gray-500 pt-2", "Upload a document to see block structure." }
-                        },
-                        Some(Ok(stats)) => {
-                            let max_bt = stats.block_types.values().copied().max().unwrap_or(1) as f64;
-                            let mut bt_sorted: Vec<(&String, &u32)> = stats.block_types.iter().collect();
-                            bt_sorted.sort_by(|a, b| b.1.cmp(a.1));
-                            let mut ex_sorted: Vec<(&String, &u32)> = stats.extractors.iter().collect();
-                            ex_sorted.sort_by(|a, b| b.1.cmp(a.1));
-                            rsx! {
-                                div { class: "space-y-3 overflow-y-auto",
-                                    div { class: "space-y-1",
-                                        for (name, count) in bt_sorted.iter() {
-                                            {
-                                                let bar_pct = (**count as f64 / max_bt * 100.0) as u32;
-                                                let color = match name.as_str() {
-                                                    "Header"  => "bg-sky-600",
-                                                    "Table"   => "bg-emerald-600",
-                                                    "Code"    => "bg-violet-600",
-                                                    "Formula" => "bg-amber-600",
-                                                    "Image"   => "bg-pink-600",
-                                                    _         => "bg-gray-600",
-                                                };
-                                                let label_color = match name.as_str() {
-                                                    "Header"  => "text-sky-300",
-                                                    "Table"   => "text-emerald-300",
-                                                    "Code"    => "text-violet-300",
-                                                    "Formula" => "text-amber-300",
-                                                    "Image"   => "text-pink-300",
-                                                    _         => "text-gray-400",
-                                                };
-                                                rsx! {
-                                                    div { class: "flex items-center gap-1.5",
-                                                        span { class: "text-xs font-mono w-16 shrink-0 {label_color}", "{name}" }
-                                                        div { class: "flex-1 bg-gray-700 rounded-full h-1",
-                                                            div { class: "{color} h-1 rounded-full", style: "width:{bar_pct}%" }
+                        match &*chunk_meta_stats.read() {
+                            Some(Ok(stats)) if stats.total == 0 => rsx! {
+                                p { class: "text-xs text-gray-500 pt-2", "Upload a document to see block structure." }
+                            },
+                            Some(Ok(stats)) => {
+                                let max_bt = stats.block_types.values().copied().max().unwrap_or(1) as f64;
+                                let mut bt_sorted: Vec<(&String, &u32)> = stats.block_types.iter().collect();
+                                bt_sorted.sort_by(|a, b| b.1.cmp(a.1));
+                                let mut ex_sorted: Vec<(&String, &u32)> = stats.extractors.iter().collect();
+                                ex_sorted.sort_by(|a, b| b.1.cmp(a.1));
+                                rsx! {
+                                    div { class: "space-y-3 overflow-y-auto",
+                                        div { class: "space-y-1",
+                                            for (name, count) in bt_sorted.iter() {
+                                                {
+                                                    let bar_pct = (**count as f64 / max_bt * 100.0) as u32;
+                                                    let color = match name.as_str() {
+                                                        "Header"  => "bg-sky-600",
+                                                        "Table"   => "bg-emerald-600",
+                                                        "Code"    => "bg-violet-600",
+                                                        "Formula" => "bg-amber-600",
+                                                        "Image"   => "bg-pink-600",
+                                                        _         => "bg-gray-600",
+                                                    };
+                                                    let label_color = match name.as_str() {
+                                                        "Header"  => "text-sky-300",
+                                                        "Table"   => "text-emerald-300",
+                                                        "Code"    => "text-violet-300",
+                                                        "Formula" => "text-amber-300",
+                                                        "Image"   => "text-pink-300",
+                                                        _         => "text-gray-400",
+                                                    };
+                                                    rsx! {
+                                                        div { class: "flex items-center gap-1.5",
+                                                            span { class: "text-xs font-mono w-16 shrink-0 {label_color}", "{name}" }
+                                                            div { class: "flex-1 bg-gray-700 rounded-full h-1",
+                                                                div { class: "{color} h-1 rounded-full", style: "width:{bar_pct}%" }
+                                                            }
+                                                            span { class: "text-xs text-gray-400 w-8 text-right shrink-0", "{count}" }
                                                         }
-                                                        span { class: "text-xs text-gray-400 w-8 text-right shrink-0", "{count}" }
                                                     }
                                                 }
                                             }
                                         }
-                                    }
-                                    div { class: "pt-1 border-t border-gray-700 space-y-0.5",
-                                        for (name, count) in ex_sorted.iter() {
-                                            {
-                                                let c = match name.as_str() {
-                                                    "docling"      => "text-amber-300",
-                                                    "unstructured" => "text-sky-300",
-                                                    _              => "text-gray-500",
-                                                };
-                                                rsx! {
-                                                    div { class: "flex items-center justify-between",
-                                                        span { class: "text-xs font-mono {c}", "{name}" }
-                                                        span { class: "text-xs text-gray-400", "{count}" }
+                                        div { class: "pt-1 border-t border-gray-700 space-y-0.5",
+                                            for (name, count) in ex_sorted.iter() {
+                                                {
+                                                    let c = match name.as_str() {
+                                                        "docling"      => "text-amber-300",
+                                                        "unstructured" => "text-sky-300",
+                                                        _              => "text-gray-500",
+                                                    };
+                                                    rsx! {
+                                                        div { class: "flex items-center justify-between",
+                                                            span { class: "text-xs font-mono {c}", "{name}" }
+                                                            span { class: "text-xs text-gray-400", "{count}" }
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        },
-                        Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                        None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                        }
                     }
+                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                // arrow
-                div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
-
-                // ── Chunker ──
-                div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0", style: "height:288px;",
-                    div { class: "flex items-center justify-between mb-3",
-                        div { class: "flex items-center gap-2",
-                            h3 { class: "text-sm font-semibold text-gray-200", "Chunker" }
-                            button {
-                                class: PARAM_ICON_BUTTON_CLASS,
-                                style: PARAM_ICON_BUTTON_STYLE,
-                                onclick: move |_| show_chunker_info.set(true),
-                                title: "About the Chunker",
-                                InfoIcon {}
+                // ── Chunker unit ──
+                div { class: "flex-1 min-w-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                        div { class: "flex items-center justify-between mb-3",
+                            div { class: "flex items-center gap-2",
+                                h3 { class: "text-sm font-semibold text-gray-200", "Chunker" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_chunker_info.set(true),
+                                    title: "About the Chunker",
+                                    InfoIcon {}
+                                }
                             }
                         }
-                        span { class: "text-xs text-gray-400", "recent 20" }
+                        match &*chunking_stats.read() {
+                            Some(Ok(snaps)) => rsx! { ChunkerStatsView { snapshots: snaps.clone() } },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                        }
                     }
-                    match &*chunking_stats.read() {
-                        Some(Ok(snaps)) => rsx! { ChunkerStatsView { snapshots: snaps.clone() } },
-                        Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                        None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
-                    }
+                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
-
-                // fork arrow
-                div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
 
                 // ── Parallel branches: NFKC and NFKC+punct ──
                 div { class: "flex flex-col gap-2 flex-1 min-w-0",
@@ -320,7 +316,6 @@ pub fn MonitorTip() -> Element {
                                     InfoIcon {}
                                 }
                             }
-                            span { class: "text-xs text-gray-400", "NFKC + whitespace" }
                         }
                         match &*canon_stats.read() {
                             Some(Ok(stats)) => rsx! {
@@ -355,7 +350,6 @@ pub fn MonitorTip() -> Element {
                                     InfoIcon {}
                                 }
                             }
-                            span { class: "text-xs text-gray-400", "NFKC + whitespace + punct" }
                         }
                         match &*canon_stats.read() {
                             Some(Ok(stats)) => rsx! {
@@ -1972,8 +1966,6 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
     let stats = &props.stats;
     let mut show_empty_info = use_signal(|| false);
 
-    // Deduplicate: keep only the most recent entry per (filename, format).
-    // recent_files is newest-first, so the first occurrence wins.
     let mut seen = std::collections::HashSet::new();
     let deduped: Vec<&FileRecord> = stats
         .recent_files
@@ -1981,8 +1973,47 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
         .filter(|r| seen.insert((r.filename.clone(), r.format.clone())))
         .collect();
 
+    let mut fmt_map: std::collections::HashMap<String, (u64, u64, u64)> = std::collections::HashMap::new();
+    for rec in &deduped {
+        let entry = fmt_map.entry(rec.format.clone()).or_insert((0, 0, 0));
+        if rec.ok { entry.0 += 1; entry.2 += rec.chars; } else { entry.1 += 1; }
+    }
+    let mut fmt_sorted: Vec<(String, u64, u64, u64)> = fmt_map
+        .into_iter()
+        .map(|(fmt, (ok, empty, chars))| (fmt, ok, empty, chars))
+        .collect();
+    fmt_sorted.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)));
+
     rsx! {
-        div { class: "overflow-y-auto", style: "max-height:220px;",
+        div { class: "space-y-3",
+            if !fmt_sorted.is_empty() {
+                table { class: "w-full text-xs",
+                    thead {
+                        tr { class: "text-gray-400 border-b border-gray-600",
+                            th { class: "text-left pb-1 pr-3 font-medium", "Format" }
+                            th { class: "text-right pb-1 pr-3 font-medium", "ok" }
+                            th { class: "text-right pb-1 pr-3 font-medium", "empty" }
+                            th { class: "text-right pb-1 font-medium", "chars" }
+                        }
+                    }
+                    tbody {
+                        for (fmt, ok, empty, chars) in &fmt_sorted {
+                            tr { class: "border-b border-gray-700/50",
+                                td { class: "py-0.5 pr-3 text-gray-300 font-mono", "{fmt}" }
+                                td { class: "py-0.5 pr-3 text-right text-green-400", "{ok}" }
+                                td { class: "py-0.5 pr-3 text-right",
+                                    if *empty > 0 {
+                                        span { class: "text-yellow-500", "{empty}" }
+                                    } else {
+                                        span { class: "text-gray-600", "0" }
+                                    }
+                                }
+                                td { class: "py-0.5 text-right text-gray-400", "{format_chars(*chars)}" }
+                            }
+                        }
+                    }
+                }
+            }
             if stats.recent_files.is_empty() {
                 div { class: "flex flex-col items-center justify-center h-24 gap-1",
                     p { class: "text-xs text-gray-400", "Upload a file to see extraction stats" }
@@ -2055,8 +2086,8 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                     tbody {
                         for rec in &deduped {
                             tr { class: "border-b border-gray-500/50",
-                                td { class: "py-0.5 pr-3 text-gray-200 font-mono truncate", style: "max-width:120px;", title: "{rec.filename}", "{rec.filename}" }
-                                td { class: "py-0.5 pr-3 text-gray-400 font-mono truncate", style: "max-width:160px;", title: "{rec.path}", "{rec.path}" }
+                                td { class: "py-0.5 pr-3 text-gray-200 font-mono whitespace-nowrap", "{rec.filename}" }
+                                td { class: "py-0.5 pr-3 text-gray-400 font-mono whitespace-nowrap", "{rec.path}" }
                                 td { class: "py-0.5 pr-3 text-gray-300 font-mono", "{rec.format}" }
                                 td { class: "py-0.5 pr-3 text-right",
                                     if rec.ok {
@@ -2138,9 +2169,14 @@ struct StoreRecordsViewProps {
 
 #[component]
 fn StoreRecordsView(props: StoreRecordsViewProps) -> Element {
+    // Deduplicate by filename — records are newest-first, so first occurrence wins.
+    let mut seen = std::collections::HashSet::new();
+    let records: Vec<&StoreRecord> = props.records.iter()
+        .filter(|r| seen.insert(r.file.clone()))
+        .collect();
     rsx! {
         div { class: "overflow-y-auto", style: "max-height:220px;",
-            if props.records.is_empty() {
+            if records.is_empty() {
                 div { class: "flex flex-col items-center justify-center h-24 gap-1",
                     p { class: "text-xs text-gray-400", "Upload a file to see NFC stats" }
                     p { class: "text-xs text-gray-400", "Stats reset on service restart" }
@@ -2156,7 +2192,7 @@ fn StoreRecordsView(props: StoreRecordsViewProps) -> Element {
                         }
                     }
                     tbody {
-                        for rec in &props.records {
+                        for rec in &records {
                             tr { class: "border-b border-gray-500/50",
                                 td { class: "py-0.5 pr-2 text-gray-200 font-mono truncate", style: "max-width:130px;", title: "{rec.file}", "{rec.file}" }
                                 td { class: "py-0.5 pr-2 text-right tabular-nums text-gray-400", "{format_chars(rec.chars_in)}" }

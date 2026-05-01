@@ -41,5 +41,6 @@ pub use monitoring::trace_middleware;
 pub mod file_watcher;
 pub mod graph;
 pub mod perf;
+pub mod pdf;
 pub mod security;
 pub mod training; // Performance optimizations (SIMD, compression, HNSW, etc.) // Neo4j Knowledge Graph for GraphRAG (Phase 27)

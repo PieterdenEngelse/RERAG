@@ -1,2 +1,0 @@
-systemctl --user restart ag-full-stack.service
-

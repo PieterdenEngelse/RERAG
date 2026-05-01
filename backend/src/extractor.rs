@@ -19,7 +19,9 @@ pub trait DocExtractor: Send + Sync {
     fn name(&self) -> &str;
     /// Return true when this extractor can improve on built-in for this type.
     fn can_handle(&self, content_type: &ContentType) -> bool;
-    fn extract(&self, bytes: &[u8], filename: &str, ct: &ContentType) -> anyhow::Result<DocIR>;
+    /// Takes ownership of `bytes` so HTTP extractors can pass them directly to
+    /// the multipart body without an extra allocation.
+    fn extract(&self, bytes: Vec<u8>, filename: &str, ct: &ContentType) -> anyhow::Result<DocIR>;
 }
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -39,17 +41,20 @@ impl ExtractorRegistry {
     }
 
     /// Try each extractor in priority order; return the first success.
-    pub fn extract(&self, bytes: &[u8], filename: &str, ct: &ContentType) -> Option<DocIR> {
-        for ext in &self.extractors {
-            if !ext.can_handle(ct) {
-                continue;
-            }
-            match ext.extract(bytes, filename, ct) {
+    /// Bytes are moved into the first matching extractor; cloned only on retry.
+    pub fn extract(&self, bytes: Vec<u8>, filename: &str, ct: &ContentType) -> Option<DocIR> {
+        let matching: Vec<_> = self.extractors.iter().filter(|e| e.can_handle(ct)).collect();
+        let n = matching.len();
+        let mut bytes_opt = Some(bytes);
+        for (i, ext) in matching.iter().enumerate() {
+            let b = if i + 1 < n {
+                bytes_opt.as_ref().unwrap().clone()
+            } else {
+                bytes_opt.take().unwrap()
+            };
+            match ext.extract(b, filename, ct) {
                 Ok(ir) => {
-                    debug!(
-                        extractor = ext.name(),
-                        filename, "external extraction succeeded"
-                    );
+                    debug!(extractor = ext.name(), filename, "external extraction succeeded");
                     return Some(ir);
                 }
                 Err(e) => {
@@ -121,9 +126,9 @@ impl DocExtractor for DoclingExtractor {
         matches!(ct, ContentType::Pdf)
     }
 
-    fn extract(&self, bytes: &[u8], filename: &str, _ct: &ContentType) -> anyhow::Result<DocIR> {
+    fn extract(&self, bytes: Vec<u8>, filename: &str, _ct: &ContentType) -> anyhow::Result<DocIR> {
         let url = format!("{}/convert", self.endpoint);
-        let part = reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
+        let part = reqwest::blocking::multipart::Part::bytes(bytes)
             .file_name(filename.to_string())
             .mime_str("application/octet-stream")?;
         let form = reqwest::blocking::multipart::Form::new().part("file", part);
@@ -207,11 +212,11 @@ impl DocExtractor for UnstructuredExtractor {
         matches!(ct, ContentType::Pdf)
     }
 
-    fn extract(&self, bytes: &[u8], filename: &str, _ct: &ContentType) -> anyhow::Result<DocIR> {
+    fn extract(&self, bytes: Vec<u8>, filename: &str, _ct: &ContentType) -> anyhow::Result<DocIR> {
         use crate::doc_ir::BlockType;
 
         let url = format!("{}/general/v0/general", self.endpoint);
-        let part = reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
+        let part = reqwest::blocking::multipart::Part::bytes(bytes)
             .file_name(filename.to_string())
             .mime_str("application/octet-stream")?;
         let form = reqwest::blocking::multipart::Form::new()
@@ -333,14 +338,19 @@ impl DocExtractor for FusionExtractor {
             >= 2
     }
 
-    fn extract(&self, bytes: &[u8], filename: &str, ct: &ContentType) -> anyhow::Result<DocIR> {
+    fn extract(&self, bytes: Vec<u8>, filename: &str, ct: &ContentType) -> anyhow::Result<DocIR> {
+        let matching: Vec<_> = self.sources.iter().filter(|w| w.extractor.can_handle(ct)).collect();
+        let n = matching.len();
+        let mut bytes_opt = Some(bytes);
         let mut results: Vec<(DocIR, f32)> = Vec::new();
 
-        for w in &self.sources {
-            if !w.extractor.can_handle(ct) {
-                continue;
-            }
-            match w.extractor.extract(bytes, filename, ct) {
+        for (i, w) in matching.iter().enumerate() {
+            let b = if i + 1 < n {
+                bytes_opt.as_ref().unwrap().clone()
+            } else {
+                bytes_opt.take().unwrap()
+            };
+            match w.extractor.extract(b, filename, ct) {
                 Ok(mut ir) => {
                     let conf_str = w.confidence.to_string();
                     let name = w.extractor.name().to_string();

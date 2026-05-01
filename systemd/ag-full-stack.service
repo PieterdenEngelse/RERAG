@@ -8,6 +8,7 @@ Wants=network-online.target docker.service
 Type=simple
 Restart=on-failure
 RestartSec=5
+KillMode=control-group
 WorkingDirectory=/home/pde/ag
 ExecStart=/home/pde/ag/start-ag.sh
 StandardOutput=journal

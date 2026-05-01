@@ -6,6 +6,7 @@ use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use std::env;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task;
@@ -147,6 +148,7 @@ enum EmbeddingBackend {
 struct EmbeddingRuntime {
     backend: EmbeddingBackend,
     dim: usize,
+    batch_size: AtomicUsize,
 }
 
 impl EmbeddingRuntime {
@@ -188,6 +190,7 @@ impl EmbeddingRuntime {
                         inner: Mutex::new(embedder),
                     },
                     dim: config.model.dimension(),
+                    batch_size: AtomicUsize::new(config.batch_size),
                 }
             }
             Err(err) => {
@@ -537,7 +540,10 @@ pub fn embed(text: &str) -> EmbeddingVector {
     result
 }
 
-/// Batch helper for synchronous indexers
+/// Batch helper for synchronous indexers.
+/// Processes chunks in sub-batches of `EMBEDDING_BATCH_SIZE` (default 32) to bound
+/// ONNX attention memory: a single pass of N×512 tokens allocates O(N×heads×512²) RAM,
+/// which OOMs for N in the hundreds.
 pub fn embed_batch(texts: &[String]) -> Vec<EmbeddingVector> {
     if texts.is_empty() {
         return Vec::new();
@@ -545,23 +551,37 @@ pub fn embed_batch(texts: &[String]) -> Vec<EmbeddingVector> {
     crate::monitoring::metrics::observe_embedding_batch_size(texts.len());
     let start = std::time::Instant::now();
     let runtime = global_runtime();
-    // Borrow as &str slices — avoids cloning every string into a new Vec<String>.
-    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    let result = match &runtime.backend {
+    let batch_size = runtime.batch_size.load(Ordering::Relaxed).max(1);
+    let mut result = Vec::with_capacity(texts.len());
+    match &runtime.backend {
         EmbeddingBackend::Onnx { inner } => {
-            let mut guard = inner.lock();
-            match guard.embed(&refs) {
-                Ok(vectors) => vectors,
-                Err(err) => {
-                    warn!("ONNX batch embed failed: {err}");
-                    texts.iter().map(|_| vec![0.0; runtime.dim]).collect()
+            for chunk in texts.chunks(batch_size) {
+                let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
+                let mut guard = inner.lock();
+                match guard.embed(&refs) {
+                    Ok(mut vectors) => result.append(&mut vectors),
+                    Err(err) => {
+                        warn!("ONNX batch embed failed: {err}");
+                        result.extend(chunk.iter().map(|_| vec![0.0; runtime.dim]));
+                    }
                 }
             }
         }
-    };
+    }
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     crate::monitoring::metrics::observe_embedding_latency_ms(duration_ms);
     result
+}
+/// Live-update the embedding batch size without restarting.
+pub fn set_embedding_batch_size(size: usize) {
+    global_runtime()
+        .batch_size
+        .store(size.max(1), Ordering::Relaxed);
+}
+
+/// Read the current live embedding batch size.
+pub fn get_embedding_batch_size() -> usize {
+    global_runtime().batch_size.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

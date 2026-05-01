@@ -322,6 +322,10 @@ pub(crate) struct OnnxConfigInfo {
     pub use_prepacking: bool,
     pub independent_thread_pool: bool,
     pub no_env_execution_providers: bool,
+    pub embedding_batch_size: usize,
+    pub layout_ml_compiled: bool,
+    pub layout_ml_enabled: bool,
+    pub layout_model_ready: bool,
 }
 
 pub(crate) fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> {
@@ -1274,10 +1278,15 @@ pub(crate) fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
 
+        let embedding_batch_size = std::env::var("EMBEDDING_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32);
         std::sync::RwLock::new(OnnxConfig {
             model_path,
             num_threads,
             inter_op_num_threads: inter_threads,
+            embedding_batch_size,
             ..Default::default()
         })
     })
@@ -1327,6 +1336,17 @@ pub(crate) async fn get_onnx_config() -> Result<HttpResponse, Error> {
             use_prepacking: config.use_prepacking,
             independent_thread_pool: config.independent_thread_pool,
             no_env_execution_providers: config.no_env_execution_providers,
+            embedding_batch_size: crate::embedder::get_embedding_batch_size(),
+            layout_ml_compiled: cfg!(feature = "layout_ml"),
+            layout_ml_enabled: std::env::var("LAYOUT_ML_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            layout_model_ready: {
+                #[cfg(feature = "layout_ml")]
+                { crate::pdf::layout_model::LayoutModel::load_or_heuristic().is_candle_loaded() }
+                #[cfg(not(feature = "layout_ml"))]
+                { false }
+            },
         },
     }))
 }
@@ -1473,6 +1493,17 @@ pub(crate) async fn set_onnx_config(
     if let Some(flag) = body.no_env_execution_providers {
         config.no_env_execution_providers = flag;
     }
+    if let Some(v) = body.embedding_batch_size {
+        if v == 0 {
+            return Ok(HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "message": "embedding_batch_size must be >= 1",
+                "request_id": request_id
+            })));
+        }
+        config.embedding_batch_size = v;
+        crate::embedder::set_embedding_batch_size(v);
+    }
 
     let opt_level_str = onnx_opt_level_to_str(config.optimization_level);
     let exec_mode_str = onnx_exec_mode_to_str(config.execution_mode);
@@ -1525,13 +1556,19 @@ pub(crate) async fn set_onnx_config(
             use_prepacking: config.use_prepacking,
             independent_thread_pool: config.independent_thread_pool,
             no_env_execution_providers: config.no_env_execution_providers,
+            embedding_batch_size: crate::embedder::get_embedding_batch_size(),
+            layout_ml_compiled: cfg!(feature = "layout_ml"),
+            layout_ml_enabled: std::env::var("LAYOUT_ML_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            layout_model_ready: {
+                #[cfg(feature = "layout_ml")]
+                { crate::pdf::layout_model::LayoutModel::load_or_heuristic().is_candle_loaded() }
+                #[cfg(not(feature = "layout_ml"))]
+                { false }
+            },
         },
     }))
-}
-
-/// Get the current ONNX config for use by embedder initialization
-pub fn get_current_onnx_config() -> OnnxConfig {
-    get_onnx_config_storage().read().unwrap().clone()
 }
 
 // ============================================================================

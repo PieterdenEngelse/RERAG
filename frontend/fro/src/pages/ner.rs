@@ -660,11 +660,11 @@ pub fn ConfigNer() -> Element {
         }
         if show_batch_size_info() {
             { info_modal("ENTITY_PERFORMANCE_BATCH_SIZE", show_batch_size_info, vec![
-                "Number of text segments sent to the NER model in a single inference call.",
-                "Larger batches improve GPU/CPU utilization by amortizing model loading overhead across more inputs.",
-                "Larger batches also use more memory — on CPU-only deployments, keep this at 4–8.",
-                "On GPU with 8+ GB VRAM, values of 16–32 are typical.",
-                "Default: 4.",
+                "How many document chunks are sent to the NER model in a single ONNX inference call.",
+                "When indexing a document the pipeline first adds all chunks to the graph, then runs NER in groups of this size, then writes entity mentions. A batch of 8 means 8 chunks share one ONNX session run instead of 8 separate runs.",
+                "Why it matters for speed: BERT-base-NER takes ~50 ms per chunk on CPU. A 200-chunk document costs ~10 s at batch=1. At batch=8 that drops to ~1–2 s because session startup is amortised across the batch.",
+                "Why it matters for memory: each batch builds a [batch × seq_len × 9] output tensor. At batch=32 and seq_len=512 that is ~600 KB — negligible. NER batching is not a memory risk the way embedding batching is.",
+                "Set to 1 to process one chunk at a time (lowest memory, slowest). Set to 8–16 for a good CPU trade-off. Default: 4.",
             ]) }
         }
         if show_quantization_info() {

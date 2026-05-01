@@ -96,12 +96,12 @@ pub async fn index_to_knowledge_graph(
     // Process each chunk
     let extractor = EntityExtractorTool::new();
     let confidence_threshold = graph_config.entity_extraction.confidence_threshold;
+    let ner_batch_size = crate::db::ner_settings::global_config().batch_size.max(1);
 
+    // Phase 1: add all chunks to the graph, collect the ones that succeeded.
+    let mut valid: Vec<(&str, &str)> = Vec::with_capacity(chunks.len());
     for (chunk_id, chunk_content) in chunks {
-        // Yield between chunks to prevent CPU starvation
         tokio::task::yield_now().await;
-
-        // Add chunk to graph
         let chunk_meta = knowledge_builder::ChunkMeta {
             id: chunk_id.clone(),
             document_id: doc_id.to_string(),
@@ -114,67 +114,56 @@ pub async fn index_to_knowledge_graph(
                 .unwrap_or(0),
             token_count: chunk_content.split_whitespace().count(),
         };
-
         if let Err(e) = kb.add_chunk(&chunk_meta).await {
             warn!(error = %e, chunk_id = %chunk_id, "Failed to add chunk to knowledge graph");
-            continue;
+        } else {
+            valid.push((chunk_id, chunk_content));
         }
+    }
 
-        // Extract entities - try ONNX NER first, fall back to regex
-        let ner_entities = crate::tools::ner_extractor::extract_entities(chunk_content);
+    // Phase 2: batched NER — one ONNX call per batch of ner_batch_size chunks.
+    let texts: Vec<&str> = valid.iter().map(|(_, c)| *c).collect();
+    let ner_results: Vec<Vec<crate::tools::ner_extractor::NerEntity>> = texts
+        .chunks(ner_batch_size)
+        .flat_map(|batch| crate::tools::ner_extractor::extract_entities_batch(batch))
+        .collect();
+
+    // Phase 3: entity mentions, regex fallback, co-occurrence links.
+    for (i, (chunk_id, chunk_content)) in valid.iter().enumerate() {
+        let ner_entities = &ner_results[i];
         let use_ner = !ner_entities.is_empty();
         if use_ner {
-            for ner_entity in &ner_entities {
+            for ner_entity in ner_entities {
                 if let Err(e) = kb
-                    .add_entity_mention(
-                        chunk_id,
-                        &ner_entity.text,
-                        &ner_entity.label,
-                        ner_entity.score,
-                    )
+                    .add_entity_mention(chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score)
                     .await
                 {
                     debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
                 }
             }
         }
-        // Fallback regex extraction
         let extraction = extractor.extract(chunk_content);
-
         for entity in &extraction.entities {
             if !use_ner && entity.confidence >= confidence_threshold {
                 if let Err(e) = kb
-                    .add_entity_mention(
-                        chunk_id,
-                        &entity.text,
-                        entity.entity_type.label(),
-                        entity.confidence,
-                    )
+                    .add_entity_mention(chunk_id, &entity.text, entity.entity_type.label(), entity.confidence)
                     .await
                 {
                     debug!(error = %e, entity = %entity.text, "Failed to add entity mention");
                 }
             }
         }
-
-        // Link co-occurring entities (entities in the same chunk are related)
         let high_confidence_entities: Vec<_> = extraction
             .entities
             .iter()
             .filter(|e| e.confidence >= confidence_threshold)
             .collect();
-
         for i in 0..high_confidence_entities.len() {
             for j in (i + 1)..high_confidence_entities.len() {
                 let e1 = &high_confidence_entities[i];
                 let e2 = &high_confidence_entities[j];
                 let _ = kb
-                    .link_entities(
-                        &e1.text,
-                        &e2.text,
-                        "co_occurs_with",
-                        (e1.confidence + e2.confidence) / 2.0,
-                    )
+                    .link_entities(&e1.text, &e2.text, "co_occurs_with", (e1.confidence + e2.confidence) / 2.0)
                     .await;
             }
         }

@@ -870,7 +870,7 @@ pub fn ConfigHardware() -> Element {
                                             },
                                         }
                                         span { class: "text-[0.7rem] text-gray-400",
-                                            "Start: ~/llama.cpp/build/bin/llama-server -m /path/to/model.gguf --port 11435"
+                                            "Start: llama-server -m /path/to/model.gguf --port 11435 --ctx-size {hardware_values.num_ctx}"
                                         }
                                     }
                                 }
@@ -2206,6 +2206,39 @@ pub fn ConfigHardware() -> Element {
                                             }
                                         }
                                     }
+                                    // Stop sequences
+                                    div { class: PARAM_COLUMN_CLASS,
+                                        span { class: "text-gray-300 font-semibold text-xs",
+                                            "Stop"
+                                        }
+                                        div { class: PARAM_BLOCK_CLASS,
+                                            div { class: "flex items-center gap-2 mb-1",
+                                                label { class: PARAM_LABEL_CLASS, "stop" }
+                                                button {
+                                                    class: PARAM_ICON_BUTTON_CLASS,
+                                                    style: PARAM_ICON_BUTTON_STYLE,
+                                                    onclick: move |_| stop_sequences_info_signal.set(true),
+                                                    title: "Stop sequences help",
+                                                    InfoIcon {}
+                                                }
+                                            }
+                                            input {
+                                                r#type: "text",
+                                                class: "input input-xs input-bordered bg-gray-700 text-gray-200 w-48",
+                                                placeholder: "e.g. </s>, ###",
+                                                value: sampling_config().stop_sequences.join(", "),
+                                                onchange: move |evt| {
+                                                    let value = evt.value();
+                                                    let sequences: Vec<String> = value
+                                                        .split(',')
+                                                        .map(|s| s.trim().to_string())
+                                                        .filter(|s| !s.is_empty())
+                                                        .collect();
+                                                    sampling_config.with_mut(|cfg| cfg.stop_sequences = sequences);
+                                                },
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2830,36 +2863,6 @@ pub fn ConfigHardware() -> Element {
                                                 style: PARAM_ICON_BUTTON_STYLE,
                                                 onclick: move |_| num_keep_info_signal.set(true),
                                                 title: "Tokens to keep help",
-                                                InfoIcon {}
-                                            }
-                                        }
-                                    }
-                                }
-                                div { class: PARAM_COLUMN_CLASS,
-                                    span { class: "text-gray-300 font-semibold", "Stop Conditions" }
-                                    div { class: PARAM_BLOCK_CLASS,
-                                        label { class: PARAM_LABEL_CLASS, "stop" }
-                                        div { class: "flex items-end gap-2",
-                                            input {
-                                                r#type: "text",
-                                                class: "input input-xs input-bordered bg-gray-700 text-gray-200 w-48",
-                                                placeholder: "e.g. </s>, ###",
-                                                value: sampling_config().stop_sequences.join(", "),
-                                                onchange: move |evt| {
-                                                    let value = evt.value();
-                                                    let sequences: Vec<String> = value
-                                                        .split(',')
-                                                        .map(|s| s.trim().to_string())
-                                                        .filter(|s| !s.is_empty())
-                                                        .collect();
-                                                    sampling_config.with_mut(|cfg| cfg.stop_sequences = sequences);
-                                                },
-                                            }
-                                            button {
-                                                class: PARAM_ICON_BUTTON_CLASS,
-                                                style: PARAM_ICON_BUTTON_STYLE,
-                                                onclick: move |_| stop_sequences_info_signal.set(true),
-                                                title: "Stop sequences help",
                                                 InfoIcon {}
                                             }
                                         }

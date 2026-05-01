@@ -294,7 +294,32 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
     let neo4j_status: Option<(bool, bool)> = None;
 
     if let Some(retriever) = RETRIEVER.get() {
-        let retriever = retriever.lock().unwrap();
+        let retriever = match retriever.try_lock() {
+            Ok(r) => r,
+            Err(_) => {
+                // Retriever mutex is held by an indexing task — respond immediately
+                // rather than blocking for potentially minutes.
+                let msg = message
+                    .unwrap_or_else(|| "Indexing in progress".to_string());
+                log_status_change("busy", &msg);
+                let mut response = json!({
+                    "status": "busy",
+                    "message": msg,
+                    "request_id": request_id
+                });
+                if let Some(l) = load {
+                    response["load"] = json!({
+                        "cpu_percent": l.cpu_percent,
+                        "memory_percent": l.memory_percent,
+                        "active_tasks": l.active_tasks,
+                        "queue_depth": l.queue_depth,
+                        "indexing": l.indexing,
+                        "llm_active": l.llm_active
+                    });
+                }
+                return Ok(HttpResponse::Ok().json(response));
+            }
+        };
         match retriever.health_check() {
             Ok(()) => {
                 // Neo4j is ingestion-only — not running is normal.
@@ -1039,7 +1064,7 @@ pub(crate) async fn get_canon_stats() -> Result<HttpResponse, Error> {
 
 pub(crate) async fn get_chunk_meta_stats() -> Result<HttpResponse, Error> {
     let (block_types, extractors, total) = if let Some(retriever) = RETRIEVER.get() {
-        retriever.lock().unwrap().chunk_meta_distribution()
+        retriever.lock().unwrap_or_else(|e| e.into_inner()).chunk_meta_distribution()
     } else {
         Default::default()
     };

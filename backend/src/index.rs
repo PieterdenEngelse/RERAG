@@ -177,28 +177,13 @@ pub async fn index_all_documents_async(
         total_files
     );
 
-    // Phase 2: Read all files asynchronously with io_uring
+    // Stream each file: read → index → drop. Never accumulate all content in RAM.
     let start = std::time::Instant::now();
-    let mut file_contents: Vec<(std::path::PathBuf, Option<String>)> =
-        Vec::with_capacity(total_files);
+    let mut indexed_count = 0usize;
 
     for path in file_paths {
         let content = extract_text_async(&path).await;
-        file_contents.push((path, content));
-    }
-
-    let read_duration = start.elapsed();
-    info!(
-        "index_all_documents_async: read {} files in {:?} via {}",
-        total_files, read_duration, io_backend
-    );
-
-    // Phase 3: Index all content (CPU-bound, no I/O)
-    let index_start = std::time::Instant::now();
-    let mut indexed_count = 0usize;
-
-    for (path, content_opt) in file_contents {
-        if let Some(content) = content_opt {
+        if let Some(content) = content {
             match index_content_direct(retriever, &path, &content, chunker_mode, chunker) {
                 Ok(chunks) => {
                     indexed_count += chunks;
@@ -213,15 +198,15 @@ pub async fn index_all_documents_async(
         }
     }
 
-    let index_duration = index_start.elapsed();
+    let elapsed = start.elapsed();
 
     retriever
         .commit()
         .map_err(|e| format!("commit failed: {}", e))?;
 
     info!(
-        "index_all_documents_async: indexed {} chunks from {} files (read: {:?}, index: {:?}, backend: {})",
-        indexed_count, total_files, read_duration, index_duration, io_backend
+        "index_all_documents_async: indexed {} chunks from {} files in {:?} via {}",
+        indexed_count, total_files, elapsed, io_backend
     );
 
     Ok(indexed_count)
@@ -909,9 +894,13 @@ fn extract_ir(path: &Path) -> Option<crate::doc_ir::DocIR> {
     // Try registered external extractors (Docling, etc.)
     if let Some(reg) = crate::extractor::global_registry() {
         if reg.has_handler(&ct) {
-            if let Some(ir) = reg.extract(&bytes, filename, &ct) {
+            if let Some(ir) = reg.extract(bytes, filename, &ct) {
                 return Some(ir);
             }
+            // Extractor failed — re-read bytes for built-in fallback.
+            let bytes = fs::read(path).ok()?;
+            let ct2 = detect_content_type(&bytes, Some(filename));
+            return extract_ir_from_bytes_typed(path, bytes, ct2);
         }
     }
 
@@ -939,7 +928,7 @@ pub async fn extract_ir_async(path: &Path) -> Option<crate::doc_ir::DocIR> {
             let ct_clone = ct.clone();
             let path_buf = path.to_path_buf();
             let ir_opt =
-                tokio::task::spawn_blocking(move || reg.extract(&bytes, &fname, &ct_clone))
+                tokio::task::spawn_blocking(move || reg.extract(bytes, &fname, &ct_clone))
                     .await
                     .ok()
                     .flatten();
@@ -1754,7 +1743,9 @@ fn extract_text_from_bytes(
             // text-layer PDFs better anyway; OCR covers image-only ones.
             let text = extract_text_from_pdf_pdftotext(path)
                 .or_else(|| extract_text_from_pdf_ocr(path, file_bytes));
-            text.map(dedupe_pdf_noise)
+            // dedupe_pdf_noise can reduce header/footer-heavy PDFs to ""; treat that as None
+            // so the file records as "empty" rather than "ok" with 0 indexable chars.
+            text.map(dedupe_pdf_noise).filter(|t| !t.trim().is_empty())
         }
         ContentType::Html => {
             debug!("extract_text: HTML detected, using smart extractor");

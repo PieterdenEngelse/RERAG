@@ -221,10 +221,7 @@ pub fn Header() -> Element {
                 }
                 Err(e) => {
                     // Check if it's likely a timeout (request failed)
-                    if e.contains("timeout")
-                        || e.contains("Timeout")
-                        || e.contains("Request failed")
-                    {
+                    if e.contains("timeout") || e.contains("Timeout") {
                         let count = timeout_count() + 1;
                         timeout_count.set(count);
                         if count >= 2 {
@@ -1135,31 +1132,6 @@ pub fn Header() -> Element {
                         h3 { class: "text-lg font-semibold text-purple-400",
                             "Checking / Slow Response (Purple Pulsing)"
                         }
-                        a {
-                            class: "text-blue-400 hover:text-blue-300 text-sm cursor-pointer",
-                            href: "#log",
-                            onclick: move |evt| {
-                                evt.stop_propagation();
-                                log_status_type.set("checking".to_string());
-                                log_loading.set(true);
-                                log_error.set(None);
-                                show_log_modal.set(true);
-                                spawn(async move {
-                                    match api::get_status_log("checking").await {
-                                        Ok(resp) => {
-                                            log_content.set(resp.content);
-                                            log_total_lines.set(resp.total_lines);
-                                            log_loading.set(false);
-                                        }
-                                        Err(e) => {
-                                            log_error.set(Some(e));
-                                            log_loading.set(false);
-                                        }
-                                    }
-                                });
-                            },
-                            "Log"
-                        }
                     }
                     p { class: "text-gray-200 leading-relaxed",
                         "Purple pulsing means the frontend's health check request is taking longer than expected (over 8 seconds). This is a transitional state indicating the backend might be very busy or experiencing issues."
@@ -1168,10 +1140,50 @@ pub fn Header() -> Element {
                         "Unlike \"offline\" (red), this state means we haven't given up yet—the request is still pending. The frontend will continue waiting and update the status once a response arrives or the next check cycle begins."
                     }
                     p { class: "text-gray-200 leading-relaxed",
-                        "Possible causes: backend is processing a very large request, system is under extreme load, network latency issues, or the backend is starting up and loading models into memory."
+                        "Possible causes: backend is processing a very large request, system is under extreme load, network latency issues, the backend is starting up and loading models into memory, or the ONNX embedding thread pool is spinning at high CPU (saturates the tokio runtime and delays health check responses)."
                     }
                     p { class: "text-gray-200 leading-relaxed",
-                        "If this persists, check the backend logs or /monitoring/metrics. The pulsing animation indicates active checking rather than a failed state."
+                        "If this persists, use the Monitor pages to diagnose:"
+                    }
+                    ul { class: "ml-4 space-y-2 list-disc list-outside text-gray-300 text-sm",
+                        li {
+                            Link {
+                                to: Route::MonitorIndex {},
+                                class: "font-semibold text-purple-300 underline decoration-dotted hover:text-purple-200",
+                                onclick: move |_| show_checking_details.set(false),
+                                "Monitor → Index"
+                            }
+                            " — the most common cause. Scroll to the "
+                            span { class: "font-semibold", "Reindex Control" }
+                            " section and check the jobs table for a running job. A large reindex saturates the backend thread pool and stalls the health endpoint. Wait for it to finish."
+                        }
+                        li {
+                            Link {
+                                to: Route::MonitorRequests {},
+                                class: "font-semibold text-purple-300 underline decoration-dotted hover:text-purple-200",
+                                onclick: move |_| show_checking_details.set(false),
+                                "Monitor → Requests"
+                            }
+                            " — look at the "
+                            span { class: "font-semibold", "Latency Breakdown" }
+                            " table (p50 / p95 / p99). Values in the hundreds of ms confirm the backend is under load. If p95 is high but p50 is normal, a single slow operation is blocking some requests."
+                        }
+                        li {
+                            span { class: "font-semibold", "Backend logs" }
+                            " — in the terminal running "
+                            code { class: "text-gray-200 bg-gray-700 px-0.5 rounded", "RUST_LOG=info cargo run" }
+                            ", look for "
+                            code { class: "text-gray-200 bg-gray-700 px-0.5 rounded", "WARN" }
+                            "/"
+                            code { class: "text-gray-200 bg-gray-700 px-0.5 rounded", "ERROR" }
+                            " lines or mentions of "
+                            code { class: "text-gray-200 bg-gray-700 px-0.5 rounded", "reindex" }
+                            ", "
+                            code { class: "text-gray-200 bg-gray-700 px-0.5 rounded", "embedding" }
+                            ", or "
+                            code { class: "text-gray-200 bg-gray-700 px-0.5 rounded", "Health:" }
+                            "."
+                        }
                     }
                     button {
                         class: "btn btn-primary btn-sm w-full",

@@ -2,8 +2,6 @@
 // Upload, reindex, search, rerank, summarize endpoints
 
 use super::*;
-use futures::future::join_all;
-
 // Rate limiting is enforced by middleware (see monitoring/rate_limit_middleware.rs).
 // The per-handler token-bucket implementation was removed to avoid double-limiting.
 
@@ -87,60 +85,53 @@ pub(crate) async fn upload_document_inner(
                 "error": "Reindex already in progress; automatic indexing skipped",
             }));
         } else if let Some(handle) = RETRIEVER.get() {
-            // Phase 1: Extract all files concurrently (outside mutex, I/O-bound)
-            let file_contents: Vec<(String, std::path::PathBuf, Option<crate::doc_ir::DocIR>)> =
-                join_all(uploaded_files.iter().map(|filename| {
-                    let path = Path::new(&upload_dir).join(filename);
-                    let fname = filename.clone();
-                    async move {
-                        let ir = index::extract_ir_async(&path).await;
-                        (fname, path, ir)
-                    }
-                }))
-                .await;
-
-            // Phase 2a: Chunk + embed (CPU-bound, offloaded to thread pool)
+            // Stream each file: extract → chunk+embed → index → drop.
+            // Never accumulate all prepared docs in RAM simultaneously.
             let chunker_mode = config.chunker_mode;
-            let mut prepared_docs: Vec<(String, std::path::PathBuf, index::PreparedDoc)> =
-                Vec::new();
-            for (filename, path, ir_opt) in file_contents {
-                match ir_opt {
-                    Some(ir) => {
-                        let path_clone = path.clone();
-                        let prepared = tokio::task::spawn_blocking(move || {
-                            let chunker = crate::index::default_chunker(chunker_mode);
-                            index::prepare_doc(
-                                &path_clone,
-                                &ir,
-                                chunker_mode,
-                                chunker.as_ref(),
-                                "default",
-                            )
-                        })
-                        .await
-                        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
-                        prepared_docs.push((filename, path, prepared));
-                    }
-                    None => index_errors.push(json!({
-                        "file": filename,
-                        "error": "Failed to extract document IR from file",
-                    })),
-                }
-            }
-
-            // Phase 2b: Write to index (brief mutex — only vector/Tantivy inserts)
             let mut graph_index_tasks: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
 
-            match handle.lock() {
-                Ok(mut retriever) => {
-                    // One shared Tantivy writer for the whole batch.
-                    if let Err(e) = retriever.begin_batch() {
-                        index_errors
-                            .push(json!({ "file": null, "error": format!("begin_batch: {e}") }));
-                    } else {
-                        for (filename, path, prepared) in prepared_docs {
-                            match index::index_prepared_doc(&mut *retriever, prepared) {
-                                Ok((chunk_count, graph_chunks)) if chunk_count > 0 => {
+            for filename in &uploaded_files {
+                let path = Path::new(&upload_dir).join(filename);
+
+                // Phase 1: Extract IR (I/O-bound, outside mutex)
+                let ir = index::extract_ir_async(&path).await;
+                let ir = match ir {
+                    Some(ir) => ir,
+                    None => {
+                        index_errors.push(json!({
+                            "file": filename,
+                            "error": "Failed to extract document IR from file",
+                        }));
+                        continue;
+                    }
+                };
+
+                // Phase 2: Chunk + embed (CPU-bound, thread pool, outside mutex)
+                let path_clone = path.clone();
+                let prepared = tokio::task::spawn_blocking(move || {
+                    let chunker = crate::index::default_chunker(chunker_mode);
+                    index::prepare_doc(&path_clone, &ir, chunker_mode, chunker.as_ref(), "default")
+                })
+                .await
+                .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+
+                // Phase 3: Write to index (brief mutex window per file)
+                match handle.lock() {
+                    Ok(mut retriever) => {
+                        if let Err(e) = retriever.begin_batch() {
+                            index_errors.push(
+                                json!({ "file": filename, "error": format!("begin_batch: {e}") }),
+                            );
+                            continue;
+                        }
+                        match index::index_prepared_doc(&mut *retriever, prepared) {
+                            Ok((chunk_count, graph_chunks)) if chunk_count > 0 => {
+                                if let Err(err) = retriever.commit() {
+                                    index_errors.push(json!({
+                                        "file": filename,
+                                        "error": format!("commit failed: {}", err),
+                                    }));
+                                } else {
                                     indexed_files.push(json!({
                                         "file": filename.clone(),
                                         "chunks_indexed": chunk_count,
@@ -154,34 +145,33 @@ pub(crate) async fn upload_document_inner(
                                         ));
                                     }
                                 }
-                                Ok((_, _)) => index_errors.push(json!({
+                            }
+                            Ok((_, _)) => {
+                                let _ = retriever.commit();
+                                index_errors.push(json!({
                                     "file": filename,
                                     "error": "Extraction returned no text — file is absent from the search index. Check the Parser tile: if status is 'empty', the PDF may be image-only (install pdftotext / tesseract) or use the Docling sidecar.",
-                                })),
-                                Err(err) => index_errors.push(json!({
+                                }));
+                            }
+                            Err(err) => {
+                                let _ = retriever.commit();
+                                index_errors.push(json!({
                                     "file": filename,
                                     "error": err,
-                                })),
+                                }));
                             }
                         }
-
-                        if let Err(err) = retriever.commit() {
-                            index_errors.push(json!({
-                                "file": null,
-                                "error": format!("commit failed: {}", err),
-                            }));
-                        }
                     }
-                }
-                Err(_) => {
-                    index_errors.push(json!({
-                        "file": null,
-                        "error": "Failed to lock retriever for indexing",
-                    }));
+                    Err(_) => {
+                        index_errors.push(json!({
+                            "file": filename,
+                            "error": "Failed to lock retriever for indexing",
+                        }));
+                    }
                 }
             }
 
-            // Phase 3: Index to knowledge graph (outside mutex, async)
+            // Phase 4: Index to knowledge graph (outside mutex, async)
             for (filename, source, chunks) in graph_index_tasks {
                 index_to_knowledge_graph(&filename, &filename, &source, &chunks).await;
             }

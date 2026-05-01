@@ -2699,7 +2699,17 @@ pub struct OnnxConfigInfo {
     pub independent_thread_pool: bool,
     #[serde(default)]
     pub no_env_execution_providers: bool,
+    #[serde(default = "default_embedding_batch_size")]
+    pub embedding_batch_size: usize,
+    #[serde(default)]
+    pub layout_ml_compiled: bool,
+    #[serde(default)]
+    pub layout_ml_enabled: bool,
+    #[serde(default)]
+    pub layout_model_ready: bool,
 }
+
+fn default_embedding_batch_size() -> usize { 32 }
 
 /// Response from ONNX config endpoint
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2776,6 +2786,8 @@ pub struct OnnxConfigRequest {
     pub independent_thread_pool: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_env_execution_providers: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_batch_size: Option<usize>,
 }
 
 /// Fetch current ONNX Runtime configuration
