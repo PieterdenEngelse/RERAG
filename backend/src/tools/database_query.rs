@@ -15,6 +15,12 @@ pub struct DatabaseQueryTool {
     total_count: usize,
 }
 
+impl Default for DatabaseQueryTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DatabaseQueryTool {
     pub fn new() -> Self {
         Self {
@@ -128,10 +134,8 @@ impl DatabaseQueryTool {
             })
             .map_err(|e| format!("Query execution failed: {}", e))?;
 
-        for row in rows {
-            if let Ok(data) = row {
-                rows_data.push(data);
-            }
+        for data in rows.flatten() {
+            rows_data.push(data);
         }
 
         // Format output
@@ -149,14 +153,14 @@ impl DatabaseQueryTool {
         output.push('\n');
 
         // Separator
-        output.push_str("|");
+        output.push('|');
         for _ in &column_names {
             output.push_str("---|");
         }
         output.push('\n');
 
         // Data rows (limit to 50)
-        for (_i, row) in rows_data.iter().take(50).enumerate() {
+        for row in rows_data.iter().take(50) {
             output.push_str("| ");
             for val in row {
                 output.push_str(&format!("{} | ", val));

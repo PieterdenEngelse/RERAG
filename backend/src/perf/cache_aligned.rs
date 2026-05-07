@@ -144,11 +144,7 @@ mod tests {
         let addr_b = &*counters.b as *const AtomicU64 as usize;
 
         // They should be at least 64 bytes apart
-        let distance = if addr_b > addr_a {
-            addr_b - addr_a
-        } else {
-            addr_a - addr_b
-        };
+        let distance = addr_a.abs_diff(addr_b);
 
         assert!(
             distance >= 64,

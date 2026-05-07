@@ -349,6 +349,7 @@ impl Default for InstallerConfig {
 
 impl InstallerConfig {
     /// Create configuration with custom prefix
+    #[allow(clippy::field_reassign_with_default)]
     pub fn with_prefix(prefix: PathBuf) -> Self {
         let mut config = Self::default();
         config.install_prefix = prefix.clone();

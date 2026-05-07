@@ -1,10 +1,74 @@
 use lru::LruCache;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Runtime-mutable search/upload QPS and burst thresholds.
+/// All fields are atomics so they can be updated without locking.
+#[derive(Debug)]
+pub struct RuntimeThresholds {
+    search_qps: AtomicU64,
+    search_burst: AtomicU64,
+    upload_qps: AtomicU64,
+    upload_burst: AtomicU64,
+}
+
+impl RuntimeThresholds {
+    pub fn new(
+        search_qps: f64,
+        search_burst: f64,
+        upload_qps: f64,
+        upload_burst: f64,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            search_qps: AtomicU64::new(search_qps.to_bits()),
+            search_burst: AtomicU64::new(search_burst.to_bits()),
+            upload_qps: AtomicU64::new(upload_qps.to_bits()),
+            upload_burst: AtomicU64::new(upload_burst.to_bits()),
+        })
+    }
+    pub fn get_search_qps(&self) -> f64 {
+        f64::from_bits(self.search_qps.load(Ordering::Relaxed))
+    }
+    pub fn get_search_burst(&self) -> f64 {
+        f64::from_bits(self.search_burst.load(Ordering::Relaxed))
+    }
+    pub fn get_upload_qps(&self) -> f64 {
+        f64::from_bits(self.upload_qps.load(Ordering::Relaxed))
+    }
+    pub fn get_upload_burst(&self) -> f64 {
+        f64::from_bits(self.upload_burst.load(Ordering::Relaxed))
+    }
+    pub fn set(&self, search_qps: f64, search_burst: f64, upload_qps: f64, upload_burst: f64) {
+        self.search_qps
+            .store(search_qps.to_bits(), Ordering::Relaxed);
+        self.search_burst
+            .store(search_burst.to_bits(), Ordering::Relaxed);
+        self.upload_qps
+            .store(upload_qps.to_bits(), Ordering::Relaxed);
+        self.upload_burst
+            .store(upload_burst.to_bits(), Ordering::Relaxed);
+    }
+    pub fn snapshot(&self) -> ThresholdsSnapshot {
+        ThresholdsSnapshot {
+            search_qps: self.get_search_qps(),
+            search_burst: self.get_search_burst(),
+            upload_qps: self.get_upload_qps(),
+            upload_burst: self.get_upload_burst(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThresholdsSnapshot {
+    pub search_qps: f64,
+    pub search_burst: f64,
+    pub upload_qps: f64,
+    pub upload_burst: f64,
+}
 
 #[derive(Clone, Debug)]
 pub struct RateLimiterConfig {
@@ -24,7 +88,8 @@ struct Bucket {
 pub struct RateLimiter {
     config: RateLimiterConfig,
     enabled: AtomicBool,
-    buckets: Mutex<LruCache<String, Bucket>>, // keyed by IP string
+    buckets: Mutex<LruCache<String, Bucket>>,
+    pub thresholds: Arc<RuntimeThresholds>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,13 +100,14 @@ pub struct RateLimiterState {
 }
 
 impl RateLimiter {
-    pub fn new(config: RateLimiterConfig) -> Self {
+    pub fn new(config: RateLimiterConfig, thresholds: Arc<RuntimeThresholds>) -> Self {
         let cap = NonZeroUsize::new(config.max_ips.max(1)).unwrap();
         let enabled = config.enabled;
         Self {
             config,
             enabled: AtomicBool::new(enabled),
             buckets: Mutex::new(LruCache::new(cap)),
+            thresholds,
         }
     }
 
@@ -201,16 +267,14 @@ impl RateLimiter {
 
             if bucket.tokens >= 1.0 {
                 0
+            } else if discrete {
+                // compute number of full intervals to reach >=1 token
+                let needed = 1.0 - bucket.tokens;
+                let intervals_needed = (needed / qps).ceil().max(1.0) as u64;
+                intervals_needed * interval_ms / 1000 // seconds
             } else {
-                if discrete {
-                    // compute number of full intervals to reach >=1 token
-                    let needed = 1.0 - bucket.tokens;
-                    let intervals_needed = (needed / qps).ceil().max(1.0) as u64;
-                    intervals_needed * interval_ms / 1000 // seconds
-                } else {
-                    let needed = 1.0 - bucket.tokens;
-                    (needed / qps).ceil() as u64
-                }
+                let needed = 1.0 - bucket.tokens;
+                (needed / qps).ceil() as u64
             }
         } else {
             1

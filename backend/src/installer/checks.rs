@@ -102,7 +102,5 @@ pub fn run_all_checks(
 mod tests {
 
     #[test]
-    fn test_checks_exist() {
-        assert!(true);
-    }
+    fn test_checks_exist() {}
 }

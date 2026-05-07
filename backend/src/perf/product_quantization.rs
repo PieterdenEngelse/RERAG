@@ -46,7 +46,7 @@ impl PQCodebook {
         let subvector_dim = dim / num_subvectors;
 
         assert!(
-            dim % num_subvectors == 0,
+            dim.is_multiple_of(num_subvectors),
             "Vector dimension {} must be divisible by num_subvectors {}",
             dim,
             num_subvectors

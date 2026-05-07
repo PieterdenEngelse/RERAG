@@ -8,25 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 
 /// Cache statistics for monitoring
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CacheStats {
     pub l1_hits: u64,
     pub l1_misses: u64,
     pub l2_hits: u64,
     pub l2_misses: u64,
     pub total_items: usize,
-}
-
-impl Default for CacheStats {
-    fn default() -> Self {
-        Self {
-            l1_hits: 0,
-            l1_misses: 0,
-            l2_hits: 0,
-            l2_misses: 0,
-            total_items: 0,
-        }
-    }
 }
 
 impl CacheStats {
@@ -122,6 +110,10 @@ impl<K: Clone + std::hash::Hash + Eq, V: Clone> MemoryCache<K, V> {
         entries.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn cleanup_expired(&self) -> usize {
         let mut entries = self.entries.lock().unwrap();
         let before = entries.len();
@@ -170,9 +162,11 @@ mod tests {
 
     #[test]
     fn test_cache_stats() {
-        let mut stats = CacheStats::default();
-        stats.l1_hits = 10;
-        stats.l1_misses = 5;
+        let stats = CacheStats {
+            l1_hits: 10,
+            l1_misses: 5,
+            ..Default::default()
+        };
 
         assert_eq!(stats.total_hits(), 10);
         assert_eq!(stats.total_misses(), 5);

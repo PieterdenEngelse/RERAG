@@ -80,15 +80,13 @@ impl Uninstaller {
     }
 
     fn backup_critical_data(&mut self) -> InstallerResult<()> {
-        if self.preserve_data || self.preserve_config {
-            if !self.dry_run {
-                fs::create_dir_all(&self.backup_dir).map_err(|e| {
-                    InstallerError::DirectoryCreationFailed {
-                        path: self.backup_dir.display().to_string(),
-                        reason: e.to_string(),
-                    }
-                })?;
-            }
+        if (self.preserve_data || self.preserve_config) && !self.dry_run {
+            fs::create_dir_all(&self.backup_dir).map_err(|e| {
+                InstallerError::DirectoryCreationFailed {
+                    path: self.backup_dir.display().to_string(),
+                    reason: e.to_string(),
+                }
+            })?;
         }
         Ok(())
     }
@@ -158,7 +156,7 @@ mod tests {
     #[test]
     fn test_uninstaller_new() {
         let u = Uninstaller::new(PathBuf::from("/app"), true);
-        assert_eq!(u.preserve_data, true);
+        assert!(u.preserve_data);
     }
 
     #[test]
@@ -166,7 +164,7 @@ mod tests {
         let u = Uninstaller::new(PathBuf::from("/app"), false)
             .with_dry_run(true)
             .with_verbose(true);
-        assert_eq!(u.dry_run, true);
+        assert!(u.dry_run);
     }
 
     #[test]

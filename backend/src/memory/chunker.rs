@@ -91,6 +91,7 @@ pub const DEFAULT_MAX_SIZE: usize = 384; // Maximum tokens (stay well under 512 
 pub const DEFAULT_OVERLAP: usize = 32; // Overlap tokens (helps with context continuity)
 pub const DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD: f32 = 0.78;
 pub const DEFAULT_PIPELINE_STAGES: &str = "lw,sent,sem";
+pub const DEFAULT_SNAP_TOLERANCE: f32 = 0.15; // Sentence-snap search window (last 15% of chunk)
 
 // BGE-small-en-v1.5 specific constants
 pub const BGE_SMALL_MAX_TOKENS: usize = 512; // Model's max sequence length
@@ -109,6 +110,7 @@ pub struct ChunkerConfig {
     pub context_prefix_enabled: bool, // Prepend [Source: filename] to each chunk
     pub context_prefix_tokens: usize, // Token budget for the context prefix
     pub pipeline_stages: String, // Active pipeline stages: comma-separated "lw", "sent", "sem"
+    pub snap_tolerance: f32, // Sentence-snap search window (0.0 = off, 0.15 = last 15%)
 }
 
 impl Default for ChunkerConfig {
@@ -125,6 +127,7 @@ impl Default for ChunkerConfig {
             context_prefix_enabled: false,
             context_prefix_tokens: 32,
             pipeline_stages: DEFAULT_PIPELINE_STAGES.to_string(),
+            snap_tolerance: DEFAULT_SNAP_TOLERANCE,
         }
     }
 }
@@ -189,6 +192,12 @@ impl ChunkerConfig {
         let pipeline_stages =
             env::var("PIPELINE_STAGES").unwrap_or_else(|_| DEFAULT_PIPELINE_STAGES.to_string());
 
+        let snap_tolerance = env::var("CHUNK_SNAP_TOLERANCE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(|v: f32| v.clamp(0.0, 1.0))
+            .unwrap_or(DEFAULT_SNAP_TOLERANCE);
+
         Self {
             target_size,
             min_size,
@@ -201,6 +210,7 @@ impl ChunkerConfig {
             context_prefix_enabled,
             context_prefix_tokens,
             pipeline_stages,
+            snap_tolerance,
         }
     }
 
@@ -404,10 +414,17 @@ impl SemanticChunker {
         let _current_pos = 0; // or just remove it if unused
 
         // Simple sentence splitting on .!? followed by space and capital
-        let sentence_regex = regex::Regex::new(r"([.!?]+)\s+(?=[A-Z])").unwrap();
+        let sentence_regex = regex::Regex::new(r"[.!?]+\s+").unwrap();
 
         let mut last_end = 0;
         for mat in sentence_regex.find_iter(text) {
+            if !text[mat.end()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_uppercase())
+            {
+                continue;
+            }
             let sentence = &text[last_end..mat.end()].trim();
             if !sentence.is_empty() {
                 units.push(SemanticUnit {
@@ -656,7 +673,7 @@ mod tests {
         let tokens = chunker.estimate_tokens(text);
 
         // Should be roughly 9-12 tokens for this sentence
-        assert!(tokens >= 8 && tokens <= 15);
+        assert!((8..=15).contains(&tokens));
     }
 
     #[test]

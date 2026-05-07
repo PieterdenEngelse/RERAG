@@ -1,8 +1,9 @@
 use crate::api::{self, RagMemoryItem};
-use crate::app::{ActiveCorpus, ShowRagInfo};
+use crate::app::{ActiveCorpus, Route, ShowRagInfo};
 use crate::components::BackendSelector;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
+use dioxus_router::hooks::use_navigator;
 
 /// Extracted settings boards (Runtime / Mode / RAG Add's / KV Cache) for the Home page.
 /// Rendered unconditionally so they are always visible.
@@ -32,10 +33,18 @@ pub fn HomeSettingsBoards(
     rag_priority_override: Signal<Option<f64>>,
     selected_model: Signal<String>,
 ) -> Element {
+    let navigator = use_navigator();
     let mut show_no_tools_msg = use_signal(|| false);
     let mut active_corpus = use_context::<Signal<ActiveCorpus>>();
     let mut corpora = use_signal(|| Vec::<api::CorpusEntry>::new());
     let mut show_corpus_info = use_signal(|| false);
+    let mut show_new_corpus = use_signal(|| false);
+    let mut new_corpus_slug = use_signal(|| String::new());
+    let mut new_corpus_description = use_signal(|| String::new());
+    let mut new_corpus_error = use_signal(|| Option::<String>::None);
+    let mut show_delete_confirm = use_signal(|| false);
+    let mut delete_error = use_signal(|| Option::<String>::None);
+    let mut show_corpus_dropdown = use_signal(|| false);
     // use_resource re-runs when active_corpus changes, refreshing the list
     // so newly created corpora appear without a page reload.
     let _corpus_res = use_resource(move || async move {
@@ -118,10 +127,24 @@ pub fn HomeSettingsBoards(
                         // Mode board
                         div {
                             class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                            label {
-                                class: "font-medium text-center",
-                                style: "color: white; font-size: 1.1rem;",
-                                "Mode"
+                            div {
+                                class: "flex items-center gap-3 w-full",
+                                label {
+                                    class: "font-medium shrink-0",
+                                    style: "color: white; font-size: 1.1rem;",
+                                    "Mode"
+                                }
+                                p {
+                                    class: "text-xs font-medium",
+                                    style: "color: #9ca3af;",
+                                    match chat_mode().as_str() {
+                                        "agentic" => "Agentic mode - LLM decides when to search, recall memory, or answer",
+                                        "auto" => "Auto mode - prefers RAG, falls back to Hybrid",
+                                        "ragstrict" => "Strict RAG - answers only from documents",
+                                        "llm" => "LLM mode - uses AI without document search",
+                                        _ => "Select a mode"
+                                    }
+                                }
                             }
                             div {
                                 class: "flex justify-center",
@@ -138,7 +161,7 @@ pub fn HomeSettingsBoards(
                                             } else {
                                                 "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
                                             },
-                                            onclick: move |_| chat_mode.set("auto".to_string()),
+                                            onclick: move |_| { chat_mode.set("auto".to_string()); show_tune_panel.set(false); },
                                             title: "Auto: prefers RAG, falls back to Hybrid",
                                             span { style: "font-size: 0.75em;", "\u{2728}" }
                                             " Auto"
@@ -170,7 +193,7 @@ pub fn HomeSettingsBoards(
                                             } else {
                                                 "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
                                             },
-                                            onclick: move |_| chat_mode.set("ragstrict".to_string()),
+                                            onclick: move |_| { chat_mode.set("ragstrict".to_string()); show_tune_panel.set(false); },
                                             title: "Strict RAG: answers only from documents, says 'I don't know' otherwise",
                                             span { style: "font-size: 0.75em;", "\u{1F512}" }
                                             " Strict"
@@ -201,7 +224,7 @@ pub fn HomeSettingsBoards(
                                             } else {
                                                 "background-color:transparent; border: 1px solid rgba(255,255,255,0.3); color:white; box-shadow:none;"
                                             },
-                                            onclick: move |_| chat_mode.set("llm".to_string()),
+                                            onclick: move |_| { chat_mode.set("llm".to_string()); show_tune_panel.set(false); },
                                             title: "Use LLM only (no document search)",
                                             span { style: "font-size: 0.75em;", "\u{1F916}" }
                                             " LLM"
@@ -239,6 +262,7 @@ pub fn HomeSettingsBoards(
                                                 if model_supports_tools {
                                                     chat_mode.set("agentic".to_string());
                                                     show_no_tools_msg.set(false);
+                                                    show_tune_panel.set(false);
                                                 } else {
                                                     show_no_tools_msg.set(true);
                                                 }
@@ -370,22 +394,60 @@ pub fn HomeSettingsBoards(
                                     }
                                 }
                             }
-                            p {
-                                class: "text-xs font-medium text-center",
-                                style: "color: white;",
-                                match chat_mode().as_str() {
-                                    "agentic" => "Agentic mode - LLM decides when to search, recall memory, or answer",
-                                    "auto" => "Auto mode - prefers RAG, falls back to Hybrid",
-                                    "ragstrict" => "Strict RAG - answers only from documents",
-                                    "llm" => "LLM mode - uses AI without document search",
-                                    _ => "Select a mode"
-                                }
-                            }
                             if show_no_tools_msg() {
                                 p {
                                     class: "text-xs text-center mt-1",
                                     style: "color: #f59e0b;",
                                     "\u{26A0} Current model ({selected_model}) lacks tool-calling support. Switch to phi3.5, qwen2.5, or llama3."
+                                }
+                            }
+                            if chat_mode() != "llm" {
+                                p {
+                                    class: "text-base font-medium text-center mt-1",
+                                    style: "color: white;",
+                                    "Corpus"
+                                }
+                                div { class: "w-full relative",
+                                    // Trigger: shows active corpus, click to expand
+                                    button {
+                                        class: "w-full flex items-center justify-between gap-2 px-2 py-1 rounded",
+                                        style: "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6); color: white;",
+                                        onclick: move |_| show_corpus_dropdown.set(!show_corpus_dropdown()),
+                                        span { class: "text-xs font-mono", "{active_corpus.read().slug()}" }
+                                        span { class: "text-xs opacity-60", if show_corpus_dropdown() { "▲" } else { "▼" } }
+                                    }
+                                    // Expanded list
+                                    if show_corpus_dropdown() {
+                                        div {
+                                            class: "absolute left-0 right-0 mt-1 flex flex-col gap-0.5 z-20 p-1 rounded-lg",
+                                            style: "background-color: #1f2937; border: 1px solid rgba(255,255,255,0.12);",
+                                            for corpus in corpora.read().clone() {
+                                                {
+                                                    let slug_sel = corpus.slug.clone();
+                                                    let is_active = corpus.slug == active_corpus.read().slug();
+                                                    rsx! {
+                                                        div {
+                                                            class: "flex items-center px-2 py-1 rounded cursor-pointer",
+                                                            style: if is_active {
+                                                                "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6);"
+                                                            } else {
+                                                                "background-color: transparent; border: 1px solid transparent;"
+                                                            },
+                                                            onclick: move |_| {
+                                                                active_corpus.with_mut(|ac| ac.0 = slug_sel.clone());
+                                                                show_corpus_dropdown.set(false);
+                                                            },
+                                                            span {
+                                                                class: "text-xs font-mono",
+                                                                style: if is_active { "color: white;" } else { "color: #d1d5db;" },
+                                                                "{corpus.slug}"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -395,7 +457,8 @@ pub fn HomeSettingsBoards(
                     div {
                         class: "flex justify-center gap-4 w-full",
 
-                        // Corpus board (same width as Runtime)
+                        // Corpus board — only shown when a RAG mode is active
+                        if chat_mode() != "llm" {
                         div {
                             class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
                             style: "min-width: 12rem;",
@@ -456,23 +519,147 @@ pub fn HomeSettingsBoards(
                                     }
                                 }
                             }
-                            select {
-                                class: "select select-sm select-bordered bg-gray-700 text-gray-200 w-full",
-                                value: active_corpus.read().slug().to_string(),
-                                onchange: move |evt| active_corpus.with_mut(|ac| ac.0 = evt.value()),
-                                for corpus in corpora.read().clone() {
-                                    option {
-                                        value: "{corpus.slug}",
-                                        selected: corpus.slug == active_corpus.read().slug(),
-                                        "{corpus.slug}"
+                            div { class: "flex gap-1",
+                                button {
+                                    class: "btn rounded-full px-4 text-xl font-bold",
+                                    style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
+                                    onclick: move |_| {
+                                        new_corpus_error.set(None);
+                                        show_new_corpus.set(!show_new_corpus());
+                                    },
+                                    title: "New corpus",
+                                    "+"
+                                }
+                                button {
+                                    class: "btn rounded-full px-4 text-xl font-bold",
+                                    style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
+                                    onclick: move |_| {
+                                        delete_error.set(None);
+                                        show_delete_confirm.set(true);
+                                    },
+                                    title: "Delete corpus",
+                                    "-"
+                                }
+                                button {
+                                    class: "btn rounded-full px-4 text-xl font-bold",
+                                    style: "border: 1.5px solid rgba(255,255,255,0.3); background: transparent; color: white; min-height: 1.875rem; height: 1.875rem; box-shadow: none;",
+                                    onclick: move |_| { navigator.push(Route::ConfigCorpus {}); },
+                                    title: "Manage corpora",
+                                    "≡"
+                                }
+                            }
+                            if show_new_corpus() {
+                                div { class: "flex flex-col gap-1.5 w-full mt-1",
+                                    input {
+                                        class: "input input-sm input-bordered bg-gray-700 text-gray-200 w-full",
+                                        placeholder: "slug (e.g. research)",
+                                        value: "{new_corpus_slug}",
+                                        oninput: move |evt| {
+                                            new_corpus_slug.set(evt.value());
+                                            new_corpus_error.set(None);
+                                        },
+                                    }
+                                    input {
+                                        class: "input input-sm input-bordered bg-gray-700 text-gray-200 w-full",
+                                        placeholder: "description (optional)",
+                                        value: "{new_corpus_description}",
+                                        oninput: move |evt| new_corpus_description.set(evt.value()),
+                                    }
+                                    if let Some(err) = new_corpus_error.read().as_ref() {
+                                        p { class: "text-xs text-red-400", "{err}" }
+                                    }
+                                    div { class: "flex gap-1.5",
+                                        button {
+                                            class: "btn btn-sm flex-1",
+                                            style: "background-color:#7C2A02;border-color:#7C2A02;color:white;",
+                                            onclick: move |_| {
+                                                let slug = new_corpus_slug.read().trim().to_string();
+                                                let desc = new_corpus_description.read().trim().to_string();
+                                                if slug.is_empty() {
+                                                    new_corpus_error.set(Some("Slug required".into()));
+                                                    return;
+                                                }
+                                                spawn(async move {
+                                                    match api::create_corpus(&slug, &slug, &desc).await {
+                                                        Ok(_) => {
+                                                            if let Ok(list) = api::fetch_corpora().await {
+                                                                corpora.set(list);
+                                                            }
+                                                            new_corpus_slug.set(String::new());
+                                                            new_corpus_description.set(String::new());
+                                                            show_new_corpus.set(false);
+                                                        }
+                                                        Err(e) => new_corpus_error.set(Some(e)),
+                                                    }
+                                                });
+                                            },
+                                            "Create"
+                                        }
+                                        button {
+                                            class: "btn btn-sm btn-ghost text-gray-400",
+                                            onclick: move |_| {
+                                                show_new_corpus.set(false);
+                                                new_corpus_slug.set(String::new());
+                                                new_corpus_description.set(String::new());
+                                                new_corpus_error.set(None);
+                                            },
+                                            "✕"
+                                        }
                                     }
                                 }
                             }
-                            p {
-                                class: "text-xs text-gray-400 mt-1",
-                                "Active: {active_corpus.read().slug()}"
+                        }
+
+                        // Delete confirmation modal
+                        if show_delete_confirm() {
+                            div {
+                                class: "fixed inset-0 z-50 flex items-center justify-center",
+                                style: "background: rgba(0,0,0,0.6);",
+                                onclick: move |_| show_delete_confirm.set(false),
+                                div {
+                                    class: "bg-base-200 rounded-2xl p-6 max-w-sm w-full mx-4 text-left",
+                                    onclick: move |evt| evt.stop_propagation(),
+                                    h3 { class: "text-base font-bold mb-2 text-white", "Delete corpus?" }
+                                    p { class: "text-sm text-gray-300 mb-1",
+                                        "This will permanently delete "
+                                        span { class: "font-mono text-red-300", "{active_corpus.read().slug()}" }
+                                        " and all its documents. This cannot be undone."
+                                    }
+                                    if let Some(err) = delete_error.read().as_ref() {
+                                        p { class: "text-xs text-red-400 mb-2", "{err}" }
+                                    }
+                                    div { class: "flex gap-2 mt-4",
+                                        button {
+                                            class: "btn btn-sm flex-1",
+                                            style: "background-color:#991b1b;border-color:#991b1b;color:white;",
+                                            onclick: move |_| {
+                                                let slug = active_corpus.read().slug().to_string();
+                                                spawn(async move {
+                                                    match api::delete_corpus(&slug).await {
+                                                        Ok(_) => {
+                                                            active_corpus.with_mut(|ac| ac.0 = "default".to_string());
+                                                            if let Ok(list) = api::fetch_corpora().await {
+                                                                corpora.set(list);
+                                                            }
+                                                            show_delete_confirm.set(false);
+                                                        }
+                                                        Err(e) => delete_error.set(Some(e)),
+                                                    }
+                                                });
+                                            },
+                                            "Yes, delete"
+                                        }
+                                        button {
+                                            class: "btn btn-sm flex-1 btn-ghost text-gray-300",
+                                            onclick: move |_| show_delete_confirm.set(false),
+                                            "Cancel"
+                                        }
+                                    }
+                                }
                             }
                         }
+
+                        } // end corpus board if chat_mode != llm
 
                         // RAG Add's board
                         div {

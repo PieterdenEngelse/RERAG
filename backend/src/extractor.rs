@@ -43,7 +43,11 @@ impl ExtractorRegistry {
     /// Try each extractor in priority order; return the first success.
     /// Bytes are moved into the first matching extractor; cloned only on retry.
     pub fn extract(&self, bytes: Vec<u8>, filename: &str, ct: &ContentType) -> Option<DocIR> {
-        let matching: Vec<_> = self.extractors.iter().filter(|e| e.can_handle(ct)).collect();
+        let matching: Vec<_> = self
+            .extractors
+            .iter()
+            .filter(|e| e.can_handle(ct))
+            .collect();
         let n = matching.len();
         let mut bytes_opt = Some(bytes);
         for (i, ext) in matching.iter().enumerate() {
@@ -54,7 +58,10 @@ impl ExtractorRegistry {
             };
             match ext.extract(b, filename, ct) {
                 Ok(ir) => {
-                    debug!(extractor = ext.name(), filename, "external extraction succeeded");
+                    debug!(
+                        extractor = ext.name(),
+                        filename, "external extraction succeeded"
+                    );
                     return Some(ir);
                 }
                 Err(e) => {
@@ -339,7 +346,11 @@ impl DocExtractor for FusionExtractor {
     }
 
     fn extract(&self, bytes: Vec<u8>, filename: &str, ct: &ContentType) -> anyhow::Result<DocIR> {
-        let matching: Vec<_> = self.sources.iter().filter(|w| w.extractor.can_handle(ct)).collect();
+        let matching: Vec<_> = self
+            .sources
+            .iter()
+            .filter(|w| w.extractor.can_handle(ct))
+            .collect();
         let n = matching.len();
         let mut bytes_opt = Some(bytes);
         let mut results: Vec<(DocIR, f32)> = Vec::new();
@@ -411,7 +422,10 @@ fn fuse(mut results: Vec<(DocIR, f32)>, strategy: FusionStrategy) -> DocIR {
             candidates.sort_by_key(|(b, _)| {
                 (
                     b.page.unwrap_or(u32::MAX),
-                    b.bbox.as_ref().map(|bb| (bb.y0 * 1000.0) as i64).unwrap_or(i64::MAX),
+                    b.bbox
+                        .as_ref()
+                        .map(|bb| (bb.y0 * 1000.0) as i64)
+                        .unwrap_or(i64::MAX),
                 )
             });
 
@@ -436,11 +450,14 @@ fn fuse(mut results: Vec<(DocIR, f32)>, strategy: FusionStrategy) -> DocIR {
     }
 }
 
-fn sort_by_position(blocks: &mut Vec<DocBlock>) {
+fn sort_by_position(blocks: &mut [DocBlock]) {
     blocks.sort_by_key(|b| {
         (
             b.page.unwrap_or(u32::MAX),
-            b.bbox.as_ref().map(|bb| (bb.y0 * 1000.0) as i64).unwrap_or(i64::MAX),
+            b.bbox
+                .as_ref()
+                .map(|bb| (bb.y0 * 1000.0) as i64)
+                .unwrap_or(i64::MAX),
         )
     });
 }
@@ -469,7 +486,11 @@ fn jaccard(a: &str, b: &str) -> f32 {
     let wb: HashSet<&str> = b.split_whitespace().collect();
     let union = wa.union(&wb).count();
     if union == 0 {
-        return if a.is_empty() && b.is_empty() { 1.0 } else { 0.0 };
+        return if a.is_empty() && b.is_empty() {
+            1.0
+        } else {
+            0.0
+        };
     }
     wa.intersection(&wb).count() as f32 / union as f32
 }

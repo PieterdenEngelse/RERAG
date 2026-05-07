@@ -5,7 +5,7 @@ use prometheus::{
 };
 
 // Global Prometheus registry
-pub static REGISTRY: Lazy<Registry> = Lazy::new(|| Registry::new());
+pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
 fn service_and_env() -> (String, String) {
     let service = std::env::var("APP_SERVICE")

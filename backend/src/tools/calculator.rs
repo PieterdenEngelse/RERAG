@@ -11,6 +11,12 @@ pub struct CalculatorTool {
     total_count: usize,
 }
 
+impl Default for CalculatorTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CalculatorTool {
     pub fn new() -> Self {
         Self {

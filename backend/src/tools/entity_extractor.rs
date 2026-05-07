@@ -551,7 +551,7 @@ impl EntityExtractorTool {
                     }
                     j += 1;
                 }
-                if digits >= 10 && digits <= 15 {
+                if (10..=15).contains(&digits) {
                     let phone: String = chars[start..j].iter().collect();
                     entities.push(Entity {
                         text: phone.trim().to_string(),
@@ -719,7 +719,7 @@ impl EntityExtractorTool {
 
                 // If we have 2-4 consecutive capitalized words, likely a name
                 let name_len = j - start;
-                if name_len >= 2 && name_len <= 4 {
+                if (2..=4).contains(&name_len) {
                     let name: String = words[start..j].join(" ");
                     // Find position in original text
                     if let Some(pos) = text.find(&name) {
@@ -843,7 +843,7 @@ impl Tool for EntityExtractorTool {
         if success {
             self.success_rate = (self.success_rate * 0.95) + 0.05;
         } else {
-            self.success_rate = self.success_rate * 0.95;
+            self.success_rate *= 0.95;
         }
     }
 }

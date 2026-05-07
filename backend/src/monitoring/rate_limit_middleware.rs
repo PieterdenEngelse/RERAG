@@ -18,7 +18,7 @@ use futures_util::future::LocalBoxFuture;
 use std::sync::Arc;
 
 use crate::monitoring::metrics::{RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_TOTAL};
-use crate::security::rate_limiter::RateLimiter;
+use crate::security::rate_limiter::{RateLimiter, RuntimeThresholds};
 use actix_web::body::EitherBody;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -85,10 +85,7 @@ pub struct RouteRule {
 #[derive(Debug, Clone)]
 pub struct RateLimitOptions {
     pub trust_proxy: bool,
-    pub search_qps: f64,
-    pub search_burst: f64,
-    pub upload_qps: f64,
-    pub upload_burst: f64,
+    pub thresholds: Arc<RuntimeThresholds>,
     pub rules: Vec<RouteRule>,
     pub exempt_prefixes: Vec<String>,
 }
@@ -187,14 +184,14 @@ impl RateLimitOptions {
             || method == "DELETE"
         {
             (
-                self.upload_qps.max(0.0),
-                self.upload_burst.max(0.0),
+                self.thresholds.get_upload_qps().max(0.0),
+                self.thresholds.get_upload_burst().max(0.0),
                 "upload".to_string(),
             )
         } else {
             (
-                self.search_qps.max(0.0),
-                self.search_burst.max(0.0),
+                self.thresholds.get_search_qps().max(0.0),
+                self.thresholds.get_search_burst().max(0.0),
                 "search".to_string(),
             )
         }
@@ -351,7 +348,7 @@ mod tests {
         // Simulated request - in real tests use actix test utilities
         // This is a structural test only
         let trust_proxy = false;
-        assert!(trust_proxy == false);
+        assert!(!trust_proxy);
     }
 
     #[test]
@@ -362,13 +359,14 @@ mod tests {
             burst: 1.0,
             max_ips: 100,
         };
-        let limiter = std::sync::Arc::new(crate::security::rate_limiter::RateLimiter::new(config));
+        let thresholds = crate::security::rate_limiter::RuntimeThresholds::new(5.0, 10.0, 2.0, 5.0);
+        let limiter = std::sync::Arc::new(crate::security::rate_limiter::RateLimiter::new(
+            config,
+            std::sync::Arc::clone(&thresholds),
+        ));
         let opts = RateLimitOptions {
             trust_proxy: true,
-            search_qps: 5.0,
-            search_burst: 10.0,
-            upload_qps: 2.0,
-            upload_burst: 5.0,
+            thresholds,
             exempt_prefixes: vec![],
             rules: vec![],
         };

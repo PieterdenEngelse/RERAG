@@ -246,9 +246,11 @@ mod tests {
 
     #[test]
     fn test_validation_enabled_missing_uri() {
-        let mut config = GraphConfig::default();
-        config.enabled = true;
-        config.uri = String::new();
+        let config = GraphConfig {
+            enabled: true,
+            uri: String::new(),
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 }

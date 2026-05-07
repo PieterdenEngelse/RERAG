@@ -45,6 +45,12 @@ pub struct DocumentStructure {
     pub sections: usize,
 }
 
+impl Default for FileAnalyzerTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileAnalyzerTool {
     pub fn new() -> Self {
         Self {
@@ -257,7 +263,7 @@ impl FileAnalyzerTool {
             score -= 0.2;
         }
 
-        score.max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
     }
 
     /// Full analysis

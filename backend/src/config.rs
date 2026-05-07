@@ -34,16 +34,12 @@ impl std::str::FromStr for ChunkerMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DistanceMetric {
+    #[default]
     Cosine,
     DotProduct,
     Euclidean,
-}
-
-impl Default for DistanceMetric {
-    fn default() -> Self {
-        DistanceMetric::Cosine
-    }
 }
 
 impl std::fmt::Display for DistanceMetric {

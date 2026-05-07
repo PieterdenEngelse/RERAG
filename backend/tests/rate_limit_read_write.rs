@@ -89,7 +89,7 @@ async fn rate_limit_read_and_write_buckets() {
     // Since same IP and tight loop, it's possible all are 429 due to exhausted tokens.
     // Ensure at least one 429 occurred (rate limiting engaged)
     assert!(
-        rerank_codes.iter().any(|&c| c == 429),
+        rerank_codes.contains(&429),
         "rerank not limited: {:?}",
         rerank_codes
     );

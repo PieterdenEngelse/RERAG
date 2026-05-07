@@ -51,6 +51,7 @@ pub struct VectorRecord {
 
 impl VectorRecord {
     /// Create a VectorRecord manually
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chunk_id: String,
         document_id: String,
@@ -285,9 +286,10 @@ impl VectorStore {
 
     /// Create with custom database path
     pub fn with_db_path<P: Into<std::path::PathBuf>>(db_path: P) -> Result<Self, VectorStoreError> {
-        let mut cfg = VectorStoreConfig::default();
-        cfg.db_path = db_path.into();
-        Self::new(cfg)
+        Self::new(VectorStoreConfig {
+            db_path: db_path.into(),
+            ..Default::default()
+        })
     }
 
     /// Create with custom capacity and policy
@@ -295,10 +297,11 @@ impl VectorStore {
         max_vectors: usize,
         policy: EvictionPolicy,
     ) -> Result<Self, VectorStoreError> {
-        let mut config = VectorStoreConfig::default();
-        config.max_vectors = max_vectors;
-        config.eviction_policy = policy;
-        Self::new(config)
+        Self::new(VectorStoreConfig {
+            max_vectors,
+            eviction_policy: policy,
+            ..Default::default()
+        })
     }
 
     /// Add a vector record to the store
@@ -993,6 +996,6 @@ mod tests {
         println!("==============================\n");
 
         // rkyv should be reasonably sized
-        assert!(rkyv_bytes.len() > 0);
+        assert!(!rkyv_bytes.is_empty());
     }
 }

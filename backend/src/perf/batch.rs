@@ -142,7 +142,7 @@ impl BatchEmbeddingRequest {
     }
 
     pub fn num_batches(&self) -> usize {
-        (self.texts.len() + self.batch_size - 1) / self.batch_size
+        self.texts.len().div_ceil(self.batch_size)
     }
 }
 

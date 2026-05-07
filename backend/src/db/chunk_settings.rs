@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::memory::chunker::{
     ChunkerConfig, DEFAULT_MAX_SIZE, DEFAULT_MIN_SIZE, DEFAULT_OVERLAP, DEFAULT_PIPELINE_STAGES,
-    DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD, DEFAULT_TARGET_SIZE,
+    DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD, DEFAULT_SNAP_TOLERANCE, DEFAULT_TARGET_SIZE,
 };
 const DEFAULT_MODE: &str = "fixed";
 const DEFAULT_CLEAN_HTML: bool = false;
@@ -29,6 +29,7 @@ static CONFIG_KEYS: ChunkConfigKeys = ChunkConfigKeys {
     context_prefix: "chunk_context_prefix",
     context_prefix_tokens: "chunk_context_prefix_tokens",
     pipeline_stages: "pipeline_stages",
+    snap_tolerance: "chunk_snap_tolerance",
 };
 
 struct ChunkConfigKeys {
@@ -43,6 +44,7 @@ struct ChunkConfigKeys {
     context_prefix: &'static str,
     context_prefix_tokens: &'static str,
     pipeline_stages: &'static str,
+    snap_tolerance: &'static str,
 }
 
 #[derive(Debug, Error)]
@@ -103,6 +105,9 @@ pub fn load_chunker_config(conn: &Connection) -> Result<ChunkerConfig> {
         .unwrap_or(DEFAULT_CONTEXT_PREFIX_TOKENS as i64) as usize;
     let pipeline_stages = read_value(conn, CONFIG_KEYS.pipeline_stages)?
         .unwrap_or_else(|| DEFAULT_PIPELINE_STAGES.to_string());
+    let snap_tolerance = read_float(conn, CONFIG_KEYS.snap_tolerance)?
+        .map(|v| (v as f32).clamp(0.0, 1.0))
+        .unwrap_or(DEFAULT_SNAP_TOLERANCE);
 
     let cfg = ChunkerConfig {
         target_size: target as usize,
@@ -116,6 +121,7 @@ pub fn load_chunker_config(conn: &Connection) -> Result<ChunkerConfig> {
         context_prefix_enabled,
         context_prefix_tokens,
         pipeline_stages,
+        snap_tolerance,
     };
     Ok(cfg)
 }
@@ -153,6 +159,11 @@ pub fn save_chunker_config(conn: &Connection, cfg: &ChunkerConfig) -> Result<()>
         conn,
         CONFIG_KEYS.pipeline_stages,
         cfg.pipeline_stages.clone(),
+    )?;
+    write_value(
+        conn,
+        CONFIG_KEYS.snap_tolerance,
+        cfg.snap_tolerance.to_string(),
     )?;
 
     conn.execute("COMMIT", []).map_err(db_err)?;
@@ -278,6 +289,7 @@ mod tests {
             context_prefix_enabled: false,
             context_prefix_tokens: 32,
             pipeline_stages: "lw,sent,sem".to_string(),
+            snap_tolerance: 0.15,
         };
         save_chunker_config(&conn, &cfg).unwrap();
         let loaded = load_chunker_config(&conn).unwrap();

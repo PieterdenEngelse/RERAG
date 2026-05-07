@@ -142,7 +142,7 @@ mod tests {
     use std::env;
 
     fn unset(var: &str) {
-        let _ = env::remove_var(var);
+        env::remove_var(var);
     }
 
     #[test]
@@ -202,13 +202,13 @@ mod tests {
 
     #[test]
     fn test_default_search_buckets_sorted() {
-        let sorted: Vec<f64> = DEFAULT_SEARCH_BUCKETS.iter().copied().collect();
+        let sorted = DEFAULT_SEARCH_BUCKETS.to_vec();
         assert!(sorted.windows(2).all(|w| w[0] <= w[1]));
     }
 
     #[test]
     fn test_default_reindex_buckets_sorted() {
-        let sorted: Vec<f64> = DEFAULT_REINDEX_BUCKETS.iter().copied().collect();
+        let sorted = DEFAULT_REINDEX_BUCKETS.to_vec();
         assert!(sorted.windows(2).all(|w| w[0] <= w[1]));
     }
 

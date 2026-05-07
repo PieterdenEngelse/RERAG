@@ -178,10 +178,11 @@ impl SpellCheckerTool {
 
         // Try edit distance 2 corrections
         let candidates2 = self.edits2(&lower);
-        for candidate in candidates2 {
-            if self.dictionary.contains(&candidate) {
-                return Some(candidate);
-            }
+        if let Some(c) = candidates2
+            .into_iter()
+            .find(|c| self.dictionary.contains(c))
+        {
+            return Some(c);
         }
 
         None
@@ -291,17 +292,15 @@ impl SpellCheckerTool {
         }
 
         // Handle last word
-        if !current_word.is_empty() {
-            if !self.is_correct(&current_word) {
-                if let Some(suggestion) = self.get_suggestion(&current_word) {
-                    let corrected = self.preserve_case(&current_word, &suggestion);
-                    corrections.push(SpellingCorrection {
-                        original: current_word.clone(),
-                        suggestion: corrected,
-                        position,
-                        confidence: 0.85,
-                    });
-                }
+        if !current_word.is_empty() && !self.is_correct(&current_word) {
+            if let Some(suggestion) = self.get_suggestion(&current_word) {
+                let corrected = self.preserve_case(&current_word, &suggestion);
+                corrections.push(SpellingCorrection {
+                    original: current_word.clone(),
+                    suggestion: corrected,
+                    position,
+                    confidence: 0.85,
+                });
             }
         }
 
@@ -424,7 +423,7 @@ impl Tool for SpellCheckerTool {
         if success {
             self.success_rate = (self.success_rate * 0.95) + 0.05;
         } else {
-            self.success_rate = self.success_rate * 0.95;
+            self.success_rate *= 0.95;
         }
     }
 }

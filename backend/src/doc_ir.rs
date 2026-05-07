@@ -171,7 +171,9 @@ impl DocIR {
     /// Called after IR construction so `chunk_ir` picks up the provenance.
     pub fn tag_extractor(&mut self, label: &str) {
         for block in &mut self.blocks {
-            block.metadata.insert("extractor".to_string(), label.to_string());
+            block
+                .metadata
+                .insert("extractor".to_string(), label.to_string());
         }
     }
 

@@ -408,8 +408,7 @@ async fn get_system_info() -> impl Responder {
 }
 
 fn custom_models_dir() -> std::io::Result<std::path::PathBuf> {
-    let manager = PathManager::new()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let manager = PathManager::new().map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok(manager.base_dir().join("models"))
 }
 
@@ -568,7 +567,7 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
     for (cmd, service) in &commands {
         let output = tokio::process::Command::new("systemctl")
             .arg("--user")
-            .args(&[*cmd, *service])
+            .args([*cmd, *service])
             .output()
             .await;
 
@@ -582,14 +581,14 @@ pub async fn runtime_action(body: web::Json<RuntimeActionRequest>) -> impl Respo
 
     // Return current status
     let ollama_running = tokio::process::Command::new("systemctl")
-        .args(&["--user", "is-active", "ollama.service"])
+        .args(["--user", "is-active", "ollama.service"])
         .output()
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
 
     let llama_running = tokio::process::Command::new("systemctl")
-        .args(&["--user", "is-active", "llama-server.service"])
+        .args(["--user", "is-active", "llama-server.service"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -777,7 +776,7 @@ pub async fn set_llama_model(body: web::Json<LlamaModelRequest>) -> impl Respond
 
     // Restart llama-server
     let _ = tokio::process::Command::new("systemctl")
-        .args(&["--user", "restart", "llama-server.service"])
+        .args(["--user", "restart", "llama-server.service"])
         .output()
         .await;
 
@@ -819,14 +818,15 @@ pub fn reload_token_counter() {
         };
         if expected_local_gguf {
             match result {
-                Ok(path) => match handle.load_from_gguf(&path) {
-                    Ok(()) => tracing::info!(
-                        model = %handle.model_name(),
-                        vocab = handle.vocab_size(),
-                        "Token counter reloaded"
-                    ),
-                    Err(_) => {} // load_from_gguf recorded the fallback + warned
-                },
+                Ok(path) => {
+                    if let Ok(()) = handle.load_from_gguf(&path) {
+                        tracing::info!(
+                            model = %handle.model_name(),
+                            vocab = handle.vocab_size(),
+                            "Token counter reloaded"
+                        );
+                    } // else: load_from_gguf recorded the fallback + warned
+                }
                 Err(e) => handle.mark_fallback(
                     FallbackReason::PathNotFound {
                         detail: format!("{:#}", e),

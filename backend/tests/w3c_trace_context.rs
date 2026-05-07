@@ -313,16 +313,13 @@ mod w3c_trace_context_tests {
         let is_sampled_true = get_sampled_flag(&flags_true);
         let is_sampled_false = get_sampled_flag(&flags_false);
 
-        assert_eq!(is_sampled_true, true, "Flags 01 should indicate sampled");
-        assert_eq!(
-            is_sampled_false, false,
-            "Flags 00 should indicate not sampled"
-        );
+        assert!(is_sampled_true, "Flags 01 should indicate sampled");
+        assert!(!is_sampled_false, "Flags 00 should indicate not sampled");
 
         // Other flag values
         let _flags_with_reserved = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-ff";
         let is_sampled_ff = get_sampled_flag("ff");
-        assert_eq!(is_sampled_ff, true, "Flags FF should have sampled bit set");
+        assert!(is_sampled_ff, "Flags FF should have sampled bit set");
 
         println!("✓ W3C sampled flag interpretation verified");
         println!("  Flags 01: sampled = true");

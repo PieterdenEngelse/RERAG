@@ -171,7 +171,7 @@ impl IoUringConfig {
         // IO_URING_RING_SIZE: 1-32768, must be power of 2
         if let Ok(val) = std::env::var("IO_URING_RING_SIZE") {
             if let Ok(size) = val.parse::<u32>() {
-                if size >= 1 && size <= 32768 && size.is_power_of_two() {
+                if (1..=32768).contains(&size) && size.is_power_of_two() {
                     config.ring_size = size;
                 } else {
                     eprintln!(
@@ -192,7 +192,7 @@ impl IoUringConfig {
         // IO_URING_BUFFER_SIZE: buffer size in bytes
         if let Ok(val) = std::env::var("IO_URING_BUFFER_SIZE") {
             if let Ok(size) = val.parse::<usize>() {
-                if size >= 4096 && size <= 16 * 1024 * 1024 {
+                if (4096..=16 * 1024 * 1024).contains(&size) {
                     config.buffer_size = size;
                 } else {
                     eprintln!(
@@ -206,7 +206,7 @@ impl IoUringConfig {
         // IO_URING_BUFFER_POOL_SIZE: number of pre-allocated buffers
         if let Ok(val) = std::env::var("IO_URING_BUFFER_POOL_SIZE") {
             if let Ok(size) = val.parse::<usize>() {
-                if size >= 1 && size <= 4096 {
+                if (1..=4096).contains(&size) {
                     config.buffer_pool_size = size;
                 }
             }
@@ -359,12 +359,7 @@ impl IoRuntimeHandle {
                     error!("io_uring runtime thread exited: {}", err);
                 }
             })
-            .map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to spawn io_uring thread: {}", e),
-                )
-            })?;
+            .map_err(|e| io::Error::other(format!("Failed to spawn io_uring thread: {}", e)))?;
 
         Ok(Self { tx, buffer_pool })
     }
@@ -388,17 +383,11 @@ impl IoRuntimeHandle {
         };
         if self.tx.send(cmd).is_err() {
             drop(permit);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "io_uring runtime unavailable",
-            ));
+            return Err(io::Error::other("io_uring runtime unavailable"));
         }
-        let result = resp_rx.await.unwrap_or_else(|_| {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "io_uring runtime dropped",
-            ))
-        });
+        let result = resp_rx
+            .await
+            .unwrap_or_else(|_| Err(io::Error::other("io_uring runtime dropped")));
         drop(permit);
         result
     }
@@ -413,17 +402,11 @@ impl IoRuntimeHandle {
         };
         if self.tx.send(cmd).is_err() {
             drop(permit);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "io_uring runtime unavailable",
-            ));
+            return Err(io::Error::other("io_uring runtime unavailable"));
         }
-        let result = resp_rx.await.unwrap_or_else(|_| {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "io_uring runtime dropped",
-            ))
-        });
+        let result = resp_rx
+            .await
+            .unwrap_or_else(|_| Err(io::Error::other("io_uring runtime dropped")));
         drop(permit);
         result
     }
@@ -739,7 +722,7 @@ mod fallback_impl {
     pub async fn read_files_batch_fallback<P: AsRef<Path>>(
         paths: &[P],
     ) -> Vec<io::Result<Vec<u8>>> {
-        let futs: Vec<_> = paths.iter().map(|p| read_file_fallback(p)).collect();
+        let futs: Vec<_> = paths.iter().map(read_file_fallback).collect();
         futures_util::future::join_all(futs).await
     }
 }

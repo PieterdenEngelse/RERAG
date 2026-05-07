@@ -21,13 +21,14 @@ pub struct OcrCounts {
     pub unavailable: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Default)]
 pub struct FileRecord {
     pub filename: String,
     pub path: String,
     pub format: String,
     pub ok: bool,
     pub chars: u64,
+    pub corpus: String,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -57,13 +58,21 @@ pub fn load_history() {
     }
 }
 
-pub fn record_format(format: &str, ok: bool, chars: usize, filename: &str, path: &str) {
+pub fn record_format(
+    format: &str,
+    ok: bool,
+    chars: usize,
+    filename: &str,
+    path: &str,
+    corpus: &str,
+) {
     let rec = FileRecord {
         filename: filename.to_string(),
         path: path.to_string(),
         format: format.to_string(),
         ok,
         chars: chars as u64,
+        corpus: corpus.to_string(),
     };
 
     // Persist to SQLite
@@ -82,6 +91,13 @@ pub fn record_format(format: &str, ok: bool, chars: usize, filename: &str, path:
             s.recent_files.pop(); // newest-first: drop oldest at tail
         }
         s.recent_files.insert(0, rec);
+    }
+}
+
+pub fn forget_file(filename: &str) {
+    crate::db::extraction_records::delete_by_filename(filename);
+    if let Ok(mut s) = STATS.write() {
+        s.recent_files.retain(|r| r.filename != filename);
     }
 }
 
@@ -116,5 +132,34 @@ pub fn record_ocr_unavailable() {
 }
 
 pub fn get_stats() -> ExtractionStats {
-    STATS.read().map(|s| s.clone()).unwrap_or_default()
+    get_stats_for(None)
+}
+
+pub fn get_stats_for(corpus: Option<&str>) -> ExtractionStats {
+    let corpus = corpus.filter(|s| !s.is_empty());
+    let snapshot = STATS.read().map(|s| s.clone()).unwrap_or_default();
+    let Some(slug) = corpus else {
+        return snapshot;
+    };
+    let recent_files: Vec<FileRecord> = snapshot
+        .recent_files
+        .into_iter()
+        .filter(|r| r.corpus == slug)
+        .collect();
+    let mut by_format: std::collections::HashMap<String, FormatCounts> =
+        std::collections::HashMap::new();
+    for rec in &recent_files {
+        let entry = by_format.entry(rec.format.clone()).or_default();
+        if rec.ok {
+            entry.ok += 1;
+            entry.chars += rec.chars;
+        } else {
+            entry.empty += 1;
+        }
+    }
+    ExtractionStats {
+        by_format,
+        ocr: snapshot.ocr,
+        recent_files,
+    }
 }

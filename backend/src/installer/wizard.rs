@@ -16,7 +16,5 @@ pub async fn run_configuration_wizard(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_wizard() {
-        assert!(true);
-    }
+    fn test_wizard() {}
 }

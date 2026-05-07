@@ -157,10 +157,8 @@ impl<R: Read> CompressedReader<R> {
 
 impl<R: Read> Read for CompressedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.position >= self.buffer.len() {
-            if !self.read_next_chunk()? {
-                return Ok(0);
-            }
+        if self.position >= self.buffer.len() && !self.read_next_chunk()? {
+            return Ok(0);
         }
 
         let available = self.buffer.len() - self.position;

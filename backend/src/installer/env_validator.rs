@@ -40,6 +40,12 @@ impl PostInstallReport {
 
 pub struct PreInstallValidator;
 
+impl Default for PreInstallValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreInstallValidator {
     pub fn new() -> Self {
         Self

@@ -27,6 +27,12 @@ pub struct StoreError(pub String);
 
 pub struct MemoryStoreTool;
 
+impl Default for MemoryStoreTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryStoreTool {
     pub fn new() -> Self {
         Self
@@ -73,7 +79,7 @@ impl Tool for MemoryStoreTool {
         let cat_clone = category.clone();
         let content_clone = content.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let mem = AgentMemory::new(&db_path).map_err(|e| StoreError(e.to_string()))?;
+            let mem = AgentMemory::new(db_path).map_err(|e| StoreError(e.to_string()))?;
             mem.store_rag("default", &content_clone, &cat_clone, &timestamp)
                 .map_err(|e| StoreError(e.to_string()))?;
             Ok::<_, StoreError>(())

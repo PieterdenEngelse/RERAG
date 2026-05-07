@@ -1,7 +1,7 @@
 use super::chunker::ChunkerConfig;
 use crate::embedder;
 use crate::embedder::similarity;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 
 #[derive(Clone, Copy, Debug)]
@@ -25,7 +25,7 @@ impl From<crate::config::ChunkerMode> for ChunkerMode {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChunkingStats {
     pub semantic_similarity_threshold: f32,
     pub semantic_flushes: usize,
@@ -159,61 +159,122 @@ pub trait Chunker {
 
 pub struct FixedChunker {
     config: ChunkerConfig,
+    last_stats: RefCell<Option<ChunkingStats>>,
 }
 
 impl FixedChunker {
     pub fn new(config: ChunkerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            last_stats: RefCell::new(None),
+        }
     }
 }
 
 impl Chunker for FixedChunker {
-    /// Accumulate paragraphs (double-newline separated) into token-budget windows.
-    /// Flushes at target_size on a paragraph boundary; hard-flushes at max_size.
-    /// Structural boundaries (headers, atomic blocks) are already handled upstream
-    /// by chunk_ir, so this only needs to enforce the size budget.
+    /// Chunk text using three complementary techniques:
+    ///
+    /// 1. **Recursive splitting** — split on `\n\n` → `\n` → `.!? ` → ` ` → chars
+    ///    so no unit ever exceeds `max_size`.
+    /// 2. **Sentence-boundary snapping** — on every flush, walk backward within
+    ///    the last `snap_tolerance` fraction of the text to find the nearest `.!?`
+    ///    boundary; the tail after the snap seeds the next chunk.
+    /// 3. **Overlap** — the last `overlap` tokens of every flushed chunk are
+    ///    prepended to the next chunk for retrieval continuity.
     fn chunk_text(&self, text: &str) -> Vec<String> {
-        let mut chunks = Vec::new();
-        let mut current = String::new();
-        let mut current_tokens = 0usize;
+        let mut stats = ChunkingStats::default();
 
-        for para in text.split("\n\n") {
-            let para = para.trim();
-            if para.is_empty() {
-                continue;
+        let units = recursive_split(text, self.config.max_size);
+        stats.total_segments = units.len();
+
+        let mut chunks: Vec<String> = Vec::new();
+        let mut acc: Vec<String> = Vec::new();
+        let mut acc_tokens = 0usize;
+
+        // Inline flush: snap to sentence boundary, push chunk, seed next with overlap + tail.
+        macro_rules! flush_acc {
+            () => {
+                if !acc.is_empty() {
+                    let joined = acc.join("\n\n");
+                    let (head, tail) = sentence_snap_split(&joined, self.config.snap_tolerance);
+                    let head = head.trim().to_string();
+                    let tail = tail.trim().to_string();
+
+                    if !head.is_empty() {
+                        let ct = estimate_token_count(&head);
+                        update_token_range(&mut stats, ct);
+                        stats.size_flushes += 1;
+                        if !tail.is_empty() {
+                            stats.sentence_flushes += 1;
+                        }
+                        chunks.push(head.clone());
+                    }
+
+                    acc.clear();
+                    acc_tokens = 0;
+
+                    // Overlap: seed next chunk with the tail end of what was just flushed.
+                    if self.config.overlap > 0 && !head.is_empty() {
+                        let ov = overlap_tail(&head, self.config.overlap);
+                        if !ov.is_empty() {
+                            acc_tokens += estimate_token_count(&ov);
+                            acc.push(ov);
+                        }
+                    }
+                    // Sentence tail: text after the snap boundary goes into the next chunk.
+                    if !tail.is_empty() {
+                        acc_tokens += estimate_token_count(&tail);
+                        acc.push(tail);
+                    }
+                }
+            };
+        }
+
+        for unit in units {
+            let unit_tokens = estimate_token_count(&unit);
+
+            // Hard flush: this unit would push us past max_size.
+            if !acc.is_empty() && acc_tokens + unit_tokens > self.config.max_size {
+                flush_acc!();
             }
-            let para_tokens = estimate_token_count(para);
 
-            // Hard flush: adding this paragraph would exceed max_size.
-            if !current.is_empty() && current_tokens + para_tokens > self.config.max_size {
-                chunks.push(current.trim().to_string());
-                current.clear();
-                current_tokens = 0;
-            }
+            acc.push(unit);
+            acc_tokens += unit_tokens;
 
-            if !current.is_empty() {
-                current.push_str("\n\n");
-            }
-            current.push_str(para);
-            current_tokens += para_tokens;
-
-            // Soft flush: at or past target on a paragraph boundary.
-            if current_tokens >= self.config.target_size {
-                chunks.push(current.trim().to_string());
-                current.clear();
-                current_tokens = 0;
+            // Soft flush: at or past target on a clean unit boundary.
+            if acc_tokens >= self.config.target_size {
+                flush_acc!();
             }
         }
 
-        if !current.trim().is_empty() {
-            chunks.push(current.trim().to_string());
+        // Flush any remaining text.
+        if !acc.is_empty() {
+            let text = acc.join("\n\n");
+            let text = text.trim().to_string();
+            if !text.is_empty() {
+                update_token_range(&mut stats, estimate_token_count(&text));
+                chunks.push(text);
+            }
         }
 
-        chunks.into_iter().filter(|c| !c.is_empty()).collect()
+        let filtered: Vec<String> = chunks
+            .into_iter()
+            .filter(|c| !c.trim().is_empty())
+            .collect();
+        stats.total_chunks = filtered.len();
+        if stats.total_chunks > 0 {
+            stats.avg_chunk_tokens = filtered
+                .iter()
+                .map(|c| estimate_token_count(c))
+                .sum::<usize>()
+                / stats.total_chunks;
+        }
+        self.last_stats.replace(Some(stats));
+        filtered
     }
 
     fn stats(&self) -> Option<ChunkingStats> {
-        None
+        self.last_stats.borrow().clone()
     }
 }
 
@@ -646,6 +707,107 @@ pub fn create_chunker(mode: ChunkerMode, config: &ChunkerConfig) -> Box<dyn Chun
         ChunkerMode::Sentence => Box::new(SentenceChunker::new(config.clone())),
         ChunkerMode::Pipeline => Box::new(PipelineChunker::new(config.clone())),
     }
+}
+
+/// Recursively split `text` into units where each unit fits within `max_tokens`.
+/// Separators are tried from coarsest to finest: paragraph → line → sentence → word → char.
+fn recursive_split(text: &str, max_tokens: usize) -> Vec<String> {
+    const SEPS: &[&str] = &["\n\n", "\n", ". ", "! ", "? ", " "];
+    recursive_split_inner(text.trim(), SEPS, max_tokens)
+}
+
+fn recursive_split_inner(text: &str, seps: &[&str], max_tokens: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![];
+    }
+    if estimate_token_count(text) <= max_tokens {
+        return vec![text.to_string()];
+    }
+    for (i, &sep) in seps.iter().enumerate() {
+        let parts: Vec<&str> = text
+            .split(sep)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if parts.len() <= 1 {
+            continue;
+        }
+        let rest = &seps[i + 1..];
+        let mut result = Vec::new();
+        for part in parts {
+            if estimate_token_count(part) > max_tokens {
+                result.extend(recursive_split_inner(part, rest, max_tokens));
+            } else {
+                result.push(part.to_string());
+            }
+        }
+        return result;
+    }
+    // Hard char fallback — only reached when no separator splits the text at all.
+    let char_budget = (max_tokens * 4).max(1);
+    text.chars()
+        .collect::<Vec<_>>()
+        .chunks(char_budget)
+        .map(|c| c.iter().collect::<String>())
+        .filter(|s| !s.trim().is_empty())
+        .collect()
+}
+
+/// Walk backward through `text` looking for the last `.`, `!`, or `?` followed by
+/// whitespace (or EOS) within the final `tolerance * text.len()` bytes.
+/// Returns `(head, tail)` split at that boundary; falls back to `(text, "")`.
+fn sentence_snap_split(text: &str, tolerance: f32) -> (&str, &str) {
+    if tolerance <= 0.0 || text.is_empty() {
+        return (text, "");
+    }
+    let window = ((text.len() as f32) * tolerance) as usize;
+    let search_from = text.len().saturating_sub(window.max(1));
+    let bytes = text.as_bytes();
+    let mut i = text.len().saturating_sub(1);
+    loop {
+        if i < search_from {
+            break;
+        }
+        if matches!(bytes[i], b'.' | b'!' | b'?') {
+            let after = i + 1;
+            if after >= bytes.len() || bytes[after].is_ascii_whitespace() {
+                // Skip leading whitespace in tail.
+                let mut tail_start = after;
+                while tail_start < bytes.len() && bytes[tail_start].is_ascii_whitespace() {
+                    tail_start += 1;
+                }
+                if text.is_char_boundary(i + 1) && text.is_char_boundary(tail_start) {
+                    return (&text[..i + 1], &text[tail_start..]);
+                }
+            }
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    (text, "")
+}
+
+/// Return the last `overlap_tokens` tokens from `text`, aligned to a word boundary.
+fn overlap_tail(text: &str, overlap_tokens: usize) -> String {
+    if overlap_tokens == 0 || text.is_empty() {
+        return String::new();
+    }
+    // Walk backward word-by-word until we have enough tokens.
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut tail: Vec<&str> = Vec::new();
+    let mut count = 0usize;
+    for &word in words.iter().rev() {
+        let wt = estimate_token_count(word);
+        if count + wt > overlap_tokens && !tail.is_empty() {
+            break;
+        }
+        tail.push(word);
+        count += wt;
+    }
+    tail.reverse();
+    tail.join(" ")
 }
 
 fn is_heading_segment(segment: &str) -> bool {

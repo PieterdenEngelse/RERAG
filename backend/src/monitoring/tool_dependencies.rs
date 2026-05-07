@@ -25,18 +25,10 @@ pub struct ToolDependencyGraph {
     pub edges: Vec<ToolDependencyEdge>,
 }
 
+#[derive(Default)]
 struct DependencyState {
     edges: HashMap<(String, String), usize>,
     nodes: HashMap<String, usize>,
-}
-
-impl Default for DependencyState {
-    fn default() -> Self {
-        Self {
-            edges: HashMap::new(),
-            nodes: HashMap::new(),
-        }
-    }
 }
 
 static DEP_STATE: OnceLock<Mutex<DependencyState>> = OnceLock::new();

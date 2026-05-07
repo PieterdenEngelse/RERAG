@@ -39,6 +39,8 @@ pub(crate) struct ChunkConfigCommitRequest {
     pub context_prefix_tokens: Option<usize>,
     #[serde(default)]
     pub pipeline_stages: Option<String>,
+    #[serde(default)]
+    pub snap_tolerance: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -54,6 +56,7 @@ pub(crate) struct ChunkerConfigSnapshot {
     pub context_prefix_enabled: bool,
     pub context_prefix_tokens: usize,
     pub pipeline_stages: String,
+    pub snap_tolerance: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -502,7 +505,7 @@ pub(crate) async fn save_io_uring_config(
         .unwrap_or(false);
 
     // Validate ring_size is power of 2
-    if !ring_size.is_power_of_two() || ring_size < 1 || ring_size > 32768 {
+    if !ring_size.is_power_of_two() || !(1..=32768).contains(&ring_size) {
         return Ok(HttpResponse::BadRequest().json(json!({
             "status": "error",
             "message": "ring_size must be a power of 2 between 1 and 32768",
@@ -511,7 +514,7 @@ pub(crate) async fn save_io_uring_config(
     }
 
     // Validate buffer_size
-    if buffer_size < 4096 || buffer_size > 16 * 1024 * 1024 {
+    if !(4096..=16 * 1024 * 1024).contains(&buffer_size) {
         return Ok(HttpResponse::BadRequest().json(json!({
             "status": "error",
             "message": "buffer_size must be between 4096 and 16MB",
@@ -853,7 +856,8 @@ pub(crate) async fn get_chunking_stats(
     }
 
     let limit = query.limit.unwrap_or(10);
-    let history = crate::monitoring::chunking_snapshot_history(limit);
+    let corpus = query.corpus.as_deref().filter(|s| !s.is_empty());
+    let history = crate::monitoring::chunking_snapshot_history(limit, corpus);
 
     if history.is_empty() {
         Ok(HttpResponse::Ok().json(json!({
@@ -940,6 +944,10 @@ pub(crate) async fn commit_chunk_config(
             .context_prefix_tokens
             .unwrap_or(existing.context_prefix_tokens),
         pipeline_stages: body.pipeline_stages.unwrap_or(existing.pipeline_stages),
+        snap_tolerance: body
+            .snap_tolerance
+            .map(|v| v.clamp(0.0, 1.0))
+            .unwrap_or(existing.snap_tolerance),
     };
 
     match chunk_settings::save_chunker_config_default_db(&new_cfg) {
@@ -1343,9 +1351,13 @@ pub(crate) async fn get_onnx_config() -> Result<HttpResponse, Error> {
                 .unwrap_or(false),
             layout_model_ready: {
                 #[cfg(feature = "layout_ml")]
-                { crate::pdf::layout_model::LayoutModel::load_or_heuristic().is_candle_loaded() }
+                {
+                    crate::pdf::layout_model::LayoutModel::load_or_heuristic().is_candle_loaded()
+                }
                 #[cfg(not(feature = "layout_ml"))]
-                { false }
+                {
+                    false
+                }
             },
         },
     }))
@@ -1563,9 +1575,13 @@ pub(crate) async fn set_onnx_config(
                 .unwrap_or(false),
             layout_model_ready: {
                 #[cfg(feature = "layout_ml")]
-                { crate::pdf::layout_model::LayoutModel::load_or_heuristic().is_candle_loaded() }
+                {
+                    crate::pdf::layout_model::LayoutModel::load_or_heuristic().is_candle_loaded()
+                }
                 #[cfg(not(feature = "layout_ml"))]
-                { false }
+                {
+                    false
+                }
             },
         },
     }))
@@ -1902,38 +1918,32 @@ pub(crate) async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
     {
         if let Some(client) = get_neo4j_client() {
             match client.health_check().await {
-                Ok(true) => {
-                    return Ok(HttpResponse::Ok().json(json!({
-                        "status": "ok",
-                        "message": "Successfully connected to Neo4j",
-                        "request_id": request_id,
-                        "connected": true
-                    })));
-                }
-                Ok(false) => {
-                    return Ok(HttpResponse::Ok().json(json!({
-                        "status": "error",
-                        "message": "Neo4j health check failed",
-                        "request_id": request_id,
-                        "connected": false
-                    })));
-                }
-                Err(e) => {
-                    return Ok(HttpResponse::Ok().json(json!({
-                        "status": "error",
-                        "message": format!("Neo4j connection error: {}", e),
-                        "request_id": request_id,
-                        "connected": false
-                    })));
-                }
+                Ok(true) => Ok(HttpResponse::Ok().json(json!({
+                    "status": "ok",
+                    "message": "Successfully connected to Neo4j",
+                    "request_id": request_id,
+                    "connected": true
+                }))),
+                Ok(false) => Ok(HttpResponse::Ok().json(json!({
+                    "status": "error",
+                    "message": "Neo4j health check failed",
+                    "request_id": request_id,
+                    "connected": false
+                }))),
+                Err(e) => Ok(HttpResponse::Ok().json(json!({
+                    "status": "error",
+                    "message": format!("Neo4j connection error: {}", e),
+                    "request_id": request_id,
+                    "connected": false
+                }))),
             }
         } else {
-            return Ok(HttpResponse::Ok().json(json!({
+            Ok(HttpResponse::Ok().json(json!({
                 "status": "error",
                 "message": "Neo4j client not initialized. Check NEO4J_ENABLED=true in .env and restart.",
                 "request_id": request_id,
                 "connected": false
-            })));
+            })))
         }
     }
 

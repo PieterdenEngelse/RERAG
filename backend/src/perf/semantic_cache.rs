@@ -329,8 +329,10 @@ mod tests {
 
     #[test]
     fn test_semantic_match() {
-        let mut config = SemanticCacheConfig::default();
-        config.similarity_threshold = 0.9;
+        let config = SemanticCacheConfig {
+            similarity_threshold: 0.9,
+            ..Default::default()
+        };
         let cache = SemanticCache::new(config);
 
         let embedding1 = random_embedding(42);

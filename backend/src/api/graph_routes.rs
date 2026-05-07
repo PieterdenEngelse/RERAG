@@ -691,7 +691,7 @@ pub async fn search_entities(_query: web::Query<SearchQuery>) -> HttpResponse {
 #[cfg(feature = "neo4j")]
 pub async fn graph_enhanced_search(query: web::Query<SearchQuery>) -> HttpResponse {
     let search_term = &query.q;
-    let limit = query.limit.unwrap_or(10).min(50) as usize;
+    let limit = query.limit.unwrap_or(10).min(50);
     let rrf_k: f32 = 60.0;
 
     // ── 1. BM25 search → (content, score) ──
@@ -968,7 +968,7 @@ pub async fn rebuild_graph_from_index() -> GraphBuildResult {
         if throttle_ms > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(throttle_ms)).await;
         }
-        if docs_processed % 5 == 0 {
+        if docs_processed.is_multiple_of(5) {
             info!(
                 progress = docs_processed,
                 total = docs_map.len(),

@@ -28,7 +28,7 @@ pub(crate) fn validate_chunk_request(req: &ChunkConfigCommitRequest) -> Result<(
     }
     if req
         .semantic_similarity_threshold
-        .map_or(false, |v| !(0.0..=1.0).contains(&v))
+        .is_some_and(|v| !(0.0..=1.0).contains(&v))
     {
         return Err("semantic_similarity_threshold must be between 0 and 1".into());
     }

@@ -46,13 +46,9 @@ pub fn build_ir(
             .map(|w| w.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        let page = run_words.first().and_then(|w| {
-            if w.page > 0 {
-                Some(w.page)
-            } else {
-                None
-            }
-        });
+        let page = run_words
+            .first()
+            .and_then(|w| if w.page > 0 { Some(w.page) } else { None });
         let bbox = run_bbox(run_words);
 
         let mut block: DocBlock = match current_tag {

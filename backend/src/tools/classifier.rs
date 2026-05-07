@@ -34,6 +34,12 @@ pub enum Sentiment {
     Question,
 }
 
+impl Default for ClassifierTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClassifierTool {
     pub fn new() -> Self {
         let mut categories = HashMap::new();
@@ -455,7 +461,7 @@ impl Tool for ClassifierTool {
             Sentiment::Question => "❓ Question",
         };
 
-        let mut output = format!("🏷️ **Classification Results**\n\n");
+        let mut output = "🏷️ **Classification Results**\n\n".to_string();
         output.push_str(&format!(
             "**Category:** {} ({:.0}% confidence)\n",
             classification.category,

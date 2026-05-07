@@ -33,18 +33,13 @@ pub enum NotificationType {
     Alert,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Ord, PartialOrd, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Ord, PartialOrd, Eq, Default)]
 pub enum Priority {
     Low,
+    #[default]
     Normal,
     High,
     Urgent,
-}
-
-impl Default for Priority {
-    fn default() -> Self {
-        Priority::Normal
-    }
 }
 
 /// Notification history storage
@@ -95,6 +90,12 @@ pub struct NotificationTool {
     default_channel: String,
     success_count: usize,
     total_count: usize,
+}
+
+impl Default for NotificationTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NotificationTool {

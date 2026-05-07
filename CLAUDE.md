@@ -84,6 +84,13 @@ docker compose --profile observability up -d
 
 - **Confirmation threshold**: Don't ask for confirmation on small or single-file edits — only ask before major or multi-file changes.
 
+## UI Color Rules
+
+- **Minimum readable text on dark tiles**: `text-gray-400` — never use `text-gray-500` or darker for any label or secondary text the user needs to read
+- **Preferred for secondary/muted labels**: `text-gray-300`
+- **When asked to increase contrast**: shift 2 Tailwind steps toward white (e.g. `text-gray-500` → `text-gray-300`)
+- These rules apply to all Dioxus components and pages without exception
+
 ## Coding Conventions
 
 - **Indentation**: 4 spaces everywhere; tabs only in Makefiles

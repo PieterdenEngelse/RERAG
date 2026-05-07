@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 /// Quality score for training examples (1-5 scale)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum QualityScore {
     /// Very poor - incorrect, harmful, or completely off-topic
     VeryPoor = 1,
     /// Poor - mostly incorrect or unhelpful
     Poor = 2,
     /// Acceptable - partially correct, could be better
+    #[default]
     Acceptable = 3,
     /// Good - correct and helpful
     Good = 4,
@@ -63,12 +65,6 @@ impl QualityScore {
             Self::Good => "🙂",
             Self::Excellent => "😊",
         }
-    }
-}
-
-impl Default for QualityScore {
-    fn default() -> Self {
-        Self::Acceptable
     }
 }
 

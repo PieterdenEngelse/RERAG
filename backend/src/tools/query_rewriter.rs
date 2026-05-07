@@ -17,6 +17,12 @@ pub struct QueryRewriterTool {
     total_count: usize,
 }
 
+impl Default for QueryRewriterTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueryRewriterTool {
     pub fn new() -> Self {
         let mut abbreviations = HashMap::new();
@@ -291,7 +297,7 @@ impl Tool for QueryRewriterTool {
 
         let result = self.rewrite(query);
 
-        let mut output = format!("🔄 **Query Rewrite Results**\n\n");
+        let mut output = "🔄 **Query Rewrite Results**\n\n".to_string();
         output.push_str(&format!("**Original:** {}\n", result.original));
         output.push_str(&format!("**Rewritten:** {}\n", result.rewritten));
         output.push_str(&format!("**Clean (no stop words):** {}\n", result.clean));

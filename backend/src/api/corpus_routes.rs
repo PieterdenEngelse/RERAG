@@ -8,11 +8,34 @@ use crate::db::corpora::{self, AgentMemorySettings, CorporaError, CorpusSettings
 pub struct CreateCorpusBody {
     pub slug: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Deserialize)]
 pub struct RenameCorpusBody {
     pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateDescriptionBody {
+    pub description: String,
+}
+
+pub async fn update_corpus_description_handler(
+    config: web::Data<ApiConfig>,
+    slug: web::Path<String>,
+    body: web::Json<UpdateDescriptionBody>,
+) -> Result<HttpResponse, Error> {
+    let slug = slug.into_inner();
+    let conn = open_db(&config)?;
+    match corpora::update_corpus_description(&conn, &slug, &body.description) {
+        Ok(()) => Ok(HttpResponse::Ok()
+            .json(json!({ "status": "ok", "slug": slug, "description": body.description }))),
+        Err(CorporaError::NotFound(_)) => Ok(corpus_not_found(&slug)),
+        Err(e) => Ok(HttpResponse::InternalServerError()
+            .json(json!({ "status": "error", "message": e.to_string() }))),
+    }
 }
 
 fn open_db(config: &ApiConfig) -> Result<rusqlite::Connection, Error> {
@@ -34,7 +57,7 @@ pub async fn create_corpus_handler(
     body: web::Json<CreateCorpusBody>,
 ) -> Result<HttpResponse, Error> {
     let conn = open_db(&config)?;
-    match corpora::create_corpus(&conn, &body.slug, &body.name) {
+    match corpora::create_corpus(&conn, &body.slug, &body.name, &body.description) {
         Ok(corpus) => {
             // Pre-warm the registry entry and ensure the upload dir exists.
             if let Some(reg) = crate::corpus_registry::get_registry() {
@@ -73,7 +96,7 @@ pub async fn list_corpora_handler(config: web::Data<ApiConfig>) -> Result<HttpRe
             let doc_count = std::fs::read_dir(&dir)
                 .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
                 .unwrap_or(0);
-            json!({ "id": c.id, "slug": c.slug, "name": c.name, "created_at": c.created_at, "doc_count": doc_count })
+            json!({ "id": c.id, "slug": c.slug, "name": c.name, "description": c.description, "created_at": c.created_at, "doc_count": doc_count })
         })
         .collect();
     Ok(HttpResponse::Ok().json(json!({ "status": "ok", "corpora": items, "count": items.len() })))
@@ -101,7 +124,7 @@ pub async fn get_corpus_handler(
                 .unwrap_or(0);
             Ok(HttpResponse::Ok().json(json!({
                 "status": "ok",
-                "corpus": { "id": c.id, "slug": c.slug, "name": c.name, "created_at": c.created_at, "doc_count": doc_count }
+                "corpus": { "id": c.id, "slug": c.slug, "name": c.name, "description": c.description, "created_at": c.created_at, "doc_count": doc_count }
             })))
         }
     }
@@ -129,10 +152,7 @@ pub async fn delete_corpus_handler(
     slug: web::Path<String>,
 ) -> Result<HttpResponse, Error> {
     let slug = slug.into_inner();
-    if slug == "default" {
-        return Ok(HttpResponse::BadRequest()
-            .json(json!({ "status": "error", "message": "Cannot delete the default corpus" })));
-    }
+
     let conn = open_db(&config)?;
     match corpora::delete_corpus(&conn, &slug) {
         Ok(()) => {
@@ -264,6 +284,8 @@ pub async fn corpus_delete_document_handler(
                     }
                 }
             }
+            crate::monitoring::forget_extraction_file(&filename);
+            crate::monitoring::forget_canon_file(&filename, &slug);
             Ok(HttpResponse::Ok()
                 .json(json!({ "status": "ok", "deleted": filename, "corpus": slug })))
         }
@@ -313,20 +335,27 @@ pub(crate) async fn corpus_upload_handler(
         };
 
         if let Some(handle) = retriever_handle {
-            // Use per-corpus chunker_mode if set, fall back to global.
-            let effective_chunker_mode = {
+            // Merge per-corpus overrides onto global chunker config.
+            let effective_cfg = {
+                let global = crate::db::chunk_settings::global_config();
                 let conn = open_db(&config).ok();
-                conn.as_ref()
+                let settings = conn
+                    .as_ref()
                     .and_then(|c| crate::db::corpora::get_corpus_settings(c, &slug).ok())
-                    .and_then(|s| s.chunker_mode)
-                    .and_then(|m| m.parse::<crate::config::ChunkerMode>().ok())
-                    .unwrap_or(config.chunker_mode)
+                    .unwrap_or_default();
+                crate::db::corpora::effective_chunker_config(&global, &settings)
             };
-            let chunker = crate::index::default_chunker(effective_chunker_mode);
+            let effective_chunker_mode = effective_cfg.mode
+                .parse::<crate::config::ChunkerMode>()
+                .unwrap_or(config.chunker_mode);
+            let chunker = crate::memory::chunker_factory::create_chunker(
+                effective_chunker_mode.into(),
+                &effective_cfg,
+            );
             let mut file_contents = Vec::new();
             for filename in &uploaded_files {
                 let path = upload_dir.join(filename);
-                let ir = crate::index::extract_ir_async(&path).await;
+                let ir = crate::index::extract_ir_async(&path, &slug).await;
                 file_contents.push((filename.clone(), path, ir));
             }
             match handle.lock() {
@@ -334,12 +363,13 @@ pub(crate) async fn corpus_upload_handler(
                     for (filename, path, ir_opt) in file_contents {
                         match ir_opt {
                             Some(ir) => match crate::index::index_content_with_graph(
-                                &mut *retriever,
+                                &mut retriever,
                                 &path,
                                 &ir,
                                 effective_chunker_mode,
                                 chunker.as_ref(),
                                 &slug,
+                                effective_cfg.context_prefix_enabled,
                             ) {
                                 Ok((n, _)) if n > 0 => indexed_files
                                     .push(json!({ "file": filename, "chunks_indexed": n })),
@@ -449,23 +479,31 @@ pub async fn corpus_reindex_handler(
         .to_string_lossy()
         .to_string();
 
-    // Use per-corpus chunker_mode if set, fall back to global.
-    let effective_chunker_mode = {
+    // Merge per-corpus overrides onto global chunker config.
+    let effective_cfg = {
+        let global = crate::db::chunk_settings::global_config();
         let conn = open_db(&config).ok();
-        conn.as_ref()
+        let settings = conn
+            .as_ref()
             .and_then(|c| crate::db::corpora::get_corpus_settings(c, &slug).ok())
-            .and_then(|s| s.chunker_mode)
-            .and_then(|m| m.parse::<crate::config::ChunkerMode>().ok())
-            .unwrap_or(config.chunker_mode)
+            .unwrap_or_default();
+        crate::db::corpora::effective_chunker_config(&global, &settings)
     };
-    let chunker = crate::index::default_chunker(effective_chunker_mode);
+    let effective_chunker_mode = effective_cfg.mode
+        .parse::<crate::config::ChunkerMode>()
+        .unwrap_or(config.chunker_mode);
+    let chunker = crate::memory::chunker_factory::create_chunker(
+        effective_chunker_mode.into(),
+        &effective_cfg,
+    );
     let result = match handle.lock() {
         Ok(mut retriever) => crate::index::index_all_documents(
-            &mut *retriever,
+            &mut retriever,
             &upload_dir,
             effective_chunker_mode,
             chunker.as_ref(),
             &slug,
+            effective_cfg.context_prefix_enabled,
         ),
         Err(_) => Err("Failed to lock retriever".to_string()),
     };
@@ -475,9 +513,7 @@ pub async fn corpus_reindex_handler(
             if let Ok(conn) = open_db(&config) {
                 let settings = corpora::get_corpus_settings(&conn, &slug).unwrap_or_default();
                 let meta = corpora::CorpusBuildMeta {
-                    chunker_mode: settings
-                        .chunker_mode
-                        .or_else(|| Some(format!("{:?}", config.chunker_mode).to_lowercase())),
+                    chunker_mode: Some(effective_cfg.mode.clone()),
                     distance_metric: settings
                         .distance_metric
                         .map(|m| format!("{:?}", m).to_lowercase()),

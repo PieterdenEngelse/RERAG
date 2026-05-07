@@ -44,6 +44,15 @@ pub fn insert(rec: &FileRecord) {
     );
 }
 
+pub fn delete_by_filename(filename: &str) {
+    let Some(mutex) = DB_CONN.get() else { return };
+    let Ok(conn) = mutex.lock() else { return };
+    let _ = conn.execute(
+        "DELETE FROM extraction_records WHERE filename = ?1",
+        params![filename],
+    );
+}
+
 pub fn load_recent() -> Vec<FileRecord> {
     let Some(mutex) = DB_CONN.get() else {
         return vec![];
@@ -70,6 +79,7 @@ pub fn load_recent() -> Vec<FileRecord> {
             format: row.get(2)?,
             ok: row.get::<_, i64>(3)? != 0,
             chars: row.get::<_, i64>(4)? as u64,
+            corpus: String::new(),
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())

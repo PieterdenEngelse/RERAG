@@ -54,12 +54,10 @@ impl TableModel {
 
     pub fn structure(&self, table_words: &[WordSpan]) -> TableStructure {
         match &self._inner {
-            TableModelInner::Ort(m) => m
-                .structure(table_words)
-                .unwrap_or_else(|e| {
-                    debug!(error = %e, "ORT TableFormer failed, falling back to text-mode");
-                    text_mode_structure(table_words)
-                }),
+            TableModelInner::Ort(m) => m.structure(table_words).unwrap_or_else(|e| {
+                debug!(error = %e, "ORT TableFormer failed, falling back to text-mode");
+                text_mode_structure(table_words)
+            }),
             TableModelInner::TextMode => text_mode_structure(table_words),
         }
     }

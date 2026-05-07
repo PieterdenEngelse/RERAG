@@ -128,7 +128,7 @@ impl Drop for OtelGuard {
     fn drop(&mut self) {
         if self.enabled {
             info!("Shutting down OpenTelemetry tracer provider...");
-            let _ = global::shutdown_tracer_provider();
+            global::shutdown_tracer_provider();
         }
     }
 }

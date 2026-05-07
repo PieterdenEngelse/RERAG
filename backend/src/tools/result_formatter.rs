@@ -19,10 +19,11 @@ impl ResultFormatter {
         // Look for "Found X" pattern first
         let parts: Vec<&str> = result.split_whitespace().collect();
         for i in 0..parts.len() {
-            if parts[i].to_lowercase() == "found" && i + 1 < parts.len() {
-                if let Ok(_) = parts[i + 1].parse::<i32>() {
-                    return parts[i + 1].to_string();
-                }
+            if parts[i].to_lowercase() == "found"
+                && i + 1 < parts.len()
+                && parts[i + 1].parse::<i32>().is_ok()
+            {
+                return parts[i + 1].to_string();
             }
         }
 
@@ -51,10 +52,11 @@ impl ResultFormatter {
         // Look for "Found X" pattern
         let parts: Vec<&str> = result.split_whitespace().collect();
         for i in 0..parts.len() {
-            if parts[i].to_lowercase() == "found" && i + 1 < parts.len() {
-                if let Ok(_) = parts[i + 1].parse::<i32>() {
-                    return parts[i + 1].to_string();
-                }
+            if parts[i].to_lowercase() == "found"
+                && i + 1 < parts.len()
+                && parts[i + 1].parse::<i32>().is_ok()
+            {
+                return parts[i + 1].to_string();
             }
         }
 

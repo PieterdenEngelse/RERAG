@@ -133,6 +133,7 @@ pub fn ConfigCorpus() -> Element {
                 hnsw_ef_construction: ef_c,
                 hnsw_ef_search: ef_s,
                 pq_subvectors: pq,
+                ..Default::default()
             };
             match api::patch_corpus_settings(&slug, &settings).await {
                 Ok(()) => save_msg.set(Some("Saved".into())),
@@ -228,7 +229,7 @@ pub fn ConfigCorpus() -> Element {
                                         spawn(async move {
                                             creating.set(true);
                                             create_error.set(None);
-                                            match api::create_corpus(&slug, &slug).await {
+                                            match api::create_corpus(&slug, &slug, "").await {
                                                 Ok(_) => {
                                                     new_slug.set(String::new());
                                                     if let Ok(list) = api::fetch_corpora().await {

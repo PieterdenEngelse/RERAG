@@ -28,6 +28,12 @@ pub struct SchedulerTool {
     success_rate: f32,
 }
 
+impl Default for SchedulerTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchedulerTool {
     pub fn new() -> Self {
         Self { success_rate: 0.9 }

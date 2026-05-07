@@ -1,5 +1,5 @@
 use crate::api::{self, RagMemoryItem};
-use crate::app::{ClearChat, Route, ShowRagInfo};
+use crate::app::{ClearChat, PendingChatQuery, Route, ShowRagInfo};
 use crate::components::HomeSettingsBoards;
 use crate::pages::hardware::components::info_modal;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
@@ -179,6 +179,16 @@ pub fn Home() -> Element {
     // Clear chat signal (triggered by Home link in header)
     let clear_chat = use_context::<Signal<ClearChat>>();
 
+    // Pre-fill chat input when navigated here with a pending query (e.g. from info modal links).
+    let mut pending_query = use_context::<Signal<PendingChatQuery>>();
+    use_effect(move || {
+        let q = pending_query.read().0.clone();
+        if let Some(q) = q {
+            input_text.set(q);
+            pending_query.write().0 = None;
+        }
+    });
+
     // Watch for clear chat signal
     use_effect(move || {
         if clear_chat().0 {
@@ -219,7 +229,6 @@ pub fn Home() -> Element {
     let mut show_attention_details = use_signal(|| false);
     let mut show_matrix_info = use_signal(|| false);
     let mut show_notation_info = use_signal(|| false);
-
     // Backend type state for home page board
     let current_backend = use_signal(|| String::from("ollama"));
     let mut runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();

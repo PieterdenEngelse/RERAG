@@ -183,9 +183,9 @@ pub fn check_system_compiler(logger: &InstallLogger) -> InstallerResult<()> {
 /// Check network connectivity
 pub fn check_network() -> InstallerResult<()> {
     let output = if cfg!(target_os = "windows") {
-        Command::new("ping").args(&["-n", "1", "8.8.8.8"]).output()
+        Command::new("ping").args(["-n", "1", "8.8.8.8"]).output()
     } else {
-        Command::new("ping").args(&["-c", "1", "8.8.8.8"]).output()
+        Command::new("ping").args(["-c", "1", "8.8.8.8"]).output()
     };
 
     match output {

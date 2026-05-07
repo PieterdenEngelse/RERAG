@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub mod calculator;
 pub mod classifier;
@@ -80,28 +81,29 @@ pub enum ToolType {
     Memory,
 }
 
-impl ToString for ToolType {
-    fn to_string(&self) -> String {
-        match self {
-            ToolType::SemanticSearch => "SemanticSearch".to_string(),
-            ToolType::WebSearch => "WebSearch".to_string(),
-            ToolType::DatabaseQuery => "DatabaseQuery".to_string(),
-            ToolType::Calculator => "Calculator".to_string(),
-            ToolType::URLFetch => "URLFetch".to_string(),
-            ToolType::CodeExecution => "CodeExecution".to_string(),
-            ToolType::ImageGeneration => "ImageGeneration".to_string(),
-            ToolType::Summarizer => "Summarizer".to_string(),
-            ToolType::QueryRewriter => "QueryRewriter".to_string(),
-            ToolType::Classifier => "Classifier".to_string(),
-            ToolType::FileAnalyzer => "FileAnalyzer".to_string(),
-            ToolType::Notification => "Notification".to_string(),
-            ToolType::Translator => "Translator".to_string(),
-            ToolType::SentimentAnalyzer => "SentimentAnalyzer".to_string(),
-            ToolType::EntityExtractor => "EntityExtractor".to_string(),
-            ToolType::SpellChecker => "SpellChecker".to_string(),
-            ToolType::Scheduler => "Scheduler".to_string(),
-            ToolType::Memory => "Memory".to_string(),
-        }
+impl fmt::Display for ToolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            ToolType::SemanticSearch => "SemanticSearch",
+            ToolType::WebSearch => "WebSearch",
+            ToolType::DatabaseQuery => "DatabaseQuery",
+            ToolType::Calculator => "Calculator",
+            ToolType::URLFetch => "URLFetch",
+            ToolType::CodeExecution => "CodeExecution",
+            ToolType::ImageGeneration => "ImageGeneration",
+            ToolType::Summarizer => "Summarizer",
+            ToolType::QueryRewriter => "QueryRewriter",
+            ToolType::Classifier => "Classifier",
+            ToolType::FileAnalyzer => "FileAnalyzer",
+            ToolType::Notification => "Notification",
+            ToolType::Translator => "Translator",
+            ToolType::SentimentAnalyzer => "SentimentAnalyzer",
+            ToolType::EntityExtractor => "EntityExtractor",
+            ToolType::SpellChecker => "SpellChecker",
+            ToolType::Scheduler => "Scheduler",
+            ToolType::Memory => "Memory",
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -150,6 +152,12 @@ pub struct ToolStats {
     pub successes: usize,
     pub avg_time_ms: f32,
     pub avg_confidence: f32,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ToolRegistry {

@@ -105,7 +105,7 @@ pub async fn execute_with_tools(req: web::Json<ToolQueryRequest>) -> ActixResult
         ExecutionStep {
             step: 2,
             tool: selection.primary_tool.to_string(),
-            action: format!("Execute {}", selection.primary_tool.to_string()),
+            action: format!("Execute {}", selection.primary_tool),
             status: "queued".to_string(),
         },
     ];
@@ -115,7 +115,7 @@ pub async fn execute_with_tools(req: web::Json<ToolQueryRequest>) -> ActixResult
         execution_plan.push(ExecutionStep {
             step: 3,
             tool: selection.secondary_tools[0].to_string(),
-            action: format!("Fallback to {}", selection.secondary_tools[0].to_string()),
+            action: format!("Fallback to {}", selection.secondary_tools[0]),
             status: "standby".to_string(),
         });
     }

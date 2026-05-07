@@ -444,7 +444,7 @@ impl Tool for SentimentAnalyzerTool {
         if success {
             self.success_rate = (self.success_rate * 0.95) + 0.05;
         } else {
-            self.success_rate = self.success_rate * 0.95;
+            self.success_rate *= 0.95;
         }
     }
 }

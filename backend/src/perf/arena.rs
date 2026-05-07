@@ -46,7 +46,7 @@ impl SearchArena {
     }
 
     /// Allocate a vector's contents in the arena
-    pub fn alloc_vec<T: Copy>(&self, vec: &Vec<T>) -> &[T] {
+    pub fn alloc_vec<T: Copy>(&self, vec: &[T]) -> &[T] {
         self.arena.alloc_slice_copy(vec)
     }
 
@@ -61,11 +61,11 @@ impl SearchArena {
     }
 
     /// Allocate space for a slice and fill with a function
-    pub fn alloc_slice_fill<T, F>(&self, len: usize, mut f: F) -> &mut [T]
+    pub fn alloc_slice_fill<T, F>(&self, len: usize, f: F) -> &mut [T]
     where
         F: FnMut(usize) -> T,
     {
-        self.arena.alloc_slice_fill_with(len, |i| f(i))
+        self.arena.alloc_slice_fill_with(len, f)
     }
 
     /// Reset the arena for reuse
@@ -99,9 +99,9 @@ where
 {
     SEARCH_ARENA.with(|arena| {
         let arena = arena.borrow();
-        let result = f(&arena);
+
         // Arena will be reset on next use if needed
-        result
+        f(&arena)
     })
 }
 

@@ -1,4 +1,5 @@
 use crate::{
+    api,
     app::Route,
     components::config_nav::{ConfigNav, ConfigTab},
     components::monitor::*,
@@ -7,6 +8,14 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn Config() -> Element {
+    let mut doc_count = use_signal(|| "--".to_string());
+
+    use_future(move || async move {
+        if let Ok(info) = api::fetch_index_info().await {
+            doc_count.set(info.total_documents.to_string());
+        }
+    });
+
     rsx! {
         div { class: "space-y-6",
             Breadcrumb {
@@ -43,7 +52,7 @@ pub fn Config() -> Element {
                     div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
                         HealthCard { name: "Chunk-Size Overlapping".into(), status: "Healthy".into(), detail: Some("Ready".into()) }
                         HealthCard { name: "Chunker".into(), status: "Ready".into(), detail: Some("See Chunker tab".into()) }
-                        HealthCard { name: "Documents".into(), status: "--".into(), detail: Some("Uploaded".into()) }
+                        HealthCard { name: "Documents".into(), status: doc_count().into(), detail: Some("Uploaded".into()) }
                     }
                 }
             }

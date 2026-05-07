@@ -176,6 +176,10 @@ pub struct ClearChat(pub bool);
 #[derive(Clone, Copy, Default)]
 pub struct RuntimeSuspended(pub bool);
 
+/// A query string to pre-fill the Home chat input on next navigation there.
+#[derive(Clone, Default)]
+pub struct PendingChatQuery(pub Option<String>);
+
 /// The currently active corpus slug (default = "default")
 #[derive(Clone, Default)]
 pub struct ActiveCorpus(pub String);
@@ -303,6 +307,7 @@ pub fn App() -> Element {
     use_context_provider(|| Signal::new(PageErrors::default())); // Global page errors state
     use_context_provider(|| Signal::new(RuntimeContext::new())); // Shared runtime context
     use_context_provider(|| Signal::new(ActiveCorpus::default())); // Active corpus
+    use_context_provider(|| Signal::new(PendingChatQuery::default())); // Pre-fill chat on navigate
 
     rsx! {
         document::Link { rel: "icon", href: asset!("/assets/favicon.ico") }

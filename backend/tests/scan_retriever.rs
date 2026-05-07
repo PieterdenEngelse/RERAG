@@ -7,7 +7,7 @@ fn main() {
     let root = "./src"; // adjust if your code lives elsewhere
 
     for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-        if entry.path().extension().map_or(false, |ext| ext == "rs") {
+        if entry.path().extension().is_some_and(|ext| ext == "rs") {
             let content = fs::read_to_string(entry.path()).unwrap_or_default();
             for (i, line) in content.lines().enumerate() {
                 if pattern.is_match(line) {

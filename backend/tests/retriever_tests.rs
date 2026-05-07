@@ -387,7 +387,7 @@ mod tests {
 
         let vector = vec![1.0, 2.0, 3.0];
         retriever
-            .index_chunk("chunk1", "This is a chunk", &vector)
+            .index_chunk("chunk1", "This is a chunk", vector.clone(), None)
             .expect("Failed to index chunk");
 
         assert_eq!(

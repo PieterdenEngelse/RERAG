@@ -109,7 +109,7 @@ pub async fn index_to_knowledge_graph(
             embedding_id: chunk_id.clone(),
             position: chunk_id
                 .split('#')
-                .last()
+                .next_back()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
             token_count: chunk_content.split_whitespace().count(),
@@ -125,7 +125,7 @@ pub async fn index_to_knowledge_graph(
     let texts: Vec<&str> = valid.iter().map(|(_, c)| *c).collect();
     let ner_results: Vec<Vec<crate::tools::ner_extractor::NerEntity>> = texts
         .chunks(ner_batch_size)
-        .flat_map(|batch| crate::tools::ner_extractor::extract_entities_batch(batch))
+        .flat_map(crate::tools::ner_extractor::extract_entities_batch)
         .collect();
 
     // Phase 3: entity mentions, regex fallback, co-occurrence links.
@@ -135,7 +135,12 @@ pub async fn index_to_knowledge_graph(
         if use_ner {
             for ner_entity in ner_entities {
                 if let Err(e) = kb
-                    .add_entity_mention(chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score)
+                    .add_entity_mention(
+                        chunk_id,
+                        &ner_entity.text,
+                        &ner_entity.label,
+                        ner_entity.score,
+                    )
                     .await
                 {
                     debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
@@ -146,7 +151,12 @@ pub async fn index_to_knowledge_graph(
         for entity in &extraction.entities {
             if !use_ner && entity.confidence >= confidence_threshold {
                 if let Err(e) = kb
-                    .add_entity_mention(chunk_id, &entity.text, entity.entity_type.label(), entity.confidence)
+                    .add_entity_mention(
+                        chunk_id,
+                        &entity.text,
+                        entity.entity_type.label(),
+                        entity.confidence,
+                    )
                     .await
                 {
                     debug!(error = %e, entity = %entity.text, "Failed to add entity mention");
@@ -163,7 +173,12 @@ pub async fn index_to_knowledge_graph(
                 let e1 = &high_confidence_entities[i];
                 let e2 = &high_confidence_entities[j];
                 let _ = kb
-                    .link_entities(&e1.text, &e2.text, "co_occurs_with", (e1.confidence + e2.confidence) / 2.0)
+                    .link_entities(
+                        &e1.text,
+                        &e2.text,
+                        "co_occurs_with",
+                        (e1.confidence + e2.confidence) / 2.0,
+                    )
                     .await;
             }
         }

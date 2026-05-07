@@ -21,6 +21,7 @@ pub struct Corpus {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub description: String,
     pub created_at: String,
 }
 
@@ -39,6 +40,23 @@ pub struct CorpusSettings {
     pub hnsw_ef_search: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pq_subvectors: Option<usize>,
+    // Chunker parameter overrides — applied on top of global config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlap: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_similarity_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_prefix_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_prefix_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_stages: Option<String>,
 }
 
 /// Build-time parameters recorded after each reindex. Used to detect settings drift.
@@ -92,6 +110,25 @@ pub fn set_corpus_settings(conn: &Connection, slug: &str, settings: &CorpusSetti
         return Err(CorporaError::NotFound(slug.to_string()));
     }
     Ok(())
+}
+
+/// Merge per-corpus overrides onto the global `ChunkerConfig`.
+/// Any `None` field in `settings` leaves the global value intact.
+pub fn effective_chunker_config(
+    global: &crate::memory::chunker::ChunkerConfig,
+    settings: &CorpusSettings,
+) -> crate::memory::chunker::ChunkerConfig {
+    let mut cfg = global.clone();
+    if let Some(v) = &settings.chunker_mode { cfg.mode = v.clone(); }
+    if let Some(v) = settings.target_size { cfg.target_size = v; }
+    if let Some(v) = settings.min_size { cfg.min_size = v; }
+    if let Some(v) = settings.max_size { cfg.max_size = v; }
+    if let Some(v) = settings.overlap { cfg.overlap = v; }
+    if let Some(v) = settings.semantic_similarity_threshold { cfg.semantic_similarity_threshold = v; }
+    if let Some(v) = settings.context_prefix_enabled { cfg.context_prefix_enabled = v; }
+    if let Some(v) = settings.context_prefix_tokens { cfg.context_prefix_tokens = v; }
+    if let Some(v) = &settings.pipeline_stages { cfg.pipeline_stages = v.clone(); }
+    cfg
 }
 
 pub fn get_corpus_build_meta(conn: &Connection, slug: &str) -> Result<CorpusBuildMeta> {
@@ -163,28 +200,35 @@ pub fn validate_slug(slug: &str) -> bool {
         .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-pub fn create_corpus(conn: &Connection, slug: &str, name: &str) -> Result<Corpus> {
+pub fn create_corpus(
+    conn: &Connection,
+    slug: &str,
+    name: &str,
+    description: &str,
+) -> Result<Corpus> {
     if !validate_slug(slug) {
         return Err(CorporaError::InvalidSlug(slug.to_string()));
     }
     let id: String = conn.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
     conn.execute(
-        "INSERT INTO corpora (id, slug, name) VALUES (?1, ?2, ?3)",
-        params![id, slug, name],
+        "INSERT INTO corpora (id, slug, name, description) VALUES (?1, ?2, ?3, ?4)",
+        params![id, slug, name, description],
     )?;
     get_corpus_by_slug(conn, slug)?.ok_or_else(|| CorporaError::NotFound(slug.to_string()))
 }
 
 pub fn list_corpora(conn: &Connection) -> Result<Vec<Corpus>> {
-    let mut stmt =
-        conn.prepare("SELECT id, slug, name, created_at FROM corpora ORDER BY created_at ASC")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, slug, name, COALESCE(description, ''), created_at FROM corpora ORDER BY created_at ASC",
+    )?;
     let corpora = stmt
         .query_map([], |row| {
             Ok(Corpus {
                 id: row.get(0)?,
                 slug: row.get(1)?,
                 name: row.get(2)?,
-                created_at: row.get(3)?,
+                description: row.get(3)?,
+                created_at: row.get(4)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -194,14 +238,15 @@ pub fn list_corpora(conn: &Connection) -> Result<Vec<Corpus>> {
 
 pub fn get_corpus_by_slug(conn: &Connection, slug: &str) -> Result<Option<Corpus>> {
     match conn.query_row(
-        "SELECT id, slug, name, created_at FROM corpora WHERE slug = ?1",
+        "SELECT id, slug, name, COALESCE(description, ''), created_at FROM corpora WHERE slug = ?1",
         params![slug],
         |row| {
             Ok(Corpus {
                 id: row.get(0)?,
                 slug: row.get(1)?,
                 name: row.get(2)?,
-                created_at: row.get(3)?,
+                description: row.get(3)?,
+                created_at: row.get(4)?,
             })
         },
     ) {
@@ -215,6 +260,17 @@ pub fn rename_corpus(conn: &Connection, slug: &str, new_name: &str) -> Result<()
     let updated = conn.execute(
         "UPDATE corpora SET name = ?1 WHERE slug = ?2",
         params![new_name, slug],
+    )?;
+    if updated == 0 {
+        return Err(CorporaError::NotFound(slug.to_string()));
+    }
+    Ok(())
+}
+
+pub fn update_corpus_description(conn: &Connection, slug: &str, description: &str) -> Result<()> {
+    let updated = conn.execute(
+        "UPDATE corpora SET description = ?1 WHERE slug = ?2",
+        params![description, slug],
     )?;
     if updated == 0 {
         return Err(CorporaError::NotFound(slug.to_string()));
@@ -292,7 +348,7 @@ mod tests {
     #[test]
     fn create_and_list() {
         let conn = fresh_db();
-        let c = create_corpus(&conn, "philosophy", "Philosophy").unwrap();
+        let c = create_corpus(&conn, "philosophy", "Philosophy", "").unwrap();
         assert_eq!(c.slug, "philosophy");
         let list = list_corpora(&conn).unwrap();
         assert_eq!(list.len(), 2); // default + philosophy

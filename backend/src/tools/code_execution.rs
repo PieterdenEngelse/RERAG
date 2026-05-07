@@ -19,6 +19,12 @@ pub struct CodeExecutionTool {
     total_count: usize,
 }
 
+impl Default for CodeExecutionTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CodeExecutionTool {
     pub fn new() -> Self {
         Self {

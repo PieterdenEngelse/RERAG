@@ -16,16 +16,17 @@ pub struct SummarizerTool {
     total_count: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum SummaryLength {
-    Brief,    // ~50 words
+    Brief, // ~50 words
+    #[default]
     Standard, // ~150 words
     Detailed, // ~300 words
 }
 
-impl Default for SummaryLength {
+impl Default for SummarizerTool {
     fn default() -> Self {
-        SummaryLength::Standard
+        Self::new()
     }
 }
 
@@ -73,7 +74,7 @@ impl SummarizerTool {
     /// (In production, this would call an LLM)
     fn summarize(&self, text: &str, length: SummaryLength) -> String {
         let sentences: Vec<&str> = text
-            .split(|c| c == '.' || c == '!' || c == '?')
+            .split(['.', '!', '?'])
             .map(|s| s.trim())
             .filter(|s| !s.is_empty() && s.len() > 10)
             .collect();

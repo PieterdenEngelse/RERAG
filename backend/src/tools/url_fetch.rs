@@ -3,12 +3,26 @@
 
 use crate::tools::{Tool, ToolMetadata, ToolResult, ToolType};
 use async_trait::async_trait;
+use std::sync::OnceLock;
 use std::time::Instant;
+
+static RATE_LIMITER: OnceLock<crate::tools::RateLimiter> = OnceLock::new();
+
+fn rate_limiter() -> &'static crate::tools::RateLimiter {
+    // 2 req/s burst, 2 req/s refill — paces outbound fetches across the whole process
+    RATE_LIMITER.get_or_init(|| crate::tools::RateLimiter::new(2.0, 2.0))
+}
 
 #[derive(Debug, Clone)]
 pub struct URLFetchTool {
     success_count: usize,
     total_count: usize,
+}
+
+impl Default for URLFetchTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl URLFetchTool {
@@ -108,8 +122,8 @@ impl URLFetchTool {
                         // Numeric entity
                         if let Some(semi) = rest.find(';') {
                             let num_str = &rest[2..semi];
-                            if let Ok(num) = if num_str.starts_with('x') {
-                                u32::from_str_radix(&num_str[1..], 16)
+                            if let Ok(num) = if let Some(hex) = num_str.strip_prefix('x') {
+                                u32::from_str_radix(hex, 16)
                             } else {
                                 num_str.parse()
                             } {
@@ -174,6 +188,8 @@ impl Tool for URLFetchTool {
                 });
             }
         };
+
+        rate_limiter().acquire(1.0).await;
 
         // Fetch the URL
         let client = reqwest::Client::builder()

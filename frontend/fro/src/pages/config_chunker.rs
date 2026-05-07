@@ -4,7 +4,7 @@ use crate::pages::hardware::components::{info_modal, InfoIcon};
 use crate::pages::hardware::constants::{PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE};
 use crate::{
     api,
-    app::Route,
+    app::{ActiveCorpus, Route},
     components::config_nav::{ConfigNav, ConfigTab},
     components::monitor::*,
 };
@@ -47,6 +47,17 @@ pub fn ConfigChunker() -> Element {
     let mut saving = use_signal(|| false);
     let mut save_message = use_signal(|| Option::<String>::None);
 
+    // ─── Corpus selector ──────────────────────────────────────
+    let mut active_corpus = use_context::<Signal<ActiveCorpus>>();
+    let mut corpora = use_signal(|| Vec::<api::CorpusEntry>::new());
+    let mut show_corpus_dropdown = use_signal(|| false);
+    let _corpus_res = use_resource(move || async move {
+        let _ = active_corpus.read().slug().to_string(); // reactive dep
+        if let Ok(list) = api::fetch_corpora().await {
+            corpora.set(list);
+        }
+    });
+
     // ─── Info modal signals ───────────────────────────────────
     let mut show_mode_info = use_signal(|| false);
     let mut show_target_info = use_signal(|| false);
@@ -59,7 +70,7 @@ pub fn ConfigChunker() -> Element {
     let mut show_centroid_info = use_signal(|| false);
     let mut show_pipeline_stages_info = use_signal(|| false);
 
-    // Load config on mount
+    // Load global config on mount (used as defaults before per-corpus overrides are known).
     use_effect(move || {
         spawn(async move {
             if let Ok(resp) = api::fetch_chunk_config().await {
@@ -86,31 +97,78 @@ pub fn ConfigChunker() -> Element {
         });
     });
 
-    // Save handler
+    // Re-load whenever the active corpus changes: apply per-corpus overrides on top of globals.
+    let _per_corpus_res = use_resource(move || async move {
+        let slug = active_corpus.read().slug().to_string();
+        // Re-fetch global base first so switching back to "default" resets correctly.
+        let (global_mode, global_target, global_min, global_max, global_overlap,
+             global_threshold, global_cp_en, global_cp_tok, global_stages) =
+            if let Ok(resp) = api::fetch_chunk_config().await {
+                let c = resp.chunker_config;
+                let has_lw  = c.pipeline_stages.split(',').any(|s| s.trim() == "lw");
+                let has_sem = c.pipeline_stages.split(',').any(|s| s.trim() == "sem");
+                let preset = match (has_lw, has_sem) {
+                    (true,  true)  => "lw_sent_sem".to_string(),
+                    (false, true)  => "sent_sem".to_string(),
+                    _              => "lw_sent".to_string(),
+                };
+                (c.mode, c.target_size, c.min_size, c.max_size, c.overlap,
+                 c.semantic_similarity_threshold as f64,
+                 c.context_prefix_enabled, c.context_prefix_tokens, preset)
+            } else {
+                return;
+            };
+
+        // Apply per-corpus overrides.
+        if let Ok(s) = api::fetch_corpus_settings(&slug).await {
+            let cs = s.settings;
+            mode.set(cs.chunker_mode.unwrap_or(global_mode));
+            target_size.set(cs.target_size.unwrap_or(global_target));
+            min_size.set(cs.min_size.unwrap_or(global_min));
+            max_size.set(cs.max_size.unwrap_or(global_max));
+            overlap.set(cs.overlap.unwrap_or(global_overlap));
+            semantic_threshold.set(cs.semantic_similarity_threshold.unwrap_or(global_threshold));
+            context_prefix_enabled.set(cs.context_prefix_enabled.unwrap_or(global_cp_en));
+            context_prefix_tokens.set(cs.context_prefix_tokens.unwrap_or(global_cp_tok));
+            if let Some(stages_raw) = cs.pipeline_stages {
+                let has_lw  = stages_raw.split(',').any(|s| s.trim() == "lw");
+                let has_sem = stages_raw.split(',').any(|s| s.trim() == "sem");
+                pipeline_preset.set(match (has_lw, has_sem) {
+                    (true,  true)  => "lw_sent_sem".to_string(),
+                    (false, true)  => "sent_sem".to_string(),
+                    _              => "lw_sent".to_string(),
+                });
+            } else {
+                pipeline_preset.set(global_stages);
+            }
+        }
+    });
+
+    // Save handler — writes per-corpus overrides; triggers automatic reindex.
     let save_config = move |_| {
         spawn(async move {
             saving.set(true);
             save_message.set(None);
+            let slug = active_corpus.read().slug().to_string();
             let stages = match pipeline_preset().as_str() {
-                "lw_sent"    => "lw,sent".to_string(),
-                "sent_sem"   => "sent,sem".to_string(),
-                _            => "lw,sent,sem".to_string(),
+                "lw_sent"  => "lw,sent".to_string(),
+                "sent_sem" => "sent,sem".to_string(),
+                _          => "lw,sent,sem".to_string(),
             };
-            let payload = api::ChunkCommitRequest {
-                target_size: target_size(),
-                min_size: min_size(),
-                max_size: max_size(),
-                overlap: overlap(),
-                semantic_similarity_threshold: Some(semantic_threshold() as f32),
-                mode: Some(mode()),
-                clean_html: None,
-                clean_unicode: None,
+            let settings = api::CorpusSettings {
+                chunker_mode: Some(mode()),
+                target_size: Some(target_size()),
+                min_size: Some(min_size()),
+                max_size: Some(max_size()),
+                overlap: Some(overlap()),
+                semantic_similarity_threshold: Some(semantic_threshold()),
                 context_prefix_enabled: Some(context_prefix_enabled()),
                 context_prefix_tokens: Some(context_prefix_tokens()),
                 pipeline_stages: Some(stages),
+                ..Default::default()
             };
-            match api::commit_chunk_config(&payload).await {
-                Ok(resp) => save_message.set(Some(resp.message)),
+            match api::patch_corpus_settings(&slug, &settings).await {
+                Ok(()) => save_message.set(Some(format!("Saved for corpus '{slug}'"))),
                 Err(e) => save_message.set(Some(format!("Error: {e}"))),
             }
             saving.set(false);
@@ -131,6 +189,56 @@ pub fn ConfigChunker() -> Element {
             }
 
             ConfigNav { active: ConfigTab::Chunker }
+
+            // ─── CORPUS SELECTOR ───────────────────────────────────────
+            Panel { title: None, refresh: None,
+                div { class: "flex items-center gap-3 flex-wrap",
+                    span { class: "text-xs text-gray-400 whitespace-nowrap", "Corpus" }
+                    div { class: "relative",
+                        button {
+                            class: "flex items-center gap-1 px-2 py-1 rounded text-xs font-mono",
+                            style: "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6); color: white;",
+                            onclick: move |_| show_corpus_dropdown.set(!show_corpus_dropdown()),
+                            "{active_corpus.read().slug()}"
+                            span { class: "text-xs opacity-60 ml-1",
+                                if show_corpus_dropdown() { "▲" } else { "▼" }
+                            }
+                        }
+                        if show_corpus_dropdown() {
+                            div {
+                                class: "absolute left-0 mt-1 flex flex-col gap-0.5 z-20 p-1 rounded-lg",
+                                style: "background-color: #1f2937; border: 1px solid rgba(255,255,255,0.12); min-width: 8rem;",
+                                for corpus in corpora.read().clone() {
+                                    {
+                                        let slug_sel = corpus.slug.clone();
+                                        let is_active = corpus.slug == active_corpus.read().slug();
+                                        rsx! {
+                                            div {
+                                                class: "flex items-center px-2 py-1 rounded cursor-pointer",
+                                                style: if is_active {
+                                                    "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6);"
+                                                } else {
+                                                    "background-color: transparent; border: 1px solid transparent;"
+                                                },
+                                                onclick: move |_| {
+                                                    active_corpus.with_mut(|ac| ac.0 = slug_sel.clone());
+                                                    show_corpus_dropdown.set(false);
+                                                },
+                                                span {
+                                                    class: "text-xs font-mono",
+                                                    style: if is_active { "color: white;" } else { "color: #d1d5db;" },
+                                                    "{corpus.slug}"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    span { class: "text-xs text-gray-400", "· selection shared with home & monitor" }
+                }
+            }
 
             // ─── HEADER TILE ───────────────────────────────────────────
             Panel { title: None, refresh: None,
@@ -163,7 +271,7 @@ pub fn ConfigChunker() -> Element {
                             }
                             Link {
                                 to: Route::ConfigEmbedding {},
-                                class: "text-xs text-gray-500 hover:text-cyan-400",
+                                class: "text-xs text-gray-400 hover:text-cyan-400",
                                 "configure →"
                             }
                         }
@@ -199,7 +307,7 @@ pub fn ConfigChunker() -> Element {
                             // Semantic threshold — active in semantic / pipeline modes
                             div { class: PARAM_BLOCK_CLASS,
                                 label {
-                                    class: if is_semantic { PARAM_LABEL_CLASS } else { "text-gray-600 whitespace-nowrap" },
+                                    class: if is_semantic { PARAM_LABEL_CLASS } else { "text-gray-500 whitespace-nowrap" },
                                     "SEMANTIC_SIMILARITY_THRESHOLD"
                                 }
                                 div { class: "flex items-center gap-2",
@@ -229,7 +337,7 @@ pub fn ConfigChunker() -> Element {
                                     }
                                 }
                                 if !is_semantic {
-                                    span { class: "text-xs text-gray-600 italic",
+                                    span { class: "text-xs text-gray-400 italic",
                                         "Only active in Semantic and Pipeline modes"
                                     }
                                 }
@@ -265,7 +373,7 @@ pub fn ConfigChunker() -> Element {
                                             "lw → sent → sem — Best quality, highest cost"
                                         }
                                     }
-                                    span { class: "text-xs text-gray-500 mt-1",
+                                    span { class: "text-xs text-gray-400 mt-1",
                                         match pipeline_preset().as_str() {
                                             "lw_sent"  => "Structural paragraph splits → sentence boundary refinement. No embedding calls.",
                                             "sent_sem" => "Sentence boundaries → semantic topic merging. Good for content without clear headings.",
@@ -393,15 +501,9 @@ pub fn ConfigChunker() -> Element {
                             }
                         }
                     }
-                }
-            }
-
-            // ─── CONTEXT PREFIX ───────────────────────────────────────
-            Panel { title: None, refresh: None,
-                div { class: "flex flex-wrap gap-8",
 
                     // ─── CONTEXT PREFIX ───────────────────────────────────
-                    div { class: "rounded border border-gray-600 p-4 flex-1 min-w-64",
+                    div { class: "rounded border border-gray-600 p-4 flex-none",
                         span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Context Prefix" }
                         div { class: PARAM_COLUMN_CLASS,
 
@@ -458,23 +560,23 @@ pub fn ConfigChunker() -> Element {
             Panel { title: None, refresh: None,
                 div { class: "flex flex-col gap-2",
                     span { class: "text-sm text-gray-300 font-semibold", "Current .env values" }
-                    span { class: "text-xs text-gray-500 italic mb-1",
+                    span { class: "text-xs text-gray-400 italic mb-1",
                         "Read-only reference — edit .env and restart to set startup defaults."
                     }
                     div { class: "text-xs font-mono text-gray-400 space-y-1 bg-gray-900 rounded p-3 border border-gray-700",
-                        div { class: "text-gray-500", "# Mode & size" }
+                        div { class: "text-gray-400", "# Mode & size" }
                         div { "CHUNKER_MODE={mode()}" }
                         div { "CHUNK_TARGET_SIZE={target_size()}" }
                         div { "CHUNK_MIN_SIZE={min_size()}" }
                         div { "CHUNK_MAX_SIZE={max_size()}" }
                         div { "CHUNK_OVERLAP={overlap()}" }
-                        div { class: "text-gray-500 mt-1", "# Semantic" }
+                        div { class: "text-gray-400 mt-1", "# Semantic" }
                         div { "SEMANTIC_SIMILARITY_THRESHOLD={semantic_threshold()}" }
-                        div { class: "text-gray-500 mt-1", "# Context prefix" }
+                        div { class: "text-gray-400 mt-1", "# Context prefix" }
                         div { "CHUNK_CONTEXT_PREFIX={context_prefix_enabled()}" }
                         div { "CHUNK_CONTEXT_PREFIX_TOKENS={context_prefix_tokens()}" }
                         if mode() == "pipeline" {
-                            div { class: "text-gray-500 mt-1", "# Pipeline" }
+                            div { class: "text-gray-400 mt-1", "# Pipeline" }
                             div {
                                 {
                                     let stages = match pipeline_preset().as_str() {
@@ -519,7 +621,7 @@ pub fn ConfigChunker() -> Element {
                             p { class: "text-gray-300 mb-2",
                                 "Splits strictly on line boundaries. No merging, no overlap, no size control. Every line becomes exactly one chunk."
                             }
-                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2",
+                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
                                     p { class: "text-green-400 font-semibold mb-1", "Strengths" }
                                     ul { class: "space-y-0.5 text-gray-400",
@@ -535,7 +637,57 @@ pub fn ConfigChunker() -> Element {
                                     }
                                 }
                             }
-                            p { class: "text-xs text-gray-500 mt-2 italic",
+                            div { class: "overflow-x-auto",
+                                table { class: "w-full text-xs border-collapse",
+                                    thead {
+                                        tr { class: "border-b border-gray-600",
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Corpus type" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Properties" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Optimal use case" }
+                                            th { class: "text-left py-1 text-gray-400 font-semibold", "Failure mode" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Log files" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Line-based, atomic records" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Fast ingestion; perfect for logs" }
+                                            td { class: "py-1 text-orange-400", "No semantic coherence" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "CSV files" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Structured rows" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Each row is a chunk" }
+                                            td { class: "py-1 text-orange-400", "Mixed cells if merged" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "TSV / NDJSON" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Record-per-line" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Ideal for analytics" }
+                                            td { class: "py-1 text-orange-400", "No context across lines" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Code (single-line)" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Short statements" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Precise atomic units" }
+                                            td { class: "py-1 text-orange-400", "Breaks multi-line functions" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Configuration files" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Key-value lines" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Stable retrieval" }
+                                            td { class: "py-1 text-orange-400", "Comments mixed with logic" }
+                                        }
+                                        tr {
+                                            td { class: "py-1 pr-3 text-gray-200", "System metrics" }
+                                            td { class: "py-1 pr-3 text-gray-400", "One metric per line" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Perfect atomicity" }
+                                            td { class: "py-1 text-orange-400", "No grouping of related metrics" }
+                                        }
+                                    }
+                                }
+                            }
+                            p { class: "text-xs text-gray-400 mt-2 italic",
                                 "Mental model: treat every line as an atomic record."
                             }
                         }
@@ -554,7 +706,7 @@ pub fn ConfigChunker() -> Element {
                                 span { class: "font-mono text-gray-200", ":" }
                                 "). Then enforces min/target/max chunk sizes."
                             }
-                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2",
+                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
                                     p { class: "text-green-400 font-semibold mb-1", "Strengths" }
                                     ul { class: "space-y-0.5 text-gray-400",
@@ -572,7 +724,57 @@ pub fn ConfigChunker() -> Element {
                                     }
                                 }
                             }
-                            p { class: "text-xs text-gray-500 mt-2 italic",
+                            div { class: "overflow-x-auto",
+                                table { class: "w-full text-xs border-collapse",
+                                    thead {
+                                        tr { class: "border-b border-gray-600",
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Corpus type" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Properties" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Optimal use case" }
+                                            th { class: "text-left py-1 text-gray-400 font-semibold", "Failure mode" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Documentation" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Paragraphs + headings" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Preserves structure" }
+                                            td { class: "py-1 text-orange-400", "Paragraphs vary too much" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Articles" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Well-formed prose" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Good default for docs" }
+                                            td { class: "py-1 text-orange-400", "No semantic awareness" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Reports" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Headings + sections" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Stable chunk sizes" }
+                                            td { class: "py-1 text-orange-400", "Long paragraphs overflow" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Blog posts" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Paragraph-based" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Good readability" }
+                                            td { class: "py-1 text-orange-400", "Topic shifts undetected" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Markdown docs" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Headings + lists" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Respects layout" }
+                                            td { class: "py-1 text-orange-400", "No sentence-level control" }
+                                        }
+                                        tr {
+                                            td { class: "py-1 pr-3 text-gray-200", "Technical notes" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Short paragraphs" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Good balance" }
+                                            td { class: "py-1 text-orange-400", "No topic detection" }
+                                        }
+                                    }
+                                }
+                            }
+                            p { class: "text-xs text-gray-400 mt-2 italic",
                                 "Mental model: paragraph-aware chunking with simple heuristics."
                             }
                         }
@@ -586,7 +788,7 @@ pub fn ConfigChunker() -> Element {
                             p { class: "text-gray-300 mb-2",
                                 "Splits on sentence boundaries (. ! ?), accumulates until target_size, hard-flushes at max_size, then carries overlap sentences into the next chunk."
                             }
-                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2",
+                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
                                     p { class: "text-green-400 font-semibold mb-1", "Strengths" }
                                     ul { class: "space-y-0.5 text-gray-400",
@@ -604,7 +806,57 @@ pub fn ConfigChunker() -> Element {
                                     }
                                 }
                             }
-                            p { class: "text-xs text-gray-500 mt-2 italic",
+                            div { class: "overflow-x-auto",
+                                table { class: "w-full text-xs border-collapse",
+                                    thead {
+                                        tr { class: "border-b border-gray-600",
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Corpus type" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Properties" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Optimal use case" }
+                                            th { class: "text-left py-1 text-gray-400 font-semibold", "Failure mode" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Narrative text" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Long-range meaning" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Smooth coherence" }
+                                            td { class: "py-1 text-orange-400", "Blind to topic shifts" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Essays" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Explanatory flow" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Good for reasoning" }
+                                            td { class: "py-1 text-orange-400", "Overlaps may be noisy" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Story-like docs" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Sequential meaning" }
+                                            td { class: "py-1 pr-3 text-gray-400", "High recall" }
+                                            td { class: "py-1 text-orange-400", "Expensive vs lightweight" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Explanations" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Tutorial-like text" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Stable semantic units" }
+                                            td { class: "py-1 text-orange-400", "Sentence boundaries imperfect" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Conversational prose" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Long sentences" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Better than paragraph-based" }
+                                            td { class: "py-1 text-orange-400", "Still no topic detection" }
+                                        }
+                                        tr {
+                                            td { class: "py-1 pr-3 text-gray-200", "Knowledge articles" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Mid-length prose" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Good for QA" }
+                                            td { class: "py-1 text-orange-400", "Weak on multi-topic docs" }
+                                        }
+                                    }
+                                }
+                            }
+                            p { class: "text-xs text-gray-400 mt-2 italic",
                                 "Mental model: sentence-first chunking with size control and overlap."
                             }
                         }
@@ -618,7 +870,7 @@ pub fn ConfigChunker() -> Element {
                             p { class: "text-gray-300 mb-2",
                                 "Embeds text progressively and detects topic shifts via cosine similarity against the running chunk centroid. Splits when similarity drops below the threshold. Produces variable-length, topic-coherent chunks."
                             }
-                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2",
+                            div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
                                     p { class: "text-green-400 font-semibold mb-1", "Strengths" }
                                     ul { class: "space-y-0.5 text-gray-400",
@@ -636,7 +888,57 @@ pub fn ConfigChunker() -> Element {
                                     }
                                 }
                             }
-                            p { class: "text-xs text-gray-500 mt-2 italic",
+                            div { class: "overflow-x-auto",
+                                table { class: "w-full text-xs border-collapse",
+                                    thead {
+                                        tr { class: "border-b border-gray-600",
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Corpus type" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Properties" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Optimal use case" }
+                                            th { class: "text-left py-1 text-gray-400 font-semibold", "Failure mode" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Long reports" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Multiple topics" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Topic-coherent chunks" }
+                                            td { class: "py-1 text-orange-400", "Slow; uneven sizes" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Books" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Complex structure" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Best retrieval quality" }
+                                            td { class: "py-1 text-orange-400", "Threshold tuning required" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Research notes" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Topic clusters" }
+                                            td { class: "py-1 pr-3 text-gray-400", "High semantic purity" }
+                                            td { class: "py-1 text-orange-400", "Over-splitting possible" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Whitepapers" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Long conceptual arcs" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Ideal for reasoning" }
+                                            td { class: "py-1 text-orange-400", "Embedding cost high" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Multi-topic articles" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Shifting themes" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Detects topic drift" }
+                                            td { class: "py-1 text-orange-400", "Chunk sizes unpredictable" }
+                                        }
+                                        tr {
+                                            td { class: "py-1 pr-3 text-gray-200", "Enterprise docs" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Heterogeneous content" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Best accuracy" }
+                                            td { class: "py-1 text-orange-400", "Slowest mode" }
+                                        }
+                                    }
+                                }
+                            }
+                            p { class: "text-xs text-gray-400 mt-2 italic",
                                 "Mental model: chunk where the meaning changes, not where the text layout changes."
                             }
                         }
@@ -647,8 +949,58 @@ pub fn ConfigChunker() -> Element {
                                 span { class: "text-xs font-mono font-semibold text-cyan-300 bg-cyan-900/30 border border-cyan-700 rounded px-2 py-0.5", "Pipeline" }
                                 span { class: "text-xs text-gray-400", "— multi-stage cascade" }
                             }
-                            p { class: "text-gray-300",
+                            p { class: "text-gray-300 mb-2",
                                 "Runs two or three stages in sequence (configurable below). Each stage refines the output of the previous one. Highest quality; most embedding calls."
+                            }
+                            div { class: "overflow-x-auto",
+                                table { class: "w-full text-xs border-collapse",
+                                    thead {
+                                        tr { class: "border-b border-gray-600",
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Corpus type" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Properties" }
+                                            th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Optimal use case" }
+                                            th { class: "text-left py-1 text-gray-400 font-semibold", "Failure mode" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Mixed content" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Prose + tables + code" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Highest quality" }
+                                            td { class: "py-1 text-orange-400", "Most expensive" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Technical manuals" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Steps + prose + diagrams" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Multi-stage refinement" }
+                                            td { class: "py-1 text-orange-400", "Overkill for simple docs" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "API documentation" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Code + prose" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Perfect separation" }
+                                            td { class: "py-1 text-orange-400", "Requires config tuning" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Legal + commentary" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Statutes + analysis" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Structure + semantics" }
+                                            td { class: "py-1 text-orange-400", "Slow indexing" }
+                                        }
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-1 pr-3 text-gray-200", "Scientific papers" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Sections + figures" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Combines structure + meaning" }
+                                            td { class: "py-1 text-orange-400", "Complex pipeline" }
+                                        }
+                                        tr {
+                                            td { class: "py-1 pr-3 text-gray-200", "Enterprise knowledge bases" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Highly varied formats" }
+                                            td { class: "py-1 pr-3 text-gray-400", "Best overall retrieval" }
+                                            td { class: "py-1 text-orange-400", "High compute cost" }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -707,6 +1059,14 @@ pub fn ConfigChunker() -> Element {
                             li { span { class: "text-gray-400", "Story-like or explanatory text → " } span { class: "text-cyan-300 font-mono", "Sentence" } }
                             li { span { class: "text-gray-400", "Long, complex, multi-topic documents → " } span { class: "text-cyan-300 font-mono", "Semantic" } }
                             li { span { class: "text-gray-400", "Mixed content needing highest quality → " } span { class: "text-cyan-300 font-mono", "Pipeline" } }
+                        }
+                    }
+                    div { class: "mt-6 pt-4 border-t border-gray-700",
+                        button {
+                            class: "btn btn-sm w-full text-white",
+                            style: "background-color: #7C2A02; border-color: #7C2A02;",
+                            onclick: move |_| show_mode_info.set(false),
+                            "Got it"
                         }
                     }
                 }
@@ -925,7 +1285,7 @@ pub fn ConfigChunker() -> Element {
                             }
                         }
 
-                        p { class: "text-xs text-gray-500", "Default: 0.75." }
+                        p { class: "text-xs text-gray-400", "Default: 0.75." }
                     }
                 }
             }
@@ -1067,7 +1427,7 @@ pub fn ConfigChunker() -> Element {
                             }
                         }
 
-                        div { class: "text-xs text-gray-500 pt-2 border-t border-gray-700",
+                        div { class: "text-xs text-gray-400 pt-2 border-t border-gray-700",
                             "The semantic similarity threshold (SEMANTIC_SIMILARITY_THRESHOLD) controls flush sensitivity in both "
                             "sent → sem and lw → sent → sem. It has no effect in lw → sent."
                         }

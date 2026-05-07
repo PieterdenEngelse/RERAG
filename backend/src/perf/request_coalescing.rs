@@ -202,7 +202,7 @@ impl std::error::Error for CoalesceError {}
 /// Batch request coalescer
 ///
 /// Collects multiple requests and executes them as a batch
-#[allow(dead_code)]
+#[allow(dead_code, clippy::type_complexity)]
 pub struct BatchCoalescer<K, V> {
     /// Pending items
     pending: Arc<Mutex<Vec<(K, oneshot::Sender<V>)>>>,

@@ -272,6 +272,7 @@ impl AgentMemory {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_manual_observation(
         &self,
         entry_type: &str,
@@ -403,6 +404,7 @@ impl AgentMemory {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_manual_observation(
         &self,
         id: &str,
@@ -477,6 +479,7 @@ impl AgentMemory {
         Ok(deleted > 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn search_manual_observations(
         &self,
         query: &str,

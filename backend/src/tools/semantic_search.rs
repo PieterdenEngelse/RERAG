@@ -17,6 +17,12 @@ pub struct SemanticSearchTool {
     total_count: usize,
 }
 
+impl Default for SemanticSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SemanticSearchTool {
     pub fn new() -> Self {
         Self {

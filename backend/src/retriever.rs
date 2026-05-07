@@ -1,6 +1,5 @@
 use crate::cache::redis_cache::RedisCache;
 use crate::perf::io_uring as async_io;
-use std::hash::{Hash, Hasher};
 use fs2;
 use lru::LruCache;
 use memmap2::Mmap;
@@ -10,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -275,6 +275,7 @@ pub async fn reindex_atomic(
     let lock_path = pm.locks_dir().join("index.lock");
     let _lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_path)?;
@@ -320,6 +321,7 @@ pub async fn reindex_atomic(
     );
 
     // Use async io_uring-backed indexing for 2-3x faster file reads
+    let global_cfg = crate::db::chunk_settings::global_config();
     let chunker = crate::index::default_chunker(crate::config::ChunkerMode::Fixed);
     let indexed_chunks = crate::index::index_all_documents_async(
         &mut tmp_ret,
@@ -327,9 +329,10 @@ pub async fn reindex_atomic(
         crate::config::ChunkerMode::Fixed,
         chunker.as_ref(),
         "default",
+        global_cfg.context_prefix_enabled,
     )
     .await
-    .map_err(|e| RetrieverError::IndexError(e))?;
+    .map_err(RetrieverError::IndexError)?;
 
     info!(
         "Reindex: indexing completed, {} chunks indexed via {}",
@@ -622,7 +625,9 @@ impl Retriever {
                                 .unwrap_or("")
                                 .to_string();
                             if !did.is_empty() && !cnt.is_empty() {
-                                retriever.content_to_chunk_id.insert(content_hash(&cnt), did.clone());
+                                retriever
+                                    .content_to_chunk_id
+                                    .insert(content_hash(&cnt), did.clone());
                                 retriever.doc_id_to_content.insert(did, cnt);
                             }
                         }
@@ -803,6 +808,13 @@ impl Retriever {
             return Err(RetrieverError::IndexError(
                 "Batch already in progress".to_string(),
             ));
+        }
+        // Unconditionally remove any stale writer lock left by a previous crash.
+        // Safe to delete: Tantivy's writer lock is a plain marker file, not an OS lock.
+        let lock_path = std::path::Path::new(&self.index_dir_path).join(".tantivy-writer.lock");
+        if lock_path.exists() {
+            let _ = std::fs::remove_file(&lock_path);
+            debug!(path = %lock_path.display(), "Removed stale Tantivy writer lock");
         }
         let writer = self.index.writer(256_000_000)?;
         // Configure merge policy to auto-compact segments
@@ -1227,8 +1239,8 @@ impl Retriever {
 
     pub fn load_chunk_meta(&mut self) {
         let path = self.meta_file_path();
-        match fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str(&json) {
+        if let Ok(json) = fs::read_to_string(&path) {
+            match serde_json::from_str(&json) {
                 Ok(map) => {
                     self.doc_id_to_meta = map;
                     debug!(
@@ -1238,13 +1250,12 @@ impl Retriever {
                     );
                 }
                 Err(e) => tracing::warn!("Failed to parse chunk meta from '{}': {}", path, e),
-            },
-            Err(_) => {} // file absent on first run — silent
+            }
         }
     }
 
-    pub fn rerank_by_similarity(&self, _query: &str, candidates: &Vec<String>) -> Vec<String> {
-        let mut results = candidates.clone();
+    pub fn rerank_by_similarity(&self, _query: &str, candidates: &[String]) -> Vec<String> {
+        let mut results = candidates.to_vec();
         results.reverse();
         results
     }
@@ -1273,7 +1284,7 @@ impl Retriever {
         Ok(scored_candidates)
     }
 
-    pub fn summarize_chunks(&self, _query: &str, candidates: &Vec<String>) -> String {
+    pub fn summarize_chunks(&self, _query: &str, candidates: &[String]) -> String {
         format!("Summary for {} chunks", candidates.len())
     }
 
@@ -2186,24 +2197,22 @@ impl Retriever {
                     e
                 )));
             }
-        } else {
-            if let Some(parent) = Path::new(&self.vector_file_path).parent() {
-                if !parent.exists() {
-                    return Err(RetrieverError::IoError(format!(
-                        "Vector file parent directory does not exist: {:?}",
-                        parent
-                    )));
-                }
-                let temp_file = parent.join(".health_check_test");
-                if let Err(e) = std::fs::File::create(&temp_file) {
-                    let _ = std::fs::remove_file(&temp_file);
-                    return Err(RetrieverError::IoError(format!(
-                        "Cannot write to vector file directory: {}",
-                        e
-                    )));
-                }
-                let _ = std::fs::remove_file(&temp_file);
+        } else if let Some(parent) = Path::new(&self.vector_file_path).parent() {
+            if !parent.exists() {
+                return Err(RetrieverError::IoError(format!(
+                    "Vector file parent directory does not exist: {:?}",
+                    parent
+                )));
             }
+            let temp_file = parent.join(".health_check_test");
+            if let Err(e) = std::fs::File::create(&temp_file) {
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(RetrieverError::IoError(format!(
+                    "Cannot write to vector file directory: {}",
+                    e
+                )));
+            }
+            let _ = std::fs::remove_file(&temp_file);
         }
 
         self.check_disk_space(100 * 1024 * 1024)?;
@@ -2352,6 +2361,7 @@ impl Drop for Retriever {
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2898,7 +2908,7 @@ impl Retriever {
 
         // Try PQ (16x memory reduction)
         if let Some(ref pq) = self.pq_index {
-            if pq.len() > 0 {
+            if !pq.is_empty() {
                 let results = pq.search(query, top_k);
                 return results
                     .into_iter()
@@ -2913,7 +2923,7 @@ impl Retriever {
 
         // Try FP16 (2x memory reduction)
         if let Some(ref store) = self.fp16_store {
-            if store.len() > 0 {
+            if !store.is_empty() {
                 let results = store.search(query, top_k);
                 return results
                     .into_iter()

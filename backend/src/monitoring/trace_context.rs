@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 thread_local! {
-    static TRACE_ID: RefCell<Option<String>> = RefCell::new(None);
+    static TRACE_ID: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn set_trace_id(trace_id: String) {

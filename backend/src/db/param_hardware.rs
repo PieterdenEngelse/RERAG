@@ -437,6 +437,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn validate_rejects_invalid_values() {
         let mut cfg = HardwareParams::default();
         cfg.num_thread = 0;

@@ -88,13 +88,14 @@ pub(crate) async fn upload_document_inner(
             // Stream each file: extract → chunk+embed → index → drop.
             // Never accumulate all prepared docs in RAM simultaneously.
             let chunker_mode = config.chunker_mode;
+            #[allow(clippy::type_complexity)]
             let mut graph_index_tasks: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
 
             for filename in &uploaded_files {
                 let path = Path::new(&upload_dir).join(filename);
 
                 // Phase 1: Extract IR (I/O-bound, outside mutex)
-                let ir = index::extract_ir_async(&path).await;
+                let ir = index::extract_ir_async(&path, "default").await;
                 let ir = match ir {
                     Some(ir) => ir,
                     None => {
@@ -109,8 +110,10 @@ pub(crate) async fn upload_document_inner(
                 // Phase 2: Chunk + embed (CPU-bound, thread pool, outside mutex)
                 let path_clone = path.clone();
                 let prepared = tokio::task::spawn_blocking(move || {
+                    let global = crate::db::chunk_settings::global_config();
+                    let cp_enabled = global.context_prefix_enabled;
                     let chunker = crate::index::default_chunker(chunker_mode);
-                    index::prepare_doc(&path_clone, &ir, chunker_mode, chunker.as_ref(), "default")
+                    index::prepare_doc(&path_clone, &ir, chunker_mode, chunker.as_ref(), "default", cp_enabled)
                 })
                 .await
                 .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
@@ -124,7 +127,7 @@ pub(crate) async fn upload_document_inner(
                             );
                             continue;
                         }
-                        match index::index_prepared_doc(&mut *retriever, prepared) {
+                        match index::index_prepared_doc(&mut retriever, prepared) {
                             Ok((chunk_count, graph_chunks)) if chunk_count > 0 => {
                                 if let Err(err) = retriever.commit() {
                                     index_errors.push(json!({
@@ -236,6 +239,8 @@ pub async fn delete_document(path: web::Path<String>) -> Result<HttpResponse, Er
                     }
                 }
             }
+            crate::monitoring::forget_extraction_file(&filename);
+            crate::monitoring::forget_canon_file(&filename, "default");
 
             Ok(HttpResponse::Ok().json(json!({
                 "status": "success",
@@ -274,13 +279,15 @@ pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpRespons
     if let Some(retriever) = RETRIEVER.get() {
         let mut retriever = retriever.lock().unwrap();
         let upload_dir = default_upload_dir();
+        let global_cfg = crate::db::chunk_settings::global_config();
         let chunker = crate::index::default_chunker(config.chunker_mode);
         let res = index::index_all_documents(
-            &mut *retriever,
+            &mut retriever,
             &upload_dir,
             config.chunker_mode,
             chunker.as_ref(),
             "default",
+            global_cfg.context_prefix_enabled,
         );
         let duration_ms = start.elapsed().as_millis() as u64;
         let vectors = retriever.metrics.total_vectors as u64;
@@ -338,6 +345,7 @@ pub async fn reindex_handler(config: web::Data<ApiConfig>) -> Result<HttpRespons
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 pub(crate) fn launch_async_reindex_job(
     config: web::Data<ApiConfig>,
 ) -> Result<String, (StatusCode, String)> {
@@ -367,103 +375,110 @@ pub(crate) fn launch_async_reindex_job(
 
     let job_id_clone = job_id.clone();
     let jobs_map = jobs.clone();
-    let retriever_handle = RETRIEVER.get().map(|h| Arc::clone(h));
+    let retriever_handle = RETRIEVER.get().map(Arc::clone);
     let config_clone = config.clone();
     let upload_dir_for_job = default_upload_dir();
 
-    actix_web::rt::spawn(async move {
-        let start = std::time::Instant::now();
-        let hooks = crate::monitoring::alerting_hooks::AlertingHooksConfig::from_env();
-        if let Some(retriever) = retriever_handle {
-            let mut retriever = retriever.lock().unwrap();
-            {
+    actix_web::rt::spawn(
+        async move {
+            let start = std::time::Instant::now();
+            let hooks = crate::monitoring::alerting_hooks::AlertingHooksConfig::from_env();
+            if let Some(retriever) = retriever_handle {
+                let mut retriever = retriever.lock().unwrap();
+                {
+                    let mut job = jobs_map
+                        .lock()
+                        .unwrap()
+                        .get(&job_id_clone)
+                        .cloned()
+                        .unwrap();
+                    job.status = "running".to_string();
+                    jobs_map.lock().unwrap().insert(job_id_clone.clone(), job);
+                }
+
+                let global_cfg2 = crate::db::chunk_settings::global_config();
+                let chunker = crate::index::default_chunker(config_clone.chunker_mode);
+                let res = index::index_all_documents(
+                    &mut retriever,
+                    &upload_dir_for_job,
+                    config_clone.chunker_mode,
+                    chunker.as_ref(),
+                    "default",
+                    global_cfg2.context_prefix_enabled,
+                );
+
                 let mut job = jobs_map
                     .lock()
                     .unwrap()
                     .get(&job_id_clone)
                     .cloned()
                     .unwrap();
-                job.status = "running".to_string();
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let vectors = retriever.metrics.total_vectors as u64;
+                let mappings = retriever.metrics.total_documents_indexed as u64;
+                drop(retriever); // Release lock before async graph rebuild
+
+                match res {
+                    Ok(_) => {
+                        job.status = "completed".to_string();
+                        job.completed_at = Some(Utc::now().to_rfc3339());
+                        job.vectors_indexed = Some(vectors as usize);
+                        job.mappings_indexed = Some(mappings as usize);
+                        let event =
+                            crate::monitoring::alerting_hooks::ReindexCompletionEvent::success(
+                                duration_ms,
+                                vectors,
+                                mappings,
+                            );
+                        crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+                    }
+                    Err(ref e) => {
+                        job.status = "failed".to_string();
+                        job.completed_at = Some(Utc::now().to_rfc3339());
+                        job.error = Some(e.to_string());
+                        let event =
+                            crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(
+                                duration_ms,
+                                vectors,
+                                mappings,
+                            );
+                        crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+                    }
+                }
                 jobs_map.lock().unwrap().insert(job_id_clone.clone(), job);
-            }
-
-            let chunker = crate::index::default_chunker(config_clone.chunker_mode);
-            let res = index::index_all_documents(
-                &mut *retriever,
-                &upload_dir_for_job,
-                config_clone.chunker_mode,
-                chunker.as_ref(),
-                "default",
-            );
-
-            let mut job = jobs_map
-                .lock()
-                .unwrap()
-                .get(&job_id_clone)
-                .cloned()
-                .unwrap();
-            let duration_ms = start.elapsed().as_millis() as u64;
-            let vectors = retriever.metrics.total_vectors as u64;
-            let mappings = retriever.metrics.total_documents_indexed as u64;
-            drop(retriever); // Release lock before async graph rebuild
-
-            match res {
-                Ok(_) => {
-                    job.status = "completed".to_string();
-                    job.completed_at = Some(Utc::now().to_rfc3339());
-                    job.vectors_indexed = Some(vectors as usize);
-                    job.mappings_indexed = Some(mappings as usize);
-                    let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::success(
-                        duration_ms,
-                        vectors,
-                        mappings,
+                // v1.3.0: Rebuild knowledge graph after successful reindex
+                if res.is_ok() {
+                    let graph_result = crate::api::graph_routes::rebuild_graph_from_index().await;
+                    info!(
+                        "Post-reindex graph rebuild: {} docs, {} chunks",
+                        graph_result.documents_processed, graph_result.chunks_processed
                     );
-                    crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
+                    // Auto-export petgraph after graph rebuild
+                    tokio::spawn(async move {
+                        crate::api::graph_routes::export_and_reload_graph().await;
+                    });
                 }
-                Err(ref e) => {
-                    job.status = "failed".to_string();
-                    job.completed_at = Some(Utc::now().to_rfc3339());
-                    job.error = Some(e.to_string());
-                    let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(
-                        duration_ms,
-                        vectors,
-                        mappings,
-                    );
-                    crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
-                }
+            } else {
+                let mut job = jobs_map
+                    .lock()
+                    .unwrap()
+                    .get(&job_id_clone)
+                    .cloned()
+                    .unwrap();
+                job.status = "failed".to_string();
+                job.completed_at = Some(Utc::now().to_rfc3339());
+                job.error = Some("Retriever not initialized".to_string());
+                jobs_map
+                    .lock()
+                    .unwrap()
+                    .insert(job_id_clone.clone(), job.clone());
+                let event =
+                    crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(0, 0, 0);
+                crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
             }
-            jobs_map.lock().unwrap().insert(job_id_clone.clone(), job);
-            // v1.3.0: Rebuild knowledge graph after successful reindex
-            if res.is_ok() {
-                let graph_result = crate::api::graph_routes::rebuild_graph_from_index().await;
-                info!(
-                    "Post-reindex graph rebuild: {} docs, {} chunks",
-                    graph_result.documents_processed, graph_result.chunks_processed
-                );
-                // Auto-export petgraph after graph rebuild
-                tokio::spawn(async move {
-                    crate::api::graph_routes::export_and_reload_graph().await;
-                });
-            }
-        } else {
-            let mut job = jobs_map
-                .lock()
-                .unwrap()
-                .get(&job_id_clone)
-                .cloned()
-                .unwrap();
-            job.status = "failed".to_string();
-            job.completed_at = Some(Utc::now().to_rfc3339());
-            job.error = Some("Retriever not initialized".to_string());
-            jobs_map
-                .lock()
-                .unwrap()
-                .insert(job_id_clone.clone(), job.clone());
-            let event = crate::monitoring::alerting_hooks::ReindexCompletionEvent::error(0, 0, 0);
-            crate::monitoring::alerting_hooks::send_alert(&hooks, event).await;
-        }
-        REINDEX_IN_PROGRESS.store(false, Ordering::SeqCst);
-    });
+            REINDEX_IN_PROGRESS.store(false, Ordering::SeqCst);
+        },
+    );
 
     Ok(job_id)
 }
@@ -788,6 +803,8 @@ pub(crate) async fn chunk_preview_handler(
         body.text.clone(),
         needs_html_clean,
         needs_unicode_clean,
+        "default",
+        filename,
     );
     let mut chunks = chunker.chunk_text(&preprocessed);
     if config.context_prefix_enabled {

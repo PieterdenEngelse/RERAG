@@ -80,6 +80,12 @@ pub(crate) struct LogsQuery {
 pub(crate) struct ChunkingQuery {
     pub limit: Option<usize>,
     pub capacity: Option<usize>,
+    pub corpus: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct CorpusFilter {
+    pub corpus: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -299,8 +305,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
             Err(_) => {
                 // Retriever mutex is held by an indexing task — respond immediately
                 // rather than blocking for potentially minutes.
-                let msg = message
-                    .unwrap_or_else(|| "Indexing in progress".to_string());
+                let msg = message.unwrap_or_else(|| "Indexing in progress".to_string());
                 log_status_change("busy", &msg);
                 let mut response = json!({
                     "status": "busy",
@@ -861,12 +866,39 @@ pub(crate) struct SetRateLimitEnabledResponse {
     pub message: String,
 }
 
+fn persist_rate_limits(
+    enabled: bool,
+    search_qps: f64,
+    search_burst: f64,
+    upload_qps: f64,
+    upload_burst: f64,
+) {
+    let content = format!(
+        "# Rate limit settings — written by UI\n\
+         RATE_LIMIT_ENABLED={enabled}\n\
+         RATE_LIMIT_SEARCH_QPS={search_qps}\n\
+         RATE_LIMIT_SEARCH_BURST={}\n\
+         RATE_LIMIT_UPLOAD_QPS={upload_qps}\n\
+         RATE_LIMIT_UPLOAD_BURST={}\n",
+        search_burst as u64, upload_burst as u64,
+    );
+    let _ = std::fs::write(".env.rate_limits", content);
+}
+
 pub(crate) async fn set_rate_limit_enabled(
     state: web::Data<RateLimitSharedState>,
     body: web::Json<SetRateLimitEnabledRequest>,
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let new_state = state.limiter.set_enabled(body.enabled);
+    let t = state.limiter.thresholds.snapshot();
+    persist_rate_limits(
+        new_state,
+        t.search_qps,
+        t.search_burst,
+        t.upload_qps,
+        t.upload_burst,
+    );
 
     let message = if new_state {
         "Rate limiter enabled".to_string()
@@ -881,6 +913,48 @@ pub(crate) async fn set_rate_limit_enabled(
         enabled: new_state,
         message,
     }))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct UpdateThresholdsRequest {
+    pub search_qps: Option<f64>,
+    pub search_burst: Option<f64>,
+    pub upload_qps: Option<f64>,
+    pub upload_burst: Option<f64>,
+}
+
+pub(crate) async fn update_rate_limit_thresholds(
+    state: web::Data<RateLimitSharedState>,
+    body: web::Json<UpdateThresholdsRequest>,
+) -> Result<HttpResponse, Error> {
+    let current = state.limiter.thresholds.snapshot();
+    let search_qps = body.search_qps.unwrap_or(current.search_qps).max(0.0);
+    let search_burst = body.search_burst.unwrap_or(current.search_burst).max(0.0);
+    let upload_qps = body.upload_qps.unwrap_or(current.upload_qps).max(0.0);
+    let upload_burst = body.upload_burst.unwrap_or(current.upload_burst).max(0.0);
+
+    state
+        .limiter
+        .thresholds
+        .set(search_qps, search_burst, upload_qps, upload_burst);
+
+    let enabled = state.limiter.is_enabled();
+    persist_rate_limits(enabled, search_qps, search_burst, upload_qps, upload_burst);
+
+    tracing::info!(
+        search_qps,
+        search_burst,
+        upload_qps,
+        upload_burst,
+        "Rate limit thresholds updated"
+    );
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "search_qps": search_qps,
+        "search_burst": search_burst,
+        "upload_qps": upload_qps,
+        "upload_burst": upload_burst,
+    })))
 }
 
 pub(crate) async fn get_recent_logs(query: web::Query<LogsQuery>) -> Result<HttpResponse, Error> {
@@ -991,6 +1065,7 @@ pub(crate) async fn get_ollama_status() -> Result<HttpResponse, Error> {
 }
 
 /// GET /monitoring/docker/inspect?name=<container>
+#[allow(dead_code)]
 pub(crate) async fn get_container_inspect(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, Error> {
@@ -1052,19 +1127,50 @@ pub(crate) async fn get_container_inspect(
     })))
 }
 
-pub(crate) async fn get_parser_stats() -> Result<HttpResponse, Error> {
-    let stats = crate::monitoring::get_extraction_stats();
+pub(crate) async fn get_parser_stats(
+    query: actix_web::web::Query<CorpusFilter>,
+) -> Result<HttpResponse, Error> {
+    let corpus = query.corpus.as_deref().filter(|s| !s.is_empty());
+    let stats = crate::monitoring::get_extraction_stats_for(corpus);
     Ok(HttpResponse::Ok().json(stats))
 }
 
-pub(crate) async fn get_canon_stats() -> Result<HttpResponse, Error> {
-    let stats = crate::monitoring::get_canon_stats();
+pub(crate) async fn get_canon_stats(
+    query: actix_web::web::Query<CorpusFilter>,
+) -> Result<HttpResponse, Error> {
+    let corpus = query.corpus.as_deref().filter(|s| !s.is_empty());
+    let stats = crate::monitoring::get_canon_stats_for(corpus);
     Ok(HttpResponse::Ok().json(stats))
 }
 
-pub(crate) async fn get_chunk_meta_stats() -> Result<HttpResponse, Error> {
-    let (block_types, extractors, total) = if let Some(retriever) = RETRIEVER.get() {
-        retriever.lock().unwrap_or_else(|e| e.into_inner()).chunk_meta_distribution()
+pub(crate) async fn get_preprocess_stats(
+    query: actix_web::web::Query<CorpusFilter>,
+) -> Result<HttpResponse, Error> {
+    let corpus = query.corpus.as_deref().filter(|s| !s.is_empty());
+    let stats = crate::monitoring::get_preprocess_stats(corpus);
+    Ok(HttpResponse::Ok().json(stats))
+}
+
+pub(crate) async fn get_chunk_meta_stats(
+    query: actix_web::web::Query<CorpusFilter>,
+) -> Result<HttpResponse, Error> {
+    let corpus = query.corpus.as_deref().filter(|s| !s.is_empty());
+    let (block_types, extractors, total) = if let Some(slug) = corpus {
+        // Use the corpus-specific retriever from the registry when a filter is set.
+        crate::corpus_registry::get_registry()
+            .and_then(|reg| reg.get(slug))
+            .map(|handle| {
+                handle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .chunk_meta_distribution()
+            })
+            .unwrap_or_default()
+    } else if let Some(retriever) = RETRIEVER.get() {
+        retriever
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .chunk_meta_distribution()
     } else {
         Default::default()
     };

@@ -118,10 +118,10 @@ impl DistributedTracingConfig {
             .install_simple()
             .map_err(|e| {
                 tracing::error!("Failed to initialize OTLP tracer: {}", e);
-                TraceError::Other(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("OTLP initialization failed: {}", e),
-                )))
+                TraceError::Other(Box::new(std::io::Error::other(format!(
+                    "OTLP initialization failed: {}",
+                    e
+                ))))
             })?;
 
         let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
@@ -156,6 +156,12 @@ pub struct SpanContext {
     pub trace_id: String,
     pub span_id: String,
     pub parent_span_id: Option<String>,
+}
+
+impl Default for SpanContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SpanContext {

@@ -26,6 +26,7 @@ pub mod onnx_metrics;
 pub mod otel_config;
 pub mod performance_analysis;
 pub mod pprof;
+pub mod preprocess_stats;
 pub mod rate_limit_middleware;
 pub mod resource_attribution;
 pub mod rig_stats;
@@ -49,26 +50,36 @@ pub use crate::monitoring::metrics::{
 };
 pub use alerting_hooks::{AlertingHooksConfig, ReindexCompletionEvent};
 pub use canon_stats::{
-    get_stats as get_canon_stats, record_embed_ingestion as record_canon_embed_ingestion,
+    flush as flush_canon_stats, forget_file as forget_canon_file, get_stats as get_canon_stats,
+    get_stats_for as get_canon_stats_for, init as init_canon_stats,
+    record_embed_ingestion as record_canon_embed_ingestion,
     record_embed_query as record_canon_embed_query, record_file_embed as record_canon_file_embed,
     record_file_index as record_canon_file_index,
     record_index_ingestion as record_canon_index_ingestion,
     record_index_query as record_canon_index_query, record_store as record_canon_store,
-    CallSiteStats, CanonStats,
+    CallSiteStats, CanonStats, StoreRecord,
 };
 pub use chunking_stats::{
-    chunking_logging_enabled, chunking_snapshot_history, latest_chunking_snapshot,
-    record_chunking_snapshot, set_chunking_history_capacity, set_chunking_logging_enabled,
-    ChunkingStatsSnapshot, DetectionInfo,
+    chunking_logging_enabled, chunking_snapshot_history, flush as flush_chunking_stats,
+    init as init_chunking_stats, latest_chunking_snapshot, record_chunking_snapshot,
+    set_chunking_history_capacity, set_chunking_logging_enabled, ChunkingStatsSnapshot,
+    DetectionInfo,
 };
 pub use config::MonitoringConfig;
 pub use extraction_stats::{
-    get_stats as get_extraction_stats, load_history as load_extraction_history,
+    forget_file as forget_extraction_file, get_stats as get_extraction_stats,
+    get_stats_for as get_extraction_stats_for, load_history as load_extraction_history,
     record_format as record_extraction_format, record_ocr_attempted, record_ocr_no_pages,
     record_ocr_no_text, record_ocr_ok, record_ocr_unavailable, ExtractionStats, FileRecord,
 };
 pub use health::HealthStatus;
 pub use histogram_config::HistogramBuckets;
+pub use preprocess_stats::{
+    flush as flush_preprocess_stats, get_stats as get_preprocess_stats,
+    init as init_preprocess_stats, record_html as record_preprocess_html,
+    record_passthrough as record_preprocess_passthrough,
+    record_unicode as record_preprocess_unicode, PreprocessFileRecord, PreprocessStats,
+};
 pub use resource_attribution::{start_resource_attribution, ResourceAttributionConfig};
 pub use tool_alerts::{
     acknowledge_alert, get_alert_config, get_alert_status, get_alerts, get_tool_alerts,

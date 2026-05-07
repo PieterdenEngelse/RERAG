@@ -122,12 +122,12 @@ impl Reranker {
             .collect();
 
         // Apply MMR for diversity
-        let results = self.apply_mmr(scored, top_k);
 
-        results
+        self.apply_mmr(scored, top_k)
     }
 
     /// Calculate re-ranking factors for a candidate
+    #[allow(clippy::field_reassign_with_default)]
     fn calculate_factors(
         &self,
         query: &str,

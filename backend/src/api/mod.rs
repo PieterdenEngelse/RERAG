@@ -11,7 +11,7 @@ use crate::monitoring::config::MonitoringConfig;
 use crate::monitoring::metrics;
 use crate::monitoring::rate_limit_middleware::{MatchKind, RateLimitOptions, RouteRule};
 use crate::retriever::Retriever;
-use crate::security::rate_limiter::{RateLimiter, RateLimiterState};
+use crate::security::rate_limiter::{RateLimiter, RateLimiterState, RuntimeThresholds};
 use crate::tools::calculator::CalculatorTool;
 use crate::tools::entity_extractor::EntityExtractorTool;
 use crate::tools::memory_tool::MemoryTool;
@@ -116,6 +116,13 @@ fn get_jobs_map() -> Arc<Mutex<HashMap<String, AsyncJob>>> {
 // Global retriever handle
 static RETRIEVER: OnceLock<Arc<Mutex<Retriever>>> = OnceLock::new();
 
+// Global rate limiter — shared across all workers so toggle/threshold updates apply everywhere
+static SHARED_RATE_LIMITER: OnceLock<Arc<RateLimiter>> = OnceLock::new();
+
+pub fn get_rate_limiter() -> Option<Arc<RateLimiter>> {
+    SHARED_RATE_LIMITER.get().map(Arc::clone)
+}
+
 // Global EmbeddingService handle for cached query embedding
 static EMBEDDING_SERVICE: OnceLock<Arc<crate::embedder::EmbeddingService>> = OnceLock::new();
 
@@ -124,7 +131,7 @@ pub fn set_embedding_service(svc: Arc<crate::embedder::EmbeddingService>) {
 }
 
 pub fn get_embedding_service() -> Option<Arc<crate::embedder::EmbeddingService>> {
-    EMBEDDING_SERVICE.get().map(|s| Arc::clone(s))
+    EMBEDDING_SERVICE.get().map(Arc::clone)
 }
 
 // Global TokenCounterHandle for exact token counting from GGUF vocab
@@ -133,7 +140,7 @@ pub fn set_token_counter(handle: Arc<crate::gguf_tokenizer::TokenCounterHandle>)
     let _ = TOKEN_COUNTER.set(handle);
 }
 pub fn get_token_counter() -> Option<Arc<crate::gguf_tokenizer::TokenCounterHandle>> {
-    TOKEN_COUNTER.get().map(|h| Arc::clone(h))
+    TOKEN_COUNTER.get().map(Arc::clone)
 }
 
 pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
@@ -141,7 +148,7 @@ pub fn set_retriever_handle(handle: Arc<Mutex<Retriever>>) {
 }
 
 pub fn get_retriever_handle() -> Option<Arc<Mutex<Retriever>>> {
-    RETRIEVER.get().map(|h| Arc::clone(h))
+    RETRIEVER.get().map(Arc::clone)
 }
 
 /// Look up a retriever for a specific corpus slug.
@@ -272,7 +279,7 @@ pub async fn index_to_knowledge_graph(
             embedding_id: chunk_id.clone(),
             position: chunk_id
                 .split('#')
-                .last()
+                .next_back()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
             token_count: chunk_content.split_whitespace().count(),
@@ -288,7 +295,7 @@ pub async fn index_to_knowledge_graph(
     let texts: Vec<&str> = valid.iter().map(|(_, c)| *c).collect();
     let ner_results: Vec<Vec<crate::tools::ner_extractor::NerEntity>> = texts
         .chunks(ner_batch_size)
-        .flat_map(|batch| crate::tools::ner_extractor::extract_entities_batch(batch))
+        .flat_map(crate::tools::ner_extractor::extract_entities_batch)
         .collect();
 
     // Phase 3: entity mentions, regex fallback, co-occurrence links.
@@ -298,7 +305,12 @@ pub async fn index_to_knowledge_graph(
         if use_ner {
             for ner_entity in ner_entities {
                 if let Err(e) = kb
-                    .add_entity_mention(chunk_id, &ner_entity.text, &ner_entity.label, ner_entity.score)
+                    .add_entity_mention(
+                        chunk_id,
+                        &ner_entity.text,
+                        &ner_entity.label,
+                        ner_entity.score,
+                    )
                     .await
                 {
                     debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
@@ -309,7 +321,12 @@ pub async fn index_to_knowledge_graph(
         for entity in &extraction.entities {
             if !use_ner && entity.confidence >= confidence_threshold {
                 if let Err(e) = kb
-                    .add_entity_mention(chunk_id, &entity.text, entity.entity_type.label(), entity.confidence)
+                    .add_entity_mention(
+                        chunk_id,
+                        &entity.text,
+                        entity.entity_type.label(),
+                        entity.confidence,
+                    )
                     .await
                 {
                     debug!(error = %e, entity = %entity.text, "Failed to add entity mention");
@@ -326,7 +343,12 @@ pub async fn index_to_knowledge_graph(
                 let e1 = &high_confidence_entities[i];
                 let e2 = &high_confidence_entities[j];
                 let _ = kb
-                    .link_entities(&e1.text, &e2.text, "co_occurs_with", (e1.confidence + e2.confidence) / 2.0)
+                    .link_entities(
+                        &e1.text,
+                        &e2.text,
+                        "co_occurs_with",
+                        (e1.confidence + e2.confidence) / 2.0,
+                    )
                     .await;
             }
         }
@@ -356,13 +378,14 @@ const MAX_LOG_LIMIT: usize = 500;
 
 impl RateLimitSharedState {
     fn config_snapshot(&self, enabled: bool) -> RateLimitConfigSnapshot {
+        let t = self.limiter.thresholds.snapshot();
         RateLimitConfigSnapshot {
             enabled,
             trust_proxy: self.opts.trust_proxy,
-            search_qps: self.opts.search_qps,
-            search_burst: self.opts.search_burst,
-            upload_qps: self.opts.upload_qps,
-            upload_burst: self.opts.upload_burst,
+            search_qps: t.search_qps,
+            search_burst: t.search_burst,
+            upload_qps: t.upload_qps,
+            upload_burst: t.upload_burst,
             exempt_prefixes: self.opts.exempt_prefixes.clone(),
             rules: self.opts.rules.clone(),
         }
@@ -383,6 +406,7 @@ impl From<&ChunkerConfig> for ChunkerConfigSnapshot {
             context_prefix_enabled: cfg.context_prefix_enabled,
             context_prefix_tokens: cfg.context_prefix_tokens,
             pipeline_stages: cfg.pipeline_stages.clone(),
+            snap_tolerance: cfg.snap_tolerance,
         }
     }
 }
@@ -673,16 +697,12 @@ pub enum ChatMode {
 
 #[derive(Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ManualObservationOrder {
+    #[default]
     Relevance,
     Newest,
     Oldest,
-}
-
-impl Default for ManualObservationOrder {
-    fn default() -> Self {
-        ManualObservationOrder::Relevance
-    }
 }
 
 /// Valid RAG memory types
@@ -732,64 +752,78 @@ pub fn start_api_server(
     let force_single_worker = std::env::var("NO_DOTENV")
         .map(|v| v.to_lowercase() == "true" || v == "1")
         .unwrap_or(false);
+
+    // Build shared rate limiter once — all workers share the same Arc so that
+    // runtime toggle/threshold updates propagate to every worker immediately.
+    let rl_thresholds = RuntimeThresholds::new(
+        search_qps.max(0.0),
+        search_burst,
+        upload_qps.max(0.0),
+        upload_burst,
+    );
+    let rl_cfg = crate::security::rate_limiter::RateLimiterConfig {
+        enabled: rate_limit_enabled,
+        qps: rate_limit_qps.max(0.0),
+        burst: rate_limit_burst,
+        max_ips: rate_limit_lru_capacity,
+    };
+    let shared_rl = Arc::new(RateLimiter::new(rl_cfg, Arc::clone(&rl_thresholds)));
+    let _ = SHARED_RATE_LIMITER.set(Arc::clone(&shared_rl));
+
+    let shared_opts = RateLimitOptions {
+        trust_proxy,
+        thresholds: Arc::clone(&rl_thresholds),
+        rules: vec![
+            RouteRule {
+                pattern: "/reindex".into(),
+                match_kind: MatchKind::Exact,
+                qps: 0.5,
+                burst: 2.0,
+                label: Some("admin-reindex".into()),
+            },
+            RouteRule {
+                pattern: "/upload".into(),
+                match_kind: MatchKind::Prefix,
+                qps: upload_qps.max(0.0),
+                burst: upload_burst.max(0.0),
+                label: Some("upload".into()),
+            },
+        ],
+        exempt_prefixes: vec![
+            "/".into(),
+            "/health".into(),
+            "/ready".into(),
+            "/metrics".into(),
+            "/monitoring".into(),
+            "/monitor".into(),
+        ],
+    }
+    .with_env_overrides();
+
+    // Log effective rate limit options for visibility
+    info!(
+        trust_proxy = shared_opts.trust_proxy,
+        search_qps = rl_thresholds.get_search_qps(),
+        search_burst = rl_thresholds.get_search_burst(),
+        upload_qps = rl_thresholds.get_upload_qps(),
+        upload_burst = rl_thresholds.get_upload_burst(),
+        rules = %serde_json::to_string(&shared_opts.rules).unwrap_or_default(),
+        exempt_prefixes = %serde_json::to_string(&shared_opts.exempt_prefixes).unwrap_or_default(),
+        "Rate limit options initialized"
+    );
+
+    let shared_rate_limit_state = web::Data::new(RateLimitSharedState {
+        limiter: Arc::clone(&shared_rl),
+        opts: shared_opts.clone(),
+    });
+
     let api_config = config.clone();
     let mut http_server = HttpServer::new(move || {
         let api_config = api_config.clone();
-        // Shared RateLimiter across workers (middleware-only enforcement)
-        let rl_cfg = crate::security::rate_limiter::RateLimiterConfig {
-            enabled: rate_limit_enabled,
-            qps: rate_limit_qps.max(0.0),
-            burst: rate_limit_burst,
-            max_ips: rate_limit_lru_capacity,
-        };
-        let rl = std::sync::Arc::new(crate::security::rate_limiter::RateLimiter::new(rl_cfg));
-        let opts = RateLimitOptions {
-            trust_proxy,
-            search_qps: search_qps.max(0.0),
-            search_burst,
-            upload_qps: upload_qps.max(0.0),
-            upload_burst,
-            rules: vec![
-                RouteRule {
-                    pattern: "/reindex".into(),
-                    match_kind: MatchKind::Exact,
-                    qps: 0.5,
-                    burst: 2.0,
-                    label: Some("admin-reindex".into()),
-                },
-                RouteRule {
-                    pattern: "/upload".into(),
-                    match_kind: MatchKind::Prefix,
-                    qps: upload_qps.max(0.0),
-                    burst: upload_burst.max(0.0),
-                    label: Some("upload".into()),
-                },
-            ],
-            exempt_prefixes: vec![
-                "/".into(),
-                "/health".into(),
-                "/ready".into(),
-                "/metrics".into(),
-                "/monitoring".into(),
-            ],
-        }
-        .with_env_overrides();
-        let rate_limit_state_data = web::Data::new(RateLimitSharedState {
-            limiter: rl.clone(),
-            opts: opts.clone(),
-        });
+        let rl = Arc::clone(&shared_rl);
+        let opts = shared_opts.clone();
+        let rate_limit_state_data = shared_rate_limit_state.clone();
 
-        // Log effective rate limit options for visibility
-        info!(
-            trust_proxy = opts.trust_proxy,
-            search_qps = opts.search_qps,
-            search_burst = opts.search_burst,
-            upload_qps = opts.upload_qps,
-            upload_burst = opts.upload_burst,
-            rules = %serde_json::to_string(&opts.rules).unwrap_or_default(),
-            exempt_prefixes = %serde_json::to_string(&opts.exempt_prefixes).unwrap_or_default(),
-            "Rate limit options initialized"
-        );
         let cors = Cors::default()
             .allow_any_origin()
             .allowed_methods(vec!["GET", "POST", "DELETE", "PATCH"])
@@ -933,6 +967,10 @@ pub fn start_api_server(
                     .route("/{slug}", web::get().to(get_corpus_handler))
                     .route("/{slug}", web::patch().to(rename_corpus_handler))
                     .route("/{slug}", web::delete().to(delete_corpus_handler))
+                    .route(
+                        "/{slug}/description",
+                        web::patch().to(update_corpus_description_handler),
+                    )
                     .route("/{slug}/upload", web::post().to(corpus_upload_handler))
                     .route(
                         "/{slug}/documents",
@@ -1030,13 +1068,24 @@ pub fn start_api_server(
                 web::post().to(set_rate_limit_enabled),
             )
             .route(
+                "/monitor/rate_limits/thresholds",
+                web::patch().to(update_rate_limit_thresholds),
+            )
+            .route(
                 "/monitor/inference_gateway",
                 web::get().to(get_inference_gateway_stats),
             )
             .route("/monitor/logs/recent", web::get().to(get_recent_logs))
             .route("/monitor/parser/stats", web::get().to(get_parser_stats))
             .route("/monitor/canon/stats", web::get().to(get_canon_stats))
-            .route("/monitor/chunk-meta/stats", web::get().to(get_chunk_meta_stats))
+            .route(
+                "/monitor/preprocess/stats",
+                web::get().to(get_preprocess_stats),
+            )
+            .route(
+                "/monitor/chunk-meta/stats",
+                web::get().to(get_chunk_meta_stats),
+            )
             .route("/monitor/golden-sample", web::get().to(get_golden_sample))
             .route(
                 "/monitor/golden-sample/recapture",

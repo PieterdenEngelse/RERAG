@@ -13,9 +13,15 @@ use opentelemetry::{
 use std::future::{ready, Ready};
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tracing::{info_span, Instrument};
+use tracing::{debug_span, Instrument};
 
 pub struct TraceMiddleware;
+
+impl Default for TraceMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TraceMiddleware {
     pub fn new() -> Self {
@@ -83,7 +89,7 @@ where
         // Set trace_id in context for all logs
         set_trace_id(request_id.clone());
 
-        let span = info_span!(
+        let span = debug_span!(
             "http_request",
             method = %method,
             path = %route_label,
@@ -147,14 +153,26 @@ where
                 let is_error = status >= 500;
                 record_http_request(duration_ms_f64, is_error, &status_class);
 
-                tracing::info!(
-                    method = %method,
-                    path = %route_label,
-                    status = status,
-                    duration_ms = duration_ms,
-                    trace_id = %request_id,
-                    "request completed"
-                );
+                // INFO-log only errors and slow requests; per-request noise stays at DEBUG.
+                if status >= 400 || duration_ms >= 500 {
+                    tracing::info!(
+                        method = %method,
+                        path = %route_label,
+                        status = status,
+                        duration_ms = duration_ms,
+                        trace_id = %request_id,
+                        "request completed"
+                    );
+                } else {
+                    tracing::debug!(
+                        method = %method,
+                        path = %route_label,
+                        status = status,
+                        duration_ms = duration_ms,
+                        trace_id = %request_id,
+                        "request completed"
+                    );
+                }
             } else {
                 otel_span.set_status(Status::Error {
                     description: "Request failed".into(),

@@ -7,20 +7,15 @@ use std::sync::{Mutex, OnceLock};
 use tracing::{debug, warn};
 
 /// Permission level for a tool
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ToolPermission {
     /// Tool is fully enabled
+    #[default]
     Enabled,
     /// Tool is disabled
     Disabled,
     /// Tool requires approval before execution
     RequiresApproval,
-}
-
-impl Default for ToolPermission {
-    fn default() -> Self {
-        ToolPermission::Enabled
-    }
 }
 
 /// Role with associated tool permissions

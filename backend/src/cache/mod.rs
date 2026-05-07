@@ -17,6 +17,12 @@ pub struct ResultCache {
     cache: HashMap<String, String>,
 }
 
+impl Default for ResultCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResultCache {
     pub fn new() -> Self {
         Self {

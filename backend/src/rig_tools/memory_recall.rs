@@ -32,6 +32,12 @@ pub struct RecallError(pub String);
 
 pub struct MemoryRecallTool;
 
+impl Default for MemoryRecallTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryRecallTool {
     pub fn new() -> Self {
         Self
@@ -67,7 +73,7 @@ impl Tool for MemoryRecallTool {
         let t0 = std::time::Instant::now();
 
         let result = tokio::task::spawn_blocking(move || {
-            let mem = AgentMemory::new(&db_path).map_err(|e| RecallError(e.to_string()))?;
+            let mem = AgentMemory::new(db_path).map_err(|e| RecallError(e.to_string()))?;
             let items = mem
                 .recall_rag("default", limit)
                 .map_err(|e| RecallError(e.to_string()))?;

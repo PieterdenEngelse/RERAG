@@ -15,6 +15,7 @@ pub struct ToolCostStats {
     pub last_updated: String,
 }
 
+#[derive(Default)]
 struct ToolCostState {
     totals: HashMap<String, InternalCostStats>,
 }
@@ -24,14 +25,6 @@ struct InternalCostStats {
     total_cost: f32,
     executions: usize,
     last_updated: chrono::DateTime<Utc>,
-}
-
-impl Default for ToolCostState {
-    fn default() -> Self {
-        Self {
-            totals: HashMap::new(),
-        }
-    }
 }
 
 static COST_STATE: OnceLock<Mutex<ToolCostState>> = OnceLock::new();

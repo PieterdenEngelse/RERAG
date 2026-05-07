@@ -19,6 +19,12 @@ pub struct ImageGenerationTool {
     total_count: usize,
 }
 
+impl Default for ImageGenerationTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ImageGenerationTool {
     pub fn new() -> Self {
         Self {

@@ -19,6 +19,7 @@ pub fn index_all_documents(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<(), String> {
     debug!("index_all_documents: scanning folder='{}'", folder);
     let entries =
@@ -34,11 +35,6 @@ pub fn index_all_documents(
         "index_all_documents: found {} already-indexed files",
         existing_files.len()
     );
-
-    // Begin batch mode — single writer, single commit
-    retriever
-        .begin_batch()
-        .map_err(|e| format!("begin_batch failed: {}", e))?;
 
     let mut indexed_count = 0usize;
     let mut skipped_count = 0usize;
@@ -85,6 +81,10 @@ pub fn index_all_documents(
             );
             // Only index text-based files
             if content_type.is_text_based() {
+                // Commit per-file so partial progress survives a restart.
+                retriever
+                    .begin_batch()
+                    .map_err(|e| format!("begin_batch failed: {}", e))?;
                 match index_file_with_detection(
                     retriever,
                     &path,
@@ -92,15 +92,24 @@ pub fn index_all_documents(
                     chunker,
                     detection_info,
                     corpus_slug,
+                    context_prefix_enabled,
                 ) {
                     Ok(chunks) => {
-                        debug!(
-                            "indexed file='{}' chunks={} type={:?}",
-                            path_str, chunks, content_type
-                        );
-                        indexed_count += 1;
+                        if let Err(e) = retriever.commit() {
+                            warn!("index_all_documents: commit failed for '{}': {}", path_str, e);
+                        } else {
+                            debug!(
+                                "indexed file='{}' chunks={} type={:?}",
+                                path_str, chunks, content_type
+                            );
+                            indexed_count += 1;
+                        }
                     }
-                    Err(e) => warn!("index_file failed for '{}': {}", path_str, e),
+                    Err(e) => {
+                        warn!("index_file failed for '{}': {}", path_str, e);
+                        // End the open batch even on failure so the writer is not left open.
+                        let _ = retriever.commit();
+                    }
                 }
             } else {
                 debug!(
@@ -118,9 +127,7 @@ pub fn index_all_documents(
         indexed_count, skipped_count
     );
 
-    retriever
-        .commit()
-        .map_err(|e| format!("commit failed: {}", e))
+    Ok(())
 }
 
 /// Async version of index_all_documents using io_uring for 2-3x faster file reads
@@ -131,6 +138,7 @@ pub async fn index_all_documents_async(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     _corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<usize, String> {
     use crate::perf::io_uring as async_io;
 
@@ -184,7 +192,7 @@ pub async fn index_all_documents_async(
     for path in file_paths {
         let content = extract_text_async(&path).await;
         if let Some(content) = content {
-            match index_content_direct(retriever, &path, &content, chunker_mode, chunker) {
+            match index_content_direct(retriever, &path, &content, chunker_mode, chunker, context_prefix_enabled) {
                 Ok(chunks) => {
                     indexed_count += chunks;
                     debug!("indexed file='{}' chunks={}", path.display(), chunks);
@@ -218,6 +226,7 @@ pub fn index_file(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<usize, String> {
     // Get detection info for observability
     let (_, detection_info) = detect_file_type_with_info(path)?;
@@ -228,6 +237,7 @@ pub fn index_file(
         chunker,
         detection_info,
         corpus_slug,
+        context_prefix_enabled,
     )
 }
 
@@ -239,6 +249,7 @@ pub fn index_content_direct(
     content: &str,
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
+    context_prefix_enabled: bool,
 ) -> Result<usize, String> {
     let filename = path
         .file_name()
@@ -248,7 +259,7 @@ pub fn index_content_direct(
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
     let mut embed_file_out = 0usize;
-    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename)
+    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename, context_prefix_enabled)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
@@ -270,8 +281,8 @@ pub fn index_content_direct(
             out
         })
         .collect();
-    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
-    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
+    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out, "");
+    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out, "");
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -325,6 +336,7 @@ pub fn index_content_direct(
 /// chunking, normalisation, and embedding.
 pub struct PreparedDoc {
     pub filename: String,
+    pub corpus: String,
     /// Embed-normalised chunks (used for HNSW/vector store).
     pub chunks: Vec<String>,
     /// Index-normalised chunks (used for Tantivy full-text).
@@ -346,12 +358,19 @@ pub fn prepare_doc(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> PreparedDoc {
     let filename = path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown")
         .to_string();
+
+    {
+        let flat = ir.to_plain_text();
+        let norm = crate::normalizer::normalize(&flat, crate::normalizer::NormalizeTarget::Store);
+        record_canon_store(&filename, flat.len(), norm.len(), corpus_slug);
+    }
 
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
@@ -360,7 +379,7 @@ pub fn prepare_doc(
         crate::memory::chunker_factory::chunk_ir(ir, chunker)
             .into_iter()
             .unzip();
-    let chunks: Vec<String> = apply_context_prefix(raw_texts, &filename)
+    let chunks: Vec<String> = apply_context_prefix(raw_texts, &filename, context_prefix_enabled)
         .into_iter()
         .map(|c| {
             let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
@@ -385,8 +404,18 @@ pub fn prepare_doc(
             out
         })
         .collect();
-    crate::monitoring::record_canon_file_embed(&filename, embed_file_in, embed_file_out);
-    crate::monitoring::record_canon_file_index(&filename, index_file_in, index_file_out);
+    crate::monitoring::record_canon_file_embed(
+        &filename,
+        embed_file_in,
+        embed_file_out,
+        corpus_slug,
+    );
+    crate::monitoring::record_canon_file_index(
+        &filename,
+        index_file_in,
+        index_file_out,
+        corpus_slug,
+    );
     let chunk_duration = chunk_start.elapsed();
 
     let embed_start = std::time::Instant::now();
@@ -402,6 +431,7 @@ pub fn prepare_doc(
     PreparedDoc {
         chunker_stats: chunker.stats(),
         filename,
+        corpus: corpus_slug.to_string(),
         chunks,
         index_chunks,
         chunk_metas,
@@ -420,6 +450,7 @@ pub fn index_prepared_doc(
 ) -> Result<(usize, Vec<(String, String)>), String> {
     let PreparedDoc {
         filename,
+        corpus,
         chunks,
         index_chunks,
         chunk_metas,
@@ -469,6 +500,7 @@ pub fn index_prepared_doc(
         chunker_stats,
     );
     snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+    snap.corpus = corpus;
     crate::monitoring::record_chunking_snapshot(snap);
 
     Ok((ok, graph_chunks))
@@ -483,8 +515,9 @@ pub fn index_content_with_graph(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<(usize, Vec<(String, String)>), String> {
-    let prepared = prepare_doc(path, ir, chunker_mode, chunker, corpus_slug);
+    let prepared = prepare_doc(path, ir, chunker_mode, chunker, corpus_slug, context_prefix_enabled);
     index_prepared_doc(retriever, prepared)
 }
 
@@ -496,6 +529,7 @@ pub async fn index_file_async(
     chunker_mode: ChunkerMode,
     chunker: &dyn Chunker,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<usize, String> {
     let (_, detection_info) = detect_file_type_with_info(path)?;
     index_file_with_detection_async(
@@ -505,6 +539,7 @@ pub async fn index_file_async(
         chunker,
         detection_info,
         corpus_slug,
+        context_prefix_enabled,
     )
     .await
 }
@@ -516,6 +551,7 @@ async fn index_file_with_detection_async(
     chunker: &dyn Chunker,
     detection_info: DetectionInfo,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<usize, String> {
     let filename = path
         .file_name()
@@ -530,7 +566,7 @@ async fn index_file_with_detection_async(
     );
 
     // Use async io_uring-backed file read, then produce IR
-    let ir = match extract_ir_async(path).await {
+    let ir = match extract_ir_async(path, corpus_slug).await {
         Some(ir) => ir,
         None => {
             warn!(
@@ -543,7 +579,7 @@ async fn index_file_with_detection_async(
     {
         let flat = ir.to_plain_text();
         let norm = crate::normalizer::normalize(&flat, crate::normalizer::NormalizeTarget::Store);
-        record_canon_store(filename, flat.len(), norm.len());
+        record_canon_store(filename, flat.len(), norm.len(), corpus_slug);
     }
 
     let chunk_start = std::time::Instant::now();
@@ -553,7 +589,7 @@ async fn index_file_with_detection_async(
         crate::memory::chunker_factory::chunk_ir(&ir, chunker)
             .into_iter()
             .unzip();
-    let prefixed = apply_context_prefix(raw_texts, filename);
+    let prefixed = apply_context_prefix(raw_texts, filename, context_prefix_enabled);
     let chunks: Vec<String> = prefixed
         .into_iter()
         .map(|c| {
@@ -579,8 +615,18 @@ async fn index_file_with_detection_async(
             out
         })
         .collect();
-    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
-    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
+    crate::monitoring::record_canon_file_embed(
+        filename,
+        embed_file_in,
+        embed_file_out,
+        corpus_slug,
+    );
+    crate::monitoring::record_canon_file_index(
+        filename,
+        index_file_in,
+        index_file_out,
+        corpus_slug,
+    );
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -605,7 +651,12 @@ async fn index_file_with_detection_async(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], vector, chunk_metas.get(i).cloned()) {
+        if let Err(e) = retriever.index_chunk(
+            &chunk_id,
+            &index_chunks[i],
+            vector,
+            chunk_metas.get(i).cloned(),
+        ) {
             warn!(
                 "index_file_async: Failed to index chunk {}: {}",
                 chunk_id, e
@@ -635,6 +686,7 @@ async fn index_file_with_detection_async(
         detection_info,
     );
     snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+    snap.corpus = corpus_slug.to_string();
     crate::monitoring::record_chunking_snapshot(snap);
 
     Ok(ok)
@@ -647,6 +699,7 @@ fn index_file_with_detection(
     chunker: &dyn Chunker,
     detection_info: DetectionInfo,
     corpus_slug: &str,
+    context_prefix_enabled: bool,
 ) -> Result<usize, String> {
     let filename = path
         .file_name()
@@ -659,7 +712,7 @@ fn index_file_with_detection(
         detection_info.chosen_strategy
     );
 
-    let ir = match extract_ir(path) {
+    let ir = match extract_ir(path, corpus_slug) {
         Some(ir) => ir,
         None => {
             warn!("index_file: extract_ir returned None for '{}'", filename);
@@ -670,7 +723,7 @@ fn index_file_with_detection(
     {
         let flat = ir.to_plain_text();
         let norm = crate::normalizer::normalize(&flat, crate::normalizer::NormalizeTarget::Store);
-        record_canon_store(filename, flat.len(), norm.len());
+        record_canon_store(filename, flat.len(), norm.len(), corpus_slug);
     }
 
     let chunk_start = std::time::Instant::now();
@@ -680,7 +733,7 @@ fn index_file_with_detection(
         crate::memory::chunker_factory::chunk_ir(&ir, chunker)
             .into_iter()
             .unzip();
-    let prefixed = apply_context_prefix(raw_texts, filename);
+    let prefixed = apply_context_prefix(raw_texts, filename, context_prefix_enabled);
     let chunks: Vec<String> = prefixed
         .into_iter()
         .map(|c| {
@@ -706,8 +759,18 @@ fn index_file_with_detection(
             out
         })
         .collect();
-    crate::monitoring::record_canon_file_embed(filename, embed_file_in, embed_file_out);
-    crate::monitoring::record_canon_file_index(filename, index_file_in, index_file_out);
+    crate::monitoring::record_canon_file_embed(
+        filename,
+        embed_file_in,
+        embed_file_out,
+        corpus_slug,
+    );
+    crate::monitoring::record_canon_file_index(
+        filename,
+        index_file_in,
+        index_file_out,
+        corpus_slug,
+    );
     let chunk_duration = chunk_start.elapsed();
     let mut ok = 0usize;
     let mut total_tokens = 0usize;
@@ -732,7 +795,12 @@ fn index_file_with_detection(
 
         total_tokens += chunk.split_whitespace().count();
 
-        if let Err(e) = retriever.index_chunk(&chunk_id, &index_chunks[i], vector, chunk_metas.get(i).cloned()) {
+        if let Err(e) = retriever.index_chunk(
+            &chunk_id,
+            &index_chunks[i],
+            vector,
+            chunk_metas.get(i).cloned(),
+        ) {
             warn!("index_file: Failed to index chunk {}: {}", chunk_id, e);
         } else {
             ok += 1;
@@ -775,6 +843,7 @@ fn index_file_with_detection(
             detection_info,
         );
         snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+        snap.corpus = corpus_slug.to_string();
         crate::monitoring::record_chunking_snapshot(snap);
     } else {
         let mut snap = crate::monitoring::ChunkingStatsSnapshot::with_detection(
@@ -787,6 +856,7 @@ fn index_file_with_detection(
             detection_info,
         );
         snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+        snap.corpus = corpus_slug.to_string();
         crate::monitoring::record_chunking_snapshot(snap);
     }
     Ok(ok)
@@ -857,11 +927,12 @@ fn detect_file_type_with_info(path: &Path) -> Result<(ContentType, DetectionInfo
 }
 
 /// Extract text content from a file based on its detected type
+#[allow(dead_code)]
 fn extract_text(path: &Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     let filename = path.file_name().and_then(|n| n.to_str());
     let ct = detect_content_type(&bytes, filename);
-    extract_text_from_bytes(path, bytes, ct)
+    extract_text_from_bytes(path, bytes, ct, "")
 }
 
 /// Async version of extract_text using io_uring for 2-3x faster file reads
@@ -870,8 +941,8 @@ pub async fn extract_text_async(path: &Path) -> Option<String> {
 
     let bytes = async_io::read_file(path).await.ok()?;
     let filename = path.file_name().and_then(|n| n.to_str());
-    let ct = detect_content_type(&bytes, filename.as_deref());
-    extract_text_from_bytes(path, bytes, ct)
+    let ct = detect_content_type(&bytes, filename);
+    extract_text_from_bytes(path, bytes, ct, "")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -883,7 +954,7 @@ pub async fn extract_text_async(path: &Path) -> Option<String> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Sync IR extractor: reads bytes, tries external extractors first, then built-in.
-fn extract_ir(path: &Path) -> Option<crate::doc_ir::DocIR> {
+fn extract_ir(path: &Path, corpus: &str) -> Option<crate::doc_ir::DocIR> {
     let bytes = fs::read(path).ok()?;
     let filename = path
         .file_name()
@@ -900,15 +971,15 @@ fn extract_ir(path: &Path) -> Option<crate::doc_ir::DocIR> {
             // Extractor failed — re-read bytes for built-in fallback.
             let bytes = fs::read(path).ok()?;
             let ct2 = detect_content_type(&bytes, Some(filename));
-            return extract_ir_from_bytes_typed(path, bytes, ct2);
+            return extract_ir_from_bytes_typed(path, bytes, ct2, corpus);
         }
     }
 
-    extract_ir_from_bytes_typed(path, bytes, ct)
+    extract_ir_from_bytes_typed(path, bytes, ct, corpus)
 }
 
 /// Async IR extractor: io_uring read, then external extractors, then built-in.
-pub async fn extract_ir_async(path: &Path) -> Option<crate::doc_ir::DocIR> {
+pub async fn extract_ir_async(path: &Path, corpus: &str) -> Option<crate::doc_ir::DocIR> {
     use crate::perf::io_uring as async_io;
     let bytes = async_io::read_file(path).await.ok()?;
     let filename = path
@@ -917,6 +988,7 @@ pub async fn extract_ir_async(path: &Path) -> Option<crate::doc_ir::DocIR> {
         .unwrap_or("unknown")
         .to_string();
     let ct = detect_content_type(&bytes, Some(&filename));
+    let corpus = corpus.to_string();
 
     // Offload blocking HTTP call to thread pool.
     // Move `bytes` into the extractor rather than cloning — saves one full copy of the
@@ -927,19 +999,19 @@ pub async fn extract_ir_async(path: &Path) -> Option<crate::doc_ir::DocIR> {
             let fname = filename.clone();
             let ct_clone = ct.clone();
             let path_buf = path.to_path_buf();
-            let ir_opt =
-                tokio::task::spawn_blocking(move || reg.extract(bytes, &fname, &ct_clone))
-                    .await
-                    .ok()
-                    .flatten();
+            let ir_opt = tokio::task::spawn_blocking(move || reg.extract(bytes, &fname, &ct_clone))
+                .await
+                .ok()
+                .flatten();
             if let Some(ir) = ir_opt {
                 return Some(ir);
             }
             // External extractor failed — re-read for built-in fallback.
             let bytes = async_io::read_file(&path_buf).await.ok()?;
             let ct2 = detect_content_type(&bytes, Some(&filename));
+            let corpus2 = corpus.clone();
             return tokio::task::spawn_blocking(move || {
-                extract_ir_from_bytes_typed(&path_buf, bytes, ct2)
+                extract_ir_from_bytes_typed(&path_buf, bytes, ct2, &corpus2)
             })
             .await
             .ok()
@@ -949,7 +1021,7 @@ pub async fn extract_ir_async(path: &Path) -> Option<crate::doc_ir::DocIR> {
 
     // Built-in extraction is blocking (subprocess calls for PDF, ONNX for others).
     let path_buf = path.to_path_buf();
-    tokio::task::spawn_blocking(move || extract_ir_from_bytes_typed(&path_buf, bytes, ct))
+    tokio::task::spawn_blocking(move || extract_ir_from_bytes_typed(&path_buf, bytes, ct, &corpus))
         .await
         .ok()
         .flatten()
@@ -961,6 +1033,7 @@ fn extract_ir_from_bytes_typed(
     path: &Path,
     bytes: Vec<u8>,
     content_type: crate::mime_detect::ContentType,
+    corpus: &str,
 ) -> Option<crate::doc_ir::DocIR> {
     use crate::doc_ir::{DocBlock, DocIR};
     use crate::mime_detect::ContentType;
@@ -973,17 +1046,24 @@ fn extract_ir_from_bytes_typed(
     match content_type {
         ContentType::Markdown => {
             let raw = detect_and_decode(&bytes)?;
+            crate::monitoring::record_preprocess_passthrough(filename, corpus, raw.len());
             let mut ir = extract_ir_from_markdown(&raw, filename);
             ir.tag_extractor("builtin/markdown");
             Some(ir)
         }
         ContentType::Html => {
+            let chars_in = detect_and_decode(&bytes)
+                .map(|s| s.len())
+                .unwrap_or(bytes.len());
             let mut ir = extract_ir_from_html(&bytes, filename);
             ir.tag_extractor("builtin/html");
+            let chars_out = ir.to_plain_text().len();
+            crate::monitoring::record_preprocess_html(filename, corpus, chars_in, chars_out, 0);
             Some(ir)
         }
         ContentType::Code(ref lang) => {
             let raw = detect_and_decode(&bytes)?;
+            crate::monitoring::record_preprocess_passthrough(filename, corpus, raw.len());
             let language = Some(format!("{:?}", lang).to_lowercase());
             let mut ir = DocIR::new(filename, "code");
             ir.push(DocBlock::code(language, raw));
@@ -992,33 +1072,47 @@ fn extract_ir_from_bytes_typed(
         }
         // Structured extraction in Rust — no sidecar needed.
         // Structure is explicit in the file format (heading styles, XML elements).
-        ContentType::Docx => {
-            extract_ir_from_docx(&bytes, filename)
-                .map(|mut ir| { ir.tag_extractor("builtin/docx"); ir })
-                .or_else(|| flat_text_ir(path, bytes, ContentType::Docx, "builtin/docx"))
+        ContentType::Docx => extract_ir_from_docx(&bytes, filename)
+            .map(|mut ir| {
+                ir.tag_extractor("builtin/docx");
+                ir
+            })
+            .or_else(|| flat_text_ir(path, bytes, ContentType::Docx, "builtin/docx", corpus)),
+        ContentType::Odt => extract_ir_from_docx(&bytes, filename)
+            .map(|mut ir| {
+                ir.tag_extractor("builtin/odt");
+                ir
+            })
+            .or_else(|| flat_text_ir(path, bytes, ContentType::Odt, "builtin/odt", corpus)),
+        ContentType::Epub => extract_ir_from_epub(&bytes, filename)
+            .map(|mut ir| {
+                ir.tag_extractor("builtin/epub");
+                ir
+            })
+            .or_else(|| flat_text_ir(path, bytes, ContentType::Epub, "builtin/epub", corpus)),
+        ContentType::Pptx => extract_ir_from_pptx(&bytes, filename)
+            .map(|mut ir| {
+                ir.tag_extractor("builtin/pptx");
+                ir
+            })
+            .or_else(|| flat_text_ir(path, bytes, ContentType::Pptx, "builtin/pptx", corpus)),
+        ContentType::Pdf => flat_text_ir(path, bytes, ContentType::Pdf, "builtin/pdf", corpus),
+        ContentType::Xlsx => flat_text_ir(
+            path,
+            bytes,
+            ContentType::Xlsx,
+            "builtin/spreadsheet",
+            corpus,
+        ),
+        ContentType::Ods => {
+            flat_text_ir(path, bytes, ContentType::Ods, "builtin/spreadsheet", corpus)
         }
-        ContentType::Odt => {
-            extract_ir_from_docx(&bytes, filename)
-                .map(|mut ir| { ir.tag_extractor("builtin/odt"); ir })
-                .or_else(|| flat_text_ir(path, bytes, ContentType::Odt, "builtin/odt"))
+        ContentType::Csv => {
+            flat_text_ir(path, bytes, ContentType::Csv, "builtin/spreadsheet", corpus)
         }
-        ContentType::Epub => {
-            extract_ir_from_epub(&bytes, filename)
-                .map(|mut ir| { ir.tag_extractor("builtin/epub"); ir })
-                .or_else(|| flat_text_ir(path, bytes, ContentType::Epub, "builtin/epub"))
-        }
-        ContentType::Pptx => {
-            extract_ir_from_pptx(&bytes, filename)
-                .map(|mut ir| { ir.tag_extractor("builtin/pptx"); ir })
-                .or_else(|| flat_text_ir(path, bytes, ContentType::Pptx, "builtin/pptx"))
-        }
-        ContentType::Pdf => flat_text_ir(path, bytes, ContentType::Pdf, "builtin/pdf"),
-        ContentType::Xlsx => flat_text_ir(path, bytes, ContentType::Xlsx, "builtin/spreadsheet"),
-        ContentType::Ods => flat_text_ir(path, bytes, ContentType::Ods, "builtin/spreadsheet"),
-        ContentType::Csv => flat_text_ir(path, bytes, ContentType::Csv, "builtin/spreadsheet"),
-        ContentType::Xml => flat_text_ir(path, bytes, ContentType::Xml, "builtin/text"),
-        ContentType::Json => flat_text_ir(path, bytes, ContentType::Json, "builtin/text"),
-        ct => flat_text_ir(path, bytes, ct, "builtin/text"),
+        ContentType::Xml => flat_text_ir(path, bytes, ContentType::Xml, "builtin/text", corpus),
+        ContentType::Json => flat_text_ir(path, bytes, ContentType::Json, "builtin/text", corpus),
+        ct => flat_text_ir(path, bytes, ct, "builtin/text", corpus),
     }
 }
 
@@ -1028,12 +1122,13 @@ fn flat_text_ir(
     bytes: Vec<u8>,
     content_type: ContentType,
     format: &str,
+    corpus: &str,
 ) -> Option<crate::doc_ir::DocIR> {
     let filename = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
-    let text = extract_text_from_bytes(path, bytes, content_type)?;
+    let text = extract_text_from_bytes(path, bytes, content_type, corpus)?;
     let mut ir = crate::doc_ir::DocIR::new(filename, "text");
     ir.push(crate::doc_ir::DocBlock::text(text));
     ir.tag_extractor(format);
@@ -1083,7 +1178,7 @@ fn extract_ir_from_markdown(text: &str, source: &str) -> crate::doc_ir::DocIR {
 
         // ATX header (1–6 hashes followed by a space)
         let hash_count = line.len() - line.trim_start_matches('#').len();
-        if hash_count >= 1 && hash_count <= 6 && line.chars().nth(hash_count) == Some(' ') {
+        if (1..=6).contains(&hash_count) && line.chars().nth(hash_count) == Some(' ') {
             let content = line[hash_count + 1..].trim();
             ir_push_text(&mut ir, &mut pending);
             if !content.is_empty() {
@@ -1098,7 +1193,7 @@ fn extract_ir_from_markdown(text: &str, source: &str) -> crate::doc_ir::DocIR {
             let mut table_lines: Vec<String> = vec![line.to_string()];
             while lines
                 .peek()
-                .map_or(false, |l| l.trim_start().starts_with('|'))
+                .is_some_and(|l| l.trim_start().starts_with('|'))
             {
                 table_lines.push(lines.next().unwrap().to_string());
             }
@@ -1233,10 +1328,8 @@ fn extract_ir_from_html(bytes: &[u8], source: &str) -> crate::doc_ir::DocIR {
                                 depth -= 1;
                             }
                         }
-                    } else if !is_close {
-                        if ctx.is_some() {
-                            depth += 1;
-                        }
+                    } else if !is_close && ctx.is_some() {
+                        depth += 1;
                     }
                 }
                 "p" | "div" | "section" | "article" => {
@@ -1460,7 +1553,7 @@ fn docx_heading_level(style: &Option<String>) -> Option<u8> {
             .trim_matches(|c: char| !c.is_ascii_digit())
             .parse::<u8>()
             .ok()
-            .filter(|&l| l >= 1 && l <= 6);
+            .filter(|&l| (1..=6).contains(&l));
     }
     match lower.as_str() {
         "title" => Some(1),
@@ -1700,8 +1793,8 @@ fn extract_text_from_bytes(
     path: &Path,
     bytes: Vec<u8>,
     content_type: ContentType,
+    corpus: &str,
 ) -> Option<String> {
-
     let format_label = match &content_type {
         ContentType::Pdf => "pdf",
         ContentType::Docx => "docx",
@@ -1788,7 +1881,12 @@ fn extract_text_from_bytes(
         _ => detect_and_decode(&bytes),
     }
     .map(|text| {
-        let preprocessed = apply_text_preprocessing(text, needs_html_clean, needs_unicode_clean);
+        let fname = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let preprocessed =
+            apply_text_preprocessing(text, needs_html_clean, needs_unicode_clean, corpus, fname);
         let normalized =
             crate::normalizer::normalize(&preprocessed, crate::normalizer::NormalizeTarget::Store);
         record_canon_store(
@@ -1797,6 +1895,7 @@ fn extract_text_from_bytes(
                 .unwrap_or("unknown"),
             preprocessed.len(),
             normalized.len(),
+            corpus,
         );
         normalized
     });
@@ -1808,7 +1907,7 @@ fn extract_text_from_bytes(
     match &result {
         Some(text) => {
             let chars = text.len();
-            record_extraction_format(format_label, true, chars, file_name, &file_path);
+            record_extraction_format(format_label, true, chars, file_name, &file_path, corpus);
             let _ = EXTRACTION_TOTAL
                 .get_metric_with_label_values(&[format_label, "ok"])
                 .map(|c| c.inc());
@@ -1817,7 +1916,7 @@ fn extract_text_from_bytes(
                 .map(|c| c.inc_by(chars as u64));
         }
         None => {
-            record_extraction_format(format_label, false, 0, file_name, &file_path);
+            record_extraction_format(format_label, false, 0, file_name, &file_path, corpus);
             let _ = EXTRACTION_TOTAL
                 .get_metric_with_label_values(&[format_label, "empty"])
                 .map(|c| c.inc());
@@ -1827,10 +1926,8 @@ fn extract_text_from_bytes(
     result
 }
 
-/// Apply [Source: filename] context prefix to chunks if enabled in global config.
-pub fn apply_context_prefix(chunks: Vec<String>, filename: &str) -> Vec<String> {
-    let config = crate::db::chunk_settings::global_config();
-    if config.context_prefix_enabled {
+pub fn apply_context_prefix(chunks: Vec<String>, filename: &str, enabled: bool) -> Vec<String> {
+    if enabled {
         chunks
             .into_iter()
             .map(|c| format!("[Source: {}] {}", filename, c))
@@ -1865,17 +1962,34 @@ fn clean_unicode_text(text: &str) -> String {
 
 /// Apply format-driven preprocessing: HTML tag stripping and Unicode normalisation.
 /// Callers compute the two booleans from the detected ContentType before calling this.
-pub fn apply_text_preprocessing(text: String, clean_html: bool, clean_unicode: bool) -> String {
+pub fn apply_text_preprocessing(
+    text: String,
+    clean_html: bool,
+    clean_unicode: bool,
+    corpus: &str,
+    filename: &str,
+) -> String {
+    let chars_in = text.len();
     let mut result = text;
     if clean_html {
         let (cleaned, count) = strip_html_tags(&result);
         if count > 0 {
             debug!("apply_text_preprocessing: stripped {} HTML tags", count);
         }
+        crate::monitoring::record_preprocess_html(
+            filename,
+            corpus,
+            chars_in,
+            cleaned.len(),
+            count as u64,
+        );
         result = cleaned;
-    }
-    if clean_unicode {
-        result = clean_unicode_text(&result);
+    } else if clean_unicode {
+        let cleaned = clean_unicode_text(&result);
+        crate::monitoring::record_preprocess_unicode(filename, corpus, chars_in, cleaned.len());
+        result = cleaned;
+    } else {
+        crate::monitoring::record_preprocess_passthrough(filename, corpus, chars_in);
     }
     result
 }

@@ -1,5 +1,5 @@
 // File: tests/rate_limit_middleware_integration_test.rs
-// Version: 1.2.1 FINAL - FIXED (9/9 tests pass)
+// Version: 1.3.0 - updated for RuntimeThresholds API
 // Purpose: Integration tests for rate limiting middleware
 // Location: tests/rate_limit_middleware_integration_test.rs
 //
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 // Import from your ag crate - ACTUAL structure
 use ag::monitoring::rate_limit_middleware::{RateLimitMiddleware, RateLimitOptions};
-use ag::security::rate_limiter::{RateLimiter, RateLimiterConfig};
+use ag::security::rate_limiter::{RateLimiter, RateLimiterConfig, RuntimeThresholds};
 
 // ───────────────────────────────────────────────────────────────────────────
 // Test Handler
@@ -22,7 +22,7 @@ async fn test_handler() -> HttpResponse {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Helper: Create default RateLimiterConfig
+// Helpers
 // ───────────────────────────────────────────────────────────────────────────
 
 fn default_config() -> RateLimiterConfig {
@@ -34,19 +34,40 @@ fn default_config() -> RateLimiterConfig {
     }
 }
 
+fn make_thresholds(
+    search_qps: f64,
+    search_burst: f64,
+    upload_qps: f64,
+    upload_burst: f64,
+) -> Arc<RuntimeThresholds> {
+    RuntimeThresholds::new(search_qps, search_burst, upload_qps, upload_burst)
+}
+
+fn default_opts(
+    search_qps: f64,
+    search_burst: f64,
+    upload_qps: f64,
+    upload_burst: f64,
+    trust_proxy: bool,
+) -> RateLimitOptions {
+    RateLimitOptions {
+        thresholds: make_thresholds(search_qps, search_burst, upload_qps, upload_burst),
+        rules: vec![],
+        exempt_prefixes: vec![],
+        trust_proxy,
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // TEST 1: Middleware allows first request
 // ───────────────────────────────────────────────────────────────────────────
 
 #[actix_web::test]
 async fn test_middleware_allows_first_request() {
-    let config = default_config();
-    let limiter = Arc::new(RateLimiter::new(config));
+    let thresholds = make_thresholds(10.0, 20.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(default_config(), thresholds.clone()));
     let opts = RateLimitOptions {
-        search_qps: 10.0,
-        search_burst: 20.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
+        thresholds,
         rules: vec![],
         exempt_prefixes: vec![],
         trust_proxy: false,
@@ -73,20 +94,13 @@ async fn test_middleware_allows_first_request() {
 async fn test_middleware_blocks_excess_requests() {
     let config = RateLimiterConfig {
         enabled: true,
-        qps: 1.0,   // Only 1 request per second
-        burst: 1.0, // Burst of 1
+        qps: 1.0,
+        burst: 1.0,
         max_ips: 100,
     };
-    let limiter = Arc::new(RateLimiter::new(config));
-    let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
-        rules: vec![],
-        exempt_prefixes: vec![],
-        trust_proxy: false,
-    };
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(config, thresholds.clone()));
+    let opts = default_opts(1.0, 1.0, 5.0, 10.0, false);
 
     let app = test::init_service(
         App::new()
@@ -118,16 +132,9 @@ async fn test_middleware_sets_retry_after_header() {
         burst: 1.0,
         max_ips: 100,
     };
-    let limiter = Arc::new(RateLimiter::new(config));
-    let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
-        rules: vec![],
-        exempt_prefixes: vec![],
-        trust_proxy: false,
-    };
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(config, thresholds.clone()));
+    let opts = default_opts(1.0, 1.0, 5.0, 10.0, false);
 
     let app = test::init_service(
         App::new()
@@ -169,12 +176,10 @@ async fn test_middleware_per_route_policies() {
         burst: 20.0,
         max_ips: 100,
     };
-    let limiter = Arc::new(RateLimiter::new(config));
+    let thresholds = make_thresholds(1.0, 1.0, 100.0, 200.0);
+    let limiter = Arc::new(RateLimiter::new(config, thresholds.clone()));
     let opts = RateLimitOptions {
-        search_qps: 1.0, // 1 request/sec for /search
-        search_burst: 1.0,
-        upload_qps: 100.0, // Much higher for /upload
-        upload_burst: 200.0,
+        thresholds,
         rules: vec![],
         exempt_prefixes: vec![],
         trust_proxy: false,
@@ -212,16 +217,9 @@ async fn test_middleware_trust_proxy_x_forwarded_for() {
         burst: 1.0,
         max_ips: 100,
     };
-    let limiter = Arc::new(RateLimiter::new(config));
-    let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
-        rules: vec![],
-        exempt_prefixes: vec![],
-        trust_proxy: true, // TRUST PROXY FOR X-FORWARDED-FOR
-    };
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(config, thresholds.clone()));
+    let opts = default_opts(1.0, 1.0, 5.0, 10.0, true);
 
     let app = test::init_service(
         App::new()
@@ -261,17 +259,9 @@ async fn test_middleware_trust_proxy_x_forwarded_for() {
 
 #[actix_web::test]
 async fn test_middleware_trust_proxy_forwarded_header() {
-    let config = default_config();
-    let limiter = Arc::new(RateLimiter::new(config));
-    let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
-        rules: vec![],
-        exempt_prefixes: vec![],
-        trust_proxy: true,
-    };
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(default_config(), thresholds.clone()));
+    let opts = default_opts(1.0, 1.0, 5.0, 10.0, true);
 
     let app = test::init_service(
         App::new()
@@ -303,13 +293,10 @@ async fn test_middleware_trust_proxy_forwarded_header() {
 
 #[actix_web::test]
 async fn test_middleware_exempt_prefixes() {
-    let config = default_config();
-    let limiter = Arc::new(RateLimiter::new(config));
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(default_config(), thresholds.clone()));
     let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
+        thresholds,
         rules: vec![],
         exempt_prefixes: vec!["/health".to_string(), "/ready".to_string()],
         trust_proxy: false,
@@ -355,16 +342,9 @@ async fn test_middleware_429_response_format() {
         burst: 1.0,
         max_ips: 100,
     };
-    let limiter = Arc::new(RateLimiter::new(config));
-    let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
-        rules: vec![],
-        exempt_prefixes: vec![],
-        trust_proxy: false,
-    };
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(config, thresholds.clone()));
+    let opts = default_opts(1.0, 1.0, 5.0, 10.0, false);
 
     let app = test::init_service(
         App::new()
@@ -403,16 +383,9 @@ async fn test_middleware_per_ip_isolation() {
         burst: 1.0,
         max_ips: 100,
     };
-    let limiter = Arc::new(RateLimiter::new(config));
-    let opts = RateLimitOptions {
-        search_qps: 1.0,
-        search_burst: 1.0,
-        upload_qps: 5.0,
-        upload_burst: 10.0,
-        rules: vec![],
-        exempt_prefixes: vec![],
-        trust_proxy: true,
-    };
+    let thresholds = make_thresholds(1.0, 1.0, 5.0, 10.0);
+    let limiter = Arc::new(RateLimiter::new(config, thresholds.clone()));
+    let opts = default_opts(1.0, 1.0, 5.0, 10.0, true);
 
     let app = test::init_service(
         App::new()

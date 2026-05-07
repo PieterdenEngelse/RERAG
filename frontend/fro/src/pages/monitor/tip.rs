@@ -1,4 +1,4 @@
-use crate::api::{fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_parser_stats, CanonStats, CallSiteStats, ChunkMetaStats, ChunkingStatsSnapshot, FileRecord, ParserStats, StoreRecord};
+use crate::api::{fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_corpora, fetch_parser_stats, fetch_preprocess_stats, update_corpus_description, CanonStats, CallSiteStats, ChunkMetaStats, ChunkingStatsSnapshot, CorpusEntry, FileRecord, ParserStats, PreprocessFileRecord, PreprocessStats, StoreRecord};
 use crate::app::Route;
 use crate::components::monitor::*;
 use crate::pages::hardware::constants::{
@@ -27,6 +27,7 @@ pub fn MonitorTip() -> Element {
     let mut show_tip_info = use_signal(|| false);
     let mut tip_tab = use_signal(|| 0u8);
     let mut show_parser_info = use_signal(|| false);
+    let mut show_parser_window_info = use_signal(|| false);
     let mut show_preprocessing_info = use_signal(|| false);
     let mut show_nfc_info = use_signal(|| false);
     let mut show_nfkc_info = use_signal(|| false);
@@ -46,20 +47,46 @@ pub fn MonitorTip() -> Element {
     let mut show_extractors_info = use_signal(|| false);
     let mut show_chunker_info = use_signal(|| false);
     let mut show_docir_info = use_signal(|| false);
+    let mut corpus_filter = use_signal(|| String::new());
+    let mut corpora: Signal<Vec<CorpusEntry>> = use_signal(Vec::new);
+    let mut show_desc_for = use_signal(|| Option::<String>::None);
+    let mut edit_desc_for = use_signal(|| Option::<String>::None);
+    let mut edit_desc_value = use_signal(|| String::new());
+    let mut edit_desc_error = use_signal(|| Option::<String>::None);
     let mut parser_stats: Signal<Option<Result<ParserStats, String>>> = use_signal(|| None);
     let mut chunking_stats: Signal<Option<Result<Vec<ChunkingStatsSnapshot>, String>>> = use_signal(|| None);
     let mut canon_stats: Signal<Option<Result<CanonStats, String>>> = use_signal(|| None);
     let mut chunk_meta_stats: Signal<Option<Result<ChunkMetaStats, String>>> = use_signal(|| None);
+    let mut preprocess_stats: Signal<Option<Result<PreprocessStats, String>>> = use_signal(|| None);
 
+    // Load corpus list once on mount.
     use_future(move || async move {
-        loop {
-            parser_stats.set(Some(fetch_parser_stats().await));
-            chunking_stats.set(Some(
-                fetch_chunking_stats(20).await.map(|r| r.snapshots)
-            ));
-            canon_stats.set(Some(fetch_canon_stats().await));
-            chunk_meta_stats.set(Some(fetch_chunk_meta_stats().await));
-            TimeoutFuture::new(5_000).await;
+        if let Ok(list) = fetch_corpora().await {
+            corpora.set(list);
+        }
+    });
+
+    // Main polling loop — restarts automatically when corpus_filter changes.
+    use_future(move || {
+        let corpus_val = corpus_filter();
+        async move {
+            // Clear stale data immediately when the filter changes.
+            parser_stats.set(None);
+            chunking_stats.set(None);
+            canon_stats.set(None);
+            chunk_meta_stats.set(None);
+            preprocess_stats.set(None);
+            let c = if corpus_val.is_empty() { None } else { Some(corpus_val.as_str()) };
+            loop {
+                parser_stats.set(Some(fetch_parser_stats(c).await));
+                chunking_stats.set(Some(
+                    fetch_chunking_stats(20, c).await.map(|r| r.snapshots)
+                ));
+                canon_stats.set(Some(fetch_canon_stats(c).await));
+                chunk_meta_stats.set(Some(fetch_chunk_meta_stats(c).await));
+                preprocess_stats.set(Some(fetch_preprocess_stats(c).await));
+                TimeoutFuture::new(5_000).await;
+            }
         }
     });
 
@@ -74,9 +101,9 @@ pub fn MonitorTip() -> Element {
             }
             NavTabs { active: Route::MonitorTip {} }
 
-            // Page header
-            div { class: "mt-6",
-                div { class: "flex items-center gap-2 mb-6",
+            // Page header + corpus filter
+            div { class: "mt-6 mb-4",
+                div { class: "flex items-center gap-3 mb-3",
                     h2 { class: "text-xl font-semibold text-white", "Text Ingestion Pipeline (TIP)" }
                     button {
                         class: PARAM_ICON_BUTTON_CLASS,
@@ -85,12 +112,155 @@ pub fn MonitorTip() -> Element {
                         title: "About the Text Ingestion Pipeline",
                         InfoIcon {}
                     }
+                    span { class: "text-base text-white ml-2", "Corpus" }
+                }
+                div { class: "flex flex-col gap-0.5 ml-1",
+                    // All corpora row
+                    div {
+                        class: "flex items-center px-2 py-0.5 rounded cursor-pointer",
+                        style: if corpus_filter().is_empty() {
+                            "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6);"
+                        } else {
+                            "background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);"
+                        },
+                        onclick: move |_| corpus_filter.set(String::new()),
+                        span {
+                            class: "text-xs font-mono",
+                            style: if corpus_filter().is_empty() { "color: white;" } else { "color: #d1d5db;" },
+                            "All corpora"
+                        }
+                    }
+                    // Per-corpus rows
+                    for entry in corpora() {
+                        {
+                            let slug = entry.slug.clone();
+                            let slug_sel = entry.slug.clone();
+                            let slug_desc = entry.slug.clone();
+                            let slug_edit = entry.slug.clone();
+                            let slug_save = entry.slug.clone();
+                            let desc = entry.description.clone();
+                            let is_active = corpus_filter() == entry.slug;
+                            let showing_desc = show_desc_for.read().as_deref() == Some(&entry.slug);
+                            let is_editing = edit_desc_for.read().as_deref() == Some(&entry.slug);
+                            let desc_clone = desc.clone();
+                            rsx! {
+                                div {
+                                    class: "flex flex-col rounded px-2 py-0.5 cursor-pointer",
+                                    style: if is_active {
+                                        "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6);"
+                                    } else {
+                                        "background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);"
+                                    },
+                                    div { class: "flex items-center justify-between gap-2",
+                                        span {
+                                            class: "text-xs font-mono flex-1",
+                                            style: if is_active { "color: white;" } else { "color: #d1d5db;" },
+                                            onclick: move |_| corpus_filter.set(slug_sel.clone()),
+                                            "{slug}"
+                                        }
+                                        button {
+                                            class: "text-xs shrink-0",
+                                            style: "color: #60a5fa; background: none; border: none; cursor: pointer; padding: 0;",
+                                            onclick: move |evt| {
+                                                evt.stop_propagation();
+                                                let target = slug_desc.clone();
+                                                if show_desc_for.read().as_deref() == Some(&target) {
+                                                    show_desc_for.set(None);
+                                                    edit_desc_for.set(None);
+                                                } else {
+                                                    show_desc_for.set(Some(target));
+                                                }
+                                            },
+                                            "description"
+                                        }
+                                    }
+                                    if showing_desc {
+                                        if is_editing {
+                                            div { class: "flex flex-col gap-1 mt-0.5",
+                                                input {
+                                                    class: "input input-xs input-bordered bg-gray-700 text-gray-200 w-full",
+                                                    value: "{edit_desc_value}",
+                                                    autofocus: true,
+                                                    oninput: move |evt| {
+                                                        edit_desc_value.set(evt.value());
+                                                        edit_desc_error.set(None);
+                                                    },
+                                                    onkeydown: move |evt| {
+                                                        if evt.key() == Key::Escape {
+                                                            edit_desc_for.set(None);
+                                                            edit_desc_error.set(None);
+                                                        }
+                                                    },
+                                                }
+                                                if let Some(err) = edit_desc_error.read().as_ref() {
+                                                    p { class: "text-xs text-red-400", "{err}" }
+                                                }
+                                                div { class: "flex gap-1",
+                                                    button {
+                                                        class: "btn btn-xs flex-1",
+                                                        style: "background-color:#7C2A02;border-color:#7C2A02;color:white;",
+                                                        onclick: move |_| {
+                                                            let s = slug_save.clone();
+                                                            let new_desc = edit_desc_value.read().trim().to_string();
+                                                            spawn(async move {
+                                                                match update_corpus_description(&s, &new_desc).await {
+                                                                    Ok(_) => {
+                                                                        if let Ok(list) = fetch_corpora().await {
+                                                                            corpora.set(list);
+                                                                        }
+                                                                        edit_desc_for.set(None);
+                                                                        edit_desc_error.set(None);
+                                                                    }
+                                                                    Err(e) => edit_desc_error.set(Some(e)),
+                                                                }
+                                                            });
+                                                        },
+                                                        "Save"
+                                                    }
+                                                    button {
+                                                        class: "btn btn-xs btn-ghost text-gray-400",
+                                                        onclick: move |_| {
+                                                            edit_desc_for.set(None);
+                                                            edit_desc_error.set(None);
+                                                        },
+                                                        "✕"
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            div {
+                                                class: "flex items-start gap-1 mt-0.5 group cursor-pointer",
+                                                onclick: move |_| {
+                                                    edit_desc_for.set(Some(slug_edit.clone()));
+                                                    edit_desc_value.set(desc_clone.clone());
+                                                    edit_desc_error.set(None);
+                                                },
+                                                p {
+                                                    class: "text-xs flex-1",
+                                                    style: "color: #9ca3af;",
+                                                    if desc.is_empty() { "No description — click to add" } else { "{desc}" }
+                                                }
+                                                span {
+                                                    class: "text-xs shrink-0 opacity-0 group-hover:opacity-100",
+                                                    style: "color: #60a5fa;",
+                                                    "edit"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             // Pipeline layout: Parser → Typography & Tag Cleanup → Canonicalize NFC → Chunker → ┬ Canonicalize NFKC
             //                                                                                    └ Canonicalize NFKC+punct
-            div { class: "flex gap-2 items-stretch flex-wrap",
+            div { class: "flex flex-col gap-2",
+
+                // ── Row 1: Parser + Typography ──
+                div { class: "flex gap-2 items-stretch",
 
                 // ── Parser unit ──
                 div { class: "shrink-0 flex items-stretch gap-2",
@@ -106,7 +276,16 @@ pub fn MonitorTip() -> Element {
                                     InfoIcon {}
                                 }
                             }
-                            span { class: "text-xs text-gray-400", "7 days" }
+                            div { class: "flex items-center gap-4",
+                                span { class: "text-xs text-gray-400", "7 days" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_parser_window_info.set(true),
+                                    title: "About the 7-day window",
+                                    InfoIcon {}
+                                }
+                            }
                         }
                         match &*parser_stats.read() {
                             Some(Ok(stats)) => rsx! { ParserStatsView { stats: stats.clone() } },
@@ -132,39 +311,124 @@ pub fn MonitorTip() -> Element {
                                 }
                             }
                         }
-                        div { class: "text-xs text-gray-400 space-y-2",
-                            div { class: "flex items-start gap-2",
-                                span { class: "text-cyan-400 font-mono shrink-0", "HTML" }
-                                span { "strip tags" }
-                            }
-                            div { class: "flex items-start gap-2",
-                                span { class: "text-amber-400 font-mono shrink-0", "PDF" }
-                                span { "unicode fix" }
-                            }
-                            div { class: "flex items-start gap-2",
-                                span { class: "text-amber-400 font-mono shrink-0", "DOCX" }
-                                span { "unicode fix" }
-                            }
-                            div { class: "flex items-start gap-2",
-                                span { class: "text-amber-400 font-mono shrink-0", "ODT" }
-                                span { "unicode fix" }
-                            }
-                            div { class: "flex items-start gap-2",
-                                span { class: "text-amber-400 font-mono shrink-0", "EPUB" }
-                                span { "unicode fix" }
-                            }
-                            div { class: "flex items-start gap-2",
-                                span { class: "text-amber-400 font-mono shrink-0", "PPTX" }
-                                span { "unicode fix" }
-                            }
-                            div { class: "flex items-start gap-2 pt-1 border-t border-gray-700",
-                                span { class: "text-gray-500 font-mono shrink-0", "TXT/MD" }
-                                span { class: "text-gray-500", "pass-through" }
+                        {
+                            match &*preprocess_stats.read() {
+                                Some(Ok(ps)) => {
+                                    let html_n = format!("{} files", ps.html_files);
+                                    let html_tags = if ps.html_tags_stripped > 0 {
+                                        format!("{} tags", ps.html_tags_stripped)
+                                    } else { String::new() };
+                                    let html_pct = if ps.html_chars_in > 0 {
+                                        let removed = ps.html_chars_in.saturating_sub(ps.html_chars_out);
+                                        let pct = removed * 100 / ps.html_chars_in;
+                                        format!("-{}%", pct)
+                                    } else { String::new() };
+                                    let html_pct_class = if ps.html_chars_in > 0 {
+                                        let pct = ps.html_chars_in.saturating_sub(ps.html_chars_out) * 100 / ps.html_chars_in;
+                                        if pct > 50 { "text-red-400 tabular-nums" } else { "text-gray-400 tabular-nums" }
+                                    } else { "text-gray-400 tabular-nums" };
+                                    let uni_n = format!("{} files", ps.unicode_files);
+                                    let uni_pct = if ps.unicode_chars_in > 0 {
+                                        let removed = ps.unicode_chars_in.saturating_sub(ps.unicode_chars_out);
+                                        let pct = removed * 100 / ps.unicode_chars_in;
+                                        format!("-{}%", pct)
+                                    } else { String::new() };
+                                    let pass_n = format!("{} files", ps.passthrough_files);
+                                    let recent: Vec<&PreprocessFileRecord> = ps.recent_files.iter().rev().take(5).collect();
+                                    rsx! {
+                                        div { class: "text-xs space-y-1.5",
+                                            div { class: "flex items-start gap-2",
+                                                span { class: "text-cyan-400 font-mono shrink-0 w-10", "HTML" }
+                                                span { class: "text-gray-400 shrink-0", "strip tags" }
+                                                if ps.html_files > 0 {
+                                                    span { class: "ml-auto text-gray-300 tabular-nums", "{html_n}" }
+                                                    if !html_tags.is_empty() {
+                                                        span { class: "text-gray-500", "·" }
+                                                        span { class: "text-gray-400 tabular-nums", "{html_tags}" }
+                                                    }
+                                                    if !html_pct.is_empty() {
+                                                        span { class: "text-gray-500", "·" }
+                                                        span { class: "{html_pct_class}", "{html_pct}" }
+                                                    }
+                                                } else {
+                                                    span { class: "ml-auto text-gray-600", "—" }
+                                                }
+                                            }
+                                            div { class: "flex items-start gap-2",
+                                                span { class: "text-amber-400 font-mono shrink-0 w-10", "PDF…" }
+                                                span { class: "text-gray-400 shrink-0", "unicode fix" }
+                                                if ps.unicode_files > 0 {
+                                                    span { class: "ml-auto text-gray-300 tabular-nums", "{uni_n}" }
+                                                    if !uni_pct.is_empty() {
+                                                        span { class: "text-gray-500", "·" }
+                                                        span { class: "text-gray-400 tabular-nums", "{uni_pct}" }
+                                                    }
+                                                } else {
+                                                    span { class: "ml-auto text-gray-600", "—" }
+                                                }
+                                            }
+                                            div { class: "flex items-start gap-2 pt-1 border-t border-gray-700",
+                                                span { class: "text-gray-500 font-mono shrink-0 w-10", "TXT…" }
+                                                span { class: "text-gray-500 shrink-0", "pass-through" }
+                                                if ps.passthrough_files > 0 {
+                                                    span { class: "ml-auto text-gray-500 tabular-nums", "{pass_n}" }
+                                                } else {
+                                                    span { class: "ml-auto text-gray-600", "—" }
+                                                }
+                                            }
+                                        }
+                                        if !recent.is_empty() {
+                                            div { class: "mt-3 pt-2 border-t border-gray-700",
+                                                table { class: "w-full text-xs",
+                                                    thead {
+                                                        tr { class: "text-gray-500 border-b border-gray-700",
+                                                            th { class: "text-left pb-1 pr-2 font-medium", "File" }
+                                                            th { class: "text-left pb-1 pr-2 font-medium", "Type" }
+                                                            th { class: "text-right pb-1 font-medium", "Reduction" }
+                                                        }
+                                                    }
+                                                    tbody {
+                                                        for rec in &recent {
+                                                            {
+                                                                let (kind_class, kind_label) = match rec.kind.as_str() {
+                                                                    "html" => ("text-cyan-400", "HTML"),
+                                                                    "unicode" => ("text-amber-400", "Unicode"),
+                                                                    _ => ("text-gray-500", "pass"),
+                                                                };
+                                                                let reduction = if rec.chars_in > 0 && rec.kind != "passthrough" {
+                                                                    let removed = rec.chars_in.saturating_sub(rec.chars_out);
+                                                                    let pct = removed * 100 / rec.chars_in;
+                                                                    format!("-{}%", pct)
+                                                                } else {
+                                                                    "—".to_string()
+                                                                };
+                                                                rsx! {
+                                                                    tr { class: "border-b border-gray-700/40",
+                                                                        td { class: "py-0.5 pr-2 text-gray-300 font-mono truncate max-w-0 w-full", title: "{rec.filename}", "{rec.filename}" }
+                                                                        td { class: "py-0.5 pr-2 shrink-0", span { class: "font-mono {kind_class}", "{kind_label}" } }
+                                                                        td { class: "py-0.5 text-right text-gray-400 tabular-nums shrink-0", "{reduction}" }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                                None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
                             }
                         }
                     }
                     div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
+
+                } // end row 1
+
+                // ── Row 2: NFC → DocIR → Chunker → NFKC branches ──
+                div { class: "flex gap-2 items-stretch",
 
                 // ── NFC unit ──
                 div { class: "flex-1 min-w-0 flex items-stretch gap-2",
@@ -330,6 +594,7 @@ pub fn MonitorTip() -> Element {
                                             CanonMiniRow { label: "query",  description: "Applied to each search query before the embedding model — identical normalization as ingest so query and document vectors are directly comparable.", site: stats.embed_query.clone() },
                                         ]
                                     }
+                                    NfkcFileRecordsView { records: stats.store_records.clone(), use_index: false }
                                 }
                             },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
@@ -364,6 +629,7 @@ pub fn MonitorTip() -> Element {
                                             CanonMiniRow { label: "query",  description: "Upgrades the Embed-normalized query for BM25 — identical canonicalization as ingest so query tokens match indexed tokens.", site: stats.index_query.clone() },
                                         ]
                                     }
+                                    NfkcFileRecordsView { records: stats.store_records.clone(), use_index: true }
                                 }
                             },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
@@ -371,6 +637,8 @@ pub fn MonitorTip() -> Element {
                         }
                     }
                 }
+
+                } // end row 2
             }
 
             // ── DocIR info modal ──────────────────────────────────────────────
@@ -520,7 +788,7 @@ pub fn MonitorTip() -> Element {
                             // Intro (shown on non-Pipeline-Flow, non-DocIR tabs)
                             if tip_tab() != 0 && tip_tab() != 5 {
                                 div { class: "text-xs text-gray-300 mb-3",
-                                    "Four components that together form the ingestion pipeline: "
+                                    "Five components that together form the ingestion pipeline: "
                                     span { class: "text-sky-400 font-semibold underline cursor-pointer hover:text-sky-300", onclick: move |_| tip_tab.set(1), "Parser" }
                                     ", "
                                     span { class: "text-amber-400 font-semibold underline cursor-pointer hover:text-amber-300", onclick: move |_| tip_tab.set(2), "Canonicalization" }
@@ -528,6 +796,8 @@ pub fn MonitorTip() -> Element {
                                     span { class: "text-emerald-400 font-semibold underline cursor-pointer hover:text-emerald-300", onclick: move |_| tip_tab.set(3), "Typography & Tag Cleanup" }
                                     ", "
                                     span { class: "text-violet-400 font-semibold underline cursor-pointer hover:text-violet-300", onclick: move |_| tip_tab.set(4), "Orchestration" }
+                                    ", "
+                                    span { class: "text-rose-400 font-semibold underline cursor-pointer hover:text-rose-300", onclick: move |_| tip_tab.set(5), "DocIR" }
                                     ". Canonicalization is not a single discrete stage — it is applied at multiple points around Typography & Tag Cleanup."
                                 }
                             }
@@ -1137,37 +1407,48 @@ pub fn MonitorTip() -> Element {
                             if tip_tab() == 3 {
                                 div { class: "space-y-2",
                                     h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "3 · Typography & Tag Cleanup" }
-                                    p { class: "text-gray-400", "Structures canonicalised text into semantic units for embedding, indexing, and retrieval. Includes chunking, segmentation, and boilerplate removal." }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                        li { "Defines embedding granularity (sentence / paragraph / chunk)." }
-                                        li { "Ensures embeddings represent coherent semantic content." }
-                                        li { "Reduces drift from inconsistent chunk boundaries." }
+                                    p { class: "text-gray-400",
+                                        "Runs immediately after the parser, before NFC canonicalization. \
+                                        Both passes are "
+                                        strong { class: "text-gray-300", "automatic and format-keyed" }
+                                        " — no settings to toggle."
                                     }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Graph" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                        li { "Determines node boundaries." }
-                                        li { "Influences edge creation via semantic adjacency." }
-                                        li { "Cleaner, more interpretable graph structures." }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "HTML tag stripping" }
+                                    p { class: "text-gray-400",
+                                        "Applied to HTML files only. Removes "
+                                        code { class: "text-cyan-300", "<tag>" }
+                                        " / "
+                                        code { class: "text-cyan-300", "</tag>" }
+                                        " patterns while preserving text content. Without this, \
+                                        markup tokens inflate chunk size and dilute embedding quality."
                                     }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Clustering" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                        li { "Controls cluster density and purity via chunk size." }
-                                        li { "Clusters represent topics, not mixed content." }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Unicode typography normalisation" }
+                                    p { class: "text-gray-400",
+                                        "Applied to PDF, DOCX, ODT, EPUB, PPTX, HTML — any format from a publishing tool. \
+                                        Substitutes typographic characters with plain ASCII: curly quotes → straight, \
+                                        em/en-dash → \" - \", ellipsis → \"...\", PDF ligatures (ﬁ ﬂ) → letter pairs."
                                     }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Summarization" }
+                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "RAG impact" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                        li { "Well-formed chunks improve summary quality." }
-                                        li { "Each chunk contains a unified topic." }
-                                        li { "Boilerplate removal reduces summarizer confusion." }
+                                        li {
+                                            strong { class: "text-gray-300", "Retrieval recall" }
+                                            " — a user typing "
+                                            code { class: "text-cyan-300", "'word'" }
+                                            " with a plain keyboard finds chunks that contain the typographic equivalent."
+                                        }
+                                        li {
+                                            strong { class: "text-gray-300", "Embedding quality" }
+                                            " — markup tokens removed from HTML don't appear as meaningless noise in the embedder's input."
+                                        }
+                                        li {
+                                            strong { class: "text-gray-300", "Tokenizer stability" }
+                                            " — consistent character forms mean the same word tokenises the same way regardless of source format."
+                                        }
                                     }
-                                    h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Retrieval" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                        li { "Each chunk ≈ one semantic idea → better precision." }
-                                        li { "Stable ranking from low-noise embedding vectors." }
-                                        li { "More accurate context selection for generation." }
+                                    p { class: "italic text-gray-300 pt-1",
+                                        "Complementary to canonicalization: this stage removes format artefacts by substitution; \
+                                        NFC (the next stage) resolves Unicode combining-character equivalences."
                                     }
-                                    p { class: "italic text-gray-300 pt-1", "The semantic structuring layer of RAG." }
                                 }
                             }
 
@@ -1346,24 +1627,29 @@ pub fn MonitorTip() -> Element {
                                     }
                                     tbody {
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "0 · Parser" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "1 · Parser" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Extract text from bytes" }
                                             td { class: "py-1.5 text-gray-400", "Empty parse = zero vectors, zero graph nodes, zero results" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "1 · Canonicalization" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "2 · Canonicalization" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Normalize text" }
                                             td { class: "py-1.5 text-gray-400", "Stable embeddings, high recall, no duplicate graph nodes" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "2 · Typography & Tag Cleanup" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "3 · Typography & Tag Cleanup" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Structure text" }
                                             td { class: "py-1.5 text-gray-400", "Coherent chunks, accurate embeddings, meaningful graph nodes" }
                                         }
-                                        tr {
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "3 · Orchestration" }
+                                        tr { class: "border-b border-gray-700",
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "4 · Orchestration" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Coordinate pipeline" }
                                             td { class: "py-1.5 text-gray-400", "Deterministic indexing, reproducible retrieval, stable summaries" }
+                                        }
+                                        tr {
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "5 · DocIR" }
+                                            td { class: "py-1.5 pr-4 text-gray-400", "Typed block IR" }
+                                            td { class: "py-1.5 text-gray-400", "Tables/code/formulas as atomic chunks; page numbers and extractor labels survive to search results" }
                                         }
                                     }
                                 }
@@ -1448,6 +1734,53 @@ pub fn MonitorTip() -> Element {
                                 class: "px-5 py-1.5 text-sm font-medium rounded text-white hover:opacity-80",
                                 style: "background-color:#7C2A02;border:1px solid #7C2A02;",
                                 onclick: move |_| show_chunker_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Parser 7-day window info modal ──────────────────────────────
+            if show_parser_window_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_parser_window_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[480px] flex flex-col shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "7-day rolling window" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_parser_window_info.set(false),
+                                "✕"
+                            }
+                        }
+
+                        div { class: "px-6 py-4 text-xs text-gray-300 space-y-3",
+                            p {
+                                "Every file that passes through the parser is recorded in a SQLite table with a timestamp. "
+                                "Rows older than "
+                                span { class: "font-semibold text-gray-100", "7 days" }
+                                " are pruned on each new insert, so the counts shown here always reflect the most recent 7-day period — not all-time totals."
+                            }
+                            p {
+                                "On startup, the backend seeds its in-memory stats from that same 7-day window, so the numbers survive restarts. "
+                                "New uploads are appended live during the current run."
+                            }
+                            p { class: "text-gray-400",
+                                "The 7-day constant ("
+                                span { class: "font-mono text-gray-300", "DAYS_HISTORY" }
+                                ") is hardcoded in "
+                                span { class: "font-mono text-gray-300", "backend/src/db/extraction_records.rs" }
+                                "."
+                            }
+                            button {
+                                class: "btn btn-sm w-full mt-1",
+                                style: "background-color:#7C2A02;color:white;border:none;",
+                                onclick: move |_| show_parser_window_info.set(false),
                                 "Got it"
                             }
                         }
@@ -1797,6 +2130,14 @@ raw query
                                 Unicode combining-character equivalences. They solve different problems."
                             }
                         }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0 flex justify-end bg-gray-800 rounded-b-lg",
+                            button {
+                                class: "px-5 py-1.5 text-sm font-medium rounded text-white hover:opacity-80",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;",
+                                onclick: move |_| show_preprocessing_info.set(false),
+                                "Got it"
+                            }
+                        }
                     }
                 }
             }
@@ -1965,6 +2306,8 @@ struct ParserStatsViewProps {
 fn ParserStatsView(props: ParserStatsViewProps) -> Element {
     let stats = &props.stats;
     let mut show_empty_info = use_signal(|| false);
+    let mut show_format_info = use_signal(|| false);
+    let mut show_all_files = use_signal(|| false);
 
     let mut seen = std::collections::HashSet::new();
     let deduped: Vec<&FileRecord> = stats
@@ -1972,6 +2315,8 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
         .iter()
         .filter(|r| seen.insert((r.filename.clone(), r.format.clone())))
         .collect();
+
+    let extra_files = deduped.len().saturating_sub(5);
 
     let mut fmt_map: std::collections::HashMap<String, (u64, u64, u64)> = std::collections::HashMap::new();
     for rec in &deduped {
@@ -1983,7 +2328,6 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
         .map(|(fmt, (ok, empty, chars))| (fmt, ok, empty, chars))
         .collect();
     fmt_sorted.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)));
-
     rsx! {
         div { class: "space-y-3",
             if !fmt_sorted.is_empty() {
@@ -2025,7 +2369,18 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                         tr { class: "text-gray-300 border-b border-gray-500",
                             th { class: "text-left pb-1 pr-3 font-medium", "Filename" }
                             th { class: "text-left pb-1 pr-3 font-medium", "Path" }
-                            th { class: "text-left pb-1 pr-3 font-medium", "Format" }
+                            th { class: "text-left pb-1 pr-3 font-medium",
+                                div { class: "inline-flex items-center gap-2",
+                                    "Format"
+                                    button {
+                                        class: PARAM_ICON_BUTTON_CLASS,
+                                        style: PARAM_ICON_BUTTON_STYLE,
+                                        onclick: move |_| show_format_info.set(true),
+                                        title: "About format labels",
+                                        InfoIcon {}
+                                    }
+                                }
+                            }
                             th { class: "text-right pb-1 pr-3 font-medium",
                                 div { class: "inline-flex items-center gap-1 justify-end",
                                     "Status"
@@ -2084,7 +2439,7 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                         }
                     }
                     tbody {
-                        for rec in &deduped {
+                        for rec in deduped.iter().take(5) {
                             tr { class: "border-b border-gray-500/50",
                                 td { class: "py-0.5 pr-3 text-gray-200 font-mono whitespace-nowrap", "{rec.filename}" }
                                 td { class: "py-0.5 pr-3 text-gray-400 font-mono whitespace-nowrap", "{rec.path}" }
@@ -2101,6 +2456,17 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                                         "{format_chars(rec.chars)}"
                                     } else {
                                         "—"
+                                    }
+                                }
+                            }
+                        }
+                        if extra_files > 0 {
+                            tr {
+                                td { colspan: "5", class: "pt-1.5",
+                                    span {
+                                        class: "text-xs text-cyan-400 hover:text-cyan-300 cursor-pointer underline underline-offset-2",
+                                        onclick: move |_| show_all_files.set(true),
+                                        "+ {extra_files} more — view all"
                                     }
                                 }
                             }
@@ -2123,6 +2489,170 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                         if stats.ocr.unavailable > 0 {
                             span { class: "text-gray-400",
                                 "unavail " span { class: "text-red-400 font-medium", "{stats.ocr.unavailable}" }
+                            }
+                        }
+                    }
+                }
+            }
+            // ── All files modal ──
+            if show_all_files() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_all_files.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[760px] max-h-[80vh] flex flex-col shadow-xl",
+                        onclick: move |e| e.stop_propagation(),
+                        div { class: "flex items-center justify-between px-5 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-sm font-semibold text-gray-100",
+                                "All parsed files "
+                                span { class: "text-gray-400 font-normal text-xs", "({deduped.len()} total)" }
+                            }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_all_files.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto min-h-0 px-5 py-3",
+                            table { class: "w-full text-xs",
+                                thead {
+                                    tr { class: "text-gray-300 border-b border-gray-500",
+                                        th { class: "text-left pb-1 pr-4 font-medium", "Filename" }
+                                        th { class: "text-left pb-1 pr-4 font-medium", "Path" }
+                                        th { class: "text-left pb-1 pr-4 font-medium", "Format" }
+                                        th { class: "text-right pb-1 pr-4 font-medium", "Status" }
+                                        th { class: "text-right pb-1 font-medium", "Chars" }
+                                    }
+                                }
+                                tbody {
+                                    for rec in deduped.iter() {
+                                        tr { class: "border-b border-gray-700/50",
+                                            td { class: "py-0.5 pr-4 text-gray-200 font-mono", "{rec.filename}" }
+                                            td { class: "py-0.5 pr-4 text-gray-400 font-mono", "{rec.path}" }
+                                            td { class: "py-0.5 pr-4 text-gray-300 font-mono", "{rec.format}" }
+                                            td { class: "py-0.5 pr-4 text-right",
+                                                if rec.ok {
+                                                    span { class: "text-green-400", "ok" }
+                                                } else {
+                                                    span { class: "text-yellow-500", "empty" }
+                                                }
+                                            }
+                                            td { class: "py-0.5 text-right text-gray-400",
+                                                if rec.ok { "{format_chars(rec.chars)}" } else { "—" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "px-5 py-3 border-t border-gray-700 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_all_files.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+            if show_format_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_format_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[560px] flex flex-col shadow-xl",
+                        onclick: move |e| e.stop_propagation(),
+                        div { class: "flex items-center justify-between px-4 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-sm font-semibold text-gray-100",
+                                "Format: " code { class: "text-amber-400 font-mono", "native_pdf" }
+                            }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_format_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "px-4 py-3 text-xs text-gray-300",
+                            table { class: "w-full",
+                                tbody {
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Definition" }
+                                        td { class: "py-1 text-gray-300", "PDF created digitally with real text objects, not scanned images" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Primary characteristic" }
+                                        td { class: "py-1 text-gray-300", "Contains selectable, searchable, copyable text" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Source" }
+                                        td { class: "py-1 text-gray-300", "Exported from digital applications (Word, LaTeX, InDesign, HTML renderers)" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Internal structure" }
+                                        td { class: "py-1 text-gray-300", "Uses vector text glyphs, embedded fonts, and structured drawing commands" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Visual layer" }
+                                        td { class: "py-1 text-gray-300", "Text and graphics rendered as vectors, not raster images" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "OCR requirement" }
+                                        td { class: "py-1 text-gray-300", "None; text is already present in the PDF structure" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Searchability" }
+                                        td { class: "py-1 text-gray-300", "Fully searchable; search operates on real text objects" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Copy/paste quality" }
+                                        td { class: "py-1 text-gray-300", "High; copied text preserves characters and encoding" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Zoom behavior" }
+                                        td { class: "py-1 text-gray-300", "Text remains sharp at any zoom level due to vector rendering" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "File size" }
+                                        td { class: "py-1 text-gray-300", "Typically small; no full-page raster images" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Extraction quality" }
+                                        td { class: "py-1 text-gray-300", "High accuracy; text extractors can read characters directly" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Reading order" }
+                                        td { class: "py-1 text-gray-300", "Usually consistent with the original document structure" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Fonts" }
+                                        td { class: "py-1 text-gray-300", "Embedded or referenced fonts define glyph shapes precisely" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Metadata" }
+                                        td { class: "py-1 text-gray-300", "May include document metadata, tags, structure trees" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Use cases" }
+                                        td { class: "py-1 text-gray-300", "Documents intended for editing, indexing, RAG pipelines, and archiving" }
+                                    }
+                                    tr { class: "border-b border-gray-700",
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "Limitations" }
+                                        td { class: "py-1 text-gray-300", "Does not guarantee semantic structure (headings, tables may be visually defined)" }
+                                    }
+                                    tr {
+                                        td { class: "py-1 pr-4 font-medium text-gray-400 whitespace-nowrap align-top", "vs scanned PDF" }
+                                        td { class: "py-1 text-gray-300", "Scanned PDFs contain only images; native PDFs contain real text and vectors" }
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "px-4 py-2 border-t border-gray-600 flex justify-end bg-gray-800 rounded-b-lg",
+                            button {
+                                class: "px-4 py-1 text-xs font-medium rounded text-white hover:opacity-80",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;",
+                                onclick: move |_| show_format_info.set(false),
+                                "Got it"
                             }
                         }
                     }
@@ -2205,6 +2735,63 @@ fn StoreRecordsView(props: StoreRecordsViewProps) -> Element {
                                             if d >= 0.0 { format!("+{:.1}%", d) } else { format!("{:.1}%", d) }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct NfkcFileRecordsViewProps {
+    records: Vec<StoreRecord>,
+    use_index: bool,
+}
+
+#[component]
+fn NfkcFileRecordsView(props: NfkcFileRecordsViewProps) -> Element {
+    let mut seen = std::collections::HashSet::new();
+    let records: Vec<&StoreRecord> = props.records.iter()
+        .filter(|r| {
+            let nonzero = if props.use_index { r.index_chars_in > 0 } else { r.embed_chars_in > 0 };
+            nonzero && seen.insert(r.file.clone())
+        })
+        .collect();
+    if records.is_empty() {
+        return rsx! { };
+    }
+    rsx! {
+        div { class: "mt-2 pt-2 border-t border-gray-700 overflow-y-auto", style: "max-height:160px;",
+            table { class: "w-full text-xs",
+                thead {
+                    tr { class: "text-gray-500 border-b border-gray-700",
+                        th { class: "text-left pb-1 pr-2 font-medium", "File" }
+                        th { class: "text-right pb-1 pr-2 font-medium", "In" }
+                        th { class: "text-right pb-1 pr-2 font-medium", "Out" }
+                        th { class: "text-right pb-1 font-medium", "Δ" }
+                    }
+                }
+                tbody {
+                    for rec in &records {
+                        {
+                            let (chars_in, chars_out) = if props.use_index {
+                                (rec.index_chars_in, rec.index_chars_out)
+                            } else {
+                                (rec.embed_chars_in, rec.embed_chars_out)
+                            };
+                            let delta = if chars_in == 0 { "—".to_string() } else {
+                                let d = chars_out as f64 / chars_in as f64 * 100.0 - 100.0;
+                                if d >= 0.0 { format!("+{:.1}%", d) } else { format!("{:.1}%", d) }
+                            };
+                            rsx! {
+                                tr { class: "border-b border-gray-700/40",
+                                    td { class: "py-0.5 pr-2 text-gray-300 font-mono truncate max-w-0 w-full", title: "{rec.file}", "{rec.file}" }
+                                    td { class: "py-0.5 pr-2 text-right tabular-nums text-gray-400 shrink-0", "{format_chars(chars_in)}" }
+                                    td { class: "py-0.5 pr-2 text-right tabular-nums text-gray-400 shrink-0", "{format_chars(chars_out)}" }
+                                    td { class: "py-0.5 text-right tabular-nums text-gray-400 shrink-0", "{delta}" }
                                 }
                             }
                         }

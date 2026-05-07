@@ -175,9 +175,10 @@ impl TrainingDataCollector {
             }
         }
 
-        let mut buffer = self.buffer.lock().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Lock error: {}", e))
-        })?;
+        let mut buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| std::io::Error::other(format!("Lock error: {}", e)))?;
 
         buffer.push(example);
 
@@ -191,9 +192,10 @@ impl TrainingDataCollector {
 
     /// Flush buffer to disk
     pub fn flush(&self) -> Result<usize, std::io::Error> {
-        let mut buffer = self.buffer.lock().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Lock error: {}", e))
-        })?;
+        let mut buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| std::io::Error::other(format!("Lock error: {}", e)))?;
         let count = buffer.len();
         self.flush_internal(&mut buffer)?;
         Ok(count)

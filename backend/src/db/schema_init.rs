@@ -1,4 +1,4 @@
-// ag/src/db/schema_init.rs v16.0.0
+// ag/src/db/schema_init.rs v17.0.0
 use crate::path_manager::PathManager;
 use crate::perf::sqlite_opt::{optimize_connection, SqliteConfig};
 use rusqlite::{params, Connection, Result as SqlResult};
@@ -8,7 +8,7 @@ pub struct SchemaInitializer;
 
 impl SchemaInitializer {
     pub fn init(db_conn: &Connection) -> SqlResult<()> {
-        info!("Initializing database schema v16.0.0");
+        info!("Initializing database schema v17.0.0");
 
         // Apply SQLite performance optimizations (WAL mode, mmap, etc.)
         let config = SqliteConfig::default();
@@ -21,6 +21,7 @@ impl SchemaInitializer {
         Self::run_v14_migration(db_conn)?;
         Self::run_v15_migration(db_conn)?;
         Self::run_v16_migration(db_conn)?;
+        Self::run_v17_migration(db_conn)?;
         info!("Database schema initialized with WAL mode");
         Ok(())
     }
@@ -102,6 +103,17 @@ impl SchemaInitializer {
             INSERT OR IGNORE INTO agent_memory_settings (id, settings_json) VALUES (1, '{}');",
         )?;
         info!("corpus migration v16: ensured agent_memory_settings table");
+        Ok(())
+    }
+
+    /// Add `description` TEXT column to `corpora`.
+    fn run_v17_migration(conn: &Connection) -> SqlResult<()> {
+        if !Self::column_exists(conn, "corpora", "description")? {
+            conn.execute_batch(
+                "ALTER TABLE corpora ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+            )?;
+            info!("corpus migration v17: added corpora.description column");
+        }
         Ok(())
     }
 

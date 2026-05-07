@@ -103,8 +103,8 @@ pub fn normalize_simd(v: &mut [f32]) {
 
     let mut magnitude_sq = sq_sum.reduce_add();
     let start = chunks * 8;
-    for i in start..len {
-        magnitude_sq += v[i] * v[i];
+    for &val in &v[start..len] {
+        magnitude_sq += val * val;
     }
 
     let magnitude = magnitude_sq.sqrt();
@@ -121,13 +121,11 @@ pub fn normalize_simd(v: &mut [f32]) {
         let chunk = f32x8::from(&v[offset..offset + 8]);
         let normalized = chunk * inv_mag_simd;
         // Write back
-        for j in 0..8 {
-            v[offset + j] = normalized.as_array_ref()[j];
-        }
+        v[offset..offset + 8].copy_from_slice(normalized.as_array_ref());
     }
 
-    for i in start..len {
-        v[i] *= inv_mag;
+    for val in &mut v[start..len] {
+        *val *= inv_mag;
     }
 }
 

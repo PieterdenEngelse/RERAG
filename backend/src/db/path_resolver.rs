@@ -59,7 +59,5 @@ pub fn agent_db_path_string() -> String {
 
 /// Convenience helper that returns the agent database path as a `&'static str`.
 pub fn agent_db_path_str() -> &'static str {
-    AGENT_DB_STRING
-        .get_or_init(|| agent_db_path_string())
-        .as_str()
+    AGENT_DB_STRING.get_or_init(agent_db_path_string).as_str()
 }

@@ -172,27 +172,49 @@ async fn run_watcher(
             // Index the file
             match retriever.lock() {
                 Ok(mut ret) => {
-                    // Look up per-corpus chunker mode; fall back to global.
-                    let effective_mode = if !config.db_path.is_empty() {
-                        rusqlite::Connection::open(&config.db_path)
-                            .ok()
-                            .and_then(|conn| {
-                                crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug)
-                                    .ok()
-                            })
-                            .and_then(|s| s.chunker_mode)
-                            .and_then(|m| m.parse::<ChunkerMode>().ok())
-                            .unwrap_or(config.chunker_mode)
-                    } else {
-                        config.chunker_mode
+                    // Skip if already indexed (upload handler may have beaten us to it).
+                    let filename = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    let already_indexed = ret
+                        .get_all_doc_ids()
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|id| id.split('#').next() == Some(filename));
+                    if already_indexed {
+                        debug!("Skipping already-indexed file: {}", filename);
+                        continue;
+                    }
+                    // Compute effective per-corpus chunker config; fall back to global.
+                    let effective_cfg = {
+                        let global = crate::db::chunk_settings::global_config();
+                        let settings = if !config.db_path.is_empty() {
+                            rusqlite::Connection::open(&config.db_path)
+                                .ok()
+                                .and_then(|conn| {
+                                    crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug).ok()
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            crate::db::corpora::CorpusSettings::default()
+                        };
+                        crate::db::corpora::effective_chunker_config(&global, &settings)
                     };
-                    let chunker = index::default_chunker(effective_mode);
+                    let effective_mode = effective_cfg.mode
+                        .parse::<ChunkerMode>()
+                        .unwrap_or(config.chunker_mode);
+                    let chunker = crate::memory::chunker_factory::create_chunker(
+                        effective_mode.into(),
+                        &effective_cfg,
+                    );
                     match index::index_file(
-                        &mut *ret,
+                        &mut ret,
                         &path,
                         effective_mode,
                         chunker.as_ref(),
                         &config.corpus_slug,
+                        effective_cfg.context_prefix_enabled,
                     ) {
                         Ok(chunks) => {
                             info!(

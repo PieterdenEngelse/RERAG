@@ -3,12 +3,26 @@
 
 use crate::tools::{Tool, ToolMetadata, ToolResult, ToolType};
 use async_trait::async_trait;
+use std::sync::OnceLock;
 use std::time::Instant;
+
+static RATE_LIMITER: OnceLock<crate::tools::RateLimiter> = OnceLock::new();
+
+fn rate_limiter() -> &'static crate::tools::RateLimiter {
+    // 1 req/s — DuckDuckGo HTML scraping is sensitive to bursts
+    RATE_LIMITER.get_or_init(|| crate::tools::RateLimiter::new(1.0, 1.0))
+}
 
 #[derive(Debug, Clone)]
 pub struct WebSearchTool {
     success_count: usize,
     total_count: usize,
+}
+
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WebSearchTool {
@@ -198,6 +212,8 @@ impl Tool for WebSearchTool {
             })
             .collect();
         let url = format!("https://html.duckduckgo.com/html/?q={}", encoded_query);
+
+        rate_limiter().acquire(1.0).await;
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))

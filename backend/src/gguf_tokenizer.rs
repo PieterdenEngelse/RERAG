@@ -382,7 +382,7 @@ mod tests {
     fn test_heuristic_counter() {
         let counter = HeuristicTokenCounter;
         let count = counter.count_tokens("The quick brown fox jumps over the lazy dog");
-        assert!(count >= 8 && count <= 15, "Heuristic count was {}", count);
+        assert!((8..=15).contains(&count), "Heuristic count was {}", count);
         assert_eq!(counter.model_name(), "heuristic");
         assert!(!counter.is_exact());
         assert_eq!(counter.vocab_size(), 0);

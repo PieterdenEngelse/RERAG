@@ -285,7 +285,7 @@ mod trace_propagation_tests {
         // All log entries should contain request ID
         for entry in &log_entries {
             assert!(
-                entry.contains(&request_id),
+                entry.contains(request_id),
                 "Log entry missing request ID: {}",
                 entry
             );

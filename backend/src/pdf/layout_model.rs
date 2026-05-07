@@ -179,7 +179,11 @@ impl DetrLayoutModel {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(11); // cmarkea/detr-layout-detection: 11 classes
 
-        Ok(DetrLayoutModel { session, threshold, num_classes })
+        Ok(DetrLayoutModel {
+            session,
+            threshold,
+            num_classes,
+        })
     }
 
     fn classify(&mut self, words: &[WordSpan], pdf_bytes: &[u8]) -> anyhow::Result<Vec<RegionTag>> {
@@ -250,7 +254,7 @@ impl DetrLayoutModel {
         // Build [1, 3, H, W] f32 ImageNet-normalised tensor (CHW layout)
         let rgb = img.to_rgb8();
         let mean = [0.485f32, 0.456, 0.406];
-        let std  = [0.229f32, 0.224, 0.225];
+        let std = [0.229f32, 0.224, 0.225];
         let npixels = (h * w) as usize;
         let mut data = vec![0f32; 3 * npixels];
 
@@ -264,8 +268,8 @@ impl DetrLayoutModel {
         }
 
         let shape = vec![1i64, 3, h as i64, w as i64];
-        let pixel_values = Tensor::from_array((shape, data))
-            .map_err(|e| anyhow::anyhow!("tensor: {e}"))?;
+        let pixel_values =
+            Tensor::from_array((shape, data)).map_err(|e| anyhow::anyhow!("tensor: {e}"))?;
 
         let outputs = self
             .session
@@ -332,7 +336,10 @@ impl DetrLayoutModel {
             let y1 = (cy + bh / 2.0).clamp(0.0, 1.0);
 
             regions.push(DetectedRegion {
-                x0, y0, x1, y1,
+                x0,
+                y0,
+                x1,
+                y1,
                 tag: detr_class_to_region(cls_idx),
                 confidence: best_prob,
             });
@@ -344,7 +351,10 @@ impl DetrLayoutModel {
 
 #[derive(Debug)]
 struct DetectedRegion {
-    x0: f32, y0: f32, x1: f32, y1: f32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
     tag: RegionTag,
     #[allow(dead_code)]
     confidence: f32,
@@ -372,12 +382,21 @@ fn detr_class_to_region(cls: usize) -> RegionTag {
 
 /// Find the detected region that best contains the word bbox.
 /// Uses centre-point containment first; falls back to highest-IoU region.
-fn best_region(wx0: f32, wy0: f32, wx1: f32, wy1: f32, regions: &[DetectedRegion]) -> Option<RegionTag> {
+fn best_region(
+    wx0: f32,
+    wy0: f32,
+    wx1: f32,
+    wy1: f32,
+    regions: &[DetectedRegion],
+) -> Option<RegionTag> {
     let cx = (wx0 + wx1) / 2.0;
     let cy = (wy0 + wy1) / 2.0;
 
     // Prefer a region whose bbox contains the word's centre point
-    if let Some(r) = regions.iter().find(|r| cx >= r.x0 && cx <= r.x1 && cy >= r.y0 && cy <= r.y1) {
+    if let Some(r) = regions
+        .iter()
+        .find(|r| cx >= r.x0 && cx <= r.x1 && cy >= r.y0 && cy <= r.y1)
+    {
         return Some(r.tag);
     }
 
@@ -403,14 +422,14 @@ fn bind_pdfium() -> anyhow::Result<pdfium_render::prelude::Pdfium> {
 
     // Try explicit path first, then system library
     let binding = if let Ok(path) = std::env::var("PDFIUM_LIBRARY_PATH") {
-        Pdfium::bind_to_library(&path)
-            .map_err(|e| anyhow::anyhow!("pdfium at {path}: {e}"))?
+        Pdfium::bind_to_library(&path).map_err(|e| anyhow::anyhow!("pdfium at {path}: {e}"))?
     } else {
-        Pdfium::bind_to_system_library()
-            .map_err(|e| anyhow::anyhow!(
+        Pdfium::bind_to_system_library().map_err(|e| {
+            anyhow::anyhow!(
                 "PDFium library not found. Set PDFIUM_LIBRARY_PATH or install libpdfium. \
                  Download from github.com/bblanchon/pdfium-binaries: {e}"
-            ))?
+            )
+        })?
     };
 
     Ok(Pdfium::new(binding))
@@ -454,7 +473,7 @@ impl OrtLayoutClassifier {
                 let y0 = (bb[1] as f32 / 1000.0).clamp(0.0, 1.0);
                 let x1 = (bb[2] as f32 / 1000.0).clamp(0.0, 1.0);
                 let y1 = (bb[3] as f32 / 1000.0).clamp(0.0, 1.0);
-                features[base]     = x0;
+                features[base] = x0;
                 features[base + 1] = y0;
                 features[base + 2] = x1;
                 features[base + 3] = y1;
@@ -466,8 +485,8 @@ impl OrtLayoutClassifier {
         }
 
         let shape = vec![1i64, n as i64, 8i64];
-        let input = Tensor::from_array((shape, features))
-            .map_err(|e| anyhow::anyhow!("tensor: {e}"))?;
+        let input =
+            Tensor::from_array((shape, features)).map_err(|e| anyhow::anyhow!("tensor: {e}"))?;
 
         let outputs = self
             .session
@@ -482,11 +501,14 @@ impl OrtLayoutClassifier {
 
         let labels: &[i64] = match shape_dims.as_slice() {
             [1, n] => &flat[..*n as usize],
-            [n]    => &flat[..*n as usize],
-            _      => flat.as_slice(),
+            [n] => &flat[..*n as usize],
+            _ => flat.as_slice(),
         };
 
-        Ok(labels.iter().map(|&l| word_ort_label_to_region(l)).collect())
+        Ok(labels
+            .iter()
+            .map(|&l| word_ort_label_to_region(l))
+            .collect())
     }
 }
 

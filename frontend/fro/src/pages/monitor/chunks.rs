@@ -39,6 +39,7 @@ pub fn MonitorChunks() -> Element {
     let mut show_canon_info = use_signal(|| false);
     let mut show_file_norm_info = use_signal(|| false);
     let mut show_mode_info = use_signal(|| false);
+    let mut show_strategy_info = use_signal(|| false);
     let mut show_golden_info = use_signal(|| false);
     let mut show_seed_info = use_signal(|| false);
     let mut show_recapture_info = use_signal(|| false);
@@ -58,6 +59,15 @@ pub fn MonitorChunks() -> Element {
     let mut show_picker_info = use_signal(|| false);
     let mut show_swap_info = use_signal(|| false);
 
+    // Golden sample browse state
+    let mut show_golden_entries = use_signal(|| false);
+    let mut expanded_golden_entry = use_signal(|| None::<i64>);
+    let mut show_golden_read_info = use_signal(|| false);
+
+    // Corpus filter
+    let mut corpus_filter = use_signal(|| String::new());
+    let mut corpora: Signal<Vec<api::CorpusEntry>> = use_signal(Vec::new);
+
     // Chunk preview state
     let mut preview_text = use_signal(|| String::new());
     let mut preview_filename = use_signal(|| String::new());
@@ -65,33 +75,48 @@ pub fn MonitorChunks() -> Element {
     let mut preview_result = use_signal(|| None::<api::ChunkPreviewResponse>);
     let mut preview_error = use_signal(|| None::<String>);
 
+    // Load corpus list once on mount.
     use_future(move || async move {
-        loop {
-            let (tok_res, stats_res, canon_res, golden_res) = futures_util::join!(
-                api::fetch_tokenizer_info(),
-                api::fetch_chunking_stats(20),
-                api::fetch_canon_stats(),
-                api::fetch_golden_sample(20),
-            );
+        if let Ok(list) = api::fetch_corpora().await {
+            corpora.set(list);
+        }
+    });
 
-            if let Ok(tok) = tok_res {
-                tokenizer.set(Some(tok));
-            }
-            match stats_res {
-                Ok(resp) => {
-                    stats.set(Some(resp.snapshots));
-                    error.set(None);
+    // Main polling loop — restarts when corpus_filter changes.
+    use_future(move || {
+        let corpus_val = corpus_filter();
+        async move {
+            stats.set(None);
+            canon_stats.set(None);
+            loading.set(true);
+            let c = if corpus_val.is_empty() { None } else { Some(corpus_val.as_str()) };
+            loop {
+                let (tok_res, stats_res, canon_res, golden_res) = futures_util::join!(
+                    api::fetch_tokenizer_info(),
+                    api::fetch_chunking_stats(20, c),
+                    api::fetch_canon_stats(c),
+                    api::fetch_golden_sample(20),
+                );
+
+                if let Ok(tok) = tok_res {
+                    tokenizer.set(Some(tok));
                 }
-                Err(e) => error.set(Some(e)),
+                match stats_res {
+                    Ok(resp) => {
+                        stats.set(Some(resp.snapshots));
+                        error.set(None);
+                    }
+                    Err(e) => error.set(Some(e)),
+                }
+                if let Ok(cs) = canon_res {
+                    canon_stats.set(Some(cs));
+                }
+                if let Ok(gs) = golden_res {
+                    golden.set(Some(gs));
+                }
+                loading.set(false);
+                TimeoutFuture::new(10_000).await;
             }
-            if let Ok(cs) = canon_res {
-                canon_stats.set(Some(cs));
-            }
-            if let Ok(gs) = golden_res {
-                golden.set(Some(gs));
-            }
-            loading.set(false);
-            TimeoutFuture::new(10_000).await;
         }
     });
 
@@ -142,22 +167,78 @@ pub fn MonitorChunks() -> Element {
         };
     let show_fallback_banner = !tok_exact && !fallback_label.is_empty();
 
-    // Pre-compute tokenizer mismatch outside RSX
-    let mismatch_models: String = stats()
+    // Pre-compute tokenizer mismatch outside RSX — collect both stale models and
+    // which corpora contain them so the warning can point at the right corpus.
+    let (mismatch_models, mismatch_corpora): (String, String) = stats()
         .as_ref()
         .map(|snaps| {
-            let mut seen = std::collections::BTreeSet::new();
+            let mut models = std::collections::BTreeSet::new();
+            let mut corpora = std::collections::BTreeSet::new();
             for s in snaps {
                 if let Some(ref m) = s.tokenizer_model {
                     if !tok_model.is_empty() && m != &tok_model {
-                        seen.insert(m.clone());
+                        models.insert(m.clone());
+                        let c = if s.corpus.is_empty() { "default" } else { s.corpus.as_str() };
+                        corpora.insert(c.to_string());
                     }
                 }
             }
-            seen.into_iter().collect::<Vec<_>>().join(", ")
+            (
+                models.into_iter().collect::<Vec<_>>().join(", "),
+                corpora.into_iter().collect::<Vec<_>>().join(", "),
+            )
         })
         .unwrap_or_default();
     let has_mismatch = !mismatch_models.is_empty();
+    let corpus_count = mismatch_corpora.split(", ").filter(|s| !s.is_empty()).count();
+    let corpus_label = if corpus_count == 1 { "Corpus" } else { "Corpora" };
+    let was_were = if corpus_count == 1 { "was" } else { "were" };
+    let that_corpus = if corpus_count == 1 { "that corpus" } else { "those corpora" };
+    let the_affected = if corpus_count == 1 { "the affected corpus" } else { "each affected corpus" };
+
+    // Detection mismatch: extension implies a strategy that doesn't match chosen_strategy.
+    // Only flagged when the extension is unambiguous; heuristic-only detections are skipped.
+    fn expected_strategy(ext: &str) -> Option<&'static str> {
+        match ext.to_lowercase().trim_start_matches('.') {
+            "pdf" => Some("character_split"),
+            "txt" => Some("paragraph_split"),
+            "md" | "markdown" => Some("header_aware"),
+            "html" | "htm" => Some("tag_aware"),
+            "xml" => Some("tag_aware"),
+            "json" => Some("structure_aware"),
+            "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp"
+            | "go" | "java" | "cs" | "rb" | "php" | "swift" | "kt" | "scala" => Some("ast_based"),
+            "docx" => Some("paragraph_split"),
+            "odt" => Some("paragraph_split"),
+            "xlsx" => Some("row_split"),
+            "ods" => Some("row_split"),
+            "csv" => Some("row_split"),
+            "epub" => Some("chapter_split"),
+            "pptx" => Some("slide_split"),
+            _ => None,
+        }
+    }
+    // Collect mismatched files for banner + per-row flagging.
+    let detection_mismatches: Vec<(String, String, String)> = stats()
+        .as_ref()
+        .map(|snaps| {
+            snaps.iter().filter_map(|s| {
+                let det = s.detection.as_ref()?;
+                let ext = det.extension.as_deref()
+                    .or_else(|| s.file.rsplit('.').next())?;
+                let expected = expected_strategy(ext)?;
+                if det.chosen_strategy != expected {
+                    let file_short = s.file.rsplit('/').next().unwrap_or(&s.file).to_string();
+                    Some((file_short, expected.to_string(), det.chosen_strategy.clone()))
+                } else {
+                    None
+                }
+            }).collect()
+        })
+        .unwrap_or_default();
+    let has_detection_mismatch = !detection_mismatches.is_empty();
+    let detection_mismatch_count = detection_mismatches.len();
+    let detection_mismatch_plural = if detection_mismatch_count == 1 { "file" } else { "files" };
 
     rsx! {
         div { class: "space-y-6",
@@ -170,6 +251,47 @@ pub fn MonitorChunks() -> Element {
             }
 
             NavTabs { active: Route::MonitorChunks {} }
+
+            // Corpus filter
+            div { class: "flex flex-col gap-0.5",
+                div {
+                    class: "flex items-center px-2 py-0.5 rounded cursor-pointer",
+                    style: if corpus_filter().is_empty() {
+                        "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6);"
+                    } else {
+                        "background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);"
+                    },
+                    onclick: move |_| corpus_filter.set(String::new()),
+                    span {
+                        class: "text-xs font-mono",
+                        style: if corpus_filter().is_empty() { "color: white;" } else { "color: #d1d5db;" },
+                        "All corpora"
+                    }
+                }
+                for entry in corpora() {
+                    {
+                        let slug = entry.slug.clone();
+                        let slug2 = slug.clone();
+                        let active = corpus_filter() == slug;
+                        rsx! {
+                            div {
+                                class: "flex items-center px-2 py-0.5 rounded cursor-pointer",
+                                style: if active {
+                                    "background-color: rgba(124,42,2,0.35); border: 1px solid rgba(124,42,2,0.6);"
+                                } else {
+                                    "background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);"
+                                },
+                                onclick: move |_| corpus_filter.set(slug.clone()),
+                                span {
+                                    class: "text-xs font-mono",
+                                    style: if active { "color: white;" } else { "color: #d1d5db;" },
+                                    "{slug2}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Tokenizer status board
             Panel { title: None, refresh: None,
@@ -261,7 +383,38 @@ pub fn MonitorChunks() -> Element {
                                 "Tokenizer mismatch detected"
                             }
                             p { class: "text-yellow-400/80",
-                                "Some chunks were indexed with a different tokenizer ({mismatch_models}) than the currently active one ({tok_model}). Token counts may be inaccurate. Consider re-indexing."
+                                "{corpus_label} {mismatch_corpora} {was_were} indexed with {mismatch_models} but the active tokenizer is {tok_model}. Token counts in {that_corpus} may be inaccurate."
+                            }
+                            p { class: "text-yellow-400/80 mt-1",
+                                "Re-index {the_affected} from Config → Corpus to fix this — documents in other corpora are unaffected."
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Detection strategy mismatch warning
+            if has_detection_mismatch {
+                Panel { title: None, refresh: None,
+                    div { class: "flex items-start gap-3 p-3 rounded-lg",
+                        style: "background-color: rgba(234,179,8,0.1); border: 1px solid rgba(234,179,8,0.3);",
+                        span { class: "text-yellow-400 text-lg", "⚠" }
+                        div { class: "text-sm text-yellow-300",
+                            p { class: "font-medium mb-1",
+                                "Format detection mismatch — {detection_mismatch_count} {detection_mismatch_plural} may have been misidentified"
+                            }
+                            p { class: "text-yellow-400/80 mb-2",
+                                "The file extension implies a different chunking strategy than what was used. This usually means the file had no extension, the wrong extension, or an unsupported MIME type. Check the Strategy column below for details."
+                            }
+                            div { class: "flex flex-col gap-0.5",
+                                for (file, expected, actual) in &detection_mismatches {
+                                    p { class: "text-xs font-mono text-yellow-400/70",
+                                        "{file} — expected {expected}, got {actual}"
+                                    }
+                                }
+                            }
+                            p { class: "text-yellow-400/80 mt-2",
+                                "Fix: rename the file with the correct extension and re-index it."
                             }
                         }
                     }
@@ -298,6 +451,23 @@ pub fn MonitorChunks() -> Element {
                                 title: "About the golden corpus sample",
                                 InfoIcon {}
                             }
+                            if cur > 0 {
+                                button {
+                                    class: "btn btn-xs bg-gray-700 hover:bg-gray-600 text-gray-200 border-gray-600",
+                                    onclick: move |_| {
+                                        show_golden_entries.set(!show_golden_entries());
+                                        expanded_golden_entry.set(None);
+                                    },
+                                    if show_golden_entries() { "▲ Hide chunks" } else { "▼ Browse chunks" }
+                                }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_golden_read_info.set(true),
+                                    title: "How to read and evaluate the sample",
+                                    InfoIcon {}
+                                }
+                            }
                         }
                         div { class: "flex flex-wrap gap-6 text-sm mb-3",
                             div { class: "flex flex-col gap-1",
@@ -331,7 +501,7 @@ pub fn MonitorChunks() -> Element {
                                 style: "width: {pct}%;",
                             }
                         }
-                        div { class: "flex items-center gap-2",
+                        div { class: "flex items-center gap-2 flex-wrap",
                             button {
                                 class: "btn btn-sm bg-gray-700 hover:bg-gray-600 text-gray-200 border-gray-600",
                                 onclick: move |_| async move {
@@ -362,6 +532,89 @@ pub fn MonitorChunks() -> Element {
                             }
                             if let Some(msg) = last_msg {
                                 span { class: "text-xs text-gray-400 ml-2", "{msg}" }
+                            }
+                        }
+
+                        // Browseable entries table
+                        if show_golden_entries() {
+                            if let Some(entries) = gs.as_ref().map(|g| &g.entries) {
+                                if entries.is_empty() {
+                                    p { class: "text-xs text-gray-400 mt-3", "No entries returned — try refreshing." }
+                                } else {
+                                    div { class: "mt-3 overflow-x-auto",
+                                        table { class: "w-full text-xs text-left border-collapse",
+                                            thead {
+                                                tr { class: "border-b border-gray-600",
+                                                    th { class: "py-1 pr-3 text-gray-400 font-medium", "Pos" }
+                                                    th { class: "py-1 pr-3 text-gray-400 font-medium", "Tokens" }
+                                                    th { class: "py-1 pr-3 text-gray-400 font-medium", "IDs?" }
+                                                    th { class: "py-1 pr-3 text-gray-400 font-medium", "Captured" }
+                                                    th { class: "py-1 text-gray-400 font-medium", "Preview" }
+                                                }
+                                            }
+                                            tbody {
+                                                for entry in entries.iter() {
+                                                    {
+                                                        let eid = entry.id;
+                                                        let is_expanded = expanded_golden_entry() == Some(eid);
+                                                        let preview: String = entry.chunk_text.chars().take(80).collect();
+                                                        let preview = if entry.chunk_text.chars().count() > 80 {
+                                                            format!("{}…", preview)
+                                                        } else {
+                                                            preview
+                                                        };
+                                                        let has_ids = entry.baseline_token_ids.is_some();
+                                                        let captured = entry.captured_at.get(..16).unwrap_or(&entry.captured_at).to_string();
+                                                        let chunk_text = entry.chunk_text.clone();
+                                                        let token_ids = entry.baseline_token_ids.clone();
+                                                        rsx! {
+                                                            tr {
+                                                                class: "border-b border-gray-700 hover:bg-gray-700/40 cursor-pointer",
+                                                                onclick: move |_| {
+                                                                    if is_expanded {
+                                                                        expanded_golden_entry.set(None);
+                                                                    } else {
+                                                                        expanded_golden_entry.set(Some(eid));
+                                                                    }
+                                                                },
+                                                                td { class: "py-1 pr-3 text-gray-300 font-mono", "{entry.position_in_corpus}" }
+                                                                td { class: "py-1 pr-3 text-gray-200 font-medium", "{entry.baseline_token_count}" }
+                                                                td { class: "py-1 pr-3",
+                                                                    if has_ids {
+                                                                        span { class: "text-green-400", "✓" }
+                                                                    } else {
+                                                                        span { class: "text-gray-500", "—" }
+                                                                    }
+                                                                }
+                                                                td { class: "py-1 pr-3 text-gray-400 font-mono", "{captured}" }
+                                                                td { class: "py-1 text-gray-300", "{preview}" }
+                                                            }
+                                                            if is_expanded {
+                                                                tr { class: "bg-gray-800/60",
+                                                                    td { colspan: "5", class: "py-2 px-1",
+                                                                        div { class: "flex flex-col gap-2",
+                                                                            div { class: "font-mono text-xs text-gray-200 whitespace-pre-wrap bg-gray-900 rounded p-2 max-h-48 overflow-y-auto",
+                                                                                "{chunk_text}"
+                                                                            }
+                                                                            if let Some(ids) = token_ids {
+                                                                                div { class: "flex flex-col gap-0.5",
+                                                                                    span { class: "text-gray-400 text-xs", "Token IDs ({ids.len()} tokens):" }
+                                                                                    div { class: "font-mono text-xs text-gray-300 bg-gray-900 rounded p-2 max-h-20 overflow-y-auto break-all",
+                                                                                        {ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(" ")}
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -799,7 +1052,26 @@ pub fn MonitorChunks() -> Element {
                                         th { class: "text-gray-400 text-right", "Tokens" }
                                         th { class: "text-gray-400 text-right", "Duration" }
                                         th { class: "text-gray-400", "Format" }
-                                        th { class: "text-gray-400", "Strategy" }
+                                        th { class: "text-gray-400",
+                                            div { class: "flex items-center gap-1",
+                                                span { "Strategy" }
+                                                button {
+                                                    class: "w-4 h-4 min-w-4 min-h-4 shrink-0 rounded flex items-center justify-center cursor-pointer hover:opacity-80",
+                                                    style: PARAM_ICON_BUTTON_STYLE,
+                                                    onclick: move |_| show_strategy_info.set(true),
+                                                    title: "About chunking strategies",
+                                                    svg {
+                                                        class: "w-3 h-3 text-white",
+                                                        view_box: "0 0 20 20",
+                                                        fill: "none",
+                                                        stroke: "currentColor",
+                                                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                                        circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                                    }
+                                                }
+                                            }
+                                        }
                                         th { class: "text-gray-400", "Tokenizer" }
                                     }
                                 }
@@ -818,6 +1090,13 @@ pub fn MonitorChunks() -> Element {
                                             let strategy = snap.detection.as_ref()
                                                 .map(|d| d.chosen_strategy.clone())
                                                 .unwrap_or_default();
+                                            let strategy_expected = snap.detection.as_ref()
+                                                .and_then(|d| d.extension.as_deref()
+                                                    .or_else(|| snap.file.rsplit('.').next()))
+                                                .and_then(expected_strategy);
+                                            let strategy_mismatch = strategy_expected
+                                                .map(|e| e != strategy.as_str())
+                                                .unwrap_or(false);
                                             rsx! {
                                                 tr { class: "hover:bg-gray-800/50",
                                                     td { class: "font-mono text-xs", "{time_short}" }
@@ -827,7 +1106,16 @@ pub fn MonitorChunks() -> Element {
                                                     td { class: "text-right", "{snap.tokens}" }
                                                     td { class: "text-right", "{snap.duration_ms}ms" }
                                                     td { class: "text-xs", "{detected_fmt}" }
-                                                    td { class: "text-xs", "{strategy}" }
+                                                    td {
+                                                        class: if strategy_mismatch { "text-xs text-yellow-400" } else { "text-xs" },
+                                                        title: if strategy_mismatch {
+                                                            format!("Expected {} for this extension", strategy_expected.unwrap_or("unknown"))
+                                                        } else {
+                                                            String::new()
+                                                        },
+                                                        if strategy_mismatch { "⚠ " } else { "" }
+                                                        "{strategy}"
+                                                    }
                                                     {
                                                         let snap_tok = snap.tokenizer_model.as_deref().unwrap_or("unknown");
                                                         let matches_active = tok_model.is_empty() || snap_tok == tok_model;
@@ -1212,6 +1500,84 @@ pub fn MonitorChunks() -> Element {
                 }
             }
 
+            // Chunking strategy info modal
+            if show_strategy_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_strategy_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg p-5 w-[98vw] shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between mb-3",
+                            h2 { class: "text-base font-semibold text-gray-100", "Chunking Strategy" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                onclick: move |_| show_strategy_info.set(false),
+                                "✕"
+                            }
+                        }
+                        p { class: "text-xs text-gray-400 mb-3", "A descriptive label derived from the file's detected format. It tells you what kind of natural boundaries exist in this document type — it does not select a different code path at chunking time. All three chunker modes (fixed, lightweight, semantic) process every format through the same pipeline." }
+                        p { class: "text-xs text-gray-400 mb-3", "The actual boundary-honoring happens in two places that run the same for all modes: the DocIR extraction pipeline (which parses documents into typed blocks — headings, paragraphs, tables, code), and the IR chunker which always flushes on atomic blocks (tables, code, formulas) and heading boundaries regardless of mode. The mode then applies its token budget on top of that." }
+                        div { class: "grid grid-cols-2 gap-2 mb-3",
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "paragraph_split" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: blank lines between paragraphs. Plain text, .docx, .odt." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "character_split" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: character count. PDF — paragraph structure is lost after text extraction." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "header_aware" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: Markdown headings (#, ##, ###). Headings become strong-boundary blocks in DocIR and always flush the accumulation." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "tag_aware" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: block-level HTML/XML tags. Markup is stripped before indexing; tag structure guides the IR block split." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "structure_aware" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: JSON keys / array elements. Objects are kept whole — partial records can't be meaningfully retrieved." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "ast_based" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: top-level syntax units — functions, classes, declarations. Source code. Each unit becomes an atomic block in DocIR." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "row_split" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: rows. CSV, .xlsx, .ods. Rows group up to the token budget; column headers are preserved." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "slide_split" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: slide breaks. .pptx. Each slide is an atomic block — title, bullets, and notes stay together." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "chapter_split" }
+                                p { class: "text-gray-500 text-xs", "Natural boundary: chapter/section markers. EPUB. Each chapter is a strong-boundary block." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "fallback_paragraph" }
+                                p { class: "text-gray-500 text-xs", "Best-effort paragraph split for unrecognised formats. Same as paragraph_split but signals format detection fell back to a heuristic." }
+                            }
+                            div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
+                                p { class: "font-semibold text-gray-200 text-xs", "skip" }
+                                p { class: "text-gray-500 text-xs", "Binary file — not indexed. No chunks produced." }
+                            }
+                        }
+                        div { class: "p-2 rounded mb-3", style: "background-color: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);",
+                            p { class: "text-xs text-gray-400 font-medium", "Not configurable" }
+                            p { class: "text-xs text-gray-500 mt-0.5", "Strategy is set by format detection — you can't change it. What you control is Mode (fixed / lightweight / semantic) via CHUNKER_MODE." }
+                        }
+                        button {
+                            class: "btn btn-sm w-full",
+                            style: "background-color:#7C2A02;border-color:#7C2A02;color:white;",
+                            onclick: move |_| show_strategy_info.set(false),
+                            "Got it"
+                        }
+                    }
+                }
+            }
+
             // Per-file normalization columns info modal
             if show_file_norm_info() {
                 div {
@@ -1355,8 +1721,8 @@ pub fn MonitorChunks() -> Element {
                                 }
                             }
                             p { "Heuristic: A fast approximation (roughly 1 token per 4 characters). Used when no GGUF file is available, for example with cloud backends." }
-                            p { "When you switch models, the token counter automatically reloads with the new model's vocabulary. Chunks indexed under the old model keep their original token counts. The mismatch warning tells you when this has happened - token counts shown may not match the active model's tokenization." }
-                            p { "To fix a mismatch, re-index your documents. This will re-chunk and re-count tokens using the active tokenizer." }
+                            p { "When you switch models, the token counter automatically reloads with the new model's vocabulary. Chunks indexed under the old model keep their original token counts. The mismatch warning tells you when this has happened — token counts shown may not match the active model's tokenization." }
+                            p { "To fix a mismatch, re-index the affected corpus from the Config → Corpus page. Only that corpus needs re-indexing — documents in other corpora are unaffected." }
                             p { class: "font-semibold text-gray-200 mt-3", "Why a fallback banner appears" }
                             p { "When exact (GGUF) counting cannot be set up, AG falls back to heuristic counting and shows a banner with the reason. The reasons:" }
                             p { class: "ml-2",
@@ -1377,6 +1743,76 @@ pub fn MonitorChunks() -> Element {
                             }
                             p { class: "text-xs text-gray-400 mt-2",
                                 "Operational consequence: while in fallback, all token counts shown in the UI and used for chunk-size decisions are approximations within roughly ±20%. Retrieval still works, but chunk boundaries may drift from what the model actually sees."
+                            }
+                        }
+                    }
+                }
+            }
+
+            // How to read & evaluate the sample modal
+            if show_golden_read_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_golden_read_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-[640px] max-h-[92vh] flex flex-col shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between mb-4 shrink-0",
+                            h2 { class: "text-lg font-semibold text-gray-100", "How to read and evaluate the sample" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                onclick: move |_| show_golden_read_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "text-sm text-gray-300 space-y-3 overflow-y-auto",
+                            p { class: "font-semibold text-gray-200", "What you're looking at" }
+                            p { "Each row is one chunk from your corpus — the exact text the embedder sees after NFKC normalisation. These are a random cross-section of everything you've ingested, selected to be statistically representative." }
+
+                            p { class: "font-semibold text-gray-200 mt-1", "Column guide" }
+                            p { class: "ml-2",
+                                span { class: "font-semibold text-gray-100", "Pos " }
+                                "— position in the corpus stream when this chunk was offered to the reservoir. Lower numbers came from early ingests; higher numbers from recent ones."
+                            }
+                            p { class: "ml-2",
+                                span { class: "font-semibold text-gray-100", "Tokens " }
+                                "— how many tokens the active tokenizer at capture time produced for this chunk. This is the baseline you're comparing against."
+                            }
+                            p { class: "ml-2",
+                                span { class: "font-semibold text-green-400", "✓ " }
+                                span { class: "text-gray-300", "in IDs — the full token ID sequence was saved (requires a GGUF-loaded tokenizer). The diff engine can do a deep sequence comparison." }
+                            }
+                            p { class: "ml-2",
+                                span { class: "text-gray-500", "— " }
+                                span { class: "text-gray-300", "in IDs — only the count was saved (heuristic fallback). The diff engine will skip per-token ID comparison for this entry." }
+                            }
+                            p { class: "ml-2",
+                                span { class: "font-semibold text-gray-100", "Captured " }
+                                "— when this chunk was last written to the sample (inserts and reservoir replacements both update this)."
+                            }
+                            p { class: "ml-2",
+                                span { class: "font-semibold text-gray-100", "Preview " }
+                                "— first 80 chars of the chunk text. Click the row to expand the full text and token IDs."
+                            }
+
+                            p { class: "font-semibold text-gray-200 mt-1", "What to look for" }
+                            p { "Scan a few rows and ask: does this look like a representative cross-section of my documents? You want a mix of topics, lengths, and formats — not 80 rows from the same PDF page." }
+                            p { "Check the token counts. Chunks with very high counts (> 500) may be oversized and could cause embedding quality issues. Very low counts (< 20) may be headings or noise." }
+                            p { "If most IDs show " span { class: "text-gray-500 font-mono", "—" } " (no IDs stored), you were running on a heuristic tokenizer at capture time. Re-capture after loading a GGUF model to get exact ID sequences — the diff engine is much more informative with them." }
+
+                            p { class: "font-semibold text-gray-200 mt-1", "What to do next" }
+                            p {
+                                "Once you have a representative, GGUF-backed sample, scroll down to "
+                                span { class: "font-semibold text-gray-100", "Compare & Swap Tokenizer" }
+                                " and point it at a candidate model file. It will re-tokenize every chunk in this table and report the delta — how many tokens changed, by how much, and which chunks diverged most."
+                            }
+                            p { "Use that diff to decide whether the new tokenizer is safe to swap in. A mean delta near zero and mostly ✓ IDs means the two tokenizers are practically equivalent. Large deltas or many ≠ rows mean the swap will meaningfully change how your corpus is split — worth understanding before committing." }
+
+                            button {
+                                class: "btn btn-sm w-full mt-2",
+                                style: "background-color:#7C2A02;",
+                                onclick: move |_| show_golden_read_info.set(false),
+                                "Got it"
                             }
                         }
                     }

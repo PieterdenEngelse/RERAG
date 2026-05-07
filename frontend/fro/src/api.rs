@@ -1610,6 +1610,35 @@ pub async fn set_rate_limit_enabled(enabled: bool) -> Result<SetRateLimitEnabled
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+pub async fn update_rate_limit_thresholds(
+    search_qps: f64,
+    search_burst: f64,
+    upload_qps: f64,
+    upload_burst: f64,
+) -> Result<(), String> {
+    let url = api_url("/monitor/rate_limits/thresholds");
+    let resp = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(
+            serde_json::json!({
+                "search_qps": search_qps,
+                "search_burst": search_burst,
+                "upload_qps": upload_qps,
+                "upload_burst": upload_burst,
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("HTTP {}", resp.status()))
+    }
+}
+
 pub async fn fetch_recent_logs(limit: usize) -> Result<LogsResponse, String> {
     let url = format!(
         "{}/monitor/logs/recent?limit={}",
@@ -2338,13 +2367,36 @@ pub struct DetectionInfo {
 /// Chunking stats from semantic chunker
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct ChunkingStats {
+    #[serde(default)]
     pub semantic_similarity_threshold: f32,
+    #[serde(default)]
     pub semantic_flushes: usize,
+    #[serde(default)]
     pub heading_flushes: usize,
+    #[serde(default)]
     pub size_flushes: usize,
+    #[serde(default)]
+    pub sentence_flushes: usize,
+    #[serde(default)]
     pub total_segments: usize,
+    #[serde(default)]
+    pub total_chunks: usize,
+    #[serde(default)]
+    pub similarity_observations: usize,
+    #[serde(default)]
     pub similarity_sum: f32,
-    pub similarity_count: usize,
+    #[serde(default)]
+    pub avg_chunk_tokens: usize,
+    #[serde(default)]
+    pub min_chunk_tokens: usize,
+    #[serde(default)]
+    pub max_chunk_tokens: usize,
+    #[serde(default)]
+    pub html_tags_stripped: usize,
+    #[serde(default)]
+    pub unicode_chars_normalized: usize,
+    #[serde(default)]
+    pub context_prefixes_added: usize,
 }
 
 /// Snapshot of chunking operation with detection info
@@ -2360,6 +2412,8 @@ pub struct ChunkingStatsSnapshot {
     pub detection: Option<DetectionInfo>,
     #[serde(default)]
     pub tokenizer_model: Option<String>,
+    #[serde(default)]
+    pub corpus: String,
 }
 
 /// Response from chunking stats endpoint
@@ -2377,8 +2431,12 @@ pub struct ChunkingStatsResponse {
 }
 
 /// Fetch chunking stats history for observability
-pub async fn fetch_chunking_stats(limit: usize) -> Result<ChunkingStatsResponse, String> {
-    fetch_json(&format!("/monitoring/chunking/latest?limit={}", limit)).await
+pub async fn fetch_chunking_stats(limit: usize, corpus: Option<&str>) -> Result<ChunkingStatsResponse, String> {
+    let url = match corpus.filter(|s| !s.is_empty()) {
+        Some(c) => format!("/monitoring/chunking/latest?limit={}&corpus={}", limit, c),
+        None => format!("/monitoring/chunking/latest?limit={}", limit),
+    };
+    fetch_json(&url).await
 }
 
 // ============ Tokenizer Info ============
@@ -3373,8 +3431,12 @@ pub struct ParserStats {
     pub recent_files: Vec<FileRecord>,
 }
 
-pub async fn fetch_parser_stats() -> Result<ParserStats, String> {
-    fetch_json("/monitor/parser/stats").await
+pub async fn fetch_parser_stats(corpus: Option<&str>) -> Result<ParserStats, String> {
+    let url = match corpus.filter(|s| !s.is_empty()) {
+        Some(c) => format!("/monitor/parser/stats?corpus={}", c),
+        None => "/monitor/parser/stats".to_string(),
+    };
+    fetch_json(&url).await
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -3410,8 +3472,45 @@ pub struct CanonStats {
     pub index_query: CallSiteStats,
 }
 
-pub async fn fetch_canon_stats() -> Result<CanonStats, String> {
-    fetch_json("/monitor/canon/stats").await
+pub async fn fetch_canon_stats(corpus: Option<&str>) -> Result<CanonStats, String> {
+    let url = match corpus.filter(|s| !s.is_empty()) {
+        Some(c) => format!("/monitor/canon/stats?corpus={}", c),
+        None => "/monitor/canon/stats".to_string(),
+    };
+    fetch_json(&url).await
+}
+
+// ============ Preprocessing Stats ============
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PreprocessFileRecord {
+    pub filename: String,
+    pub kind: String,
+    pub chars_in: u64,
+    pub chars_out: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct PreprocessStats {
+    pub html_files: u64,
+    pub html_chars_in: u64,
+    pub html_chars_out: u64,
+    pub html_tags_stripped: u64,
+    pub unicode_files: u64,
+    pub unicode_chars_in: u64,
+    pub unicode_chars_out: u64,
+    pub passthrough_files: u64,
+    pub passthrough_chars: u64,
+    #[serde(default)]
+    pub recent_files: Vec<PreprocessFileRecord>,
+}
+
+pub async fn fetch_preprocess_stats(corpus: Option<&str>) -> Result<PreprocessStats, String> {
+    let url = match corpus.filter(|s| !s.is_empty()) {
+        Some(c) => format!("/monitor/preprocess/stats?corpus={}", c),
+        None => "/monitor/preprocess/stats".to_string(),
+    };
+    fetch_json(&url).await
 }
 
 // ============ DocIR / Chunk Metadata Stats ============
@@ -3423,8 +3522,12 @@ pub struct ChunkMetaStats {
     pub total: u32,
 }
 
-pub async fn fetch_chunk_meta_stats() -> Result<ChunkMetaStats, String> {
-    fetch_json("/monitor/chunk-meta/stats").await
+pub async fn fetch_chunk_meta_stats(corpus: Option<&str>) -> Result<ChunkMetaStats, String> {
+    let url = match corpus.filter(|s| !s.is_empty()) {
+        Some(c) => format!("/monitor/chunk-meta/stats?corpus={}", c),
+        None => "/monitor/chunk-meta/stats".to_string(),
+    };
+    fetch_json(&url).await
 }
 
 // ============ Named Corpora ============
@@ -3434,6 +3537,8 @@ pub struct CorpusEntry {
     pub id: String,
     pub slug: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub created_at: String,
     #[serde(default)]
     pub doc_count: usize,
@@ -3451,12 +3556,12 @@ pub async fn fetch_corpora() -> Result<Vec<CorpusEntry>, String> {
     Ok(resp.corpora)
 }
 
-pub async fn create_corpus(slug: &str, name: &str) -> Result<CorpusEntry, String> {
+pub async fn create_corpus(slug: &str, name: &str, description: &str) -> Result<CorpusEntry, String> {
     #[derive(Serialize)]
-    struct Body<'a> { slug: &'a str, name: &'a str }
+    struct Body<'a> { slug: &'a str, name: &'a str, description: &'a str }
     #[derive(Deserialize)]
     struct Resp { corpus: CorpusEntry }
-    let resp: Resp = post_json("/corpora", &Body { slug, name }).await?;
+    let resp: Resp = post_json("/corpora", &Body { slug, name, description }).await?;
     Ok(resp.corpus)
 }
 
@@ -3496,6 +3601,28 @@ pub async fn rename_corpus(slug: &str, new_name: &str) -> Result<(), String> {
     }
 }
 
+pub async fn update_corpus_description(slug: &str, description: &str) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Body<'a> { description: &'a str }
+    let url = api_url(&format!("/corpora/{}/description", slug));
+    let body = serde_json::to_string(&Body { description })
+        .map_err(|e| format!("Encode error: {}", e))?;
+    let response = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("HTTP {} {}", status, text.trim()))
+    }
+}
+
 // ─── Per-corpus settings ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -3506,6 +3633,15 @@ pub struct CorpusSettings {
     pub hnsw_ef_construction: Option<usize>,
     pub hnsw_ef_search: Option<usize>,
     pub pq_subvectors: Option<usize>,
+    // Chunker parameter overrides
+    pub target_size: Option<usize>,
+    pub min_size: Option<usize>,
+    pub max_size: Option<usize>,
+    pub overlap: Option<usize>,
+    pub semantic_similarity_threshold: Option<f64>,
+    pub context_prefix_enabled: Option<bool>,
+    pub context_prefix_tokens: Option<usize>,
+    pub pipeline_stages: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use tracing::{info, warn};
 
 const DEFAULT_CAPACITY: usize = 100;
-const DEFAULT_SEED: u64 = 0xA60D5A_4_AEu64;
+const DEFAULT_SEED: u64 = 0x000A_60D5_A4AE_u64;
 
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 static DB_CONN: OnceLock<Mutex<Connection>> = OnceLock::new();

@@ -59,7 +59,7 @@ pub fn MonitorRag() -> Element {
             });
 
             let rag_result = api::fetch_rag_memories(50).await;
-            let chunking_result = api::fetch_chunking_stats(20).await;
+            let chunking_result = api::fetch_chunking_stats(20, None).await;
 
             match (rag_result, chunking_result) {
                 (Ok(r), Ok(c)) => {

@@ -97,7 +97,7 @@ mod tests {
     use std::env;
 
     fn unset(var: &str) {
-        let _ = env::remove_var(var);
+        env::remove_var(var);
     }
 
     #[test]

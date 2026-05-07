@@ -133,8 +133,10 @@ mod tests {
 
     #[test]
     fn test_tracing_disabled() {
-        let mut config = MonitoringConfig::default();
-        config.enabled = false;
+        let config = MonitoringConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let result = init_tracing(&config);
         assert!(result.is_ok());
     }

@@ -23,6 +23,8 @@ async fn main() -> std::io::Result<()> {
     // ─────────────────────────────────────────────────────────────
 
     dotenvy::dotenv().ok();
+    // Runtime overrides saved by the UI (toggle + thresholds) — must load after .env so they win.
+    dotenvy::from_filename_override(".env.rate_limits").ok();
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 0.1: Set up Ctrl+C handler for clean shutdown
@@ -152,12 +154,10 @@ async fn main() -> std::io::Result<()> {
 
     let _db_conn = match (|| -> std::io::Result<rusqlite::Connection> {
         let conn = rusqlite::Connection::open(pm.db_path("documents"))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        SchemaInitializer::init(&conn)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        ag::db::param_store::init_table(&conn)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        SchemaInitializer::init(&conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+        ag::db::param_store::init_table(&conn).map_err(|e| std::io::Error::other(e.to_string()))?;
 
         Ok(conn)
     })() {
@@ -180,6 +180,19 @@ async fn main() -> std::io::Result<()> {
     ag::db::extraction_records::init(pm.db_path("documents"));
     ag::db::golden_sample::init(pm.db_path("documents"));
     ag::monitoring::load_extraction_history();
+    ag::monitoring::init_preprocess_stats(pm.data_dir().join("preprocess_stats.json"));
+    ag::monitoring::init_canon_stats(pm.data_dir().join("canon_stats.json"));
+    ag::monitoring::init_chunking_stats(pm.data_dir().join("chunking_stats.json"));
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            ag::monitoring::flush_preprocess_stats();
+            ag::monitoring::flush_canon_stats();
+            ag::monitoring::flush_chunking_stats();
+        }
+    });
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 3.5: Initialize GGUF Token Counter
@@ -214,15 +227,15 @@ async fn main() -> std::io::Result<()> {
 
         if expected_local_gguf {
             match gguf_result {
-                Ok(path) => match handle.load_from_gguf(&path) {
-                    Ok(()) => info!(
-                        "✅ Exact token counter loaded (model={}, vocab={})",
-                        handle.model_name(),
-                        handle.vocab_size()
-                    ),
-                    // load_from_gguf already recorded the fallback + warned.
-                    Err(_) => {}
-                },
+                Ok(path) => {
+                    if let Ok(()) = handle.load_from_gguf(&path) {
+                        info!(
+                            "✅ Exact token counter loaded (model={}, vocab={})",
+                            handle.model_name(),
+                            handle.vocab_size()
+                        );
+                    } // else: load_from_gguf already recorded the fallback + warned
+                }
                 Err(e) => handle.mark_fallback(
                     FallbackReason::PathNotFound {
                         detail: format!("{:#}", e),
@@ -261,7 +274,7 @@ async fn main() -> std::io::Result<()> {
             }
             Err(e) => {
                 error!(error = %e, "Failed to initialize retriever");
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
+                return Err(std::io::Error::other(e));
             }
         };
 
@@ -508,21 +521,29 @@ async fn main() -> std::io::Result<()> {
             match retriever_clone.lock() {
                 Ok(mut ret) => {
                     // Check for per-corpus chunker override on default
-                    let effective_mode = rusqlite::Connection::open(&db_path_for_idx)
+                    let settings_default = rusqlite::Connection::open(&db_path_for_idx)
                         .ok()
                         .and_then(|conn| {
                             ag::db::corpora::get_corpus_settings(&conn, "default").ok()
-                        })
-                        .and_then(|s| s.chunker_mode)
-                        .and_then(|m| m.parse::<ag::config::ChunkerMode>().ok())
+                        });
+                    let global_cfg = ag::db::chunk_settings::global_config();
+                    let effective_cfg_default = settings_default
+                        .map(|s| ag::db::corpora::effective_chunker_config(&global_cfg, &s))
+                        .unwrap_or(global_cfg.clone());
+                    let effective_mode = effective_cfg_default.mode
+                        .parse::<ag::config::ChunkerMode>()
                         .unwrap_or(config.chunker_mode);
-                    let chunker = index::default_chunker(effective_mode);
+                    let chunker = ag::memory::chunker_factory::create_chunker(
+                        effective_mode.into(),
+                        &effective_cfg_default,
+                    );
                     if let Err(e) = index::index_all_documents(
-                        &mut *ret,
+                        &mut ret,
                         &upload_dir,
                         effective_mode,
                         chunker.as_ref(),
                         "default",
+                        effective_cfg_default.context_prefix_enabled,
                     ) {
                         error!("Background indexing (default) failed: {}", e);
                     } else {
@@ -544,22 +565,27 @@ async fn main() -> std::io::Result<()> {
                             .corpus_upload_dir(slug)
                             .to_string_lossy()
                             .to_string();
-                        let effective_mode = ag::db::corpora::get_corpus_settings(&conn, slug)
-                            .ok()
-                            .and_then(|s| s.chunker_mode)
-                            .and_then(|m| m.parse::<ag::config::ChunkerMode>().ok())
+                        let corpus_settings = ag::db::corpora::get_corpus_settings(&conn, slug).unwrap_or_default();
+                        let global_cfg2 = ag::db::chunk_settings::global_config();
+                        let eff_cfg = ag::db::corpora::effective_chunker_config(&global_cfg2, &corpus_settings);
+                        let effective_mode = eff_cfg.mode
+                            .parse::<ag::config::ChunkerMode>()
                             .unwrap_or(config.chunker_mode);
                         if let Some(handle) = ag::corpus_registry::get_registry()
                             .and_then(|reg| reg.get_or_create(slug).ok())
                         {
                             if let Ok(mut ret) = handle.lock() {
-                                let chunker = index::default_chunker(effective_mode);
+                                let chunker = ag::memory::chunker_factory::create_chunker(
+                                    effective_mode.into(),
+                                    &eff_cfg,
+                                );
                                 if let Err(e) = index::index_all_documents(
-                                    &mut *ret,
+                                    &mut ret,
                                     &corpus_dir,
                                     effective_mode,
                                     chunker.as_ref(),
                                     slug,
+                                    eff_cfg.context_prefix_enabled,
                                 ) {
                                     error!("Background indexing ({}) failed: {}", slug, e);
                                 }
@@ -658,9 +684,10 @@ fn cleanup_stale_locks() {
         .unwrap_or_else(|_| ".".to_string());
 
     let lock_patterns = [
-        // Tantivy index locks
-        format!("{}/tantivy_index/*.lock", data_dir),
-        format!("{}/tantivy_index/.tantivy-*", data_dir),
+        // Tantivy index locks — all corpus subdirs under index/
+        format!("{}/index/*/.tantivy-writer.lock", data_dir),
+        format!("{}/index/*/.tantivy-meta.lock", data_dir),
+        format!("{}/index/*/.tantivy-*", data_dir),
         // Data directory locks
         format!("{}/*.lock", data_dir),
         format!("{}/data/*.lock", data_dir),
@@ -696,11 +723,9 @@ fn cleanup_stale_locks() {
     // Also clean /tmp/ag_* files
     if let Ok(entries) = glob::glob("/tmp/ag_*") {
         for entry in entries.flatten() {
-            if entry.is_file() {
-                if let Ok(_) = std::fs::remove_file(&entry) {
-                    cleaned += 1;
-                    eprintln!("  Cleaned temp file: {}", entry.display());
-                }
+            if entry.is_file() && std::fs::remove_file(&entry).is_ok() {
+                cleaned += 1;
+                eprintln!("  Cleaned temp file: {}", entry.display());
             }
         }
     }

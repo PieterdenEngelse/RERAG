@@ -190,7 +190,7 @@ pub(crate) async fn get_docker_stats() -> Vec<DockerStats> {
             let (memory_usage, memory_limit) = if mem_usage.contains(" / ") {
                 let parts: Vec<&str> = mem_usage.split(" / ").collect();
                 (
-                    parts.get(0).unwrap_or(&"0B").to_string(),
+                    parts.first().unwrap_or(&"0B").to_string(),
                     parts.get(1).unwrap_or(&"0B").to_string(),
                 )
             } else {
@@ -207,7 +207,7 @@ pub(crate) async fn get_docker_stats() -> Vec<DockerStats> {
             let (network_rx, network_tx) = if net_io.contains(" / ") {
                 let parts: Vec<&str> = net_io.split(" / ").collect();
                 (
-                    parts.get(0).unwrap_or(&"0B").to_string(),
+                    parts.first().unwrap_or(&"0B").to_string(),
                     parts.get(1).unwrap_or(&"0B").to_string(),
                 )
             } else {
@@ -275,7 +275,7 @@ pub(crate) async fn runtime_action(
     for (cmd, service) in &commands {
         let output = tokio::process::Command::new("systemctl")
             .arg("--user")
-            .args(&[*cmd, *service])
+            .args([*cmd, *service])
             .output()
             .await;
 
@@ -289,14 +289,14 @@ pub(crate) async fn runtime_action(
 
     // Return current status
     let ollama_running = tokio::process::Command::new("systemctl")
-        .args(&["--user", "is-active", "ollama.service"])
+        .args(["--user", "is-active", "ollama.service"])
         .output()
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
 
     let llama_running = tokio::process::Command::new("systemctl")
-        .args(&["--user", "is-active", "llama-server.service"])
+        .args(["--user", "is-active", "llama-server.service"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -310,13 +310,13 @@ pub(crate) async fn runtime_action(
         "none"
     };
 
-    return Ok(HttpResponse::Ok().json(json!({
+    Ok(HttpResponse::Ok().json(json!({
         "status": "ok",
         "request_id": request_id,
         "active_backend": active_backend,
         "ollama_running": ollama_running,
         "llama_cpp_running": llama_running,
-    })));
+    })))
 }
 
 #[allow(dead_code)]

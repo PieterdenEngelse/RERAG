@@ -28,12 +28,7 @@ impl DocExtractor for NativePdfExtractor {
         matches!(ct, ContentType::Pdf)
     }
 
-    fn extract(
-        &self,
-        bytes: Vec<u8>,
-        filename: &str,
-        _ct: &ContentType,
-    ) -> anyhow::Result<DocIR> {
+    fn extract(&self, bytes: Vec<u8>, filename: &str, _ct: &ContentType) -> anyhow::Result<DocIR> {
         // Stage 1: word extraction
         let words = extract_words(&bytes).map_err(|e| {
             warn!(filename, error = %e, "native_pdf: word extraction failed");
@@ -44,11 +39,7 @@ impl DocExtractor for NativePdfExtractor {
             anyhow::bail!("native_pdf: no text extracted from '{}'", filename);
         }
 
-        debug!(
-            filename,
-            words = words.len(),
-            "native_pdf: words extracted"
-        );
+        debug!(filename, words = words.len(), "native_pdf: words extracted");
 
         // Stage 2: region classification (DETR, word-ORT, or heuristic)
         let layout = LayoutModel::load_or_heuristic();

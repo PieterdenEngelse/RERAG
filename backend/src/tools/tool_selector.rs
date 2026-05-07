@@ -3,6 +3,7 @@
 
 use crate::tools::ToolType;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSelection {
@@ -27,20 +28,21 @@ pub enum QueryIntent {
     Unknown,
 }
 
-impl ToString for QueryIntent {
-    fn to_string(&self) -> String {
-        match self {
-            QueryIntent::Math => "Math".to_string(),
-            QueryIntent::WebSearch => "WebSearch".to_string(),
-            QueryIntent::UrlFetch => "UrlFetch".to_string(),
-            QueryIntent::Database => "Database".to_string(),
-            QueryIntent::CodeExecution => "CodeExecution".to_string(),
-            QueryIntent::ImageGeneration => "ImageGeneration".to_string(),
-            QueryIntent::Scheduler => "Scheduler".to_string(),
-            QueryIntent::Memory => "Memory".to_string(),
-            QueryIntent::SemanticSearch => "SemanticSearch".to_string(),
-            QueryIntent::Unknown => "Unknown".to_string(),
-        }
+impl fmt::Display for QueryIntent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            QueryIntent::Math => "Math",
+            QueryIntent::WebSearch => "WebSearch",
+            QueryIntent::UrlFetch => "UrlFetch",
+            QueryIntent::Database => "Database",
+            QueryIntent::CodeExecution => "CodeExecution",
+            QueryIntent::ImageGeneration => "ImageGeneration",
+            QueryIntent::Scheduler => "Scheduler",
+            QueryIntent::Memory => "Memory",
+            QueryIntent::SemanticSearch => "SemanticSearch",
+            QueryIntent::Unknown => "Unknown",
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -134,8 +136,8 @@ impl ToolSelector {
         let reasoning = format!(
             "Query intent: {}. Selected {} (confidence: {:.2}). \
              Fallback tools: {:?}",
-            intent.to_string(),
-            primary.to_string(),
+            intent,
+            primary,
             confidence,
             secondary.iter().map(|t| t.to_string()).collect::<Vec<_>>()
         );
