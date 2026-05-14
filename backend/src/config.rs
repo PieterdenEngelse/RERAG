@@ -41,7 +41,9 @@ pub enum DistanceMetric {
 }
 
 impl Default for DistanceMetric {
-    fn default() -> Self { DistanceMetric::Cosine }
+    fn default() -> Self {
+        DistanceMetric::Cosine
+    }
 }
 
 impl std::fmt::Display for DistanceMetric {

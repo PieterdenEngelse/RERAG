@@ -12,13 +12,12 @@ pub mod db {
     pub mod path_resolver;
     pub mod schema_init;
 }
-pub mod corpus_registry;
 pub mod agent;
 pub mod api;
 pub mod config;
+pub mod corpus_registry;
 pub mod embedder;
 pub mod gguf_tokenizer;
-pub mod tokenizer_diff;
 pub mod index;
 pub mod inference_gateway;
 pub mod mime_detect;
@@ -27,6 +26,7 @@ pub mod parser;
 pub mod retriever;
 pub mod rig_tools;
 pub mod rules;
+pub mod tokenizer_diff;
 pub use retriever::Retriever;
 pub mod agent_memory;
 pub mod cache;

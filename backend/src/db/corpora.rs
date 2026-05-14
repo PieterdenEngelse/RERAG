@@ -136,8 +136,7 @@ pub fn set_agent_memory_settings(
     conn: &Connection,
     settings: &AgentMemorySettings,
 ) -> std::result::Result<(), String> {
-    let json =
-        serde_json::to_string(settings).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(settings).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO agent_memory_settings (id, settings_json) VALUES (1, ?1)
          ON CONFLICT(id) DO UPDATE SET settings_json = ?1",
@@ -168,8 +167,7 @@ pub fn create_corpus(conn: &Connection, slug: &str, name: &str) -> Result<Corpus
     if !validate_slug(slug) {
         return Err(CorporaError::InvalidSlug(slug.to_string()));
     }
-    let id: String =
-        conn.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
+    let id: String = conn.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
     conn.execute(
         "INSERT INTO corpora (id, slug, name) VALUES (?1, ?2, ?3)",
         params![id, slug, name],
@@ -178,9 +176,8 @@ pub fn create_corpus(conn: &Connection, slug: &str, name: &str) -> Result<Corpus
 }
 
 pub fn list_corpora(conn: &Connection) -> Result<Vec<Corpus>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, slug, name, created_at FROM corpora ORDER BY created_at ASC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, slug, name, created_at FROM corpora ORDER BY created_at ASC")?;
     let corpora = stmt
         .query_map([], |row| {
             Ok(Corpus {
@@ -231,8 +228,8 @@ pub fn delete_corpus(conn: &Connection, slug: &str) -> Result<()> {
     if slug == "default" {
         return Err(CorporaError::CannotDeleteDefault);
     }
-    let corpus = get_corpus_by_slug(conn, slug)?
-        .ok_or_else(|| CorporaError::NotFound(slug.to_string()))?;
+    let corpus =
+        get_corpus_by_slug(conn, slug)?.ok_or_else(|| CorporaError::NotFound(slug.to_string()))?;
     // Foreign-key cascades handle chunks and embeddings when documents are deleted,
     // but corpus_id is nullable, so delete orphan rows explicitly.
     conn.execute(
@@ -264,7 +261,8 @@ mod tests {
 
     fn fresh_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("../db/schema.sql")).unwrap();
+        conn.execute_batch(include_str!("../db/schema.sql"))
+            .unwrap();
         // run v14 migration inline
         conn.execute_batch(
             "INSERT OR IGNORE INTO corpora (id, slug, name)

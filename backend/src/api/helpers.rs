@@ -33,11 +33,19 @@ pub(crate) fn validate_chunk_request(req: &ChunkConfigCommitRequest) -> Result<(
         return Err("semantic_similarity_threshold must be between 0 and 1".into());
     }
     if let Some(ref stages) = req.pipeline_stages {
-        let valid: std::collections::HashSet<&str> = ["lw", "sent", "sem"].iter().copied().collect();
-        let tokens: Vec<&str> = stages.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let valid: std::collections::HashSet<&str> =
+            ["lw", "sent", "sem"].iter().copied().collect();
+        let tokens: Vec<&str> = stages
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         for token in &tokens {
             if !valid.contains(token) {
-                return Err(format!("unknown pipeline stage '{}'; valid values: lw, sent, sem", token));
+                return Err(format!(
+                    "unknown pipeline stage '{}'; valid values: lw, sent, sem",
+                    token
+                ));
             }
         }
         let unique: std::collections::HashSet<&&str> = tokens.iter().collect();

@@ -628,8 +628,8 @@ fn embedding_model_hf_id(model: &str) -> &'static str {
 pub(crate) async fn get_embedding_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    let model = std::env::var("EMBEDDING_MODEL")
-        .unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    let model =
+        std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
     let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
         .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
 
@@ -669,8 +669,13 @@ pub(crate) async fn set_embedding_model(
         .unwrap_or("bge-small-en-v1.5");
 
     // Validate against known models
-    let known = ["bge-small-en-v1.5", "bge-small-en-v1.5q", "all-minilm-l6-v2",
-                 "bge-base-en-v1.5", "e5-small-v2"];
+    let known = [
+        "bge-small-en-v1.5",
+        "bge-small-en-v1.5q",
+        "all-minilm-l6-v2",
+        "bge-base-en-v1.5",
+        "e5-small-v2",
+    ];
     if !known.contains(&model) {
         return Ok(HttpResponse::BadRequest().json(json!({
             "status": "error",
@@ -704,13 +709,11 @@ pub(crate) async fn set_embedding_model(
                 "message": "Saved. Restart the service for the new model to take effect."
             })))
         }
-        Err(e) => {
-            Ok(HttpResponse::InternalServerError().json(json!({
-                "status": "error",
-                "request_id": request_id,
-                "message": format!("Failed to write .env.embedding: {}", e)
-            })))
-        }
+        Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "request_id": request_id,
+            "message": format!("Failed to write .env.embedding: {}", e)
+        }))),
     }
 }
 
@@ -720,8 +723,8 @@ pub(crate) async fn set_embedding_model(
 pub(crate) async fn download_tokenizer() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    let model = std::env::var("EMBEDDING_MODEL")
-        .unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    let model =
+        std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
     let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
         .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
 
@@ -752,20 +755,24 @@ pub(crate) async fn download_tokenizer() -> Result<HttpResponse, Error> {
         .build()
     {
         Ok(c) => c,
-        Err(e) => return Ok(HttpResponse::InternalServerError().json(json!({
-            "status": "error",
-            "request_id": request_id,
-            "message": format!("Failed to build HTTP client: {e}")
-        }))),
+        Err(e) => {
+            return Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "message": format!("Failed to build HTTP client: {e}")
+            })))
+        }
     };
 
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
-        Err(e) => return Ok(HttpResponse::BadGateway().json(json!({
-            "status": "error",
-            "request_id": request_id,
-            "message": format!("HuggingFace request failed: {e}")
-        }))),
+        Err(e) => {
+            return Ok(HttpResponse::BadGateway().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "message": format!("HuggingFace request failed: {e}")
+            })))
+        }
     };
 
     if !resp.status().is_success() {
@@ -778,11 +785,13 @@ pub(crate) async fn download_tokenizer() -> Result<HttpResponse, Error> {
 
     let bytes = match resp.bytes().await {
         Ok(b) => b,
-        Err(e) => return Ok(HttpResponse::BadGateway().json(json!({
-            "status": "error",
-            "request_id": request_id,
-            "message": format!("Failed to read response body: {e}")
-        }))),
+        Err(e) => {
+            return Ok(HttpResponse::BadGateway().json(json!({
+                "status": "error",
+                "request_id": request_id,
+                "message": format!("Failed to read response body: {e}")
+            })))
+        }
     };
 
     if let Err(e) = std::fs::write(&tok_path, &bytes) {
@@ -926,9 +935,7 @@ pub(crate) async fn commit_chunk_config(
         context_prefix_tokens: body
             .context_prefix_tokens
             .unwrap_or(existing.context_prefix_tokens),
-        pipeline_stages: body
-            .pipeline_stages
-            .unwrap_or(existing.pipeline_stages),
+        pipeline_stages: body.pipeline_stages.unwrap_or(existing.pipeline_stages),
     };
 
     match chunk_settings::save_chunker_config_default_db(&new_cfg) {

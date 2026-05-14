@@ -544,7 +544,8 @@ pub(crate) async fn search_documents_inner(
     let retriever_handle = get_corpus_retriever(corpus_slug);
     if let Some(retriever) = retriever_handle {
         // Normalize query for each use: Embed for vector search, Index for BM25
-        let embed_q = crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
+        let embed_q =
+            crate::normalizer::normalize(&query.q, crate::normalizer::NormalizeTarget::Embed);
         crate::monitoring::record_canon_embed_query(query.q.len(), embed_q.len());
         let index_q = crate::normalizer::to_index(&embed_q);
         crate::monitoring::record_canon_index_query(embed_q.len(), index_q.len());

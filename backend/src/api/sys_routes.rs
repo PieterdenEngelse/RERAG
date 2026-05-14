@@ -808,9 +808,10 @@ pub fn reload_token_counter() {
                     (Err(anyhow::anyhow!("No model configured")), false)
                 }
             }
-            crate::db::param_hardware::BackendType::LlamaCpp => {
-                (crate::gguf_tokenizer::resolve_llama_server_gguf_path(), true)
-            }
+            crate::db::param_hardware::BackendType::LlamaCpp => (
+                crate::gguf_tokenizer::resolve_llama_server_gguf_path(),
+                true,
+            ),
             _ => {
                 handle.mark_fallback(FallbackReason::CloudBackend, None);
                 (Err(anyhow::anyhow!("Cloud backend, no local GGUF")), false)
@@ -1006,15 +1007,16 @@ pub async fn restart_process() -> HttpResponse {
             .collect();
         let exe_cstr = match std::ffi::CString::new(exe.to_string_lossy().as_bytes()) {
             Ok(s) => s,
-            Err(e) => { tracing::error!("Invalid exe path: {e}"); return; }
+            Err(e) => {
+                tracing::error!("Invalid exe path: {e}");
+                return;
+            }
         };
 
         // Build raw pointer arrays (null-terminated)
-        let mut argv: Vec<*const libc::c_char> =
-            args.iter().map(|s| s.as_ptr()).collect();
+        let mut argv: Vec<*const libc::c_char> = args.iter().map(|s| s.as_ptr()).collect();
         argv.push(std::ptr::null());
-        let mut envp: Vec<*const libc::c_char> =
-            env.iter().map(|s| s.as_ptr()).collect();
+        let mut envp: Vec<*const libc::c_char> = env.iter().map(|s| s.as_ptr()).collect();
         envp.push(std::ptr::null());
 
         tracing::info!(exe = %exe.display(), "Exec-replacing process");

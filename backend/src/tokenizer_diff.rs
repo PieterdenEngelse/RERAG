@@ -137,8 +137,7 @@ pub fn resolve_candidate_path(req: &DiffRequest) -> Result<PathBuf> {
             .with_context(|| format!("Failed to resolve Ollama model {:?}", m));
     }
     if llama_cpp {
-        return resolve_llama_server_gguf_path()
-            .context("Failed to resolve llama.cpp model path");
+        return resolve_llama_server_gguf_path().context("Failed to resolve llama.cpp model path");
     }
     Err(anyhow!(
         "Must specify candidate_path, candidate_ollama_model, or candidate_llama_cpp"

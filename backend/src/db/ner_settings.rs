@@ -13,8 +13,7 @@ use thiserror::Error;
 const DEFAULT_EXTRACTION_ENABLED: bool = true;
 const DEFAULT_TYPE_ALLOWLIST: &str = "PERSON,ORGANIZATION,LOCATION,PRODUCT";
 const DEFAULT_CONFIDENCE_THRESHOLD: f64 = 0.85;
-const DEFAULT_TYPE_THRESHOLDS: &str =
-    r#"{"PERSON":0.75,"ORGANIZATION":0.95,"PRODUCT":0.95}"#;
+const DEFAULT_TYPE_THRESHOLDS: &str = r#"{"PERSON":0.75,"ORGANIZATION":0.95,"PRODUCT":0.95}"#;
 const DEFAULT_FUZZY_THRESHOLD: f64 = 0.8;
 const DEFAULT_MIN_LENGTH: usize = 2;
 const DEFAULT_MAX_LENGTH: usize = 100;
@@ -71,11 +70,9 @@ impl Default for NerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(DEFAULT_MAX_LENGTH),
-            dedup_case_insensitive: std::env::var(
-                "ENTITY_FILTER_DEDUPLICATE_CASE_INSENSITIVE",
-            )
-            .map(|v| v != "false" && v != "0")
-            .unwrap_or(DEFAULT_DEDUP_CASE_INSENSITIVE),
+            dedup_case_insensitive: std::env::var("ENTITY_FILTER_DEDUPLICATE_CASE_INSENSITIVE")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(DEFAULT_DEDUP_CASE_INSENSITIVE),
             nesting_strategy: std::env::var("ENTITY_FILTER_NESTING_STRATEGY")
                 .unwrap_or_else(|_| DEFAULT_NESTING_STRATEGY.to_string()),
             batch_size: std::env::var("ENTITY_PERFORMANCE_BATCH_SIZE")
@@ -163,30 +160,30 @@ pub fn load_active_config(conn: &Connection) {
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 pub fn load_ner_config(conn: &Connection) -> Result<NerConfig> {
-    let extraction_enabled = read_bool(conn, CONFIG_KEYS.extraction_enabled)?
-        .unwrap_or(DEFAULT_EXTRACTION_ENABLED);
+    let extraction_enabled =
+        read_bool(conn, CONFIG_KEYS.extraction_enabled)?.unwrap_or(DEFAULT_EXTRACTION_ENABLED);
     let type_allowlist = read_value(conn, CONFIG_KEYS.type_allowlist)?
         .unwrap_or_else(|| DEFAULT_TYPE_ALLOWLIST.to_string());
-    let confidence_threshold = read_float(conn, CONFIG_KEYS.confidence_threshold)?
-        .unwrap_or(DEFAULT_CONFIDENCE_THRESHOLD);
+    let confidence_threshold =
+        read_float(conn, CONFIG_KEYS.confidence_threshold)?.unwrap_or(DEFAULT_CONFIDENCE_THRESHOLD);
     let type_thresholds = read_value(conn, CONFIG_KEYS.type_thresholds)?
         .unwrap_or_else(|| DEFAULT_TYPE_THRESHOLDS.to_string());
     let fuzzy_threshold =
         read_float(conn, CONFIG_KEYS.fuzzy_threshold)?.unwrap_or(DEFAULT_FUZZY_THRESHOLD);
-    let min_length = read_int(conn, CONFIG_KEYS.min_length)?
-        .unwrap_or(DEFAULT_MIN_LENGTH as i64) as usize;
-    let max_length = read_int(conn, CONFIG_KEYS.max_length)?
-        .unwrap_or(DEFAULT_MAX_LENGTH as i64) as usize;
+    let min_length =
+        read_int(conn, CONFIG_KEYS.min_length)?.unwrap_or(DEFAULT_MIN_LENGTH as i64) as usize;
+    let max_length =
+        read_int(conn, CONFIG_KEYS.max_length)?.unwrap_or(DEFAULT_MAX_LENGTH as i64) as usize;
     let dedup_case_insensitive = read_bool(conn, CONFIG_KEYS.dedup_case_insensitive)?
         .unwrap_or(DEFAULT_DEDUP_CASE_INSENSITIVE);
     let nesting_strategy = read_value(conn, CONFIG_KEYS.nesting_strategy)?
         .unwrap_or_else(|| DEFAULT_NESTING_STRATEGY.to_string());
-    let batch_size = read_int(conn, CONFIG_KEYS.batch_size)?
-        .unwrap_or(DEFAULT_BATCH_SIZE as i64) as usize;
-    let quantization_enabled = read_bool(conn, CONFIG_KEYS.quantization_enabled)?
-        .unwrap_or(DEFAULT_QUANTIZATION_ENABLED);
-    let model_cache_enabled = read_bool(conn, CONFIG_KEYS.model_cache_enabled)?
-        .unwrap_or(DEFAULT_MODEL_CACHE_ENABLED);
+    let batch_size =
+        read_int(conn, CONFIG_KEYS.batch_size)?.unwrap_or(DEFAULT_BATCH_SIZE as i64) as usize;
+    let quantization_enabled =
+        read_bool(conn, CONFIG_KEYS.quantization_enabled)?.unwrap_or(DEFAULT_QUANTIZATION_ENABLED);
+    let model_cache_enabled =
+        read_bool(conn, CONFIG_KEYS.model_cache_enabled)?.unwrap_or(DEFAULT_MODEL_CACHE_ENABLED);
     let graph_storage_enabled = read_bool(conn, CONFIG_KEYS.graph_storage_enabled)?
         .unwrap_or(DEFAULT_GRAPH_STORAGE_ENABLED);
 
@@ -221,7 +218,11 @@ pub fn save_ner_config(conn: &Connection, cfg: &NerConfig) -> Result<()> {
         CONFIG_KEYS.confidence_threshold,
         cfg.confidence_threshold.to_string(),
     )?;
-    write_value(conn, CONFIG_KEYS.type_thresholds, cfg.type_thresholds.clone())?;
+    write_value(
+        conn,
+        CONFIG_KEYS.type_thresholds,
+        cfg.type_thresholds.clone(),
+    )?;
     write_value(
         conn,
         CONFIG_KEYS.fuzzy_threshold,
@@ -262,8 +263,8 @@ pub fn save_ner_config(conn: &Connection, cfg: &NerConfig) -> Result<()> {
 }
 
 pub fn save_ner_config_default_db(cfg: &NerConfig) -> Result<()> {
-    let path = crate::db::chunk_settings::get_db_path()
-        .expect("DB path not initialized for NER settings");
+    let path =
+        crate::db::chunk_settings::get_db_path().expect("DB path not initialized for NER settings");
     let conn = Connection::open(path).map_err(db_err)?;
     save_ner_config(&conn, cfg)
 }

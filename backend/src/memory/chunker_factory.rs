@@ -491,9 +491,7 @@ impl Chunker for PipelineChunker {
                     .flat_map(|s| self.sentence.chunk_text(&s))
                     .collect(),
                 // Semantic — receives all upstream chunks at once for centroid loop
-                (PipelineStage::Semantic, Some(segs)) => {
-                    self.semantic.chunk_from_segments(segs)
-                }
+                (PipelineStage::Semantic, Some(segs)) => self.semantic.chunk_from_segments(segs),
             });
         }
 

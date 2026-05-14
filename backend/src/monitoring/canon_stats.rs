@@ -52,7 +52,10 @@ struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { stats: CanonStats::default(), store_records: VecDeque::new() }
+        Self {
+            stats: CanonStats::default(),
+            store_records: VecDeque::new(),
+        }
     }
 }
 
@@ -135,9 +138,12 @@ pub fn record_index_query(chars_in: usize, chars_out: usize) {
 }
 
 pub fn get_stats() -> CanonStats {
-    STATE.read().map(|s| {
-        let mut stats = s.stats.clone();
-        stats.store_records = s.store_records.iter().cloned().collect();
-        stats
-    }).unwrap_or_default()
+    STATE
+        .read()
+        .map(|s| {
+            let mut stats = s.stats.clone();
+            stats.store_records = s.store_records.iter().cloned().collect();
+            stats
+        })
+        .unwrap_or_default()
 }

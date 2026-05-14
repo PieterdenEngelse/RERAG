@@ -934,15 +934,33 @@ pub fn start_api_server(
                     .route("/{slug}", web::patch().to(rename_corpus_handler))
                     .route("/{slug}", web::delete().to(delete_corpus_handler))
                     .route("/{slug}/upload", web::post().to(corpus_upload_handler))
-                    .route("/{slug}/documents", web::get().to(corpus_list_documents_handler))
-                    .route("/{slug}/documents/{filename}", web::delete().to(corpus_delete_document_handler))
+                    .route(
+                        "/{slug}/documents",
+                        web::get().to(corpus_list_documents_handler),
+                    )
+                    .route(
+                        "/{slug}/documents/{filename}",
+                        web::delete().to(corpus_delete_document_handler),
+                    )
                     .route("/{slug}/search", web::get().to(corpus_search_handler))
                     .route("/{slug}/reindex", web::post().to(corpus_reindex_handler))
-                    .route("/{slug}/settings", web::get().to(get_corpus_settings_handler))
-                    .route("/{slug}/settings", web::patch().to(patch_corpus_settings_handler)),
+                    .route(
+                        "/{slug}/settings",
+                        web::get().to(get_corpus_settings_handler),
+                    )
+                    .route(
+                        "/{slug}/settings",
+                        web::patch().to(patch_corpus_settings_handler),
+                    ),
             )
-            .route("/agent/memory/settings", web::get().to(get_agent_memory_settings_handler))
-            .route("/agent/memory/settings", web::patch().to(patch_agent_memory_settings_handler))
+            .route(
+                "/agent/memory/settings",
+                web::get().to(get_agent_memory_settings_handler),
+            )
+            .route(
+                "/agent/memory/settings",
+                web::patch().to(patch_agent_memory_settings_handler),
+            )
             // ============================================================================
             // ROOT & CORE ROUTES
             // ============================================================================
@@ -955,8 +973,14 @@ pub fn start_api_server(
             .route("/chunk/preview", web::post().to(chunk_preview_handler))
             .route("/config/embedding", web::get().to(get_embedding_config))
             .route("/config/embedding", web::post().to(set_embedding_config))
-            .route("/config/embedding-model", web::post().to(set_embedding_model))
-            .route("/config/embedding/download-tokenizer", web::post().to(download_tokenizer))
+            .route(
+                "/config/embedding-model",
+                web::post().to(set_embedding_model),
+            )
+            .route(
+                "/config/embedding/download-tokenizer",
+                web::post().to(download_tokenizer),
+            )
             .route("/config/llm", web::get().to(get_llm_config))
             .route("/config/llm", web::post().to(commit_llm_config))
             .route("/config/prompt_caching", web::get().to(get_prompt_caching))

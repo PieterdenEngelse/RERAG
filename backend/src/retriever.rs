@@ -1013,7 +1013,12 @@ impl Retriever {
                     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
                 }
                 crate::config::DistanceMetric::Euclidean => {
-                    let dist: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt();
+                    let dist: f32 = a
+                        .iter()
+                        .zip(b.iter())
+                        .map(|(x, y)| (x - y) * (x - y))
+                        .sum::<f32>()
+                        .sqrt();
                     1.0 / (1.0 + dist) // convert to similarity
                 }
             }
@@ -2711,7 +2716,10 @@ impl Retriever {
             })
             .collect();
 
-        let pq = crate::perf::product_quantization::PQIndex::build(&vectors_with_ids, self.pq_subvectors);
+        let pq = crate::perf::product_quantization::PQIndex::build(
+            &vectors_with_ids,
+            self.pq_subvectors,
+        );
 
         self.pq_index = Some(pq);
         info!("PQ index built successfully");

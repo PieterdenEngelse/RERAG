@@ -180,7 +180,10 @@ mod tests {
     #[test]
     fn paragraph_boundary_preserved() {
         let out = normalize("para one\n\npara two", NormalizeTarget::Index);
-        assert!(out.contains("\n\n"), "double newline must survive for chunker");
+        assert!(
+            out.contains("\n\n"),
+            "double newline must survive for chunker"
+        );
     }
 
     #[test]

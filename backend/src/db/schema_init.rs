@@ -49,11 +49,8 @@ impl SchemaInitializer {
             |row| row.get(0),
         )?;
         if default_count == 0 {
-            let id: String = conn.query_row(
-                "SELECT lower(hex(randomblob(16)))",
-                [],
-                |row| row.get(0),
-            )?;
+            let id: String =
+                conn.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
             conn.execute(
                 "INSERT INTO corpora (id, slug, name) VALUES (?1, 'default', 'Default')",
                 params![id],
@@ -61,15 +58,17 @@ impl SchemaInitializer {
             info!("corpus migration: created default corpus id={}", id);
         }
 
-        let default_id: String = conn.query_row(
-            "SELECT id FROM corpora WHERE slug = 'default'",
-            [],
-            |row| row.get(0),
-        )?;
+        let default_id: String =
+            conn.query_row("SELECT id FROM corpora WHERE slug = 'default'", [], |row| {
+                row.get(0)
+            })?;
 
         for table in &["documents", "chunks", "embeddings"] {
             let updated = conn.execute(
-                &format!("UPDATE {} SET corpus_id = ?1 WHERE corpus_id IS NULL", table),
+                &format!(
+                    "UPDATE {} SET corpus_id = ?1 WHERE corpus_id IS NULL",
+                    table
+                ),
                 params![default_id],
             )?;
             if updated > 0 {
@@ -100,7 +99,7 @@ impl SchemaInitializer {
                 id            INTEGER PRIMARY KEY CHECK (id = 1),
                 settings_json TEXT NOT NULL DEFAULT '{}'
             );
-            INSERT OR IGNORE INTO agent_memory_settings (id, settings_json) VALUES (1, '{}');"
+            INSERT OR IGNORE INTO agent_memory_settings (id, settings_json) VALUES (1, '{}');",
         )?;
         info!("corpus migration v16: ensured agent_memory_settings table");
         Ok(())
