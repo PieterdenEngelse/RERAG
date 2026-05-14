@@ -3,9 +3,9 @@ use crate::embedder;
 use crate::memory::chunker_factory::{create_chunker, Chunker};
 use crate::mime_detect::{detect_content_type, ContentType};
 use crate::monitoring::{
-    record_canon_store, record_extraction_format, record_ocr_attempted, record_ocr_no_pages, record_ocr_no_text,
-    record_ocr_ok, record_ocr_unavailable, DetectionInfo, EXTRACTION_CHARS_TOTAL,
-    EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL,
+    record_canon_store, record_extraction_format, record_ocr_attempted, record_ocr_no_pages,
+    record_ocr_no_text, record_ocr_ok, record_ocr_unavailable, DetectionInfo,
+    EXTRACTION_CHARS_TOTAL, EXTRACTION_OCR_TOTAL, EXTRACTION_TOTAL,
 };
 use crate::retriever::Retriever;
 use std::collections::HashMap;
@@ -236,7 +236,14 @@ pub fn index_file(
 ) -> Result<usize, String> {
     // Get detection info for observability
     let (_, detection_info) = detect_file_type_with_info(path)?;
-    index_file_with_detection(retriever, path, chunker_mode, chunker, detection_info, corpus_slug)
+    index_file_with_detection(
+        retriever,
+        path,
+        chunker_mode,
+        chunker,
+        detection_info,
+        corpus_slug,
+    )
 }
 
 /// Index pre-read content directly (no file I/O)
@@ -323,6 +330,17 @@ pub fn index_content_direct(
         chunk_duration.as_millis(),
         embed_duration.as_millis()
     );
+
+    let mut snap = crate::monitoring::ChunkingStatsSnapshot::new(
+        filename,
+        chunker_mode,
+        ok,
+        total_tokens,
+        chunk_duration.as_millis() as u64,
+        chunker.stats(),
+    );
+    snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+    crate::monitoring::record_chunking_snapshot(snap);
 
     Ok(ok)
 }
@@ -442,7 +460,15 @@ pub async fn index_file_async(
     corpus_slug: &str,
 ) -> Result<usize, String> {
     let (_, detection_info) = detect_file_type_with_info(path)?;
-    index_file_with_detection_async(retriever, path, chunker_mode, chunker, detection_info, corpus_slug).await
+    index_file_with_detection_async(
+        retriever,
+        path,
+        chunker_mode,
+        chunker,
+        detection_info,
+        corpus_slug,
+    )
+    .await
 }
 
 async fn index_file_with_detection_async(
@@ -810,7 +836,6 @@ pub fn strip_html_tags(text: &str) -> (String, usize) {
     )
 }
 
-
 /// Common text extraction logic from bytes
 fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
     let filename = path.file_name().and_then(|n| n.to_str());
@@ -902,14 +927,19 @@ fn extract_text_from_bytes(path: &Path, bytes: Vec<u8>) -> Option<String> {
             debug!("extract_text: Binary file detected, skipping");
             None
         }
-        _ => {
-            detect_and_decode(&bytes)
-        }
+        _ => detect_and_decode(&bytes),
     }
     .map(|text| {
         let preprocessed = apply_text_preprocessing(text, needs_html_clean, needs_unicode_clean);
-        let normalized = crate::normalizer::normalize(&preprocessed, crate::normalizer::NormalizeTarget::Store);
-        record_canon_store(path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"), preprocessed.len(), normalized.len());
+        let normalized =
+            crate::normalizer::normalize(&preprocessed, crate::normalizer::NormalizeTarget::Store);
+        record_canon_store(
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown"),
+            preprocessed.len(),
+            normalized.len(),
+        );
         normalized
     });
 
@@ -1091,7 +1121,11 @@ fn extract_text_from_epub(bytes: &[u8]) -> Option<String> {
             }
         }
     }
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Extract text from a PPTX file.
@@ -1117,7 +1151,11 @@ fn extract_text_from_pptx(bytes: &[u8]) -> Option<String> {
             }
         }
     }
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// OCR fallback for scanned/image-only PDFs.
@@ -1240,7 +1278,11 @@ fn extract_text_from_pdf_pdftotext(path: &Path) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if text.trim().is_empty() { None } else { Some(text) }
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Remove repeated short lines that are likely PDF page headers/footers.
@@ -1272,7 +1314,10 @@ fn dedupe_pdf_noise(text: String) -> String {
         .collect();
     let removed = lines.len() - filtered.len();
     if removed > 0 {
-        debug!("dedupe_pdf_noise: removed {} repeated header/footer lines", removed);
+        debug!(
+            "dedupe_pdf_noise: removed {} repeated header/footer lines",
+            removed
+        );
     }
     filtered.join("\n")
 }
@@ -1296,9 +1341,14 @@ fn remove_html_blocks(html: &str, block_tags: &[&str]) -> String {
         let close_pat = format!("</{}>", tag);
         loop {
             let lower = result.to_lowercase();
-            let Some(start) = lower.find(&open_pat) else { break };
+            let Some(start) = lower.find(&open_pat) else {
+                break;
+            };
             // find '>' to end the opening tag
-            let tag_end = lower[start..].find('>').map(|i| start + i + 1).unwrap_or(start + open_pat.len());
+            let tag_end = lower[start..]
+                .find('>')
+                .map(|i| start + i + 1)
+                .unwrap_or(start + open_pat.len());
             if let Some(close_off) = lower[tag_end..].find(&close_pat) {
                 let end = tag_end + close_off + close_pat.len();
                 result.replace_range(start..end, " ");
@@ -1377,7 +1427,9 @@ pub fn detect_and_decode(bytes: &[u8]) -> Option<String> {
     // BOM detection
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         // UTF-8 BOM
-        return std::str::from_utf8(&bytes[3..]).ok().map(|s| s.to_string())
+        return std::str::from_utf8(&bytes[3..])
+            .ok()
+            .map(|s| s.to_string())
             .or_else(|| Some(String::from_utf8_lossy(&bytes[3..]).into_owned()));
     }
     if bytes.starts_with(&[0xFF, 0xFE]) {
