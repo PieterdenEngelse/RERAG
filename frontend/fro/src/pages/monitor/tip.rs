@@ -1610,7 +1610,7 @@ raw query
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "What NFKC does" }
                             p { class: "text-gray-400", "NFKC (Compatibility Decomposition followed by Canonical Composition) is a strict superset of NFC. It applies all the canonical equivalences NFC applies, and then additionally folds compatibility variants — characters that look different but carry the same meaning for text processing." }
                             p { class: "text-gray-400 font-mono text-[0.7rem]",
-                                "ﬁ → fi  ·  ① → 1  ·  Ⅳ → IV  ·  ² → 2  ·  ａｂｃ → abc"
+                                "ﬁ → fi  ① → 1  Ⅳ → IV  ² → 2  ａｂｃ → abc"
                             }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "Why this matters for embeddings" }
                             p { class: "text-gray-400", "Embedding models tokenize on byte sequences. If \"ﬁnance\" and \"finance\" produce different byte sequences, they produce different tokens — and therefore slightly different embedding vectors — even though they mean the same thing. NFKC collapses these variants before the text reaches the tokenizer, so semantically identical content maps to identical vectors." }
@@ -1661,10 +1661,10 @@ raw query
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "What it adds on top of NFKC" }
                             p { class: "text-gray-400", "In addition to all NFKC folding, punctuation canonicalization rewrites typographic punctuation to its ASCII equivalent:" }
                             p { class: "text-gray-400 font-mono text-[0.7rem]",
-                                "“word” → \"word\"  ·  ‘it’s’ → 'it's'  ·  don’t → don't"
+                                "“word” → \"word\"  ‘it’s’ → 'it's'  don’t → don't"
                             }
                             p { class: "text-gray-400 font-mono text-[0.7rem]",
-                                "em-dash (—) → \" - \"  ·  en-dash (–) → \" - \"  ·  ellipsis (…) → \"...\""
+                                "em-dash (—) → \" - \"  en-dash (–) → \" - \"  ellipsis (…) → \"...\""
                             }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "Why BM25 needs punct canonicalization" }
                             p { class: "text-gray-400", "BM25 is a term-frequency model: it compares exact tokens. If a document contains “don’t” (curly apostrophe) and a user searches for \"don't\" (straight apostrophe), the tokens are different — BM25 returns zero matches even though the intent is identical." }
