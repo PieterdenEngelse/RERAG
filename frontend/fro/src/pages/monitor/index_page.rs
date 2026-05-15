@@ -12,9 +12,9 @@ use std::rc::Rc;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::console;
 
-const REINDEX_SYNC_COMMAND: &str = "curl -X POST http://127.0.0.1:3010/reindex";
-const REINDEX_ASYNC_COMMAND: &str = "curl -X POST http://127.0.0.1:3010/reindex/async";
-const REINDEX_STATUS_COMMAND: &str = "curl http://127.0.0.1:3010/reindex/status/<job_id>";
+const REINDEX_SYNC_COMMAND: &str = "curl -X POST http://127.0.0.1:3011/reindex";
+const REINDEX_ASYNC_COMMAND: &str = "curl -X POST http://127.0.0.1:3011/reindex/async";
+const REINDEX_STATUS_COMMAND: &str = "curl http://127.0.0.1:3011/reindex/status/<job_id>";
 const JOURNALCTL_COMMAND: &str = "journalctl -u ag.service -n 200 -f";
 const TAIL_LOGS_COMMAND: &str = "tail -f logs/ag.log";
 const STORAGE_PATHS: [(&str, &str); 4] = [
@@ -173,6 +173,17 @@ pub fn MonitorIndex() -> Element {
     let mem_info = use_signal(|| Option::<api::MemoryInfo>::None);
     let show_synthetic_qa_examples = use_signal(|| false);
     let mut show_synthetic_qa_info = use_signal(|| false);
+    let selected_corpus: Signal<Option<String>> = use_signal(|| None);
+    let corpora: Signal<Vec<api::CorpusEntry>> = use_signal(Vec::new);
+
+    {
+        let mut corpora = corpora.clone();
+        use_future(move || async move {
+            if let Ok(list) = api::fetch_corpora().await {
+                corpora.set(list);
+            }
+        });
+    }
 
     {
         let mut state = state.clone();
@@ -484,23 +495,40 @@ pub fn MonitorIndex() -> Element {
 
     let trigger_sync_reindex = {
         let state = state.clone();
+        let selected_corpus = selected_corpus.clone();
         Rc::new(move |_| {
             let mut state = state.clone();
+            let selected_corpus = selected_corpus.clone();
             spawn(async move {
+                let slug = selected_corpus.read().clone();
                 {
                     let mut snapshot = state.write();
                     snapshot.sync_running = true;
-                    snapshot.status_message = Some("Triggering sync reindex…".into());
+                    snapshot.status_message = Some(if let Some(ref s) = slug {
+                        format!("Reindexing corpus '{}'…", s)
+                    } else {
+                        "Triggering sync reindex…".into()
+                    });
                 }
 
-                match api::reindex().await {
+                let result = if let Some(ref slug) = slug {
+                    api::reindex_corpus(slug).await
+                } else {
+                    api::reindex().await
+                };
+
+                match result {
                     Ok(_) => {
                         let mut snapshot = state.write();
-                        snapshot.status_message = Some("Sync reindex request accepted".into());
+                        snapshot.status_message = Some(if let Some(ref s) = slug {
+                            format!("Corpus '{}' reindexed", s)
+                        } else {
+                            "Sync reindex request accepted".into()
+                        });
                     }
                     Err(err) => {
                         let mut snapshot = state.write();
-                        snapshot.status_message = Some(format!("Sync reindex failed: {}", err));
+                        snapshot.status_message = Some(format!("Reindex failed: {}", err));
                     }
                 }
 
@@ -512,41 +540,65 @@ pub fn MonitorIndex() -> Element {
     let trigger_async_reindex = {
         let state = state.clone();
         let jobs = jobs.clone();
+        let selected_corpus = selected_corpus.clone();
         Rc::new(move |_| {
             let mut state = state.clone();
             let mut jobs = jobs.clone();
+            let selected_corpus = selected_corpus.clone();
             spawn(async move {
-                {
-                    let mut snapshot = state.write();
-                    snapshot.async_running = true;
-                    snapshot.status_message = Some("Submitting async reindex…".into());
-                }
+                let slug = selected_corpus.read().clone();
 
-                match api::reindex_async().await {
-                    Ok(resp) => {
-                        {
-                            let mut rows = jobs.write();
-                            rows.retain(|row| row.job_id != resp.job_id);
-                            rows.insert(0, ReindexJobRow::placeholder(&resp));
-                        }
-
-                        state.write().status_message =
-                            Some(format!("Async job {} accepted", resp.job_id));
-
-                        if let Err(err) =
-                            refresh_single_job(resp.job_id, jobs.clone(), state.clone()).await
-                        {
-                            state.write().status_message =
-                                Some(format!("Failed to fetch async status: {}", err));
-                        }
-                    }
-                    Err(err) => {
+                if let Some(ref slug) = slug {
+                    {
                         let mut snapshot = state.write();
-                        snapshot.status_message = Some(format!("Async reindex failed: {}", err));
+                        snapshot.async_running = true;
+                        snapshot.status_message = Some(format!("Reindexing corpus '{}'…", slug));
                     }
-                }
+                    match api::reindex_corpus(slug).await {
+                        Ok(_) => {
+                            state.write().status_message =
+                                Some(format!("Corpus '{}' reindexed", slug));
+                        }
+                        Err(err) => {
+                            state.write().status_message =
+                                Some(format!("Corpus reindex failed: {}", err));
+                        }
+                    }
+                    state.write().async_running = false;
+                } else {
+                    {
+                        let mut snapshot = state.write();
+                        snapshot.async_running = true;
+                        snapshot.status_message = Some("Submitting async reindex…".into());
+                    }
 
-                state.write().async_running = false;
+                    match api::reindex_async().await {
+                        Ok(resp) => {
+                            {
+                                let mut rows = jobs.write();
+                                rows.retain(|row| row.job_id != resp.job_id);
+                                rows.insert(0, ReindexJobRow::placeholder(&resp));
+                            }
+
+                            state.write().status_message =
+                                Some(format!("Async job {} accepted", resp.job_id));
+
+                            if let Err(err) =
+                                refresh_single_job(resp.job_id, jobs.clone(), state.clone()).await
+                            {
+                                state.write().status_message =
+                                    Some(format!("Failed to fetch async status: {}", err));
+                            }
+                        }
+                        Err(err) => {
+                            let mut snapshot = state.write();
+                            snapshot.status_message =
+                                Some(format!("Async reindex failed: {}", err));
+                        }
+                    }
+
+                    state.write().async_running = false;
+                }
             });
         })
     };
@@ -606,6 +658,41 @@ pub fn MonitorIndex() -> Element {
             }
 
             NavTabs { active: Route::MonitorIndex {} }
+
+            // Corpus selector — scopes upload and reindex to a named corpus
+            if !corpora.read().is_empty() {
+                div { class: "flex items-center gap-3 px-1",
+                    span { class: "text-xs text-gray-400 shrink-0", "Corpus" }
+                    select {
+                        class: "select select-sm select-bordered bg-gray-700 text-gray-200",
+                        onchange: {
+                            let mut selected_corpus = selected_corpus.clone();
+                            move |evt: Event<FormData>| {
+                                let val = evt.value();
+                                if val == "__default__" {
+                                    selected_corpus.set(None);
+                                } else {
+                                    selected_corpus.set(Some(val));
+                                }
+                            }
+                        },
+                        option { value: "__default__", "Default (global)" }
+                        for corpus in corpora.read().iter() {
+                            {
+                                let slug = corpus.slug.clone();
+                                let name = corpus.name.clone();
+                                let count = corpus.doc_count;
+                                rsx! {
+                                    option { value: "{slug}", "{name} ({count} docs)" }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(slug) = selected_corpus.read().as_ref() {
+                        span { class: "text-xs text-teal-400", "Active: {slug}" }
+                    }
+                }
+            }
 
             RowHeader {
                 title: "Index Statistics".into(),
@@ -1646,10 +1733,11 @@ pub fn MonitorIndex() -> Element {
                                     disabled: snapshot.upload_running,
                                     onchange: {
                                         let state = state.clone();
+                                        let selected_corpus = selected_corpus.clone();
                                         move |evt: Event<FormData>| {
                                             let mut state = state.clone();
+                                            let selected_corpus = selected_corpus.clone();
                                             spawn(async move {
-                                                // Use Dioxus 0.7 file handling
                                                 let files = evt.files();
                                                 let total = files.len();
 
@@ -1657,7 +1745,8 @@ pub fn MonitorIndex() -> Element {
                                                     return;
                                                 }
 
-                                                // Start upload
+                                                let slug = selected_corpus.read().clone();
+
                                                 {
                                                     let mut s = state.write();
                                                     s.upload_running = true;
@@ -1670,7 +1759,6 @@ pub fn MonitorIndex() -> Element {
 
                                                 for file_data in &files {
                                                     let file_name = file_data.name();
-                                                    // Update current file
                                                     {
                                                         let mut s = state.write();
                                                         s.upload_current_file = Some(file_name.clone());
@@ -1679,7 +1767,12 @@ pub fn MonitorIndex() -> Element {
 
                                                     match file_data.read_bytes().await {
                                                         Ok(contents) => {
-                                                            match api::upload_document(&file_name, &contents).await {
+                                                            let upload_result = if let Some(ref s) = slug {
+                                                                api::upload_document_to_corpus(s, &file_name, &contents).await
+                                                            } else {
+                                                                api::upload_document(&file_name, &contents).await
+                                                            };
+                                                            match upload_result {
                                                                 Ok(resp) if !resp.index_errors.is_empty() => {
                                                                     let mut s = state.write();
                                                                     s.upload_failed_files += 1;

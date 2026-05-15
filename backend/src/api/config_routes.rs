@@ -833,12 +833,120 @@ pub(crate) async fn set_embedding_config() -> Result<HttpResponse, Error> {
 }
 
 /// Self-contained UI metrics: HTTP Requests summary + chart
-/// GET /monitoring/ui/requests
-/// Returns: JSON with rate, p95 latency, error%, and recent points
+/// GET /monitoring/ui/requests — combined snapshot across both servers
 pub(crate) async fn get_ui_requests() -> Result<HttpResponse, Error> {
-    let snapshot = crate::monitoring::get_requests_snapshot();
+    let snapshot = crate::monitoring::get_requests_snapshot_for_server(None);
     Ok(HttpResponse::Ok().json(snapshot))
 }
+
+/// GET /monitoring/ui/requests/search — search server (3010) only
+pub(crate) async fn get_ui_requests_search() -> Result<HttpResponse, Error> {
+    let snapshot = crate::monitoring::get_requests_snapshot_for_server(Some("search"));
+    Ok(HttpResponse::Ok().json(snapshot))
+}
+
+/// GET /monitoring/ui/requests/upload — upload server (3011) only
+pub(crate) async fn get_ui_requests_upload() -> Result<HttpResponse, Error> {
+    let snapshot = crate::monitoring::get_requests_snapshot_for_server(Some("upload"));
+    Ok(HttpResponse::Ok().json(snapshot))
+}
+
+/// GET /config/servers — read-only snapshot of both servers' tuning parameters
+pub(crate) async fn get_server_config(
+    config: web::Data<ApiConfig>,
+) -> Result<HttpResponse, Error> {
+    let upload_max_mb = std::env::var("UPLOAD_MAX_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(150);
+    let upload_onnx_threads = std::env::var("UPLOAD_ONNX_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4);
+    let upload_cors_origins: Vec<String> = std::env::var("UPLOAD_CORS_ORIGINS")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    Ok(HttpResponse::Ok().json(json!({
+        "search": {
+            "host": config.host,
+            "port": config.port,
+            "workers": config.search_workers,
+            "max_connections": config.search_max_connections,
+            "max_body_kb": config.search_max_body_kb,
+            "timeout_secs": config.search_timeout_secs,
+            "trust_proxy": config.trust_proxy_search,
+            "rate_limit_lru_capacity": config.rate_limit_lru_capacity,
+        },
+        "upload": {
+            "host": config.upload_host,
+            "port": config.upload_port,
+            "workers": config.upload_workers,
+            "max_connections": config.upload_max_connections,
+            "max_concurrent": config.upload_max_concurrent,
+            "max_mb": upload_max_mb,
+            "timeout_secs": config.upload_timeout_secs,
+            "trust_proxy": config.trust_proxy_upload,
+            "rate_limit_lru_capacity": config.upload_rate_limit_lru_capacity,
+            "cors_origins": upload_cors_origins,
+            "onnx_threads": upload_onnx_threads,
+        }
+    })))
+}
+
+/// POST /config/servers — persist Actix server tuning vars to .env.server (restart required)
+pub(crate) async fn save_server_config(
+    body: web::Json<std::collections::HashMap<String, String>>,
+) -> Result<HttpResponse, Error> {
+    const ALLOWED: &[&str] = &[
+        "BACKEND_HOST", "BACKEND_PORT",
+        "SEARCH_WORKERS", "SEARCH_MAX_CONNECTIONS", "SEARCH_MAX_BODY_KB",
+        "SEARCH_TIMEOUT_SECS", "TRUST_PROXY_SEARCH", "RATE_LIMIT_LRU_CAPACITY",
+        "UPLOAD_HOST", "UPLOAD_PORT",
+        "UPLOAD_WORKERS", "UPLOAD_MAX_CONNECTIONS", "UPLOAD_MAX_CONCURRENT",
+        "UPLOAD_MAX_MB", "UPLOAD_TIMEOUT_SECS", "TRUST_PROXY_UPLOAD",
+        "UPLOAD_RATE_LIMIT_LRU_CAPACITY", "UPLOAD_CORS_ORIGINS", "UPLOAD_ONNX_THREADS",
+    ];
+    let mut lines = String::new();
+    for key in ALLOWED {
+        if let Some(val) = body.get(*key) {
+            lines.push_str(&format!("{}={}\n", key, val));
+        }
+    }
+    match std::fs::write(".env.server", &lines) {
+        Ok(_) => Ok(HttpResponse::Ok().json(json!({
+            "status": "saved",
+            "note": "Restart the backend to apply changes"
+        }))),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": format!("Failed to write .env.server: {}", e)
+        }))),
+    }
+}
+
+/// POST /config/index_in_ram — persist INDEX_IN_RAM to .env.index (restart required)
+pub(crate) async fn set_index_in_ram(
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, Error> {
+    let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let env_content = format!("INDEX_IN_RAM={}\n", if enabled { "true" } else { "false" });
+    let env_path = std::path::Path::new(".env.index");
+    match std::fs::write(env_path, &env_content) {
+        Ok(_) => Ok(HttpResponse::Ok().json(json!({
+            "status": "success",
+            "index_in_ram": enabled,
+            "note": "Restart the backend to apply — INDEX_IN_RAM changes the Tantivy directory type at startup"
+        }))),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": format!("Failed to write .env.index: {}", e)
+        }))),
+    }
+}
+
 
 pub(crate) async fn get_chunking_stats(
     query: web::Query<ChunkingQuery>,

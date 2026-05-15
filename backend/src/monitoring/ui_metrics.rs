@@ -11,6 +11,7 @@ struct RequestSample {
     latency_ms: f64,
     is_error: bool,
     status_class: String,
+    server: &'static str,
 }
 
 /// Chart point exposed to the frontend.
@@ -44,10 +45,11 @@ pub struct RequestsSnapshot {
     pub latency_breakdown: LatencyBreakdown,
     pub status_breakdown: StatusBreakdown,
     pub points: Vec<RequestChartPoint>,
+    /// Which server this snapshot covers: "search", "upload", or "all".
+    pub server: String,
 }
 
 static REQUEST_SAMPLES: Lazy<Mutex<VecDeque<RequestSample>>> = Lazy::new(|| {
-    // Reserve some space but let it grow as needed up to a reasonable cap.
     Mutex::new(VecDeque::with_capacity(1024))
 });
 
@@ -57,7 +59,8 @@ const MAX_WINDOW_SECS: i64 = 5 * 60; // 5 minutes
 /// Record a single HTTP request sample for UI metrics.
 ///
 /// Called from the trace middleware after each completed request.
-pub fn record_http_request(latency_ms: f64, is_error: bool, status_class: &str) {
+/// `server` must be a `'static` str ("search" or "upload").
+pub fn record_http_request(latency_ms: f64, is_error: bool, status_class: &str, server: &'static str) {
     let mut buf = REQUEST_SAMPLES.lock().unwrap();
     let now = Utc::now();
 
@@ -66,6 +69,7 @@ pub fn record_http_request(latency_ms: f64, is_error: bool, status_class: &str) 
         latency_ms,
         is_error,
         status_class: status_class.to_string(),
+        server,
     });
 
     // Drop samples older than MAX_WINDOW_SECS to keep memory bounded.
@@ -88,14 +92,21 @@ pub fn record_http_request(latency_ms: f64, is_error: bool, status_class: &str) 
     }
 }
 
-/// Compute a snapshot for the Requests dashboard from recent samples.
+/// Compute a snapshot for the Requests dashboard.
 ///
+/// - `server_filter`: `Some("search")` / `Some("upload")` to restrict to one server, `None` for all.
 /// - Summary (rate, p95 latency, error%) is computed over roughly the last 60 seconds.
 /// - Chart points cover the last MAX_WINDOW_SECS seconds.
-pub fn get_requests_snapshot() -> RequestsSnapshot {
+pub fn get_requests_snapshot_for_server(server_filter: Option<&str>) -> RequestsSnapshot {
+    let server_label = server_filter.unwrap_or("all").to_string();
     let buf = REQUEST_SAMPLES.lock().unwrap();
 
-    if buf.is_empty() {
+    let samples: Vec<&RequestSample> = buf
+        .iter()
+        .filter(|s| server_filter.map_or(true, |f| s.server == f))
+        .collect();
+
+    if samples.is_empty() {
         return RequestsSnapshot {
             request_rate_rps: 0.0,
             latency_p95_ms: 0.0,
@@ -103,33 +114,29 @@ pub fn get_requests_snapshot() -> RequestsSnapshot {
             latency_breakdown: LatencyBreakdown::default(),
             status_breakdown: StatusBreakdown::default(),
             points: Vec::new(),
+            server: server_label,
         };
     }
 
     let now = Utc::now();
     let summary_window = chrono::Duration::seconds(60);
     let summary_cutoff = now - summary_window;
+    let chart_cutoff = now - chrono::Duration::seconds(MAX_WINDOW_SECS);
 
     let mut summary_latencies: Vec<f64> = Vec::new();
     let mut summary_total = 0usize;
     let mut summary_errors = 0usize;
     let mut client_errors = 0usize;
     let mut server_errors = 0usize;
-
-    // Collect summary window stats and chart points.
     let mut points: Vec<RequestChartPoint> = Vec::new();
-    let chart_cutoff = now - chrono::Duration::seconds(MAX_WINDOW_SECS);
 
-    for s in buf.iter() {
-        // Chart: keep everything within MAX_WINDOW_SECS
+    for s in &samples {
         if s.ts >= chart_cutoff {
             points.push(RequestChartPoint {
                 ts: s.ts.timestamp(),
                 latency_ms: s.latency_ms,
             });
         }
-
-        // Summary: only last 60 seconds (or all if window is smaller)
         if s.ts >= summary_cutoff {
             summary_total += 1;
             if s.is_error {
@@ -145,12 +152,11 @@ pub fn get_requests_snapshot() -> RequestsSnapshot {
     }
 
     if summary_total == 0 {
-        // Fallback: use entire buffer as summary window.
-        summary_total = buf.len();
-        summary_latencies = buf.iter().map(|s| s.latency_ms).collect::<Vec<f64>>();
-        summary_errors = buf.iter().filter(|s| s.is_error).count();
-        client_errors = buf.iter().filter(|s| s.status_class == "4xx").count();
-        server_errors = buf.iter().filter(|s| s.status_class == "5xx").count();
+        summary_total = samples.len();
+        summary_latencies = samples.iter().map(|s| s.latency_ms).collect();
+        summary_errors = samples.iter().filter(|s| s.is_error).count();
+        client_errors = samples.iter().filter(|s| s.status_class == "4xx").count();
+        server_errors = samples.iter().filter(|s| s.status_class == "5xx").count();
     }
 
     let latency_snapshot = summary_latencies.clone();
@@ -158,8 +164,7 @@ pub fn get_requests_snapshot() -> RequestsSnapshot {
     let request_rate_rps = if summary_total == 0 {
         0.0
     } else {
-        // Approximate window length in seconds based on timestamps.
-        let first_ts = buf.front().unwrap().ts;
+        let first_ts = samples.first().unwrap().ts;
         let elapsed = (now - first_ts).num_seconds().max(1) as f64;
         (summary_total as f64) / elapsed
     };
@@ -176,8 +181,7 @@ pub fn get_requests_snapshot() -> RequestsSnapshot {
         let mut v = summary_latencies;
         v.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let idx = ((v.len() as f64) * 0.95).ceil() as usize - 1;
-        let idx = idx.clamp(0, v.len() - 1);
-        v[idx]
+        v[idx.clamp(0, v.len() - 1)]
     };
 
     let latency_breakdown = compute_latency_breakdown(&latency_snapshot);
@@ -190,7 +194,13 @@ pub fn get_requests_snapshot() -> RequestsSnapshot {
         latency_breakdown,
         status_breakdown,
         points,
+        server: server_label,
     }
+}
+
+/// Convenience wrapper — returns the combined snapshot across all servers.
+pub fn get_requests_snapshot() -> RequestsSnapshot {
+    get_requests_snapshot_for_server(None)
 }
 
 fn compute_latency_breakdown(latencies: &[f64]) -> LatencyBreakdown {
@@ -219,12 +229,9 @@ fn compute_status_breakdown(total: usize, client: usize, server: usize) -> Statu
     }
 
     let total_f = total as f64;
-    let client_f = client as f64;
-    let server_f = server as f64;
-
     StatusBreakdown {
-        success_rate: ((total as f64 - client_f - server_f) / total_f) * 100.0,
-        client_error_rate: (client_f / total_f) * 100.0,
-        server_error_rate: (server_f / total_f) * 100.0,
+        success_rate: ((total as f64 - client as f64 - server as f64) / total_f) * 100.0,
+        client_error_rate: (client as f64 / total_f) * 100.0,
+        server_error_rate: (server as f64 / total_f) * 100.0,
     }
 }

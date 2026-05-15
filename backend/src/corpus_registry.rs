@@ -7,13 +7,15 @@ use tracing::info;
 pub struct CorpusRegistry {
     retrievers: DashMap<String, Arc<Mutex<Retriever>>>,
     pm: Arc<PathManager>,
+    index_in_ram: bool,
 }
 
 impl CorpusRegistry {
-    pub fn new(pm: Arc<PathManager>) -> Self {
+    pub fn new(pm: Arc<PathManager>, index_in_ram: bool) -> Self {
         Self {
             retrievers: DashMap::new(),
             pm,
+            index_in_ram,
         }
     }
 
@@ -42,7 +44,7 @@ impl CorpusRegistry {
         let index_dir = self.pm.corpus_index_dir(slug);
         let vector_file = self.pm.corpus_vector_file(slug);
         let mut retriever =
-            Retriever::new_with_paths(index_dir, vector_file).map_err(|e| e.to_string())?;
+            Retriever::new_with_paths(index_dir, vector_file, self.index_in_ram).map_err(|e| e.to_string())?;
         // Apply per-corpus settings (best-effort — don't fail if DB unavailable).
         let db_path = self.pm.db_path("documents");
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
@@ -74,8 +76,8 @@ impl CorpusRegistry {
 
 static CORPUS_REGISTRY: OnceLock<CorpusRegistry> = OnceLock::new();
 
-pub fn init(pm: Arc<PathManager>) {
-    let _ = CORPUS_REGISTRY.set(CorpusRegistry::new(pm));
+pub fn init(pm: Arc<PathManager>, index_in_ram: bool) {
+    let _ = CORPUS_REGISTRY.set(CorpusRegistry::new(pm, index_in_ram));
 }
 
 pub fn get_registry() -> Option<&'static CorpusRegistry> {

@@ -16,6 +16,31 @@ const REQUEST_METRICS_COMMAND: &str =
 const JOURNALCTL_COMMAND: &str = "journalctl -u ag.service -n 200 -f";
 const TAIL_LOGS_COMMAND: &str = "tail -f logs/ag.log";
 
+#[derive(Clone, PartialEq)]
+enum ServerFilter {
+    All,
+    Search,
+    Upload,
+}
+
+impl ServerFilter {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Search => "Search :3010",
+            Self::Upload => "Upload :3011",
+        }
+    }
+
+    fn api_key(&self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Search => Some("search"),
+            Self::Upload => Some("upload"),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct RequestsState {
     loading: bool,
@@ -48,13 +73,19 @@ impl Default for RequestsState {
 #[component]
 pub fn MonitorRequests() -> Element {
     let state = use_signal(RequestsState::default);
+    let server_filter = use_signal(|| ServerFilter::All);
 
     {
         let mut state = state.clone();
+        let server_filter = server_filter.clone();
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
-                match api::fetch_requests_snapshot().await {
+                let snapshot = match server_filter.read().api_key() {
+                    None => api::fetch_requests_snapshot().await,
+                    Some(key) => api::fetch_requests_snapshot_for(key).await,
+                };
+                match snapshot {
                     Ok(snapshot) => {
                         let busy = state.read().busy;
                         state.set(RequestsState {
@@ -120,6 +151,29 @@ pub fn MonitorRequests() -> Element {
 
             NavTabs { active: Route::MonitorRequests {} }
 
+            // Server filter tabs
+            div { class: "flex gap-2",
+                for filter in [ServerFilter::All, ServerFilter::Search, ServerFilter::Upload] {
+                    {
+                        let is_active = *server_filter.read() == filter;
+                        let label = filter.label();
+                        let mut sf = server_filter.clone();
+                        let color = if is_active {
+                            "bg-teal-700 text-white border-teal-500"
+                        } else {
+                            "bg-gray-800 text-gray-300 border-gray-600 hover:border-gray-400"
+                        };
+                        rsx! {
+                            button {
+                                class: "px-3 py-1 rounded border text-xs font-medium transition-colors {color}",
+                                onclick: move |_| sf.set(filter.clone()),
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+            }
+
             Panel { title: Some("Summary".into()), refresh: Some("5s".into()),
                 if snapshot.loading {
                     div { class: "text-gray-400 text-sm", "Loading latest stats..." }
@@ -147,7 +201,7 @@ pub fn MonitorRequests() -> Element {
                                 div {
                                     p { class: "font-semibold text-slate-50", "1. Confirm backend load" }
                                     ul { class: "list-disc ml-5 space-y-1",
-                                        li { "Use the Requests tab’s chart plus the Overview tab to make sure the spike isn’t just a single blip." }
+                                        li { "Use the Requests tab's chart plus the Overview tab to make sure the spike isn't just a single blip." }
                                         li {
                                             "Shell command: "
                                             div { class: "bg-slate-900/60 border border-slate-700 px-2 py-1 mt-1 text-[10px] flex items-center justify-between gap-3",
@@ -223,7 +277,7 @@ pub fn MonitorRequests() -> Element {
                                 div {
                                     p { class: "font-semibold text-slate-50", "6. Engage upstream teams" }
                                     ul { class: "list-disc ml-5 space-y-1",
-                                        li { "If another internal service owns the surge, coordinate with them and suggest rate limiting/backoff if it’s misbehaving." }
+                                        li { "If another internal service owns the surge, coordinate with them and suggest rate limiting/backoff if it's misbehaving." }
                                         li { "Document the root cause—client load, dependency slowness, or network failures—so you can right-size caching or throttling afterward." }
                                     }
                                 }

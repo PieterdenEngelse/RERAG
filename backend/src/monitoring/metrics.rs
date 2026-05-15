@@ -293,6 +293,20 @@ pub static RATE_LIMIT_DROPS_BY_ROUTE: Lazy<IntCounterVec> = Lazy::new(|| {
     cv
 });
 
+/// Drops partitioned by both server ("search"/"upload") and route. Additive with existing counters.
+pub static RATE_LIMIT_DROPS_BY_SERVER_ROUTE: Lazy<IntCounterVec> = Lazy::new(|| {
+    let (service, env_name) = service_and_env();
+    let opts = Opts::new(
+        "rate_limit_drops_by_server_route_total",
+        "Rate limit drops partitioned by server and route",
+    )
+    .const_label("service", service)
+    .const_label("env", env_name);
+    let cv = IntCounterVec::new(opts, &["server", "route"]).unwrap();
+    REGISTRY.register(Box::new(cv.clone())).ok();
+    cv
+});
+
 // State gauges
 pub static DOCUMENTS_TOTAL: Lazy<IntGauge> = Lazy::new(|| {
     let (service, env_name) = service_and_env();
@@ -368,7 +382,7 @@ pub static REQUEST_LATENCY_MS: Lazy<prometheus::HistogramVec> = Lazy::new(|| {
         .common_opts
         .const_label("service", service)
         .const_label("env", env_name);
-    let hv = HistogramVec::new(opts, &["method", "route", "status_class"]).unwrap();
+    let hv = HistogramVec::new(opts, &["server", "method", "route", "status_class"]).unwrap();
     REGISTRY.register(Box::new(hv.clone())).ok();
     hv
 });
@@ -563,6 +577,30 @@ pub fn rate_limit_drops_by_route_snapshot() -> Vec<(String, i64)> {
             }
             let drops = metric.get_counter().get_value() as i64;
             out.push((route, drops));
+        }
+    }
+    out
+}
+
+/// Snapshot per-server+route rate limit drops → Vec<(server, route, drops)>
+pub fn rate_limit_drops_by_server_route_snapshot() -> Vec<(String, String, i64)> {
+    let mut out = Vec::new();
+    for family in RATE_LIMIT_DROPS_BY_SERVER_ROUTE.collect().into_iter() {
+        if family.get_name() != "rate_limit_drops_by_server_route_total" {
+            continue;
+        }
+        for metric in family.get_metric() {
+            let mut server = "unknown".to_string();
+            let mut route = "unknown".to_string();
+            for label in metric.get_label() {
+                match label.get_name() {
+                    "server" => server = label.get_value().to_string(),
+                    "route" => route = label.get_value().to_string(),
+                    _ => {}
+                }
+            }
+            let drops = metric.get_counter().get_value() as i64;
+            out.push((server, route, drops));
         }
     }
     out

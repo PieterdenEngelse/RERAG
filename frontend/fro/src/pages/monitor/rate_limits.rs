@@ -16,6 +16,31 @@ struct RateLimitState {
     toggling: bool,
 }
 
+#[derive(Clone, PartialEq)]
+enum ServerFilter {
+    All,
+    Search,
+    Upload,
+}
+
+impl ServerFilter {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Search => "Search :3010",
+            Self::Upload => "Upload :3011",
+        }
+    }
+
+    fn key(&self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Search => Some("search"),
+            Self::Upload => Some("upload"),
+        }
+    }
+}
+
 #[component]
 pub fn MonitorRateLimits() -> Element {
     let state = use_signal(|| RateLimitState {
@@ -69,9 +94,11 @@ pub fn MonitorRateLimits() -> Element {
         });
     }
 
+    let server_filter = use_signal(|| ServerFilter::All);
+
     let snapshot = state.read().clone();
-    let drop_rows = snapshot.data.as_ref().map(|d| build_drop_rows(d));
-    let drop_counts = snapshot.data.as_ref().map(|d| build_drop_counts(d));
+    let drop_rows = snapshot.data.as_ref().map(|d| build_drop_rows(d, server_filter.read().key()));
+    let drop_counts = snapshot.data.as_ref().map(|d| build_drop_counts(d, server_filter.read().key()));
 
     rsx! {
         div { class: "space-y-6",
@@ -84,6 +111,29 @@ pub fn MonitorRateLimits() -> Element {
             }
 
             NavTabs { active: Route::MonitorRateLimits {} }
+
+            // Server filter
+            div { class: "flex gap-2",
+                for filter in [ServerFilter::All, ServerFilter::Search, ServerFilter::Upload] {
+                    {
+                        let is_active = *server_filter.read() == filter;
+                        let label = filter.label();
+                        let mut sf = server_filter.clone();
+                        let color = if is_active {
+                            "bg-teal-700 text-white border-teal-500"
+                        } else {
+                            "bg-gray-800 text-gray-300 border-gray-600 hover:border-gray-400"
+                        };
+                        rsx! {
+                            button {
+                                class: "px-3 py-1 rounded border text-xs font-medium transition-colors {color}",
+                                onclick: move |_| sf.set(filter.clone()),
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+            }
 
             Panel { title: Some("Summary".into()), refresh: Some("5s".into()),
                 if snapshot.loading {
@@ -563,21 +613,42 @@ fn format_float(value: f64) -> String {
     format!("{:.2}", value)
 }
 
-fn build_drop_rows(data: &api::RateLimitInfoResponse) -> Vec<Vec<String>> {
-    let mut entries = data.drops_by_route.clone();
-    entries.sort_by(|a, b| b.drops.cmp(&a.drops));
-    entries
-        .into_iter()
-        .map(|entry| vec![entry.route, entry.drops.to_string()])
-        .collect()
+fn build_drop_rows(data: &api::RateLimitInfoResponse, server_filter: Option<&'static str>) -> Vec<Vec<String>> {
+    if let Some(server) = server_filter {
+        let mut entries: Vec<_> = data.drops_by_server_route
+            .iter()
+            .filter(|e| e.server == server)
+            .collect();
+        entries.sort_by(|a, b| b.drops.cmp(&a.drops));
+        entries.into_iter()
+            .map(|e| vec![e.route.clone(), e.drops.to_string()])
+            .collect()
+    } else {
+        let mut entries = data.drops_by_route.clone();
+        entries.sort_by(|a, b| b.drops.cmp(&a.drops));
+        entries.into_iter()
+            .map(|entry| vec![entry.route, entry.drops.to_string()])
+            .collect()
+    }
 }
 
-fn build_drop_counts(data: &api::RateLimitInfoResponse) -> Vec<f64> {
-    let mut entries = data.drops_by_route.clone();
-    entries.sort_by(|a, b| b.drops.cmp(&a.drops));
-    entries
-        .into_iter()
-        .take(5)
-        .map(|entry| entry.drops as f64)
-        .collect()
+fn build_drop_counts(data: &api::RateLimitInfoResponse, server_filter: Option<&'static str>) -> Vec<f64> {
+    if let Some(server) = server_filter {
+        let mut entries: Vec<_> = data.drops_by_server_route
+            .iter()
+            .filter(|e| e.server == server)
+            .collect();
+        entries.sort_by(|a, b| b.drops.cmp(&a.drops));
+        entries.into_iter()
+            .take(5)
+            .map(|e| e.drops as f64)
+            .collect()
+    } else {
+        let mut entries = data.drops_by_route.clone();
+        entries.sort_by(|a, b| b.drops.cmp(&a.drops));
+        entries.into_iter()
+            .take(5)
+            .map(|entry| entry.drops as f64)
+            .collect()
+    }
 }

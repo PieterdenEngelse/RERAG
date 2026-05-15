@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use tantivy::{
     collector::TopDocs,
     directory::error::OpenDirectoryError,
-    directory::MmapDirectory,
+    directory::{MmapDirectory, RamDirectory},
     query::QueryParser,
     query::QueryParserError,
     schema::{Field, Schema, Value, STORED, TEXT},
@@ -307,7 +307,7 @@ pub async fn reindex_atomic(
     }
 
     // Build temp retriever bound to temp paths
-    let mut tmp_ret = Retriever::new_with_paths(tmp_index_dir.clone(), vectors_tmp.clone())
+    let mut tmp_ret = Retriever::new_with_paths(tmp_index_dir.clone(), vectors_tmp.clone(), false)
         .map_err(|e| RetrieverError::IndexError(e.to_string()))?;
     // Disable autosave during temp build to avoid mid-build writes
     tmp_ret.set_auto_save_threshold(usize::MAX / 2);
@@ -519,19 +519,27 @@ pub async fn reindex_atomic(
 }
 
 impl Retriever {
-    /// Create a new Retriever with custom vector storage path
+    /// Create a new Retriever with custom vector storage path.
+    /// `index_in_ram`: when true, Tantivy segments are heap-allocated (fast, no disk reads
+    /// after startup, but data is not persisted — re-indexing runs on every restart).
     pub fn new_with_vector_file(
         index_dir: &str,
         vector_file_path: &str,
+        index_in_ram: bool,
     ) -> Result<Self, RetrieverError> {
         let mut schema_builder = Schema::builder();
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let content_field = schema_builder.add_text_field("content", TEXT | STORED);
         let doc_id_field = schema_builder.add_text_field("doc_id", TEXT | STORED);
         let schema = schema_builder.build();
-        fs::create_dir_all(index_dir)?;
-        let dir = MmapDirectory::open(index_dir)?;
-        let index = Index::open_or_create(dir, schema)?;
+        let index = if index_in_ram {
+            info!("INDEX_IN_RAM=true: opening Tantivy index in RamDirectory (heap-allocated, re-indexed on every start)");
+            Index::open_or_create(RamDirectory::create(), schema)?
+        } else {
+            fs::create_dir_all(index_dir)?;
+            let dir = MmapDirectory::open(index_dir)?;
+            Index::open_or_create(dir, schema)?
+        };
 
         let vector_file_path_owned = vector_file_path.to_string();
 
@@ -645,19 +653,20 @@ impl Retriever {
     // LOCATION: ag/src/retriever.rs
     // INSERT THIS AFTER LINE 221 (after the new_with_vector_file method ends)
 
-    /// NEW for v13.1.2: Create with PathBuf paths (wrapper for new_with_vector_file)
+    /// Create with PathBuf paths (wrapper for new_with_vector_file)
     pub fn new_with_paths(
         index_dir: std::path::PathBuf,
         vector_file: std::path::PathBuf,
+        index_in_ram: bool,
     ) -> Result<Self, RetrieverError> {
         let index_dir_str = index_dir.to_string_lossy().to_string();
         let vector_file_str = vector_file.to_string_lossy().to_string();
-        Self::new_with_vector_file(&index_dir_str, &vector_file_str)
+        Self::new_with_vector_file(&index_dir_str, &vector_file_str, index_in_ram)
     }
 
     /// Create a new Retriever with default vector storage path ("./vectors.json")
     pub fn new(index_dir: &str) -> Result<Self, RetrieverError> {
-        Self::new_with_vector_file(index_dir, "./vectors.json")
+        Self::new_with_vector_file(index_dir, "./vectors.json", false)
     }
 
     pub fn new_dummy() -> Result<Self, RetrieverError> {
@@ -669,7 +678,7 @@ impl Retriever {
             .as_nanos();
         let dummy_dir = format!("./dummy_tantivy_index_{}", timestamp);
         let dummy_vector_file = format!("./dummy_vectors_{}.json", timestamp);
-        let result = Self::new_with_vector_file(&dummy_dir, &dummy_vector_file);
+        let result = Self::new_with_vector_file(&dummy_dir, &dummy_vector_file, false);
 
         // Clean up the dummy files immediately if creation failed
         if result.is_err() {
@@ -1614,6 +1623,13 @@ impl Retriever {
             parse_time
         );
 
+        crate::perf::io_uring::update_startup_vectors(
+            bytes.len() as u64,
+            read_time.as_millis() as u64,
+            self.vectors.len(),
+            async_io::backend_name(),
+        );
+
         Ok(())
     }
 
@@ -1623,6 +1639,7 @@ impl Retriever {
             return Ok(0);
         }
 
+        let cache_start = std::time::Instant::now();
         let bytes = async_io::read_file(path).await?;
 
         let archived = rkyv::access::<
@@ -1645,6 +1662,13 @@ impl Retriever {
             async_io::backend_name(),
             bytes.len()
         );
+
+        crate::perf::io_uring::update_startup_cache(
+            bytes.len() as u64,
+            cache_start.elapsed().as_millis() as u64,
+            loaded,
+        );
+
         Ok(loaded)
     }
 

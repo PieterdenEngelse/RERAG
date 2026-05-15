@@ -60,11 +60,11 @@ pub enum Route {
         ConfigPrompt {},
         #[route("/config/hardware")]
         ConfigHardware {},
-        #[route("/config/other")]
+        #[route("/config/actix")]
         ConfigOther {},
         #[route("/config/memories")]
         ConfigMemories {},
-        #[route("/config/io-uring")]
+        #[route("/config/Io-uring")]
         ConfigIoUring {},
         #[route("/config/chunker")]
         ConfigChunker {},

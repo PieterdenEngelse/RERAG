@@ -33,6 +33,7 @@
 //! - Index loading: 2-3x faster vector file reads
 //! - Batch operations: Even better due to io_uring's batching
 
+use once_cell::sync::Lazy;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,7 @@ use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 // Global stats and config for monitoring
 static IO_STATS: OnceLock<IoStats> = OnceLock::new();
 static IO_CONFIG: OnceLock<IoUringConfig> = OnceLock::new();
+static IO_STATS_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOGGED_INIT: OnceLock<bool> = OnceLock::new();
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 static IO_RUNTIME: OnceLock<Option<Arc<IoRuntimeHandle>>> = OnceLock::new();
@@ -754,11 +756,14 @@ pub async fn read_file<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     if let Some(handle) = runtime_handle() {
         let result = handle.read_file(path_ref).await;
         match &result {
-            Ok(data) => debug!(
-                "io_uring: read {} bytes from {} via io_uring",
-                data.len(),
-                path_ref.display()
-            ),
+            Ok(data) => {
+                get_stats().record_read(data.len() as u64);
+                debug!(
+                    "io_uring: read {} bytes from {} via io_uring",
+                    data.len(),
+                    path_ref.display()
+                );
+            }
             Err(e) => {
                 get_stats().record_read_error();
                 debug!(
@@ -803,11 +808,14 @@ pub async fn write_file<P: AsRef<Path>>(path: P, data: &[u8]) -> io::Result<()> 
     if let Some(handle) = runtime_handle() {
         let result = handle.write_file(path_ref, Arc::from(data.to_vec())).await;
         match &result {
-            Ok(_) => debug!(
-                "io_uring: wrote {} bytes to {} via io_uring",
-                data.len(),
-                path_ref.display()
-            ),
+            Ok(_) => {
+                get_stats().record_write(data.len() as u64);
+                debug!(
+                    "io_uring: wrote {} bytes to {} via io_uring",
+                    data.len(),
+                    path_ref.display()
+                );
+            }
             Err(e) => {
                 get_stats().record_write_error();
                 debug!(
@@ -844,6 +852,7 @@ pub async fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
     #[cfg(all(target_os = "linux", feature = "io_uring"))]
     if let Some(handle) = runtime_handle() {
         return handle.read_file(path.as_ref()).await.and_then(|bytes| {
+            get_stats().record_read(bytes.len() as u64);
             String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         });
     }
@@ -988,6 +997,85 @@ impl IoStats {
 /// Get global I/O stats
 pub fn get_stats() -> &'static IoStats {
     IO_STATS.get_or_init(IoStats::new)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct IoStatsSnapshot {
+    reads: u64,
+    writes: u64,
+    bytes_read: u64,
+    bytes_written: u64,
+    read_errors: u64,
+    write_errors: u64,
+}
+
+/// Load persisted stats from disk and seed the global counters.
+/// Call once at startup before any I/O occurs.
+pub fn init_stats(path: PathBuf) {
+    let _ = IO_STATS_PATH.set(path.clone());
+    let stats = get_stats();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(snap) = serde_json::from_str::<IoStatsSnapshot>(&data) {
+            stats.reads.store(snap.reads, Ordering::Relaxed);
+            stats.writes.store(snap.writes, Ordering::Relaxed);
+            stats.bytes_read.store(snap.bytes_read, Ordering::Relaxed);
+            stats.bytes_written.store(snap.bytes_written, Ordering::Relaxed);
+            stats.read_errors.store(snap.read_errors, Ordering::Relaxed);
+            stats.write_errors.store(snap.write_errors, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Flush current stats to disk. Call periodically and on shutdown.
+pub fn flush_stats() {
+    let Some(path) = IO_STATS_PATH.get() else { return };
+    let s = get_stats();
+    let snap = IoStatsSnapshot {
+        reads: s.get_reads(),
+        writes: s.get_writes(),
+        bytes_read: s.get_bytes_read(),
+        bytes_written: s.get_bytes_written(),
+        read_errors: s.get_read_errors(),
+        write_errors: s.get_write_errors(),
+    };
+    if let Ok(json) = serde_json::to_string(&snap) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+// ── Startup I/O Accounting ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct StartupIoRecord {
+    pub vectors_bytes: u64,
+    pub vectors_read_ms: u64,
+    pub vectors_count: usize,
+    pub cache_bytes: u64,
+    pub cache_read_ms: u64,
+    pub cache_entries: usize,
+    pub backend: String,
+}
+
+static STARTUP_IO: Lazy<parking_lot::Mutex<StartupIoRecord>> =
+    Lazy::new(|| parking_lot::Mutex::new(StartupIoRecord::default()));
+
+pub fn update_startup_vectors(bytes: u64, read_ms: u64, count: usize, backend: &str) {
+    let mut r = STARTUP_IO.lock();
+    r.vectors_bytes = bytes;
+    r.vectors_read_ms = read_ms;
+    r.vectors_count = count;
+    r.backend = backend.to_string();
+}
+
+pub fn update_startup_cache(bytes: u64, read_ms: u64, entries: usize) {
+    let mut r = STARTUP_IO.lock();
+    r.cache_bytes = bytes;
+    r.cache_read_ms = read_ms;
+    r.cache_entries = entries;
+}
+
+pub fn get_startup_io() -> StartupIoRecord {
+    STARTUP_IO.lock().clone()
 }
 
 /// Get I/O stats summary

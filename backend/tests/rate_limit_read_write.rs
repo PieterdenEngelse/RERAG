@@ -3,7 +3,8 @@ use tokio::time::sleep;
 
 #[tokio::test]
 async fn rate_limit_read_and_write_buckets() {
-    let port: u16 = 40124;
+    let search_port: u16 = 40126;
+    let upload_port: u16 = 40127;
     // Deterministic per-route configuration and stable test env
     env::set_var("NO_DOTENV", "true");
     env::set_var("RATE_LIMIT_EXEMPT_PREFIXES", "[]");
@@ -16,7 +17,8 @@ async fn rate_limit_read_and_write_buckets() {
     );
     // Global enable
     env::set_var("BACKEND_HOST", "127.0.0.1");
-    env::set_var("BACKEND_PORT", port.to_string());
+    env::set_var("BACKEND_PORT", search_port.to_string());
+    env::set_var("UPLOAD_PORT", upload_port.to_string());
     env::set_var("RATE_LIMIT_ENABLED", "true");
     env::set_var("TRUST_PROXY", "true");
     // Route-specific: make read burst and write burst small to assert quickly
@@ -25,6 +27,10 @@ async fn rate_limit_read_and_write_buckets() {
     env::set_var("RATE_LIMIT_UPLOAD_QPS", "1");
     env::set_var("RATE_LIMIT_UPLOAD_BURST", "2");
     env::set_var("SKIP_INITIAL_INDEXING", "true");
+    // Disable continuous refill so upload processing time (ONNX ~1s) doesn't
+    // replenish the bucket between requests and make c3 pass unexpectedly.
+    env::set_var("RATE_LIMIT_DISCRETE_REFILL", "true");
+    env::set_var("RATE_LIMIT_REFILL_INTERVAL_MS", "3600000");
 
     // Start server
     tokio::spawn(async move {
@@ -44,18 +50,18 @@ async fn rate_limit_read_and_write_buckets() {
 
     // Health warm-up with different IP to avoid draining /search bucket
     let _ = client
-        .get(format!("http://127.0.0.1:{}/health", port))
+        .get(format!("http://127.0.0.1:{}/health", search_port))
         .header("X-Forwarded-For", "9.9.9.9")
         .send()
         .await
         .unwrap();
 
-    // 1) /search (read bucket: burst=3)
+    // 1) /search (read bucket: burst=3) — hits search server
     let mut search_codes = Vec::new();
     for _ in 0..6 {
         // 3 ok + 3 drops likely
         let r = client
-            .get(format!("http://127.0.0.1:{}/search?q=t", port))
+            .get(format!("http://127.0.0.1:{}/search?q=t", search_port))
             .header("X-Forwarded-For", "1.2.3.4")
             .send()
             .await
@@ -73,12 +79,12 @@ async fn rate_limit_read_and_write_buckets() {
         );
     }
 
-    // 2) /rerank (read bucket applies)
+    // 2) /rerank (read bucket applies) — hits search server
     let mut rerank_codes = Vec::new();
     for _ in 0..4 {
         // 3 ok + 1 drop expected under tight loop for the same read bucket IP
         let r = client
-            .post(format!("http://127.0.0.1:{}/rerank", port))
+            .post(format!("http://127.0.0.1:{}/rerank", search_port))
             .header("X-Forwarded-For", "1.2.3.4")
             .json(&serde_json::json!({"query":"q","candidates":["a","b"]}))
             .send()
@@ -94,7 +100,7 @@ async fn rate_limit_read_and_write_buckets() {
         rerank_codes
     );
 
-    // 3) /upload (write bucket: burst=2)
+    // 3) /upload (write bucket: burst=2) — hits upload server
     // Build forms with explicit unique filenames to avoid collisions
     let part1 = reqwest::multipart::Part::file(test_file("one"))
         .await
@@ -113,7 +119,7 @@ async fn rate_limit_read_and_write_buckets() {
     let form3 = reqwest::multipart::Form::new().part("file", part3);
 
     let c1 = client
-        .post(format!("http://127.0.0.1:{}/upload", port))
+        .post(format!("http://127.0.0.1:{}/upload", upload_port))
         .header("X-Forwarded-For", "1.2.3.4")
         .multipart(form1)
         .send()
@@ -122,7 +128,7 @@ async fn rate_limit_read_and_write_buckets() {
         .status()
         .as_u16();
     let c2 = client
-        .post(format!("http://127.0.0.1:{}/upload", port))
+        .post(format!("http://127.0.0.1:{}/upload", upload_port))
         .header("X-Forwarded-For", "1.2.3.4")
         .multipart(form2)
         .send()
@@ -133,7 +139,7 @@ async fn rate_limit_read_and_write_buckets() {
     // Small delay before third upload to reduce race potential
     sleep(std::time::Duration::from_millis(30)).await;
     let mut resp3 = client
-        .post(format!("http://127.0.0.1:{}/upload", port))
+        .post(format!("http://127.0.0.1:{}/upload", upload_port))
         .header("X-Forwarded-For", "1.2.3.4")
         .multipart(form3)
         .send()
@@ -148,7 +154,7 @@ async fn rate_limit_read_and_write_buckets() {
             .file_name("test_retry.txt");
         let form_retry = reqwest::multipart::Form::new().part("file", part_retry);
         resp3 = client
-            .post(format!("http://127.0.0.1:{}/upload", port))
+            .post(format!("http://127.0.0.1:{}/upload", upload_port))
             .header("X-Forwarded-For", "1.2.3.4")
             .multipart(form_retry)
             .send()

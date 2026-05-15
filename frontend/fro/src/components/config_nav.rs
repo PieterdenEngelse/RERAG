@@ -37,14 +37,14 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
             Route::ConfigHardware {},
             ConfigTab::Hardware,
         ),
-        ("io_uring", Route::ConfigIoUring {}, ConfigTab::IoUring),
+        ("Io-uring", Route::ConfigIoUring {}, ConfigTab::IoUring),
         ("Chunker", Route::ConfigChunker {}, ConfigTab::Chunker),
         ("Embedding", Route::ConfigEmbedding {}, ConfigTab::Embedding),
         ("Ner", Route::ConfigNer {}, ConfigTab::Ner),
         ("ONNX", Route::ConfigOnnx {}, ConfigTab::Onnx),
         ("Neo4j", Route::ConfigNeo4j {}, ConfigTab::Neo4j),
         ("Terms", Route::ConfigTerms {}, ConfigTab::Terms),
-        ("Other", Route::ConfigOther {}, ConfigTab::Other),
+        ("Actix", Route::ConfigOther {}, ConfigTab::Other),
         ("Corpus", Route::ConfigCorpus {}, ConfigTab::Corpus),
     ];
 

@@ -46,6 +46,7 @@ pub fn Header() -> Element {
 
     // Store last health response for load metrics display
     let mut last_health_response: Signal<Option<api::HealthResponse>> = use_signal(|| None);
+    let mut last_upload_health_response: Signal<Option<api::HealthResponse>> = use_signal(|| None);
     // Track consecutive timeouts to show "checking" state
     let mut timeout_count: Signal<u32> = use_signal(|| 0);
 
@@ -240,6 +241,39 @@ pub fn Header() -> Element {
         }
     });
 
+    // Upload server health loop — runs independently of the search server loop
+    use_future(move || async move {
+        loop {
+            match api::upload_health_check().await {
+                Ok(resp) => {
+                    let s = resp.status.clone();
+                    last_upload_health_response.set(Some(resp));
+                    match s.as_str() {
+                        "offline" | "unhealthy" => {
+                            page_errors.with_mut(|e| {
+                                e.set_error("upload_server", "Upload server unhealthy")
+                            });
+                        }
+                        "degraded" => {
+                            page_errors.with_mut(|e| {
+                                e.set_error("upload_server", "Upload server degraded")
+                            });
+                        }
+                        _ => {
+                            page_errors.with_mut(|e| e.clear_error("upload_server"));
+                        }
+                    }
+                }
+                Err(_) => {
+                    last_upload_health_response.set(None);
+                    page_errors
+                        .with_mut(|e| e.set_error("upload_server", "Upload server offline"));
+                }
+            }
+            gloo_timers::future::TimeoutFuture::new(5000).await;
+        }
+    });
+
     let status = health_status();
     let errors = page_errors();
     let has_page_errors = errors.has_errors();
@@ -275,23 +309,28 @@ pub fn Header() -> Element {
             .map(|(page, err)| format!("[{}] {}", page, err))
             .collect();
         format!("Page errors:\n{}", error_lines.join("\n"))
-    } else if let Some(resp) = last_health_response() {
-        let mut text = format!("Backend status: {}", resp.status);
-        if let Some(message) = resp.message {
-            text = format!("{}\nMessage: {}", text, message);
-        }
-        if let Some(doc_count) = resp.documents {
-            text = format!("{}\nDocuments: {}", text, doc_count);
-        }
-        if let Some(vec_count) = resp.vectors {
-            text = format!("{}\nVectors: {}", text, vec_count);
-        }
-        if let Some(path) = resp.index_path {
-            text = format!("{}\nIndex path: {}", text, path);
-        }
-        text
     } else {
-        status.clone()
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(resp) = last_health_response() {
+            let mut line = format!("Search (3010): {}", resp.status);
+            if let Some(d) = resp.documents { line = format!("{} | {} docs", line, d); }
+            if let Some(v) = resp.vectors { line = format!("{}, {} vecs", line, v); }
+            lines.push(line);
+        } else {
+            lines.push(format!("Search (3010): {}", status));
+        }
+        if let Some(resp) = last_upload_health_response() {
+            let mut line = format!("Upload (3011): {}", resp.status);
+            if let Some(m) = resp.message { line = format!("{} | {}", line, m); }
+            if let Some(l) = resp.load {
+                if l.indexing { line = format!("{} | indexing", line); }
+                line = format!("{} | queue:{}", line, l.queue_depth);
+            }
+            lines.push(line);
+        } else {
+            lines.push("Upload (3011): offline".to_string());
+        }
+        lines.join("\n")
     };
 
     let status_for_click = status.clone();
@@ -1212,7 +1251,7 @@ pub fn Header() -> Element {
                         }
                     }
                     p { class: "text-sm text-gray-400 mb-4",
-                        "The status light shows the health of the backend server:"
+                        "The status light combines health from both backend servers (search :3010 and upload :3011):"
                     }
                     div { class: "space-y-3",
                         // Unknown
@@ -1351,9 +1390,21 @@ pub fn Header() -> Element {
                             }
                         }
                     }
-                    div { class: "mt-4 pt-3 border-t border-gray-700 text-xs text-gray-500",
-                        "Current status: "
-                        span { class: "font-mono text-gray-300", "{health_status()}" }
+                    div { class: "mt-4 pt-3 border-t border-gray-700 text-xs text-gray-500 space-y-1",
+                        div {
+                            "Search (3010): "
+                            span { class: "font-mono text-gray-300", "{health_status()}" }
+                        }
+                        div {
+                            "Upload (3011): "
+                            span { class: "font-mono text-gray-300",
+                                {
+                                    last_upload_health_response()
+                                        .map(|r| r.status)
+                                        .unwrap_or_else(|| "offline".to_string())
+                                }
+                            }
+                        }
                     }
                     button {
                         class: "btn btn-primary btn-sm mt-4 w-full",

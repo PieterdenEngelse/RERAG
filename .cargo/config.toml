@@ -1,34 +1,48 @@
-# Cargo configuration for reduced build artifact size
-# See: https://doc.rust-lang.org/cargo/reference/config.html
-
-[build]
-# Disable incremental compilation in dev - saves ~50% disk space
-# Trade-off: slightly slower rebuilds, but much smaller target/
-incremental = false
-
-# Use fewer parallel jobs to reduce peak memory/disk usage (optional)
-# jobs = 4
-
+# ============================
+# GLOBAL DEV PROFILE
+# ============================
 [profile.dev]
-# Reduce debug info size (level 1 = line tables only, level 2 = full)
-# Level 1 saves significant space while keeping basic debugging
-debug = 1
+opt-level = 0
+debug = true
+lto = false
+codegen-units = 256
+incremental = true
 
-# Split debug info into separate files (reduces binary size)
-split-debuginfo = "packed"
+# ============================
+# GLOBAL RELEASE PROFILE (native default)
+# ============================
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+incremental = false
+strip = "symbols"
+panic = "abort"
 
-[profile.dev.package."*"]
-# Optimize dependencies even in dev mode - smaller and faster deps
-opt-level = 2
-
+# ============================
+# NATIVE BACKEND OVERRIDES
+# ============================
 [target.x86_64-unknown-linux-gnu]
-# Use mold linker if available (faster linking, optional)
-# linker = "clang"
-# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "inline-threshold=1000",
+]
 
-[net]
-# Reduce network retries
-retry = 2
+# ============================
+# WASM FRONTEND OVERRIDES
+# ============================
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "opt-level=z",
+    "-C", "link-arg=--export-table",
+    "-C", "link-arg=--export=__heap_base",
+    "-C", "link-arg=--export=__data_end",
+]
 
-[registries.crates-io]
-protocol = "sparse"
+# WASM-specific release overrides
+[profile.release.package."*"]
+opt-level = "z"
+codegen-units = 1
+strip = "none"
+

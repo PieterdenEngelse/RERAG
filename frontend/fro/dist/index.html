@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script>
+    const isDark = localStorage.getItem('darkMode') === 'dark' ||
+                   (localStorage.getItem('darkMode') === null && true);
+    if (isDark) document.documentElement.classList.add('dark');
+  </script>
+<link rel="modulepreload" href="/fro-184e890be6e353be.js" crossorigin="anonymous" integrity="sha384-1tf/vGvSCVbD6r6IaL5JqbWKP3+MqGAqtpYlzwlKKmgtropoHRgwtUv0ETGGbsDP"><link rel="modulepreload" href="/snippets/dioxus-cli-config-dd5550fda4283b56/inline0.js" crossorigin="anonymous" integrity="sha384-63GOaGGIhEHCB9m4vzzYEBfUIIUWiAYuNlk/LB2TuDDcjK13LO2II01K9xxO0fFG"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-e827be9a3ca83173/src/js/set_attribute.js" crossorigin="anonymous" integrity="sha384-KzHUe16NLJR2eaeVyqeB7zwb1qHGH3sV/aw0aS7V/+IeQwWH6OAnZ9nbGkwEyGzZ"><link rel="modulepreload" href="/snippets/dioxus-web-5b126e270dcd269f/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-e827be9a3ca83173/inline0.js" crossorigin="anonymous" integrity="sha384-j0LKwUivj+3TJqebf9mBv6v1Yu2sX+LAJanOVfQAVOZpWTU0+pzzo8XExJBFDUso"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-e827be9a3ca83173/src/js/patch_console.js" crossorigin="anonymous" integrity="sha384-r+5veWcnM6yFNXixia5X8SIr1KdMZfaSc4dp0/8fqFpt3s6gK4zUXXSkvHdZ4TmG"><link rel="modulepreload" href="/snippets/dioxus-web-5b126e270dcd269f/src/js/eval.js" crossorigin="anonymous" integrity="sha384-p8SsdRWHMmi6kI0ok6n5NV3mpIQPM5rkaJiiTwobcDIXKNhvajvPCqsBACIQVcP8"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-e827be9a3ca83173/src/js/hydrate.js" crossorigin="anonymous" integrity="sha384-Ocp9HYCb7T7M2KNri/Y2CHx/JgjlahEvu2KUTc/YKyGLB0s0pgNeCaanjX7egjMz"><link rel="preload" href="/fro-184e890be6e353be_bg.wasm" crossorigin="anonymous" integrity="sha384-7XTpcNhf+smkg6nmGXg04n5VyuXZTBB3QA09rkwBMx6df8en8X27SNcraYawnmuR" as="fetch" type="application/wasm"></head>
+<body>
+<script type="module">
+import init, * as bindings from '/fro-184e890be6e353be.js';
+const wasm = await init({ module_or_path: '/fro-184e890be6e353be_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>

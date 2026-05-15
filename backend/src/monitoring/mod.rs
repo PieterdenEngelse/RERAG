@@ -28,6 +28,7 @@ pub mod performance_analysis;
 pub mod pprof;
 pub mod preprocess_stats;
 pub mod rate_limit_middleware;
+pub mod upload_concurrency_middleware;
 pub mod resource_attribution;
 pub mod rig_stats;
 pub mod tool_alerts;
@@ -101,7 +102,8 @@ pub use tool_trends::{
 pub use trace_alerting::{start_trace_alerting, TraceAlertingConfig, TraceAnomalyEvent};
 pub use trace_context::{clear_trace_id, get_trace_id, set_trace_id};
 pub use ui_metrics::{
-    get_requests_snapshot, record_http_request, RequestChartPoint, RequestsSnapshot,
+    get_requests_snapshot, get_requests_snapshot_for_server, record_http_request,
+    RequestChartPoint, RequestsSnapshot,
 };
 
 use once_cell::sync::OnceCell;

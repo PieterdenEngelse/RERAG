@@ -23,8 +23,10 @@ async fn main() -> std::io::Result<()> {
     // ─────────────────────────────────────────────────────────────
 
     dotenvy::dotenv().ok();
-    // Runtime overrides saved by the UI (toggle + thresholds) — must load after .env so they win.
+    // Runtime overrides saved by the UI — must load after .env so they win.
     dotenvy::from_filename_override(".env.rate_limits").ok();
+    dotenvy::from_filename_override(".env.index").ok();
+    dotenvy::from_filename_override(".env.server").ok();
 
     // ─────────────────────────────────────────────────────────────
     // PHASE 0.1: Set up Ctrl+C handler for clean shutdown
@@ -99,6 +101,13 @@ async fn main() -> std::io::Result<()> {
 
     let config = ApiConfig::from_env();
     ag::monitoring::set_chunking_logging_enabled(config.chunking_log_enabled);
+
+    ag::embedder::init_upload_blocking_pool(
+        std::env::var("UPLOAD_ONNX_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4),
+    );
 
     let pm = &config.path_manager;
 
@@ -183,6 +192,7 @@ async fn main() -> std::io::Result<()> {
     ag::monitoring::init_preprocess_stats(pm.data_dir().join("preprocess_stats.json"));
     ag::monitoring::init_canon_stats(pm.data_dir().join("canon_stats.json"));
     ag::monitoring::init_chunking_stats(pm.data_dir().join("chunking_stats.json"));
+    ag::perf::io_uring::init_stats(pm.data_dir().join("io_stats.json"));
     tokio::spawn(async {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         interval.tick().await; // skip the immediate first tick
@@ -191,6 +201,7 @@ async fn main() -> std::io::Result<()> {
             ag::monitoring::flush_preprocess_stats();
             ag::monitoring::flush_canon_stats();
             ag::monitoring::flush_chunking_stats();
+            ag::perf::io_uring::flush_stats();
         }
     });
 
@@ -262,7 +273,7 @@ async fn main() -> std::io::Result<()> {
     info!("📦 Initializing Retriever with PathManager...");
 
     let mut retriever =
-        match Retriever::new_with_paths(pm.index_path("tantivy"), pm.vector_store_path()) {
+        match Retriever::new_with_paths(pm.index_path("tantivy"), pm.vector_store_path(), config.index_in_ram) {
             Ok(mut ret) => {
                 ret.set_search_top_k(config.search_top_k);
                 let duration_ms = retriever_start.elapsed().as_millis() as u64;
@@ -476,7 +487,7 @@ async fn main() -> std::io::Result<()> {
     ag::api::set_retriever_handle(Arc::clone(&retriever));
 
     // Initialize corpus registry and register the default corpus
-    ag::corpus_registry::init(Arc::new(config.path_manager.clone()));
+    ag::corpus_registry::init(Arc::new(config.path_manager.clone()), config.index_in_ram);
     if let Some(registry) = ag::corpus_registry::get_registry() {
         registry.insert("default", Arc::clone(&retriever));
         info!("✓ Corpus registry initialized (default corpus registered)");
@@ -652,7 +663,8 @@ async fn main() -> std::io::Result<()> {
         total_startup_ms
     );
     metrics::STARTUP_DURATION_MS.set(total_startup_ms as i64);
-    info!("   Server: http://{}", config.bind_addr());
+    info!("   Search server: http://{}", config.bind_addr());
+    info!("   Upload server: http://{}", config.upload_bind_addr());
     info!("   Health: http://{}/monitoring/health", config.bind_addr());
     info!(
         "   Metrics: http://{}/monitoring/metrics",
@@ -667,11 +679,19 @@ async fn main() -> std::io::Result<()> {
     info!("═══════════════════════════════════════════════════════════");
 
     info!(
-        "🚀 Starting API server on http://{} ...",
-        config.bind_addr()
+        "🚀 Starting API servers on http://{} (search) and http://{} (upload) ...",
+        config.bind_addr(),
+        config.upload_bind_addr()
     );
 
-    start_api_server(&config).await
+    let result = start_api_server(&config).await;
+    // Flush all stats to disk before process exits (catches snapshots from uploads
+    // that completed during graceful shutdown after SIGTERM).
+    ag::monitoring::flush_preprocess_stats();
+    ag::monitoring::flush_canon_stats();
+    ag::monitoring::flush_chunking_stats();
+    ag::perf::io_uring::flush_stats();
+    result
 }
 
 /// Clean up stale lock files from previous crashes or kill -9

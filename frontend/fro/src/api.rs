@@ -38,15 +38,54 @@ pub fn api_url(path: &str) -> String {
     format!("{}{}", resolve_api_base_url(), path)
 }
 
+pub const UPLOAD_API_BASE_URL: &str = "http://127.0.0.1:3011";
+
+pub fn resolve_upload_api_base_url() -> String {
+    if let Some(window) = web_sys::window() {
+        let location = window.location();
+        if let Ok(origin) = location.origin() {
+            let is_loopback = origin.contains("127.0.0.1") || origin.contains("localhost");
+            if !is_loopback {
+                return origin;
+            }
+
+            let hostname = location
+                .hostname()
+                .unwrap_or_else(|_| "127.0.0.1".into())
+                .trim()
+                .to_string();
+            let scheme = location
+                .protocol()
+                .unwrap_or_else(|_| "http:".into())
+                .trim_end_matches(':')
+                .to_string();
+
+            if hostname.is_empty() {
+                return UPLOAD_API_BASE_URL.to_string();
+            }
+
+            return format!("{}://{}:3011", scheme, hostname);
+        }
+    }
+
+    UPLOAD_API_BASE_URL.to_string()
+}
+
+pub fn upload_api_url(path: &str) -> String {
+    format!("{}{}", resolve_upload_api_base_url(), path)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HealthResponse {
     pub status: String,
+    pub server: Option<String>,
     pub documents: Option<usize>,
     pub vectors: Option<usize>,
     pub index_path: Option<String>,
     pub message: Option<String>,
     pub load: Option<LoadMetrics>,
     pub neo4j: Option<Neo4jHealthStatus>,
+    pub onnx_pool: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -78,6 +117,8 @@ pub struct IoUringInfo {
     pub backend: String,
     pub config: IoUringConfig,
     pub stats: IoUringIoStats,
+    #[serde(default)]
+    pub startup: Option<IoUringStartup>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -125,6 +166,24 @@ fn default_sqpoll_cpu() -> i32 {
 
 fn default_attach_wq_fd() -> i32 {
     -1
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct IoUringStartup {
+    #[serde(default)]
+    pub vectors_bytes: u64,
+    #[serde(default)]
+    pub vectors_read_ms: u64,
+    #[serde(default)]
+    pub vectors_count: usize,
+    #[serde(default)]
+    pub cache_bytes: u64,
+    #[serde(default)]
+    pub cache_read_ms: u64,
+    #[serde(default)]
+    pub cache_entries: usize,
+    #[serde(default)]
+    pub backend: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -365,6 +424,9 @@ pub struct RequestsSnapshot {
     #[serde(default)]
     pub status_breakdown: StatusBreakdown,
     pub points: Vec<RequestChartPoint>,
+    /// Which server this snapshot covers: "search", "upload", or "all".
+    #[serde(default)]
+    pub server: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -386,6 +448,9 @@ pub struct IndexInfoResponse {
     pub warning: Option<String>,
     pub total_documents: usize,
     pub total_vectors: usize,
+    pub index_size_bytes: Option<u64>,
+    pub index_size_human: Option<String>,
+    pub memory_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -946,11 +1011,22 @@ pub struct RateLimiterState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerRouteDrop {
+    pub server: String,
+    pub route: String,
+    pub drops: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RateLimitInfoResponse {
     pub request_id: String,
     pub total_drops: i64,
     pub drops_by_route: Vec<RouteDropStat>,
+    #[serde(default)]
+    pub drops_by_server_route: Vec<ServerRouteDrop>,
     pub config: RateLimitConfigSnapshot,
+    #[serde(default)]
+    pub upload_config: Option<RateLimitConfigSnapshot>,
     pub limiter_state: RateLimiterState,
 }
 
@@ -1225,6 +1301,18 @@ pub async fn health_check() -> Result<HealthResponse, String> {
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+pub async fn upload_health_check() -> Result<HealthResponse, String> {
+    let url = upload_api_url("/monitoring/health");
+
+    gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 /// Get io_uring async I/O stats
 pub async fn fetch_io_uring_stats() -> Result<IoUringResponse, String> {
     let url = api_url("/monitoring/io-uring");
@@ -1309,7 +1397,7 @@ pub async fn list_documents() -> Result<DocumentsResponse, String> {
 
 /// Delete a document
 pub async fn delete_document(filename: &str) -> Result<serde_json::Value, String> {
-    let url = format!("{}/documents/{}", resolve_api_base_url(), filename);
+    let url = format!("{}/documents/{}", resolve_upload_api_base_url(), filename);
 
     gloo_net::http::Request::delete(&url)
         .send()
@@ -1342,7 +1430,7 @@ pub async fn clear_cache() -> Result<serde_json::Value, String> {
 
 /// Trigger reindexing
 pub async fn reindex() -> Result<serde_json::Value, String> {
-    let url = api_url("/reindex");
+    let url = upload_api_url("/reindex");
 
     gloo_net::http::Request::post(&url)
         .send()
@@ -1354,7 +1442,7 @@ pub async fn reindex() -> Result<serde_json::Value, String> {
 }
 
 pub async fn reindex_async() -> Result<ReindexAsyncResponse, String> {
-    let url = api_url("/reindex/async");
+    let url = upload_api_url("/reindex/async");
 
     gloo_net::http::Request::post(&url)
         .send()
@@ -1523,7 +1611,7 @@ pub async fn delete_api_key(provider: &str) -> Result<serde_json::Value, String>
 }
 
 pub async fn fetch_reindex_status(job_id: &str) -> Result<ReindexStatusResponse, String> {
-    let url = format!("{}/reindex/status/{}", resolve_api_base_url(), job_id);
+    let url = format!("{}/reindex/status/{}", resolve_upload_api_base_url(), job_id);
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -1537,7 +1625,18 @@ pub async fn fetch_reindex_status(job_id: &str) -> Result<ReindexStatusResponse,
 /// Fetch request metrics snapshot for the Monitor UI
 pub async fn fetch_requests_snapshot() -> Result<RequestsSnapshot, String> {
     let url = api_url("/monitoring/ui/requests");
+    gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
 
+pub async fn fetch_requests_snapshot_for(server: &str) -> Result<RequestsSnapshot, String> {
+    let path = format!("/monitoring/ui/requests/{}", server);
+    let url = api_url(&path);
     gloo_net::http::Request::get(&url)
         .send()
         .await
@@ -1550,6 +1649,101 @@ pub async fn fetch_requests_snapshot() -> Result<RequestsSnapshot, String> {
 /// Fetch index info for the monitor page
 pub async fn fetch_index_info() -> Result<IndexInfoResponse, String> {
     fetch_json::<IndexInfoResponse>("/index/info").await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SearchServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub workers: usize,
+    pub max_connections: usize,
+    pub max_body_kb: usize,
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub trust_proxy: bool,
+    #[serde(default)]
+    pub rate_limit_lru_capacity: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UploadServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub workers: usize,
+    pub max_connections: usize,
+    pub max_concurrent: usize,
+    pub max_mb: usize,
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub trust_proxy: bool,
+    #[serde(default)]
+    pub rate_limit_lru_capacity: usize,
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
+    #[serde(default)]
+    pub onnx_threads: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServersConfig {
+    pub search: SearchServerConfig,
+    pub upload: UploadServerConfig,
+}
+
+pub async fn fetch_server_config() -> Result<ServersConfig, String> {
+    fetch_json::<ServersConfig>("/config/servers").await
+}
+
+pub async fn save_server_config(
+    params: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let url = api_url("/config/servers");
+    let body = serde_json::to_string(&params).map_err(|e| e.to_string())?;
+    let resp = gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .map_err(|e| format!("Request build failed: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if !(200..=299).contains(&resp.status()) {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", resp.status(), text));
+    }
+    Ok(())
+}
+
+pub async fn set_index_in_ram(enabled: bool) -> Result<(), String> {
+    let url = api_url("/config/index_in_ram");
+    let body = serde_json::json!({ "enabled": enabled });
+    let response = gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Request build failed: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if !(200..=299).contains(&response.status()) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", response.status(), body));
+    }
+    Ok(())
+}
+
+pub async fn restart_service() -> Result<(), String> {
+    let url = api_url("/sys/restart");
+    let response = gloo_net::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .map_err(|e| format!("Request build failed: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if !(200..=299).contains(&response.status()) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", response.status(), body));
+    }
+    Ok(())
 }
 
 pub async fn get_chunking_logging() -> Result<ChunkingLoggingResponse, String> {
@@ -1713,7 +1907,7 @@ pub async fn upload_document(filename: &str, data: &[u8]) -> Result<UploadRespon
     use js_sys::{Array, Uint8Array};
     use web_sys::{Blob, BlobPropertyBag, FormData};
 
-    let url = api_url("/upload");
+    let url = upload_api_url("/upload");
 
     // Create a Uint8Array from the data
     let uint8_array = Uint8Array::new_with_length(data.len() as u32);
@@ -1751,6 +1945,55 @@ pub async fn upload_document(filename: &str, data: &[u8]) -> Result<UploadRespon
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+pub async fn upload_document_to_corpus(slug: &str, filename: &str, data: &[u8]) -> Result<UploadResponse, String> {
+    use gloo_net::http::Request;
+    use js_sys::{Array, Uint8Array};
+    use web_sys::{Blob, BlobPropertyBag, FormData};
+
+    let url = upload_api_url(&format!("/corpora/{}/upload", slug));
+
+    let uint8_array = Uint8Array::new_with_length(data.len() as u32);
+    uint8_array.copy_from(data);
+    let array = Array::new();
+    array.push(&uint8_array);
+    let blob_options = BlobPropertyBag::new();
+    blob_options.set_type("application/octet-stream");
+    let blob = Blob::new_with_u8_array_sequence_and_options(&array, &blob_options)
+        .map_err(|_| "Failed to create blob".to_string())?;
+    let form_data = FormData::new().map_err(|_| "Failed to create FormData".to_string())?;
+    form_data
+        .append_with_blob_and_filename("file", &blob, filename)
+        .map_err(|_| "Failed to append file to FormData".to_string())?;
+
+    let response = Request::post(&url)
+        .body(form_data)
+        .map_err(|e| format!("Failed to create request: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+    response.json().await.map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+pub async fn reindex_corpus(slug: &str) -> Result<serde_json::Value, String> {
+    let url = upload_api_url(&format!("/corpora/{}/reindex", slug));
+    let response = gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+    response.json().await.map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 async fn post_empty(path: &str) -> Result<(), String> {
@@ -2289,7 +2532,7 @@ pub struct StoreRagResponse {
 }
 
 pub async fn store_rag_memory(req: &StoreRagRequest) -> Result<StoreRagResponse, String> {
-    let url = api_url("/memory/store_rag");
+    let url = upload_api_url("/memory/store_rag");
     let response = gloo_net::http::Request::post(&url)
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(req).map_err(|e| format!("Failed to serialize: {}", e))?)

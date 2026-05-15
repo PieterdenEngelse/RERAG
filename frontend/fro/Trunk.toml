@@ -1,0 +1,17 @@
+[build]
+release = true
+
+[tools]
+# Laat Trunk wasm-opt gebruiken als hij Binaryen vindt
+#wasm_opt = true
+
+[serve]
+port = 1789
+open = false
+
+[watch]
+watch = ["src", "public", "assets"]
+
+[output]
+dir = "dist"
+

@@ -9,6 +9,7 @@ async fn rate_limit_per_ip_token_bucket() {
     let port: u16 = 40123;
     env::set_var("BACKEND_HOST", "127.0.0.1");
     env::set_var("BACKEND_PORT", port.to_string());
+    env::set_var("UPLOAD_PORT", "40124");
     env::set_var("RATE_LIMIT_ENABLED", "true");
     env::set_var("RATE_LIMIT_QPS", "1");
     env::set_var("RATE_LIMIT_BURST", "2");

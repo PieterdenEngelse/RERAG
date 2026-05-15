@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script>
+    const isDark = localStorage.getItem('darkMode') === 'dark' ||
+                   (localStorage.getItem('darkMode') === null && true);
+    if (isDark) document.documentElement.classList.add('dark');
+  </script>
+</head>
+<body>
+  <div id="main"></div>
+</body>
+</html>

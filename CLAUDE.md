@@ -83,12 +83,14 @@ docker compose --profile observability up -d
 ## Collaboration Style
 
 - **Confirmation threshold**: Don't ask for confirmation on small or single-file edits — only ask before major or multi-file changes.
+- **No speculative pre-builds**: Don't run `cargo build` to check for errors after making changes. Build errors surface when the user restarts the service (`systemctl --user restart ag.service`). Running a build check just wastes the user's time.
 
 ## UI Color Rules
 
 - **Minimum readable text on dark tiles**: `text-gray-400` — never use `text-gray-500` or darker for any label or secondary text the user needs to read
 - **Preferred for secondary/muted labels**: `text-gray-300`
 - **When asked to increase contrast**: shift 2 Tailwind steps toward white (e.g. `text-gray-500` → `text-gray-300`)
+- **Links are always blue**: use `text-blue-400 hover:text-blue-300` for all clickable links — never orange, teal, or any other color
 - These rules apply to all Dioxus components and pages without exception
 
 ## Coding Conventions
@@ -133,6 +135,10 @@ neo4j    # GraphRAG via neo4rs + deadpool
 - Grafana/Tempo launched via docker-compose use default credentials; secure before exposing beyond localhost
 - Rate-limit middleware (`monitoring/rate_limit_middleware.rs`): update env defaults and integration tests when changing search/upload budgets
 
+
+## Info Modal Voice
+
+Info modals are written from the perspective of the compiled app's end user. They do not know or care about "the frontend" or "the backend" — to them there is only **the app**. Use "the app" or "ag" instead of "the backend", "the frontend", or "the server" when those words would leak implementation structure. Technical terms that are user-visible (env files, config variables, ports) are fine; source-code architecture terms (Actix, Dioxus, HttpServer, handler) are not.
 
 ## Info Buttons
 

@@ -1,4 +1,4 @@
-use crate::api::{fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_corpora, fetch_parser_stats, fetch_preprocess_stats, update_corpus_description, CanonStats, CallSiteStats, ChunkMetaStats, ChunkingStatsSnapshot, CorpusEntry, FileRecord, ParserStats, PreprocessFileRecord, PreprocessStats, StoreRecord};
+use crate::api::{fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_corpora, fetch_io_uring_stats, fetch_parser_stats, fetch_preprocess_stats, update_corpus_description, CanonStats, CallSiteStats, ChunkMetaStats, ChunkingStatsSnapshot, CorpusEntry, FileRecord, IoUringResponse, ParserStats, PreprocessFileRecord, PreprocessStats, StoreRecord};
 use crate::app::Route;
 use crate::components::monitor::*;
 use crate::pages::hardware::constants::{
@@ -58,6 +58,8 @@ pub fn MonitorTip() -> Element {
     let mut canon_stats: Signal<Option<Result<CanonStats, String>>> = use_signal(|| None);
     let mut chunk_meta_stats: Signal<Option<Result<ChunkMetaStats, String>>> = use_signal(|| None);
     let mut preprocess_stats: Signal<Option<Result<PreprocessStats, String>>> = use_signal(|| None);
+    let mut show_iouring_info = use_signal(|| false);
+    let mut io_uring_stats: Signal<Option<Result<IoUringResponse, String>>> = use_signal(|| None);
 
     // Load corpus list once on mount.
     use_future(move || async move {
@@ -85,6 +87,7 @@ pub fn MonitorTip() -> Element {
                 canon_stats.set(Some(fetch_canon_stats(c).await));
                 chunk_meta_stats.set(Some(fetch_chunk_meta_stats(c).await));
                 preprocess_stats.set(Some(fetch_preprocess_stats(c).await));
+                io_uring_stats.set(Some(fetch_io_uring_stats().await));
                 TimeoutFuture::new(5_000).await;
             }
         }
@@ -255,15 +258,93 @@ pub fn MonitorTip() -> Element {
                 }
             }
 
-            // Pipeline layout: Parser → Typography & Tag Cleanup → Canonicalize NFC → Chunker → ┬ Canonicalize NFKC
-            //                                                                                    └ Canonicalize NFKC+punct
+            // Pipeline layout: io-uring → Parser
+            //                      ↓
+            //   Typography → NFC → DocIR → Chunker
+            //                      ↓
+            //   NFKC · NFKC+punct
             div { class: "flex flex-col gap-2",
 
-                // ── Row 1: Parser + Typography ──
+                // ── Row 1: io-uring → Parser ──
                 div { class: "flex gap-2 items-stretch",
 
-                // ── Parser unit ──
+                // ── io-uring card ──
                 div { class: "shrink-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 w-64",
+                        div { class: "flex items-center justify-between mb-3",
+                            div { class: "flex items-center gap-2",
+                                h3 { class: "text-sm font-semibold text-gray-200", "I/O Layer" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_iouring_info.set(true),
+                                    title: "About the io-uring I/O layer",
+                                    InfoIcon {}
+                                }
+                            }
+                            span { class: "text-xs text-gray-600", "global" }
+                        }
+                        match &*io_uring_stats.read() {
+                            Some(Ok(r)) => {
+                                let info = &r.io_uring;
+                                let backend_class = if info.backend.contains("io_uring") { "text-emerald-400 font-mono" } else { "text-gray-400 font-mono" };
+                                let br = format_bytes(info.stats.bytes_read);
+                                let bw = format_bytes(info.stats.bytes_written);
+                                let err_class = if info.stats.total_errors > 0 { "text-red-400 tabular-nums" } else { "text-gray-600" };
+                                let err_text = if info.stats.total_errors > 0 { format!("{}", info.stats.total_errors) } else { "—".to_string() };
+                                rsx! {
+                                    div { class: "text-xs space-y-1.5",
+                                        div { class: "flex items-center justify-between gap-2",
+                                            span { class: "text-gray-500 shrink-0", "Backend" }
+                                            span { class: "{backend_class}", "{info.backend}" }
+                                        }
+                                        div { class: "flex items-center justify-between gap-2",
+                                            span { class: "text-gray-500 shrink-0", "Reads" }
+                                            span { class: "text-gray-300 tabular-nums", "{info.stats.reads} · {br}" }
+                                        }
+                                        div { class: "flex items-center justify-between gap-2",
+                                            span { class: "text-gray-500 shrink-0", "Writes" }
+                                            span { class: "text-gray-300 tabular-nums", "{info.stats.writes} · {bw}" }
+                                        }
+                                        div { class: "flex items-center justify-between gap-2",
+                                            span { class: "text-gray-500 shrink-0", "Errors" }
+                                            span { class: "{err_class}", "{err_text}" }
+                                        }
+                                        if let Some(startup) = &info.startup {
+                                            if startup.vectors_count > 0 || startup.cache_entries > 0 {
+                                                div { class: "pt-2 mt-1 border-t border-gray-700 space-y-1.5",
+                                                    p { class: "text-gray-600 uppercase text-xs tracking-wide", "Startup loads" }
+                                                    if startup.vectors_count > 0 {
+                                                        div { class: "flex items-start justify-between gap-2",
+                                                            span { class: "text-gray-500 shrink-0", "Vectors" }
+                                                            span { class: "text-gray-300 tabular-nums text-right leading-tight",
+                                                                "{startup.vectors_count} · {format_bytes(startup.vectors_bytes)} · {startup.vectors_read_ms}ms"
+                                                            }
+                                                        }
+                                                    }
+                                                    if startup.cache_entries > 0 {
+                                                        div { class: "flex items-start justify-between gap-2",
+                                                            span { class: "text-gray-500 shrink-0", "Cache" }
+                                                            span { class: "text-gray-300 tabular-nums text-right leading-tight",
+                                                                "{startup.cache_entries} · {format_bytes(startup.cache_bytes)} · {startup.cache_read_ms}ms"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                        }
+                    }
+                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
+                }
+
+                // ── Parser unit ──
+                div { class: "shrink-0",
                     div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 min-w-0",
                         div { class: "flex items-center justify-between mb-3",
                             div { class: "flex items-center gap-2",
@@ -293,8 +374,15 @@ pub fn MonitorTip() -> Element {
                             None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
                         }
                     }
-                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
+
+                } // end row 1
+
+                // ── ↓ connector ──
+                div { class: "flex text-gray-600 text-sm leading-none pl-[17rem]", "↓" }
+
+                // ── Row 2: Typography → NFC → DocIR (compact) → Chunker ──
+                div { class: "flex gap-2 items-stretch",
 
                 // ── Typography unit ──
                 div { class: "flex-1 min-w-0 flex items-stretch gap-2",
@@ -425,11 +513,6 @@ pub fn MonitorTip() -> Element {
                     div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                } // end row 1
-
-                // ── Row 2: NFC → DocIR → Chunker → NFKC branches ──
-                div { class: "flex gap-2 items-stretch",
-
                 // ── NFC unit ──
                 div { class: "flex-1 min-w-0 flex items-stretch gap-2",
                     div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
@@ -454,78 +537,57 @@ pub fn MonitorTip() -> Element {
                     div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                // ── DocIR unit ──
-                div { class: "flex-1 min-w-0 flex items-stretch gap-2",
-                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
-                        div { class: "flex items-center justify-between mb-3",
-                            div { class: "flex items-center gap-2",
-                                h3 { class: "text-sm font-semibold text-gray-200", "DocIR" }
-                                button {
-                                    class: PARAM_ICON_BUTTON_CLASS,
-                                    style: PARAM_ICON_BUTTON_STYLE,
-                                    onclick: move |_| show_docir_info.set(true),
-                                    title: "About DocIR structured extraction",
-                                    InfoIcon {}
-                                }
+                // ── DocIR unit (compact chips) ──
+                div { class: "shrink-0 flex items-stretch gap-2",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 w-48",
+                        div { class: "flex items-center gap-2 mb-3",
+                            h3 { class: "text-sm font-semibold text-gray-200", "DocIR" }
+                            button {
+                                class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
+                                onclick: move |_| show_docir_info.set(true),
+                                title: "About DocIR structured extraction",
+                                InfoIcon {}
                             }
                         }
                         match &*chunk_meta_stats.read() {
                             Some(Ok(stats)) if stats.total == 0 => rsx! {
-                                p { class: "text-xs text-gray-500 pt-2", "Upload a document to see block structure." }
+                                p { class: "text-xs text-gray-600", "Upload a document to see block structure." }
                             },
                             Some(Ok(stats)) => {
-                                let max_bt = stats.block_types.values().copied().max().unwrap_or(1) as f64;
                                 let mut bt_sorted: Vec<(&String, &u32)> = stats.block_types.iter().collect();
                                 bt_sorted.sort_by(|a, b| b.1.cmp(a.1));
                                 let mut ex_sorted: Vec<(&String, &u32)> = stats.extractors.iter().collect();
                                 ex_sorted.sort_by(|a, b| b.1.cmp(a.1));
                                 rsx! {
-                                    div { class: "space-y-3 overflow-y-auto",
-                                        div { class: "space-y-1",
-                                            for (name, count) in bt_sorted.iter() {
-                                                {
-                                                    let bar_pct = (**count as f64 / max_bt * 100.0) as u32;
-                                                    let color = match name.as_str() {
-                                                        "Header"  => "bg-sky-600",
-                                                        "Table"   => "bg-emerald-600",
-                                                        "Code"    => "bg-violet-600",
-                                                        "Formula" => "bg-amber-600",
-                                                        "Image"   => "bg-pink-600",
-                                                        _         => "bg-gray-600",
-                                                    };
-                                                    let label_color = match name.as_str() {
-                                                        "Header"  => "text-sky-300",
-                                                        "Table"   => "text-emerald-300",
-                                                        "Code"    => "text-violet-300",
-                                                        "Formula" => "text-amber-300",
-                                                        "Image"   => "text-pink-300",
-                                                        _         => "text-gray-400",
-                                                    };
-                                                    rsx! {
-                                                        div { class: "flex items-center gap-1.5",
-                                                            span { class: "text-xs font-mono w-16 shrink-0 {label_color}", "{name}" }
-                                                            div { class: "flex-1 bg-gray-700 rounded-full h-1",
-                                                                div { class: "{color} h-1 rounded-full", style: "width:{bar_pct}%" }
-                                                            }
-                                                            span { class: "text-xs text-gray-400 w-8 text-right shrink-0", "{count}" }
-                                                        }
-                                                    }
+                                    div { class: "flex flex-wrap gap-1",
+                                        for (name, count) in bt_sorted.iter().filter(|(_, c)| **c > 0) {
+                                            {
+                                                let chip_class = match name.as_str() {
+                                                    "Header"  => "bg-sky-900/60 text-sky-300",
+                                                    "Table"   => "bg-emerald-900/60 text-emerald-300",
+                                                    "Code"    => "bg-violet-900/60 text-violet-300",
+                                                    "Formula" => "bg-amber-900/60 text-amber-300",
+                                                    "Image"   => "bg-pink-900/60 text-pink-300",
+                                                    _         => "bg-gray-700 text-gray-400",
+                                                };
+                                                rsx! {
+                                                    span { class: "text-xs font-mono rounded px-1.5 py-0.5 {chip_class}", "{name} {count}" }
                                                 }
                                             }
                                         }
-                                        div { class: "pt-1 border-t border-gray-700 space-y-0.5",
+                                    }
+                                    if !ex_sorted.is_empty() {
+                                        div { class: "mt-2 flex flex-wrap gap-1",
                                             for (name, count) in ex_sorted.iter() {
                                                 {
                                                     let c = match name.as_str() {
-                                                        "docling"      => "text-amber-300",
-                                                        "unstructured" => "text-sky-300",
-                                                        _              => "text-gray-500",
+                                                        "docling"      => "bg-amber-900/40 text-amber-400",
+                                                        "unstructured" => "bg-sky-900/40 text-sky-400",
+                                                        _              => "bg-gray-700 text-gray-500",
                                                     };
                                                     rsx! {
-                                                        div { class: "flex items-center justify-between",
-                                                            span { class: "text-xs font-mono {c}", "{name}" }
-                                                            span { class: "text-xs text-gray-400", "{count}" }
-                                                        }
+                                                        span { class: "text-xs font-mono rounded px-1.5 py-0.5 {c}", "{name} {count}" }
                                                     }
                                                 }
                                             }
@@ -541,8 +603,8 @@ pub fn MonitorTip() -> Element {
                 }
 
                 // ── Chunker unit ──
-                div { class: "flex-1 min-w-0 flex items-stretch gap-2",
-                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                div { class: "flex-1 min-w-0",
+                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 h-full",
                         div { class: "flex items-center justify-between mb-3",
                             div { class: "flex items-center gap-2",
                                 h3 { class: "text-sm font-semibold text-gray-200", "Chunker" }
@@ -561,14 +623,18 @@ pub fn MonitorTip() -> Element {
                             None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
                         }
                     }
-                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
                 }
 
-                // ── Parallel branches: NFKC and NFKC+punct ──
-                div { class: "flex flex-col gap-2 flex-1 min-w-0",
+                } // end row 2
+
+                // ── ↓ connector ──
+                div { class: "flex text-gray-600 text-sm leading-none", "↓" }
+
+                // ── Row 3: NFKC · NFKC+punct ──
+                div { class: "flex gap-2 items-stretch",
 
                     // ── Canonicalize NFKC ──
-                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                    div { class: "flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg p-4",
                         div { class: "flex items-center justify-between mb-3",
                             div { class: "flex items-center gap-2",
                                 h3 { class: "text-sm font-semibold text-gray-200", "Canonicalize NFKC" }
@@ -603,7 +669,7 @@ pub fn MonitorTip() -> Element {
                     }
 
                     // ── Canonicalize NFKC+punct ──
-                    div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 flex-1 min-w-0",
+                    div { class: "flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg p-4",
                         div { class: "flex items-center justify-between mb-3",
                             div { class: "flex items-center gap-2",
                                 h3 { class: "text-sm font-semibold text-gray-200", "Canonicalize NFKC+punct" }
@@ -636,9 +702,8 @@ pub fn MonitorTip() -> Element {
                             None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
                         }
                     }
-                }
 
-                } // end row 2
+                } // end row 3
             }
 
             // ── DocIR info modal ──────────────────────────────────────────────
@@ -720,6 +785,104 @@ pub fn MonitorTip() -> Element {
                                 class: "btn btn-sm w-full",
                                 style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
                                 onclick: move |_| show_docir_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── io-uring info modal ──────────────────────────────────────────
+            if show_iouring_info() {
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_iouring_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[500px] max-h-[92vh] flex flex-col shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "I/O Layer — io_uring" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_iouring_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto min-h-0 px-6 py-4 text-xs text-gray-300 space-y-3",
+                            p {
+                                span { class: "font-semibold text-gray-100", "io_uring" }
+                                " is a Linux kernel async I/O mechanism (kernel 5.1+). Instead of issuing one syscall per read, it submits batches of I/O requests via a shared ring buffer and collects completions without entering the kernel for each one — eliminating the context-switch overhead that makes traditional file I/O expensive at high throughput."
+                            }
+                            p {
+                                "The I/O Layer is the first thing that touches every document. Before the Parser sees a single byte, io_uring has already read the raw file from disk. At startup, it also loads the vector store and the search cache — the two largest reads the app ever performs."
+                            }
+                            p {
+                                "On Linux 5.1+ the app uses io_uring automatically. On older kernels or non-Linux systems it falls back to "
+                                span { class: "font-mono text-gray-200", "tokio::fs" }
+                                " (epoll). The "
+                                span { class: "font-semibold text-gray-200", "Backend" }
+                                " field below tells you which path is active."
+                            }
+                            // Live stats
+                            div { class: "rounded bg-gray-900 border border-gray-700 p-3 space-y-1.5",
+                                p { class: "text-gray-400 font-semibold mb-1", "Live stats" }
+                                match &*io_uring_stats.read() {
+                                    Some(Ok(r)) => {
+                                        let info = &r.io_uring;
+                                        let backend_class = if info.backend.contains("io_uring") { "text-emerald-400" } else { "text-gray-400" };
+                                        let br = format_bytes(info.stats.bytes_read);
+                                        let bw = format_bytes(info.stats.bytes_written);
+                                        let err_class = if info.stats.total_errors > 0 { "text-red-400" } else { "text-gray-600" };
+                                        let err_text = if info.stats.total_errors > 0 { format!("{}", info.stats.total_errors) } else { "—".to_string() };
+                                        rsx! {
+                                            div { class: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs",
+                                                span { class: "text-gray-500", "Backend" }
+                                                span { class: "font-mono {backend_class}", "{info.backend}" }
+                                                span { class: "text-gray-500", "Reads" }
+                                                span { class: "text-gray-300 tabular-nums", "{info.stats.reads} ({br})" }
+                                                span { class: "text-gray-500", "Writes" }
+                                                span { class: "text-gray-300 tabular-nums", "{info.stats.writes} ({bw})" }
+                                                span { class: "text-gray-500", "Errors" }
+                                                span { class: "{err_class} tabular-nums", "{err_text}" }
+                                            }
+                                            if let Some(startup) = &info.startup {
+                                                if startup.vectors_count > 0 || startup.cache_entries > 0 {
+                                                    div { class: "pt-2 mt-1 border-t border-gray-700",
+                                                        p { class: "text-gray-400 font-semibold mb-1", "Startup loads" }
+                                                        div { class: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs",
+                                                            if startup.vectors_count > 0 {
+                                                                span { class: "text-gray-500", "Vectors" }
+                                                                span { class: "text-gray-300 tabular-nums", "{startup.vectors_count} · {format_bytes(startup.vectors_bytes)} · {startup.vectors_read_ms}ms" }
+                                                            }
+                                                            if startup.cache_entries > 0 {
+                                                                span { class: "text-gray-500", "Cache" }
+                                                                span { class: "text-gray-300 tabular-nums", "{startup.cache_entries} entries · {format_bytes(startup.cache_bytes)} · {startup.cache_read_ms}ms" }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
+                                    None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                                }
+                            }
+                            p { class: "text-gray-400",
+                                "Tune via "
+                                span { class: "font-mono text-gray-200", "IO_URING_RING_SIZE" }
+                                ", "
+                                span { class: "font-mono text-gray-200", "IO_URING_SQPOLL" }
+                                ", "
+                                span { class: "font-mono text-gray-200", "IO_URING_BUFFER_SIZE" }
+                                " — full reference on the Config › io_uring page."
+                            }
+                        }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_iouring_info.set(false),
                                 "Got it"
                             }
                         }
@@ -2669,6 +2832,18 @@ fn format_chars(n: u64) -> String {
         format!("{:.1}k", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+fn format_bytes(b: u64) -> String {
+    if b >= 1_073_741_824 {
+        format!("{:.1} GB", b as f64 / 1_073_741_824.0)
+    } else if b >= 1_048_576 {
+        format!("{:.1} MB", b as f64 / 1_048_576.0)
+    } else if b >= 1_024 {
+        format!("{:.1} KB", b as f64 / 1_024.0)
+    } else {
+        format!("{} B", b)
     }
 }
 

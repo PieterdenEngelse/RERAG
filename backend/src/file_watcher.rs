@@ -169,65 +169,93 @@ async fn run_watcher(
 
             info!("📄 New file detected: {}", path.display());
 
-            // Index the file
+            let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+
+            // Phase 0: quick already-indexed check — hold lock only long enough to read doc IDs.
+            let already_indexed = retriever
+                .lock()
+                .ok()
+                .and_then(|ret| ret.get_all_doc_ids().ok())
+                .map(|ids| ids.iter().any(|id| id.split('#').next() == Some(filename.as_str())))
+                .unwrap_or(false);
+            if already_indexed {
+                debug!("Skipping already-indexed file: {}", filename);
+                continue;
+            }
+
+            // Compute effective per-corpus chunker config (no lock needed).
+            let effective_cfg = {
+                let global = crate::db::chunk_settings::global_config();
+                let settings = if !config.db_path.is_empty() {
+                    rusqlite::Connection::open(&config.db_path)
+                        .ok()
+                        .and_then(|conn| {
+                            crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug).ok()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    crate::db::corpora::CorpusSettings::default()
+                };
+                crate::db::corpora::effective_chunker_config(&global, &settings)
+            };
+            let effective_mode = effective_cfg.mode
+                .parse::<ChunkerMode>()
+                .unwrap_or(config.chunker_mode);
+
+            // Phase 1: Extract IR — async, no mutex held, no Actix thread blocked.
+            let ir = index::extract_ir_async(&path, &config.corpus_slug).await;
+            let ir = match ir {
+                Some(ir) => ir,
+                None => {
+                    warn!("Failed to extract IR from: {}", path.display());
+                    continue;
+                }
+            };
+
+            // Phase 2: Chunk + embed — CPU-bound, offloaded to blocking thread pool.
+            let path_clone = path.clone();
+            let corpus_slug = config.corpus_slug.clone();
+            let cfg_clone = effective_cfg.clone();
+            let prepared = tokio::task::spawn_blocking(move || {
+                let cp_enabled = crate::db::chunk_settings::global_config().context_prefix_enabled;
+                let chunker = crate::memory::chunker_factory::create_chunker(
+                    effective_mode.into(),
+                    &cfg_clone,
+                );
+                index::prepare_doc(&path_clone, &ir, effective_mode, chunker.as_ref(), &corpus_slug, cp_enabled)
+            })
+            .await;
+
+            let prepared = match prepared {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("prepare_doc panicked for {}: {}", path.display(), e);
+                    continue;
+                }
+            };
+
+            // Phase 3: Write to index — hold mutex only for the brief Tantivy write.
             match retriever.lock() {
                 Ok(mut ret) => {
-                    // Skip if already indexed (upload handler may have beaten us to it).
-                    let filename = path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
-                    let already_indexed = ret
-                        .get_all_doc_ids()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|id| id.split('#').next() == Some(filename));
-                    if already_indexed {
-                        debug!("Skipping already-indexed file: {}", filename);
+                    if let Err(e) = ret.begin_batch() {
+                        warn!("begin_batch failed for {}: {}", path.display(), e);
                         continue;
                     }
-                    // Compute effective per-corpus chunker config; fall back to global.
-                    let effective_cfg = {
-                        let global = crate::db::chunk_settings::global_config();
-                        let settings = if !config.db_path.is_empty() {
-                            rusqlite::Connection::open(&config.db_path)
-                                .ok()
-                                .and_then(|conn| {
-                                    crate::db::corpora::get_corpus_settings(&conn, &config.corpus_slug).ok()
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            crate::db::corpora::CorpusSettings::default()
-                        };
-                        crate::db::corpora::effective_chunker_config(&global, &settings)
-                    };
-                    let effective_mode = effective_cfg.mode
-                        .parse::<ChunkerMode>()
-                        .unwrap_or(config.chunker_mode);
-                    let chunker = crate::memory::chunker_factory::create_chunker(
-                        effective_mode.into(),
-                        &effective_cfg,
-                    );
-                    match index::index_file(
-                        &mut ret,
-                        &path,
-                        effective_mode,
-                        chunker.as_ref(),
-                        &config.corpus_slug,
-                        effective_cfg.context_prefix_enabled,
-                    ) {
-                        Ok(chunks) => {
-                            info!(
-                                "✅ Auto-indexed {} ({} chunks)",
-                                path.file_name().unwrap_or_default().to_string_lossy(),
-                                chunks
-                            );
-                            // Commit after each file
+                    match index::index_prepared_doc(&mut ret, prepared) {
+                        Ok((chunks, _)) if chunks > 0 => {
                             if let Err(e) = ret.commit() {
-                                warn!("Failed to commit after indexing: {}", e);
+                                warn!("Failed to commit after indexing {}: {}", path.display(), e);
+                            } else {
+                                info!(
+                                    "✅ Auto-indexed {} ({} chunks)",
+                                    path.file_name().unwrap_or_default().to_string_lossy(),
+                                    chunks
+                                );
+                                metrics::refresh_retriever_gauges(&ret);
                             }
-                            // Update metrics
-                            metrics::refresh_retriever_gauges(&ret);
+                        }
+                        Ok(_) => {
+                            warn!("No chunks produced for: {}", path.display());
                         }
                         Err(e) => {
                             warn!("Failed to index {}: {}", path.display(), e);

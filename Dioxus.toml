@@ -1,11 +1,8 @@
 [application]
+app = "frontend/fro"
 default_platform = "web"
-sub_package = "fro"
 asset_dir = "frontend/fro/public"
 out_dir = "frontend/fro/dist"
-
-[web.app]
-title = "fro"
 
 [web.watcher]
 watch_path = ["frontend/fro/src", "frontend/fro/public", "frontend/fro/assets"]
@@ -19,3 +16,15 @@ script = []
 [web.resource.dev]
 style = []
 script = []
+
+[web.wasm_opt]
+level = "z"
+
+[web.asset_compression]
+gzip = true
+brotli = true
+
+[web.resource.inline]
+scripts = true
+styles = true
+

@@ -112,6 +112,10 @@ pub fn ConfigIoUring() -> Element {
     let mut save_status = use_signal(|| Option::<String>::None);
     let mut save_error = use_signal(|| Option::<String>::None);
 
+    // Restart state
+    let mut show_restart_confirm = use_signal(|| false);
+    let mut restart_msg: Signal<Option<String>> = use_signal(|| None);
+
     // Reset to defaults handler
     let reset_to_defaults = move |_| {
         // Category 1: Queue & Buffers
@@ -166,6 +170,15 @@ pub fn ConfigIoUring() -> Element {
     let mut show_dontfork_info = use_signal(|| false);
     // Info modal - main Configuration header
     let mut show_config_info = use_signal(|| false);
+
+    // Info modal signals - Status board
+    let mut show_available_info = use_signal(|| false);
+    let mut show_feature_enabled_info = use_signal(|| false);
+    let mut show_backend_info = use_signal(|| false);
+    let mut show_reads_info = use_signal(|| false);
+    let mut show_writes_info = use_signal(|| false);
+    let mut show_bytes_read_info = use_signal(|| false);
+    let mut show_bytes_written_info = use_signal(|| false);
 
     // Load io_uring config on mount
     {
@@ -360,22 +373,27 @@ pub fn ConfigIoUring() -> Element {
                             if let Some(err) = save_error() {
                                 span { class: "text-red-400 text-xs", "{err}" }
                             }
-                            div { class: "flex flex-col items-center gap-1",
-                                div { class: "flex items-center gap-2",
-                                    button {
-                                        class: "btn btn-sm btn-ghost text-gray-400 hover:text-gray-200",
-                                        onclick: reset_to_defaults,
-                                        "Reset"
-                                    }
-                                    button {
-                                        class: "btn btn-sm",
-                                        style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                                        onclick: on_save,
-                                        disabled: saving(),
-                                        if saving() { "Saving…" } else { "Save" }
-                                    }
+                            div { class: "flex items-center gap-2",
+                                button {
+                                    class: "btn btn-sm btn-ghost text-gray-400 hover:text-gray-200",
+                                    onclick: reset_to_defaults,
+                                    "Reset"
                                 }
-                                span { class: "text-xs text-gray-500 italic", "App restart required" }
+                                button {
+                                    class: "btn btn-sm",
+                                    style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
+                                    onclick: on_save,
+                                    disabled: saving(),
+                                    if saving() { "Saving…" } else { "Save" }
+                                }
+                                button {
+                                    class: "btn btn-sm btn-ghost text-gray-300 border border-gray-600",
+                                    onclick: move |_| show_restart_confirm.set(true),
+                                    "Restart to apply"
+                                }
+                                if let Some(msg) = restart_msg() {
+                                    span { class: "text-xs text-yellow-400", "{msg}" }
+                                }
                             }
                         }
                     }
@@ -395,41 +413,42 @@ pub fn ConfigIoUring() -> Element {
                             div { class: "flex flex-wrap gap-6 justify-start",
                                 // Status column
                                 div { class: PARAM_COLUMN_CLASS,
-                                    span { class: "text-gray-300 font-semibold text-xs", "Status" }
-                                    div { class: PARAM_BLOCK_CLASS,
+                                    span { class: "text-gray-300 font-semibold text-xs mb-1", "Status" }
+                                    div {
+                                        class: "grid gap-x-1 gap-y-1 items-center text-xs",
+                                        style: "grid-template-columns: max-content min-content auto;",
                                         label { class: PARAM_LABEL_CLASS, "available" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_available_info.set(true), InfoIcon {} }
                                         span { class: if available() { "text-green-400" } else { "text-red-400" },
                                             if available() { "✓ Yes" } else { "✗ No" }
                                         }
-                                    }
-                                    div { class: PARAM_BLOCK_CLASS,
                                         label { class: PARAM_LABEL_CLASS, "feature_enabled" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_feature_enabled_info.set(true), InfoIcon {} }
                                         span { class: if feature_enabled() { "text-green-400" } else { "text-yellow-400" },
                                             if feature_enabled() { "✓ Yes" } else { "○ No" }
                                         }
-                                    }
-                                    div { class: PARAM_BLOCK_CLASS,
                                         label { class: PARAM_LABEL_CLASS, "backend" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_backend_info.set(true), InfoIcon {} }
                                         span { class: "text-blue-400 font-mono", "{backend}" }
                                     }
                                 }
                                 // I/O column
                                 div { class: PARAM_COLUMN_CLASS,
-                                    span { class: "text-gray-300 font-semibold text-xs", "I/O" }
-                                    div { class: PARAM_BLOCK_CLASS,
+                                    span { class: "text-gray-300 font-semibold text-xs mb-1", "I/O" }
+                                    div {
+                                        class: "grid gap-x-1 gap-y-1 items-center text-xs",
+                                        style: "grid-template-columns: max-content min-content auto;",
                                         label { class: PARAM_LABEL_CLASS, "reads" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_reads_info.set(true), InfoIcon {} }
                                         span { class: "text-gray-200", "{stats_reads}" }
-                                    }
-                                    div { class: PARAM_BLOCK_CLASS,
                                         label { class: PARAM_LABEL_CLASS, "writes" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_writes_info.set(true), InfoIcon {} }
                                         span { class: "text-gray-200", "{stats_writes}" }
-                                    }
-                                    div { class: PARAM_BLOCK_CLASS,
                                         label { class: PARAM_LABEL_CLASS, "bytes_read" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_bytes_read_info.set(true), InfoIcon {} }
                                         span { class: "text-gray-200", "{format_bytes(stats_bytes_read())}" }
-                                    }
-                                    div { class: PARAM_BLOCK_CLASS,
                                         label { class: PARAM_LABEL_CLASS, "bytes_written" }
+                                        button { class: PARAM_ICON_BUTTON_CLASS, style: PARAM_ICON_BUTTON_STYLE, onclick: move |_| show_bytes_written_info.set(true), InfoIcon {} }
                                         span { class: "text-gray-200", "{format_bytes(stats_bytes_written())}" }
                                     }
                                 }
@@ -1079,6 +1098,96 @@ pub fn ConfigIoUring() -> Element {
                     }
                 }
             }
+        }
+
+        // ── Restart confirm modal ─────────────────────────────────────────────
+        if show_restart_confirm() {
+            div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show_restart_confirm.set(false),
+                div {
+                    class: "bg-gray-900 border border-gray-700 rounded-lg p-6 w-80 shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    h2 { class: "text-base font-bold text-gray-100 mb-2", "Restart app?" }
+                    p { class: "text-sm text-gray-300 mb-4",
+                        "The app will restart to apply io_uring config changes. Active requests will be dropped."
+                    }
+                    div { class: "flex gap-2",
+                        button {
+                            class: "btn btn-sm flex-1",
+                            style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                            onclick: move |_| {
+                                show_restart_confirm.set(false);
+                                spawn(async move {
+                                    match api::restart_service().await {
+                                        Ok(()) => restart_msg.set(Some("Restarting…".into())),
+                                        Err(e) => restart_msg.set(Some(format!("Error: {}", e))),
+                                    }
+                                });
+                            },
+                            "Yes, restart"
+                        }
+                        button {
+                            class: "btn btn-sm flex-1 btn-ghost text-gray-300",
+                            onclick: move |_| show_restart_confirm.set(false),
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Status board info modals ──────────────────────────────────────────
+        if show_available_info() {
+            {info_modal("available", show_available_info, vec![
+                "Whether the io_uring subsystem is present and usable on this machine.",
+                "io_uring requires Linux 5.1 or later. The kernel must have been compiled with CONFIG_IO_URING=y. This flag is set at startup by probing the kernel — it cannot be changed at runtime.",
+                "✓ Yes — io_uring syscalls are available and ag can use them for file I/O.",
+                "✗ No — the kernel is too old or the feature was compiled out. ag falls back to standard tokio async I/O (tokio::fs). All functionality still works; only the I/O performance characteristic changes.",
+            ])}
+        }
+        if show_feature_enabled_info() {
+            {info_modal("feature_enabled", show_feature_enabled_info, vec![
+                "Whether io_uring has been switched on in ag's configuration.",
+                "Even when the kernel supports io_uring (available = Yes), ag only uses it when this flag is also true. This lets you disable io_uring without changing the kernel — useful for debugging I/O issues or comparing performance.",
+                "○ No — ag is using tokio::fs for all file operations regardless of kernel support.",
+                "✓ Yes — ag will use io_uring for file I/O when available = Yes. The active backend field confirms which path is actually running.",
+            ])}
+        }
+        if show_backend_info() {
+            {info_modal("backend", show_backend_info, vec![
+                "The file I/O backend that is currently active.",
+                "\"io_uring\" — ag is using the io_uring submission/completion ring for all file reads and writes. This is the fast path: fewer syscalls, lower CPU overhead, and higher throughput on Linux 5.1+.",
+                "\"tokio::fs\" — ag is using the standard tokio async file I/O, which dispatches blocking calls onto a thread pool. This is the fallback when io_uring is unavailable or disabled.",
+                "The backend is determined at startup from the combination of available and feature_enabled. Changing feature_enabled in config and restarting will switch the backend.",
+            ])}
+        }
+        if show_reads_info() {
+            {info_modal("reads", show_reads_info, vec![
+                "Total number of read operations completed since ag started.",
+                "Each time ag reads a chunk, index file, or document from disk, this counter increments by one regardless of how many bytes were transferred.",
+                "A high read count relative to writes is normal for a search system — documents are written once during indexing but may be read many times during retrieval.",
+            ])}
+        }
+        if show_writes_info() {
+            {info_modal("writes", show_writes_info, vec![
+                "Total number of write operations completed since ag started.",
+                "Writes occur when ag persists index updates, flushes Tantivy segments, or saves vector data to disk. Each write call increments this counter once.",
+                "Writes are typically much less frequent than reads. A spike in writes usually corresponds to a reindex or a batch upload completing.",
+            ])}
+        }
+        if show_bytes_read_info() {
+            {info_modal("bytes_read", show_bytes_read_info, vec![
+                "Total bytes transferred from disk to memory by the I/O backend since ag started.",
+                "This accumulates across all read operations: index lookups, chunk retrievals, and any file reads performed during search or reindex.",
+                "High bytes_read with low read count means ag is reading large chunks per call — generally efficient. High read count with low bytes_read means many small reads, which io_uring handles better than the thread-pool fallback.",
+            ])}
+        }
+        if show_bytes_written_info() {
+            {info_modal("bytes_written", show_bytes_written_info, vec![
+                "Total bytes flushed from memory to disk by the I/O backend since ag started.",
+                "This accumulates across all write operations: Tantivy segment flushes, vector store saves, and any other persistence writes.",
+                "Bytes written grows in steps rather than smoothly — Tantivy batches changes and flushes periodically, so you will see flat stretches followed by jumps during or after heavy indexing.",
+            ])}
         }
 
     }

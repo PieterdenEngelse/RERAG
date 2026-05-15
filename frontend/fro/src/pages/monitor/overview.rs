@@ -54,11 +54,37 @@ struct OverviewState {
     llm_calls_hour: Option<usize>,
 }
 
+#[derive(Clone, PartialEq)]
+enum ServerFilter {
+    All,
+    Search,
+    Upload,
+}
+
+impl ServerFilter {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Search => "Search :3010",
+            Self::Upload => "Upload :3011",
+        }
+    }
+
+    fn key(&self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Search => Some("search"),
+            Self::Upload => Some("upload"),
+        }
+    }
+}
+
 #[component]
 pub fn MonitorOverview() -> Element {
     let mut state = use_signal(OverviewState::default);
     let mut page_errors = use_context::<Signal<PageErrors>>();
     let navigator = use_navigator();
+    let server_filter = use_signal(|| ServerFilter::All);
 
     // Action button states
     let mut reindex_loading = use_signal(|| false);
@@ -75,7 +101,10 @@ pub fn MonitorOverview() -> Element {
     use_future(move || async move {
         loop {
             let health = api::health_check().await;
-            let requests = api::fetch_requests_snapshot().await;
+            let requests = match server_filter.read().key() {
+                Some(server) => api::fetch_requests_snapshot_for(server).await,
+                None => api::fetch_requests_snapshot().await,
+            };
             let io_uring = api::fetch_io_uring_stats().await;
             let neo4j = api::fetch_neo4j_config().await;
             let docker = api::fetch_docker_status().await;
@@ -224,6 +253,29 @@ pub fn MonitorOverview() -> Element {
 
             NavTabs { active: Route::MonitorOverview {} }
 
+            // Server filter
+            div { class: "flex gap-2",
+                for filter in [ServerFilter::All, ServerFilter::Search, ServerFilter::Upload] {
+                    {
+                        let is_active = *server_filter.read() == filter;
+                        let label = filter.label();
+                        let mut sf = server_filter.clone();
+                        let color = if is_active {
+                            "bg-teal-700 text-white border-teal-500"
+                        } else {
+                            "bg-gray-800 text-gray-300 border-gray-600 hover:border-gray-400"
+                        };
+                        rsx! {
+                            button {
+                                class: "px-3 py-1 rounded border text-xs font-medium transition-colors {color}",
+                                onclick: move |_| sf.set(filter.clone()),
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+            }
+
             // System Health Panel
             Panel { title: Some("System Health".into()), refresh: Some("5s".into()),
                 if snapshot.loading {
@@ -302,7 +354,13 @@ pub fn MonitorOverview() -> Element {
             // Key Metrics
             RowHeader {
                 title: "Key Metrics".into(),
-                description: Some("Live request stats refreshed every 5s. Click a card to see details.".into()),
+                description: Some(format!("Live request stats refreshed every 5s — {} server. Click a card for details.",
+                    match *server_filter.read() {
+                        ServerFilter::All => "all",
+                        ServerFilter::Search => "search :3010",
+                        ServerFilter::Upload => "upload :3011",
+                    }
+                ).into()),
             }
             div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
                 // Clickable stat cards that navigate to detail pages

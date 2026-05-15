@@ -51,6 +51,13 @@ pub(crate) struct RouteDropStat {
 }
 
 #[derive(Serialize)]
+pub(crate) struct ServerRouteDrop {
+    pub server: String,
+    pub route: String,
+    pub drops: i64,
+}
+
+#[derive(Serialize)]
 pub(crate) struct RateLimitConfigSnapshot {
     pub enabled: bool,
     pub trust_proxy: bool,
@@ -67,7 +74,9 @@ pub(crate) struct RateLimitMonitorResponse {
     pub request_id: String,
     pub total_drops: i64,
     pub drops_by_route: Vec<RouteDropStat>,
+    pub drops_by_server_route: Vec<ServerRouteDrop>,
     pub config: RateLimitConfigSnapshot,
+    pub upload_config: Option<RateLimitConfigSnapshot>,
     pub limiter_state: RateLimiterState,
 }
 
@@ -361,6 +370,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
 
                 let mut response = json!({
                     "status": status,
+                    "server": "search",
                     "documents": retriever.metrics.total_documents_indexed,
                     "vectors": retriever.metrics.total_vectors,
                     "index_path": retriever.metrics.index_path,
@@ -419,6 +429,76 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
     }
 }
 
+pub async fn upload_health_check() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    // ONNX pool must be initialized before any uploads can embed
+    if !crate::embedder::upload_pool_ready() {
+        return Ok(HttpResponse::ServiceUnavailable().json(json!({
+            "status": "unhealthy",
+            "server": "upload",
+            "error": "Upload ONNX blocking pool not initialized",
+            "request_id": request_id
+        })));
+    }
+
+    let (load, is_busy, message) = if let Some(tracker) = crate::monitoring::get_health_tracker() {
+        let load = tracker.get_load_metrics();
+        let is_busy = tracker.is_busy();
+        let msg = if is_busy {
+            Some(format!(
+                "System busy: {} active tasks{}",
+                load.active_tasks,
+                if load.indexing { ", indexing" } else { "" }
+            ))
+        } else {
+            None
+        };
+        (Some(load), is_busy, msg)
+    } else {
+        (None, false, None)
+    };
+
+    if let Some(retriever) = RETRIEVER.get() {
+        let (status, detail) = match retriever.try_lock() {
+            Ok(_) => {
+                if is_busy {
+                    ("busy", message.unwrap_or_else(|| "System busy".to_string()))
+                } else {
+                    ("healthy", "Upload server ready".to_string())
+                }
+            }
+            Err(_) => ("busy", "Indexing in progress".to_string()),
+        };
+
+        let mut response = json!({
+            "status": status,
+            "server": "upload",
+            "message": detail,
+            "onnx_pool": "ready",
+            "request_id": request_id
+        });
+        if let Some(l) = load {
+            response["load"] = json!({
+                "cpu_percent": l.cpu_percent,
+                "memory_percent": l.memory_percent,
+                "active_tasks": l.active_tasks,
+                "queue_depth": l.queue_depth,
+                "indexing": l.indexing,
+                "llm_active": l.llm_active
+            });
+        }
+        Ok(HttpResponse::Ok().json(response))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(json!({
+            "status": "unhealthy",
+            "server": "upload",
+            "error": "Retriever not initialized",
+            "request_id": request_id
+        })))
+    }
+}
+
 pub(crate) async fn root_handler() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok()
         .content_type("text/plain; charset=utf-8")
@@ -428,23 +508,26 @@ pub(crate) async fn root_handler() -> Result<HttpResponse, Error> {
 pub(crate) async fn ready_check() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     if let Some(retriever) = RETRIEVER.get() {
-        match retriever.lock() {
+        match retriever.try_lock() {
             Ok(retriever) => match retriever.ready_check() {
                 Ok(_) => Ok(HttpResponse::Ok().json(json!({
                     "status": "ready",
+                    "server": "search",
                     "timestamp": Utc::now().to_rfc3339(),
                     "request_id": request_id
                 }))),
                 Err(e) => Ok(HttpResponse::ServiceUnavailable().json(json!({
                     "status": "not ready",
+                    "server": "search",
                     "error": e.to_string(),
                     "timestamp": Utc::now().to_rfc3339(),
                     "request_id": request_id
                 }))),
             },
-            Err(e) => Ok(HttpResponse::ServiceUnavailable().json(json!({
+            Err(_) => Ok(HttpResponse::ServiceUnavailable().json(json!({
                 "status": "not ready",
-                "error": format!("Failed to acquire lock: {}", e),
+                "server": "search",
+                "error": "Retriever locked — indexing in progress",
                 "timestamp": Utc::now().to_rfc3339(),
                 "request_id": request_id
             }))),
@@ -452,11 +535,59 @@ pub(crate) async fn ready_check() -> Result<HttpResponse, Error> {
     } else {
         Ok(HttpResponse::ServiceUnavailable().json(json!({
             "status": "not ready",
+            "server": "search",
             "message": "Retriever not initialized",
             "timestamp": Utc::now().to_rfc3339(),
             "request_id": request_id
         })))
     }
+}
+
+pub(crate) async fn upload_ready_check() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    if !crate::embedder::upload_pool_ready() {
+        return Ok(HttpResponse::ServiceUnavailable().json(json!({
+            "status": "not ready",
+            "server": "upload",
+            "reason": "onnx_pool_not_initialized",
+            "timestamp": Utc::now().to_rfc3339(),
+            "request_id": request_id
+        })));
+    }
+
+    if RETRIEVER.get().is_none() {
+        return Ok(HttpResponse::ServiceUnavailable().json(json!({
+            "status": "not ready",
+            "server": "upload",
+            "reason": "retriever_not_initialized",
+            "timestamp": Utc::now().to_rfc3339(),
+            "request_id": request_id
+        })));
+    }
+
+    let available_slots = crate::api::get_upload_semaphore()
+        .map(|s| s.available_permits())
+        .unwrap_or(0);
+
+    if available_slots == 0 {
+        return Ok(HttpResponse::ServiceUnavailable().json(json!({
+            "status": "not ready",
+            "server": "upload",
+            "reason": "at_capacity",
+            "available_slots": 0,
+            "timestamp": Utc::now().to_rfc3339(),
+            "request_id": request_id
+        })));
+    }
+
+    Ok(HttpResponse::Ok().json(json!({
+        "status": "ready",
+        "server": "upload",
+        "available_slots": available_slots,
+        "timestamp": Utc::now().to_rfc3339(),
+        "request_id": request_id
+    })))
 }
 
 /// Phase 16: Export metrics in Prometheus text format
@@ -562,6 +693,7 @@ pub(crate) async fn get_io_uring_stats() -> Result<HttpResponse, Error> {
                 "IO_URING_BUFFER_POOL_SIZE": "Number of pre-allocated buffers (1-4096)",
                 "IO_URING_SINGLE_ISSUER": "Single issuer optimization (true/false)"
             },
+            "startup": async_io::get_startup_io(),
             "description": "io_uring provides 2-3x faster file I/O on Linux 5.1+",
             "available_functions": {
                 "vector_loading": "load_vectors_rkyv_async() / load_vectors_auto_async()",
@@ -827,13 +959,34 @@ pub(crate) async fn get_rate_limit_monitor_info(
         .into_iter()
         .map(|(route, drops)| RouteDropStat { route, drops })
         .collect();
+    let drops_by_server_route = metrics::rate_limit_drops_by_server_route_snapshot()
+        .into_iter()
+        .map(|(server, route, drops)| ServerRouteDrop { server, route, drops })
+        .collect();
     let config = state.config_snapshot(limiter_state.enabled);
+
+    let upload_config = crate::api::get_upload_rate_limiter().map(|ul| {
+        let upload_state = ul.snapshot();
+        let t = ul.thresholds.snapshot();
+        RateLimitConfigSnapshot {
+            enabled: upload_state.enabled,
+            trust_proxy: state.opts.trust_proxy, // populated from upload opts below
+            search_qps: t.search_qps,
+            search_burst: t.search_burst,
+            upload_qps: t.upload_qps,
+            upload_burst: t.upload_burst,
+            exempt_prefixes: vec!["/monitoring".into()],
+            rules: vec![],
+        }
+    });
 
     let response = RateLimitMonitorResponse {
         request_id,
         total_drops,
         drops_by_route,
+        drops_by_server_route,
         config,
+        upload_config,
         limiter_state,
     };
 
@@ -891,6 +1044,9 @@ pub(crate) async fn set_rate_limit_enabled(
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let new_state = state.limiter.set_enabled(body.enabled);
+    if let Some(ul) = crate::api::get_upload_rate_limiter() {
+        ul.set_enabled(body.enabled);
+    }
     let t = state.limiter.thresholds.snapshot();
     persist_rate_limits(
         new_state,

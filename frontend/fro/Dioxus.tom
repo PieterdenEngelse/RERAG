@@ -1,0 +1,53 @@
+[application]
+name = "fro"
+default_platform = "web"
+
+[web.app]
+title = "fro"
+base_path = "/"
+
+# ============================
+# 🔥 WASM OPTIMALISATIE
+# ============================
+[web.wasm_opt]
+enabled = true
+mode = "z"   # kleinste WASM size
+
+# ============================
+# 📦 ASSET HASHING (cache-busting)
+# ============================
+[web.asset]
+hash = true
+
+# ============================
+# 🧹 MINIFICATION
+# ============================
+[web.resource]
+style = ["minify"]
+script = ["minify"]
+
+[web.resource.dev]
+style = []
+script = []
+
+# ============================
+# 🔁 HOT RELOAD / WATCHER
+# ============================
+[web.watcher]
+watch_path = ["src", "public", "assets"]
+reload_html = true
+index_on_404 = true
+
+# ============================
+# 🌐 SERVER SETTINGS
+# ============================
+[web.server]
+port = 1789
+
+# ============================
+# ⚡ SERVICE WORKER (PWA)
+# ============================
+[web.service_worker]
+enabled = true
+file = "public/sw.js"
+

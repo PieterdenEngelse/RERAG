@@ -6,6 +6,7 @@ async fn rate_limit_lru_eviction_behavior() {
     let port: u16 = 40125;
     env::set_var("BACKEND_HOST", "127.0.0.1");
     env::set_var("BACKEND_PORT", port.to_string());
+    env::set_var("UPLOAD_PORT", "40128");
     env::set_var("RATE_LIMIT_ENABLED", "true");
     env::set_var("TRUST_PROXY", "true");
     env::set_var("RATE_LIMIT_SEARCH_QPS", "100"); // high so refill not a factor

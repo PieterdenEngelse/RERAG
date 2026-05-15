@@ -116,8 +116,20 @@ fn get_jobs_map() -> Arc<Mutex<HashMap<String, AsyncJob>>> {
 // Global retriever handle
 static RETRIEVER: OnceLock<Arc<Mutex<Retriever>>> = OnceLock::new();
 
-// Global rate limiter — shared across all workers so toggle/threshold updates apply everywhere
+// Global rate limiters — each server has its own LRU but shares RuntimeThresholds
 static SHARED_RATE_LIMITER: OnceLock<Arc<RateLimiter>> = OnceLock::new();
+static UPLOAD_RATE_LIMITER: OnceLock<Arc<RateLimiter>> = OnceLock::new();
+
+pub fn get_upload_rate_limiter() -> Option<Arc<RateLimiter>> {
+    UPLOAD_RATE_LIMITER.get().map(Arc::clone)
+}
+
+// Global upload concurrency semaphore — shared so /ready can query available permits
+static UPLOAD_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+pub fn get_upload_semaphore() -> Option<Arc<tokio::sync::Semaphore>> {
+    UPLOAD_SEMAPHORE.get().map(Arc::clone)
+}
 
 pub fn get_rate_limiter() -> Option<Arc<RateLimiter>> {
     SHARED_RATE_LIMITER.get().map(Arc::clone)
@@ -735,7 +747,38 @@ pub fn start_api_server(
 ) -> impl std::future::Future<Output = std::io::Result<()>> {
     // Snapshot needed config values to satisfy 'static factory closure
     let bind_addr = config.bind_addr();
-    let trust_proxy = config.trust_proxy;
+    let upload_bind_addr = config.upload_bind_addr();
+    let search_workers = config.search_workers;
+    let upload_workers = config.upload_workers;
+    let search_max_connections = config.search_max_connections;
+    let upload_max_connections = config.upload_max_connections;
+    let search_max_body_bytes = config.search_max_body_kb * 1024;
+    let search_timeout = std::time::Duration::from_secs(config.search_timeout_secs);
+    let upload_timeout = std::time::Duration::from_secs(config.upload_timeout_secs);
+    let _trust_proxy = config.trust_proxy;
+    let trust_proxy_search = config.trust_proxy_search;
+    let trust_proxy_upload = config.trust_proxy_upload;
+    let upload_rate_limit_lru_capacity = config.upload_rate_limit_lru_capacity;
+
+    let upload_semaphore = Arc::new(tokio::sync::Semaphore::new(config.upload_max_concurrent));
+    let _ = UPLOAD_SEMAPHORE.set(Arc::clone(&upload_semaphore));
+    info!(
+        max_concurrent = config.upload_max_concurrent,
+        "Upload concurrency semaphore initialized"
+    );
+
+    // CORS: search is always permissive; upload restricts when UPLOAD_CORS_ORIGINS is set.
+    let upload_cors_origins: Option<Arc<Vec<String>>> =
+        std::env::var("UPLOAD_CORS_ORIGINS")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| Arc::new(s.split(',').map(|o| o.trim().to_string()).collect()));
+
+    if let Some(ref origins) = upload_cors_origins {
+        info!(origins = ?origins, "Upload CORS restricted to explicit origin list");
+    } else {
+        info!("Upload CORS: allow_any_origin (set UPLOAD_CORS_ORIGINS to restrict)");
+    }
     let rate_limit_enabled = config.rate_limit_enabled;
     let rate_limit_qps = config.rate_limit_qps;
     let rate_limit_burst = config.rate_limit_burst as f64;
@@ -753,42 +796,37 @@ pub fn start_api_server(
         .map(|v| v.to_lowercase() == "true" || v == "1")
         .unwrap_or(false);
 
-    // Build shared rate limiter once — all workers share the same Arc so that
-    // runtime toggle/threshold updates propagate to every worker immediately.
+    // Shared thresholds — both limiters reference the same Arc so runtime updates
+    // via /config/rate-limits apply to both servers simultaneously.
     let rl_thresholds = RuntimeThresholds::new(
         search_qps.max(0.0),
         search_burst,
         upload_qps.max(0.0),
         upload_burst,
     );
-    let rl_cfg = crate::security::rate_limiter::RateLimiterConfig {
+
+    let search_rl_cfg = crate::security::rate_limiter::RateLimiterConfig {
         enabled: rate_limit_enabled,
         qps: rate_limit_qps.max(0.0),
         burst: rate_limit_burst,
         max_ips: rate_limit_lru_capacity,
     };
-    let shared_rl = Arc::new(RateLimiter::new(rl_cfg, Arc::clone(&rl_thresholds)));
+    let upload_rl_cfg = crate::security::rate_limiter::RateLimiterConfig {
+        enabled: rate_limit_enabled,
+        qps: upload_qps.max(0.0),
+        burst: upload_burst,
+        max_ips: upload_rate_limit_lru_capacity,
+    };
+    let shared_rl = Arc::new(RateLimiter::new(search_rl_cfg, Arc::clone(&rl_thresholds)));
+    let upload_rl = Arc::new(RateLimiter::new(upload_rl_cfg, Arc::clone(&rl_thresholds)));
     let _ = SHARED_RATE_LIMITER.set(Arc::clone(&shared_rl));
+    let _ = UPLOAD_RATE_LIMITER.set(Arc::clone(&upload_rl));
 
-    let shared_opts = RateLimitOptions {
-        trust_proxy,
+    // Search server opts: only search-relevant route rules; trust_proxy_search.
+    let search_opts = RateLimitOptions {
+        trust_proxy: trust_proxy_search,
         thresholds: Arc::clone(&rl_thresholds),
-        rules: vec![
-            RouteRule {
-                pattern: "/reindex".into(),
-                match_kind: MatchKind::Exact,
-                qps: 0.5,
-                burst: 2.0,
-                label: Some("admin-reindex".into()),
-            },
-            RouteRule {
-                pattern: "/upload".into(),
-                match_kind: MatchKind::Prefix,
-                qps: upload_qps.max(0.0),
-                burst: upload_burst.max(0.0),
-                label: Some("upload".into()),
-            },
-        ],
+        rules: vec![],
         exempt_prefixes: vec![
             "/".into(),
             "/health".into(),
@@ -800,29 +838,62 @@ pub fn start_api_server(
     }
     .with_env_overrides();
 
-    // Log effective rate limit options for visibility
+    // Upload server opts: all non-monitoring routes are upload class by default; trust_proxy_upload.
+    let upload_opts = RateLimitOptions {
+        trust_proxy: trust_proxy_upload,
+        thresholds: Arc::clone(&rl_thresholds),
+        rules: vec![
+            RouteRule {
+                pattern: "/reindex".into(),
+                match_kind: MatchKind::Exact,
+                qps: 0.5,
+                burst: 2.0,
+                label: Some("admin-reindex".into()),
+            },
+        ],
+        exempt_prefixes: vec![
+            "/monitoring".into(),
+        ],
+    };
+
     info!(
-        trust_proxy = shared_opts.trust_proxy,
+        trust_proxy_search,
+        trust_proxy_upload,
         search_qps = rl_thresholds.get_search_qps(),
         search_burst = rl_thresholds.get_search_burst(),
         upload_qps = rl_thresholds.get_upload_qps(),
         upload_burst = rl_thresholds.get_upload_burst(),
-        rules = %serde_json::to_string(&shared_opts.rules).unwrap_or_default(),
-        exempt_prefixes = %serde_json::to_string(&shared_opts.exempt_prefixes).unwrap_or_default(),
+        search_lru = rate_limit_lru_capacity,
+        upload_lru = upload_rate_limit_lru_capacity,
         "Rate limit options initialized"
     );
 
     let shared_rate_limit_state = web::Data::new(RateLimitSharedState {
         limiter: Arc::clone(&shared_rl),
-        opts: shared_opts.clone(),
+        opts: search_opts.clone(),
+    });
+    let upload_rate_limit_state = web::Data::new(RateLimitSharedState {
+        limiter: Arc::clone(&upload_rl),
+        opts: upload_opts.clone(),
     });
 
-    let api_config = config.clone();
-    let mut http_server = HttpServer::new(move || {
-        let api_config = api_config.clone();
-        let rl = Arc::clone(&shared_rl);
-        let opts = shared_opts.clone();
-        let rate_limit_state_data = shared_rate_limit_state.clone();
+    let upload_max_bytes = std::env::var("UPLOAD_MAX_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(150)
+        * 1024
+        * 1024;
+
+    // ── Search server ─────────────────────────────────────────────────────────
+    let api_config_search = config.clone();
+    let shared_rl_search = Arc::clone(&shared_rl);
+    let search_opts_search = search_opts.clone();
+    let shared_rate_limit_state_search = shared_rate_limit_state.clone();
+    let mut search_server = HttpServer::new(move || {
+        let api_config = api_config_search.clone();
+        let rl = Arc::clone(&shared_rl_search);
+        let opts = search_opts_search.clone();
+        let rate_limit_state_data = shared_rate_limit_state_search.clone();
 
         let cors = Cors::default()
             .allow_any_origin()
@@ -833,19 +904,12 @@ pub fn start_api_server(
             ])
             .max_age(3600);
 
-        let upload_max_bytes = std::env::var("UPLOAD_MAX_MB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(150)
-            * 1024
-            * 1024;
-
         App::new()
+            .wrap(cors)
             .app_data(web::Data::new(api_config.clone()))
             .app_data(rate_limit_state_data.clone())
-            .app_data(web::PayloadConfig::default().limit(upload_max_bytes))
-            .wrap(cors)
-            .wrap(crate::trace_middleware::TraceMiddleware::new())
+            .app_data(web::PayloadConfig::default().limit(search_max_body_bytes))
+            .wrap(crate::trace_middleware::TraceMiddleware::new_with_server("search"))
             .wrap(
                 crate::monitoring::rate_limit_middleware::RateLimitMiddleware::new_with_options(
                     rl.clone(),
@@ -880,7 +944,9 @@ pub fn start_api_server(
                         "/optimizations/build-all",
                         web::post().to(build_all_indexes),
                     )
-                    .route("/ui/requests", web::get().to(get_ui_requests)) // ← Self-contained UI metrics for Requests
+                    .route("/ui/requests", web::get().to(get_ui_requests))
+                    .route("/ui/requests/search", web::get().to(get_ui_requests_search))
+                    .route("/ui/requests/upload", web::get().to(get_ui_requests_upload))
                     .route("/chunking/latest", web::get().to(get_chunking_stats))
                     .route("/chunking/logging", web::get().to(toggle_chunking_logging))
                     // Agentic monitoring routes
@@ -958,7 +1024,7 @@ pub fn start_api_server(
                     .route("/onnx", web::get().to(get_onnx_status)),
             )
             // ============================================================================
-            // CORPUS ROUTES
+            // CORPUS ROUTES (search + metadata only)
             // ============================================================================
             .service(
                 web::scope("/corpora")
@@ -971,17 +1037,11 @@ pub fn start_api_server(
                         "/{slug}/description",
                         web::patch().to(update_corpus_description_handler),
                     )
-                    .route("/{slug}/upload", web::post().to(corpus_upload_handler))
                     .route(
                         "/{slug}/documents",
                         web::get().to(corpus_list_documents_handler),
                     )
-                    .route(
-                        "/{slug}/documents/{filename}",
-                        web::delete().to(corpus_delete_document_handler),
-                    )
                     .route("/{slug}/search", web::get().to(corpus_search_handler))
-                    .route("/{slug}/reindex", web::post().to(corpus_reindex_handler))
                     .route(
                         "/{slug}/settings",
                         web::get().to(get_corpus_settings_handler),
@@ -1003,11 +1063,12 @@ pub fn start_api_server(
             // ROOT & CORE ROUTES
             // ============================================================================
             .route("/", web::get().to(root_handler))
-            .route("/upload", web::post().to(upload_document_inner))
             .route("/documents", web::get().to(list_documents))
-            .route("/documents/{filename}", web::delete().to(delete_document))
             .route("/config/chunk_size", web::get().to(get_chunk_config))
             .route("/config/chunk_size", web::post().to(commit_chunk_config))
+            .route("/config/index_in_ram", web::post().to(set_index_in_ram))
+            .route("/config/servers", web::get().to(get_server_config))
+            .route("/config/servers", web::post().to(save_server_config))
             .route("/chunk/preview", web::post().to(chunk_preview_handler))
             .route("/config/embedding", web::get().to(get_embedding_config))
             .route("/config/embedding", web::post().to(set_embedding_config))
@@ -1046,17 +1107,10 @@ pub fn start_api_server(
             // Entity Terms config (Step 1 v1.0)
             .route("/config/entity_terms", web::get().to(get_entity_terms))
             .route("/config/entity_terms", web::post().to(save_entity_terms))
-            .route("/reindex", web::post().to(reindex_handler))
-            .route("/reindex/async", web::post().to(reindex_async_handler))
-            .route(
-                "/reindex/status/{job_id}",
-                web::get().to(reindex_status_handler),
-            )
             .route("/index/info", web::get().to(index_info_handler))
             .route("/search", web::get().to(search_documents_inner))
             .route("/rerank", web::post().to(rerank))
             .route("/summarize", web::post().to(summarize))
-            .route("/save_vectors", web::post().to(save_vectors_handler))
             .route("/monitor/cache/info", web::get().to(get_cache_monitor_info))
             .route("/cache/clear", web::post().to(clear_cache))
             .route(
@@ -1099,7 +1153,6 @@ pub fn start_api_server(
             // RAG MEMORY ROUTES
             // ============================================================================
             .route("/memory/types", web::get().to(list_memory_types))
-            .route("/memory/store_rag", web::post().to(store_rag_memory))
             .route("/memory/search_rag", web::post().to(search_rag_memory))
             .route("/memory/recall_rag", web::post().to(recall_rag_memory))
             .route("/memory/delete_rag", web::post().to(delete_rag_memory))
@@ -1207,11 +1260,147 @@ pub fn start_api_server(
             .configure(graph_routes::configure_graph_routes)
     });
     if force_single_worker {
-        http_server = http_server.workers(1);
+        search_server = search_server.workers(1);
+    } else {
+        search_server = search_server.workers(search_workers);
     }
-    http_server
-        .client_request_timeout(std::time::Duration::from_secs(30))
+    if let Err(e) = std::net::TcpListener::bind(&bind_addr) {
+        error!(
+            addr = %bind_addr,
+            error = %e,
+            "Search server port is already in use — set BACKEND_PORT to a free port"
+        );
+        std::process::exit(1);
+    }
+    let search_server = search_server
+        .max_connections(search_max_connections)
+        .client_request_timeout(search_timeout)
+        .keep_alive(std::time::Duration::from_secs(20))
         .bind(bind_addr.clone())
-        .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", bind_addr, e))
-        .run()
+        .unwrap_or_else(|e| panic!("Failed to bind search server to {}: {}", bind_addr, e));
+
+    info!("Search server bound to http://{}", bind_addr);
+
+    // ── Upload server ─────────────────────────────────────────────────────────
+    let api_config_upload = config.clone();
+    let upload_rl_ref = Arc::clone(&upload_rl);
+    let upload_opts_ref = upload_opts.clone();
+    let upload_rate_limit_state_ref = upload_rate_limit_state.clone();
+    let upload_semaphore_ref = Arc::clone(&upload_semaphore);
+    let upload_cors_origins_ref = upload_cors_origins.clone();
+    let mut upload_server = HttpServer::new(move || {
+        let api_config = api_config_upload.clone();
+        let rl = Arc::clone(&upload_rl_ref);
+        let opts = upload_opts_ref.clone();
+        let rate_limit_state_data = upload_rate_limit_state_ref.clone();
+        let sem = Arc::clone(&upload_semaphore_ref);
+        let origins = upload_cors_origins_ref.clone();
+
+            // CORS voor upload + monitoring server
+    let upload_cors = Cors::default()
+        .allow_any_origin()
+        .allowed_methods(vec!["GET", "POST"])
+        .allowed_headers(vec![
+            actix_web::http::header::CONTENT_TYPE,
+            actix_web::http::header::AUTHORIZATION,
+        ])
+        .max_age(3600);
+
+   
+
+        let _cors = {
+            let mut c = Cors::default()
+                .allowed_methods(vec!["GET", "POST", "DELETE", "PATCH"])
+                .allowed_headers(vec![
+                    actix_web::http::header::CONTENT_TYPE,
+                    actix_web::http::header::AUTHORIZATION,
+                ])
+                .max_age(3600);
+            if let Some(ref list) = origins {
+                for origin in list.iter() {
+                    c = c.allowed_origin(origin.as_str());
+                }
+            } else {
+                c = c.allow_any_origin();
+            }
+            c
+        };
+
+        App::new()
+            .app_data(web::Data::new(api_config.clone()))
+            .app_data(rate_limit_state_data.clone())
+            .app_data(web::PayloadConfig::default().limit(upload_max_bytes))
+            .wrap(crate::trace_middleware::TraceMiddleware::new_with_server("upload"))
+            .wrap(
+                crate::monitoring::rate_limit_middleware::RateLimitMiddleware::new_with_options(
+                    rl.clone(),
+                    opts.clone(),
+                )
+                .with_server("upload"),
+            )
+            .wrap(
+                crate::monitoring::upload_concurrency_middleware::UploadConcurrencyMiddleware::new(
+                    Arc::clone(&sem),
+                ),
+            )
+            // Upload-only corpus routes
+            
+            .wrap(upload_cors)
+            .service(
+                web::scope("/corpora")
+                    .route("/{slug}/upload", web::post().to(corpus_upload_handler))
+                    .route("/{slug}/reindex", web::post().to(corpus_reindex_handler))
+                    .route(
+                        "/{slug}/documents/{filename}",
+                        web::delete().to(corpus_delete_document_handler),
+                    ),
+            )
+            .route("/upload", web::post().to(upload_document_inner))
+            .route("/documents/{filename}", web::delete().to(delete_document))
+            .route("/save_vectors", web::post().to(save_vectors_handler))
+            .route("/reindex", web::post().to(reindex_handler))
+            .route("/reindex/async", web::post().to(reindex_async_handler))
+            .route(
+                "/reindex/status/{job_id}",
+                web::get().to(reindex_status_handler),
+            )
+            .route("/memory/store_rag", web::post().to(store_rag_memory))
+            .service(
+                web::scope("/monitoring")
+                    .route("/health", web::get().to(upload_health_check))
+                    .route("/ready", web::get().to(upload_ready_check))
+                    .route("/metrics", web::get().to(get_metrics))
+                    .route("/ui/requests", web::get().to(get_ui_requests_upload)),
+            )
+    });
+    if force_single_worker {
+        upload_server = upload_server.workers(1);
+    } else {
+        upload_server = upload_server.workers(upload_workers);
+    }
+    if let Err(e) = std::net::TcpListener::bind(&upload_bind_addr) {
+        error!(
+            addr = %upload_bind_addr,
+            error = %e,
+            "Upload server port is already in use — set UPLOAD_PORT to a free port"
+        );
+        std::process::exit(1);
+    }
+    let upload_server = upload_server
+        .max_connections(upload_max_connections)
+        .client_request_timeout(upload_timeout)
+        .keep_alive(std::time::Duration::from_secs(75))
+        .bind(upload_bind_addr.clone())
+        .unwrap_or_else(|e| panic!("Failed to bind upload server to {}: {}", upload_bind_addr, e));
+
+    info!("Upload server bound to http://{}", upload_bind_addr);
+
+    // Call .run() here (on the calling thread) so the returned future captures only
+    // the Send `Server` handles, not the !Send `HttpServer` factory closures.
+    let search_run = search_server.run();
+    let upload_run = upload_server.run();
+    async move {
+        tokio::try_join!(search_run, upload_run)?;
+        Ok(())
+    }
 }

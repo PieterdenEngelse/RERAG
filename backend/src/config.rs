@@ -69,6 +69,16 @@ pub struct ApiConfig {
     // Network
     pub host: String,
     pub port: u16,
+    pub upload_host: String,
+    pub upload_port: u16,
+    pub search_workers: usize,
+    pub upload_workers: usize,
+    pub search_max_connections: usize,
+    pub upload_max_connections: usize,
+    pub upload_max_concurrent: usize,
+    pub search_max_body_kb: usize,
+    pub search_timeout_secs: u64,
+    pub upload_timeout_secs: u64,
 
     // Phase 15 - Reliability & Observability
     pub skip_initial_indexing: bool,
@@ -83,6 +93,9 @@ pub struct ApiConfig {
     pub rate_limit_upload_qps: Option<f64>,
     pub rate_limit_upload_burst: Option<u32>,
     pub rate_limit_lru_capacity: usize,
+    pub trust_proxy_search: bool,
+    pub trust_proxy_upload: bool,
+    pub upload_rate_limit_lru_capacity: usize,
 
     // Chunker selection
     pub chunker_mode: ChunkerMode,
@@ -121,6 +134,58 @@ impl ApiConfig {
             .parse()
             .expect("BACKEND_PORT must be a valid u16");
 
+        let upload_host = env::var("UPLOAD_HOST").unwrap_or_else(|_| host.clone());
+
+        let upload_port = env::var("UPLOAD_PORT")
+            .unwrap_or_else(|_| "3011".to_string())
+            .parse()
+            .expect("UPLOAD_PORT must be a valid u16");
+
+        let default_search_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .saturating_sub(2)
+            .max(1);
+        let search_workers = env::var("SEARCH_WORKERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default_search_workers);
+
+        let upload_workers = env::var("UPLOAD_WORKERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+
+        let search_max_connections = env::var("SEARCH_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000);
+
+        let upload_max_connections = env::var("UPLOAD_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50);
+
+        let upload_max_concurrent = env::var("UPLOAD_MAX_CONCURRENT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4);
+
+        let search_max_body_kb = env::var("SEARCH_MAX_BODY_KB")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64);
+
+        let search_timeout_secs = env::var("SEARCH_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let upload_timeout_secs = env::var("UPLOAD_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300);
+
         // Phase 15 - Reliability & Observability
         let skip_initial_indexing = env::var("SKIP_INITIAL_INDEXING")
             .map(|v| v.to_lowercase() == "true" || v == "1")
@@ -146,6 +211,12 @@ impl ApiConfig {
         let trust_proxy = env::var("TRUST_PROXY")
             .map(|v| v.to_lowercase() == "true" || v == "1")
             .unwrap_or(false);
+        let trust_proxy_search = env::var("TRUST_PROXY_SEARCH")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(trust_proxy);
+        let trust_proxy_upload = env::var("TRUST_PROXY_UPLOAD")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(trust_proxy);
         let rate_limit_search_qps = env::var("RATE_LIMIT_SEARCH_QPS")
             .ok()
             .and_then(|v| v.parse().ok());
@@ -162,6 +233,10 @@ impl ApiConfig {
             .unwrap_or_else(|_| "1024".to_string())
             .parse()
             .unwrap_or(1024);
+        let upload_rate_limit_lru_capacity = env::var("UPLOAD_RATE_LIMIT_LRU_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(256usize);
 
         // Chunker selection
         let chunker_mode = ChunkerMode::from_env();
@@ -196,10 +271,23 @@ impl ApiConfig {
         Self {
             host,
             port,
+            upload_host,
+            upload_port,
+            search_workers,
+            upload_workers,
+            search_max_connections,
+            upload_max_connections,
+            upload_max_concurrent,
+            search_max_body_kb,
+            search_timeout_secs,
+            upload_timeout_secs,
             skip_initial_indexing,
             index_in_ram,
             reindex_webhook_url,
             rate_limit_enabled,
+            trust_proxy_search,
+            trust_proxy_upload,
+            upload_rate_limit_lru_capacity,
             rate_limit_qps,
             rate_limit_burst,
             trust_proxy,
@@ -221,5 +309,9 @@ impl ApiConfig {
 
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    pub fn upload_bind_addr(&self) -> String {
+        format!("{}:{}", self.upload_host, self.upload_port)
     }
 }

@@ -3,13 +3,24 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: 'ag-backend'
+  - job_name: 'ag-backend-search'
     metrics_path: /monitoring/metrics
     scrape_interval: 15s
     static_configs:
       - targets: ['host.docker.internal:3010']
         labels:
           service: ag
+          server: search
+          env: dev
+
+  - job_name: 'ag-backend-upload'
+    metrics_path: /monitoring/metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['host.docker.internal:3011']
+        labels:
+          service: ag
+          server: upload
           env: dev
 
   - job_name: 'prometheus'

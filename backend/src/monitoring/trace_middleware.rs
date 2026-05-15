@@ -15,7 +15,9 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 use tracing::{debug_span, Instrument};
 
-pub struct TraceMiddleware;
+pub struct TraceMiddleware {
+    server: &'static str,
+}
 
 impl Default for TraceMiddleware {
     fn default() -> Self {
@@ -25,7 +27,11 @@ impl Default for TraceMiddleware {
 
 impl TraceMiddleware {
     pub fn new() -> Self {
-        Self
+        Self { server: "search" }
+    }
+
+    pub fn new_with_server(server: &'static str) -> Self {
+        Self { server }
     }
 }
 
@@ -42,12 +48,16 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> <Self as Transform<S, ServiceRequest>>::Future {
-        ready(Ok(TraceMiddlewareService { service }))
+        ready(Ok(TraceMiddlewareService {
+            service,
+            server: self.server,
+        }))
     }
 }
 
 pub struct TraceMiddlewareService<S> {
     service: S,
+    server: &'static str,
 }
 
 impl<S, B> Service<ServiceRequest> for TraceMiddlewareService<S>
@@ -85,8 +95,8 @@ where
             .realip_remote_addr()
             .unwrap_or("unknown")
             .to_string();
+        let server = self.server;
 
-        // Set trace_id in context for all logs
         set_trace_id(request_id.clone());
 
         let span = debug_span!(
@@ -95,26 +105,19 @@ where
             path = %route_label,
             client_ip = %client_ip,
             trace_id = %request_id,
-            user_agent = %user_agent
+            user_agent = %user_agent,
+            server = %server,
         );
 
         let tracer = global::tracer("ag-backend");
         let span_name = format!("{} {}", method, route_label);
         let mut otel_span = tracer.start(span_name);
         otel_span.set_attribute(opentelemetry::KeyValue::new("http.method", method.clone()));
-        otel_span.set_attribute(opentelemetry::KeyValue::new(
-            "http.url",
-            route_label.clone(),
-        ));
-        otel_span.set_attribute(opentelemetry::KeyValue::new(
-            "http.client_ip",
-            client_ip.clone(),
-        ));
+        otel_span.set_attribute(opentelemetry::KeyValue::new("http.url", route_label.clone()));
+        otel_span.set_attribute(opentelemetry::KeyValue::new("http.client_ip", client_ip.clone()));
         otel_span.set_attribute(opentelemetry::KeyValue::new("trace.id", request_id.clone()));
-        otel_span.set_attribute(opentelemetry::KeyValue::new(
-            "http.user_agent",
-            user_agent.clone(),
-        ));
+        otel_span.set_attribute(opentelemetry::KeyValue::new("http.user_agent", user_agent.clone()));
+        otel_span.set_attribute(opentelemetry::KeyValue::new("server.name", server));
 
         let start = Instant::now();
         let fut = self.service.call(req);
@@ -146,14 +149,12 @@ where
 
                 let duration_ms_f64 = duration_ms as f64;
                 REQUEST_LATENCY_MS
-                    .with_label_values(&[&method, &route_label, &status_class])
+                    .with_label_values(&[server, &method, &route_label, &status_class])
                     .observe(duration_ms_f64);
 
-                // Feed self-contained UI metrics buffer
                 let is_error = status >= 500;
-                record_http_request(duration_ms_f64, is_error, &status_class);
+                record_http_request(duration_ms_f64, is_error, &status_class, server);
 
-                // INFO-log only errors and slow requests; per-request noise stays at DEBUG.
                 if status >= 400 || duration_ms >= 500 {
                     tracing::info!(
                         method = %method,
@@ -161,6 +162,7 @@ where
                         status = status,
                         duration_ms = duration_ms,
                         trace_id = %request_id,
+                        server = %server,
                         "request completed"
                     );
                 } else {
@@ -170,6 +172,7 @@ where
                         status = status,
                         duration_ms = duration_ms,
                         trace_id = %request_id,
+                        server = %server,
                         "request completed"
                     );
                 }

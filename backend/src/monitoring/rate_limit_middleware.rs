@@ -17,7 +17,9 @@ use actix_web::{
 use futures_util::future::LocalBoxFuture;
 use std::sync::Arc;
 
-use crate::monitoring::metrics::{RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_TOTAL};
+use crate::monitoring::metrics::{
+    RATE_LIMIT_DROPS_BY_ROUTE, RATE_LIMIT_DROPS_BY_SERVER_ROUTE, RATE_LIMIT_DROPS_TOTAL,
+};
 use crate::security::rate_limiter::{RateLimiter, RuntimeThresholds};
 use actix_web::body::EitherBody;
 use serde::{Deserialize, Serialize};
@@ -176,12 +178,11 @@ impl RateLimitOptions {
         self
     }
 
-    fn classify_default(&self, path: &str, method: &str) -> (f64, f64, String) {
+    fn classify_default(&self, path: &str, _method: &str) -> (f64, f64, String) {
         if path.starts_with("/upload")
             || path.starts_with("/save_vectors")
             || path.starts_with("/reindex")
             || path.starts_with("/memory/store_rag")
-            || method == "DELETE"
         {
             (
                 self.thresholds.get_upload_qps().max(0.0),
@@ -231,12 +232,17 @@ impl RateLimitOptions {
 pub struct RateLimitMiddleware {
     rate_limiter: Arc<RateLimiter>,
     opts: RateLimitOptions,
+    server: &'static str,
 }
 
 impl RateLimitMiddleware {
-    /// Create middleware with options
     pub fn new_with_options(rate_limiter: Arc<RateLimiter>, opts: RateLimitOptions) -> Self {
-        Self { rate_limiter, opts }
+        Self { rate_limiter, opts, server: "search" }
+    }
+
+    pub fn with_server(mut self, server: &'static str) -> Self {
+        self.server = server;
+        self
     }
 }
 
@@ -257,6 +263,7 @@ where
             service: std::sync::Arc::new(service),
             rate_limiter: Arc::clone(&self.rate_limiter),
             opts: self.opts.clone(),
+            server: self.server,
         }))
     }
 }
@@ -265,6 +272,7 @@ pub struct RateLimitMiddlewareService<S> {
     service: std::sync::Arc<S>,
     rate_limiter: Arc<RateLimiter>,
     opts: RateLimitOptions,
+    server: &'static str,
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>
@@ -309,6 +317,9 @@ where
                 RATE_LIMIT_DROPS_TOTAL.inc();
                 RATE_LIMIT_DROPS_BY_ROUTE
                     .with_label_values(&[&route_label])
+                    .inc();
+                RATE_LIMIT_DROPS_BY_SERVER_ROUTE
+                    .with_label_values(&[self.server, &route_label])
                     .inc();
 
                 return Box::pin(async move {

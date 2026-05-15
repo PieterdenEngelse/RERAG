@@ -1004,6 +1004,16 @@ pub async fn extract_ir_async(path: &Path, corpus: &str) -> Option<crate::doc_ir
                 .ok()
                 .flatten();
             if let Some(ir) = ir_opt {
+                let chars = ir.to_plain_text().len();
+                crate::monitoring::record_extraction_format(
+                    "docling",
+                    true,
+                    chars,
+                    &filename,
+                    &path.to_string_lossy(),
+                    &corpus,
+                );
+                crate::monitoring::record_preprocess_passthrough(&filename, &corpus, chars);
                 return Some(ir);
             }
             // External extractor failed — re-read for built-in fallback.
@@ -1049,6 +1059,15 @@ fn extract_ir_from_bytes_typed(
             crate::monitoring::record_preprocess_passthrough(filename, corpus, raw.len());
             let mut ir = extract_ir_from_markdown(&raw, filename);
             ir.tag_extractor("builtin/markdown");
+            let chars = ir.to_plain_text().len();
+            crate::monitoring::record_extraction_format(
+                "builtin/markdown",
+                true,
+                chars,
+                filename,
+                &path.to_string_lossy(),
+                corpus,
+            );
             Some(ir)
         }
         ContentType::Html => {
@@ -1059,6 +1078,14 @@ fn extract_ir_from_bytes_typed(
             ir.tag_extractor("builtin/html");
             let chars_out = ir.to_plain_text().len();
             crate::monitoring::record_preprocess_html(filename, corpus, chars_in, chars_out, 0);
+            crate::monitoring::record_extraction_format(
+                "builtin/html",
+                true,
+                chars_out,
+                filename,
+                &path.to_string_lossy(),
+                corpus,
+            );
             Some(ir)
         }
         ContentType::Code(ref lang) => {
@@ -1068,6 +1095,15 @@ fn extract_ir_from_bytes_typed(
             let mut ir = DocIR::new(filename, "code");
             ir.push(DocBlock::code(language, raw));
             ir.tag_extractor("builtin/code");
+            let chars = ir.to_plain_text().len();
+            crate::monitoring::record_extraction_format(
+                "builtin/code",
+                true,
+                chars,
+                filename,
+                &path.to_string_lossy(),
+                corpus,
+            );
             Some(ir)
         }
         // Structured extraction in Rust — no sidecar needed.
@@ -1075,24 +1111,64 @@ fn extract_ir_from_bytes_typed(
         ContentType::Docx => extract_ir_from_docx(&bytes, filename)
             .map(|mut ir| {
                 ir.tag_extractor("builtin/docx");
+                let chars = ir.to_plain_text().len();
+                crate::monitoring::record_preprocess_passthrough(filename, corpus, chars);
+                crate::monitoring::record_extraction_format(
+                    "builtin/docx",
+                    true,
+                    chars,
+                    filename,
+                    &path.to_string_lossy(),
+                    corpus,
+                );
                 ir
             })
             .or_else(|| flat_text_ir(path, bytes, ContentType::Docx, "builtin/docx", corpus)),
         ContentType::Odt => extract_ir_from_docx(&bytes, filename)
             .map(|mut ir| {
                 ir.tag_extractor("builtin/odt");
+                let chars = ir.to_plain_text().len();
+                crate::monitoring::record_preprocess_passthrough(filename, corpus, chars);
+                crate::monitoring::record_extraction_format(
+                    "builtin/odt",
+                    true,
+                    chars,
+                    filename,
+                    &path.to_string_lossy(),
+                    corpus,
+                );
                 ir
             })
             .or_else(|| flat_text_ir(path, bytes, ContentType::Odt, "builtin/odt", corpus)),
         ContentType::Epub => extract_ir_from_epub(&bytes, filename)
             .map(|mut ir| {
                 ir.tag_extractor("builtin/epub");
+                let chars = ir.to_plain_text().len();
+                crate::monitoring::record_preprocess_passthrough(filename, corpus, chars);
+                crate::monitoring::record_extraction_format(
+                    "builtin/epub",
+                    true,
+                    chars,
+                    filename,
+                    &path.to_string_lossy(),
+                    corpus,
+                );
                 ir
             })
             .or_else(|| flat_text_ir(path, bytes, ContentType::Epub, "builtin/epub", corpus)),
         ContentType::Pptx => extract_ir_from_pptx(&bytes, filename)
             .map(|mut ir| {
                 ir.tag_extractor("builtin/pptx");
+                let chars = ir.to_plain_text().len();
+                crate::monitoring::record_preprocess_passthrough(filename, corpus, chars);
+                crate::monitoring::record_extraction_format(
+                    "builtin/pptx",
+                    true,
+                    chars,
+                    filename,
+                    &path.to_string_lossy(),
+                    corpus,
+                );
                 ir
             })
             .or_else(|| flat_text_ir(path, bytes, ContentType::Pptx, "builtin/pptx", corpus)),

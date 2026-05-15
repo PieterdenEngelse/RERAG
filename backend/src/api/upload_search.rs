@@ -530,6 +530,30 @@ pub async fn reindex_status_handler(path: web::Path<String>) -> Result<HttpRespo
 }
 
 /// Phase 15: Index info endpoint
+fn human_bytes(bytes: u64) -> String {
+    let units = ["B", "KB", "MB", "GB"];
+    let mut val = bytes as f64;
+    let mut i = 0;
+    while val >= 1024.0 && i < units.len() - 1 {
+        val /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{} B", bytes) } else { format!("{:.1} {}", val, units[i]) }
+}
+
+fn process_rss_bytes() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|n| n.parse::<u64>().ok())
+        })
+        .map(|kb| kb * 1024)
+        .unwrap_or(0)
+}
+
 pub async fn index_info_handler() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
     let in_ram = std::env::var("INDEX_IN_RAM")
@@ -538,16 +562,32 @@ pub async fn index_info_handler() -> Result<HttpResponse, Error> {
 
     if let Some(retriever) = RETRIEVER.get() {
         let retriever = retriever.lock().unwrap();
+        let doc_count = retriever.metrics.total_documents_indexed;
+
+        let (mem_bytes, mem_human, mem_label) = if in_ram {
+            let rss = process_rss_bytes();
+            (rss, human_bytes(rss), "Process RSS")
+        } else {
+            let bytes = retriever.metrics.get_index_size_bytes().unwrap_or(0);
+            let human = retriever.metrics.get_index_size_human().unwrap_or_else(|_| "?".into());
+            (bytes, human, "Est. RAM if active")
+        };
+
         Ok(HttpResponse::Ok().json(json!({
             "index_in_ram": in_ram,
             "mode": if in_ram { "RAM (fast)" } else { "Disk (standard)" },
-            "warning": if in_ram {
-                json!("INDEX_IN_RAM enabled: High memory usage for large datasets. Recommended for <100 docs only.")
+            "warning": if in_ram && mem_bytes > 100_000_000 {
+                json!(format!("High memory usage: process RSS is {}.", mem_human))
+            } else if in_ram {
+                json!("INDEX_IN_RAM active. Avoid when index exceeds ~100 MB on disk.")
             } else {
                 json!(null)
             },
-            "total_documents": retriever.metrics.total_documents_indexed,
+            "total_documents": doc_count,
             "total_vectors": retriever.metrics.total_vectors,
+            "index_size_bytes": mem_bytes,
+            "index_size_human": mem_human,
+            "memory_label": mem_label,
             "request_id": request_id
         })))
     } else {

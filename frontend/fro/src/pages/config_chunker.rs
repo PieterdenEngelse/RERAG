@@ -69,6 +69,15 @@ pub fn ConfigChunker() -> Element {
     let mut show_prefix_tokens_info = use_signal(|| false);
     let mut show_centroid_info = use_signal(|| false);
     let mut show_pipeline_stages_info = use_signal(|| false);
+    let mut show_ram_info = use_signal(|| false);
+    let mut index_in_ram = use_signal(|| false);
+    let mut ram_msg: Signal<Option<String>> = use_signal(|| None);
+    let mut index_doc_count: Signal<usize> = use_signal(|| 0);
+    let mut index_size_bytes: Signal<u64> = use_signal(|| 0);
+    let mut index_size_human: Signal<String> = use_signal(|| "…".to_string());
+    let mut memory_label: Signal<String> = use_signal(|| "Est. RAM if active".to_string());
+    let mut restart_msg: Signal<Option<String>> = use_signal(|| None);
+    let mut show_restart_confirm = use_signal(|| false);
 
     // Load global config on mount (used as defaults before per-corpus overrides are known).
     use_effect(move || {
@@ -93,6 +102,13 @@ pub fn ConfigChunker() -> Element {
             }
             if let Ok(emb) = api::fetch_embedding_config().await {
                 embed_model_label.set(emb.model);
+            }
+            if let Ok(info) = api::fetch_index_info().await {
+                index_in_ram.set(info.index_in_ram);
+                index_doc_count.set(info.total_documents);
+                index_size_bytes.set(info.index_size_bytes.unwrap_or(0));
+                index_size_human.set(info.index_size_human.unwrap_or_else(|| "?".into()));
+                memory_label.set(info.memory_label.unwrap_or_else(|| "Est. RAM if active".into()));
             }
         });
     });
@@ -556,6 +572,115 @@ pub fn ConfigChunker() -> Element {
                 }
             }
 
+            // ─── INDEX IN RAM ─────────────────────────────────────────
+            if show_restart_confirm() {
+                div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_restart_confirm.set(false),
+                    div {
+                        class: "bg-gray-900 border border-gray-700 rounded-lg p-6 w-80 shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        h2 { class: "text-base font-bold text-gray-100 mb-2", "Restart app?" }
+                        p { class: "text-sm text-gray-300 mb-4",
+                            "The app will restart to apply the new index setting. Active requests will be dropped."
+                        }
+                        div { class: "flex gap-2",
+                            button {
+                                class: "btn btn-sm flex-1",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| {
+                                    show_restart_confirm.set(false);
+                                    spawn(async move {
+                                        match api::restart_service().await {
+                                            Ok(()) => restart_msg.set(Some("Restarting…".into())),
+                                            Err(e) => restart_msg.set(Some(format!("Error: {}", e))),
+                                        }
+                                    });
+                                },
+                                "Yes, restart"
+                            }
+                            button {
+                                class: "btn btn-sm flex-1 btn-ghost text-gray-300",
+                                onclick: move |_| show_restart_confirm.set(false),
+                                "Cancel"
+                            }
+                        }
+                    }
+                }
+            }
+            if show_ram_info() {
+                { info_modal("Index in RAM", show_ram_info, vec![
+                    "Heap-allocates Tantivy segments (RamDirectory). Lower search latency, higher memory use.",
+                    "Re-indexes on every restart — leave SKIP_INITIAL_INDEXING=false.",
+                    "Avoid when the index exceeds ~100 MB on disk.",
+                ]) }
+            }
+            Panel { title: None, refresh: None,
+                div { class: "flex items-center justify-between gap-4",
+                    div {
+                        div { class: "flex items-center gap-2 mb-0.5",
+                            h3 { class: "text-sm font-medium text-gray-200", "Index in RAM" }
+                            button {
+                                class: PARAM_ICON_BUTTON_CLASS,
+                                style: PARAM_ICON_BUTTON_STYLE,
+                                onclick: move |_| show_ram_info.set(true),
+                                InfoIcon {}
+                            }
+                            input {
+                                r#type: "checkbox",
+                                class: "toggle toggle-sm",
+                                checked: index_in_ram(),
+                                onchange: move |evt: Event<FormData>| {
+                                    let enabled = evt.value() == "true";
+                                    let sz_bytes = index_size_bytes();
+                                    let sz = index_size_human();
+                                    spawn(async move {
+                                        match api::set_index_in_ram(enabled).await {
+                                            Ok(()) => {
+                                                index_in_ram.set(enabled);
+                                                if enabled && sz_bytes > 100_000_000 {
+                                                    ram_msg.set(Some(format!(
+                                                        "Saved — index is {} and will be fully heap-allocated. Restart to apply.",
+                                                        sz
+                                                    )));
+                                                } else {
+                                                    ram_msg.set(Some("Saved — restart to apply.".into()));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                ram_msg.set(Some(format!("Error: {}", e)));
+                                            }
+                                        }
+                                    });
+                                },
+                            }
+                            if index_in_ram() {
+                                span { class: "text-xs text-teal-400", "Active" }
+                            } else {
+                                span { class: "text-xs text-gray-400", "Inactive" }
+                            }
+                        }
+                        div { class: "flex items-center gap-2 text-xs text-gray-400",
+                            span { class: "text-gray-300", "{memory_label()}:" }
+                            span { "{index_size_human()}" }
+                            span { class: "text-gray-600", "·" }
+                            span { "{index_doc_count()} chunks" }
+                            span { class: "text-gray-600", "·" }
+                            button {
+                                class: "text-yellow-400 hover:text-yellow-200 underline underline-offset-2 cursor-pointer",
+                                onclick: move |_| show_restart_confirm.set(true),
+                                "Restart APP to apply"
+                            }
+                        }
+                        if let Some(msg) = ram_msg() {
+                            div { class: "text-xs text-teal-400 mt-1", "{msg}" }
+                        }
+                        if let Some(msg) = restart_msg() {
+                            div { class: "text-xs text-yellow-300 mt-1", "{msg}" }
+                        }
+                    }
+                }
+            }
+
             // ─── ENV VAR REFERENCE ────────────────────────────────────
             Panel { title: None, refresh: None,
                 div { class: "flex flex-col gap-2",
@@ -564,7 +689,9 @@ pub fn ConfigChunker() -> Element {
                         "Read-only reference — edit .env and restart to set startup defaults."
                     }
                     div { class: "text-xs font-mono text-gray-400 space-y-1 bg-gray-900 rounded p-3 border border-gray-700",
-                        div { class: "text-gray-400", "# Mode & size" }
+                        div { class: "text-gray-400", "# Index" }
+                        div { "INDEX_IN_RAM={index_in_ram()}" }
+                        div { class: "text-gray-400 mt-1", "# Mode & size" }
                         div { "CHUNKER_MODE={mode()}" }
                         div { "CHUNK_TARGET_SIZE={target_size()}" }
                         div { "CHUNK_MIN_SIZE={min_size()}" }

@@ -12,6 +12,27 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{debug, info, info_span, warn, Instrument};
 
+static UPLOAD_BLOCKING_RT: std::sync::OnceLock<tokio::runtime::Handle> =
+    std::sync::OnceLock::new();
+
+pub fn upload_pool_ready() -> bool {
+    UPLOAD_BLOCKING_RT.get().is_some()
+}
+
+pub fn init_upload_blocking_pool(max_threads: usize) {
+    UPLOAD_BLOCKING_RT.get_or_init(|| {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(max_threads)
+            .thread_name("upload-onnx")
+            .build()
+            .expect("Failed to build upload ONNX blocking pool");
+        let handle = rt.handle().clone();
+        Box::leak(Box::new(rt));
+        handle
+    });
+}
+
 /// Embedding vector (defaults to 384-dimensional to match BGE-small)
 pub type EmbeddingVector = Vec<f32>;
 
@@ -334,7 +355,7 @@ impl EmbeddingService {
         .await
     }
 
-    /// Embed multiple texts in batches (efficient for bulk operations)
+    /// Embed multiple texts in a single ONNX call via one spawn_blocking round-trip.
     pub async fn embed_batch(&self, texts: &[&str]) -> Vec<EmbeddingVector> {
         let span = info_span!(
             "embed_batch",
@@ -342,6 +363,10 @@ impl EmbeddingService {
             batch_size = self.config.batch_size
         );
         async move {
+            if texts.is_empty() {
+                return Vec::new();
+            }
+
             info!(
                 total_texts = texts.len(),
                 batch_size = self.config.batch_size,
@@ -351,15 +376,18 @@ impl EmbeddingService {
             crate::monitoring::onnx_metrics::record_batch(texts.len());
             crate::monitoring::metrics::observe_embedding_batch_size(texts.len());
             let start = std::time::Instant::now();
-            let mut results = Vec::new();
 
-            for batch in texts.chunks(self.config.batch_size) {
-                for text in batch {
-                    results.push(self.embed_text(text).await);
-                }
-                // Yield to tokio runtime to avoid blocking
-                task::yield_now().await;
-            }
+            let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+            let runtime = self.runtime.clone();
+
+            let embedding_future = if let Some(handle) = UPLOAD_BLOCKING_RT.get() {
+                handle.spawn_blocking(move || runtime.embed_batch_owned(owned))
+            } else {
+                tokio::task::spawn_blocking(move || runtime.embed_batch_owned(owned))
+            };
+            let results = embedding_future
+                .await
+                .unwrap_or_else(|e| { warn!("embed_batch join error: {e}"); vec![] });
 
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
             info!(
@@ -373,26 +401,38 @@ impl EmbeddingService {
         .await
     }
 
-    /// Embed multiple texts with indices (preserves order)
+    /// Embed multiple texts with indices (preserves order) via one spawn_blocking round-trip.
     pub async fn embed_batch_indexed(
         &self,
         texts: &[(usize, &str)],
     ) -> Vec<(usize, EmbeddingVector)> {
+        if texts.is_empty() {
+            return Vec::new();
+        }
+
         info!(
             total_texts = texts.len(),
             batch_size = self.config.batch_size,
             "Starting indexed batch embedding"
         );
 
-        let mut results = Vec::new();
+        let indices: Vec<usize> = texts.iter().map(|(idx, _)| *idx).collect();
+        let owned: Vec<String> = texts.iter().map(|(_, s)| s.to_string()).collect();
+        let runtime = self.runtime.clone();
 
-        for batch in texts.chunks(self.config.batch_size) {
-            for (idx, text) in batch {
-                let embedding = self.embed_text(text).await;
-                results.push((*idx, embedding));
-            }
-            task::yield_now().await;
-        }
+        let embedding_future = if let Some(handle) = UPLOAD_BLOCKING_RT.get() {
+            handle.spawn_blocking(move || runtime.embed_batch_owned(owned))
+        } else {
+            tokio::task::spawn_blocking(move || runtime.embed_batch_owned(owned))
+        };
+        let vectors = embedding_future
+            .await
+            .unwrap_or_else(|e| { warn!("embed_batch_indexed join error: {e}"); vec![] });
+
+        let results: Vec<(usize, EmbeddingVector)> = indices
+            .into_iter()
+            .zip(vectors)
+            .collect();
 
         info!(
             total_embeddings = results.len(),
