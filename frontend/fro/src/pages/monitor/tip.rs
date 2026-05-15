@@ -904,7 +904,7 @@ pub fn MonitorTip() -> Element {
                                                 }
                                                 li {
                                                     span { class: "text-gray-200 font-semibold", "Index" }
-                                                    " — NFKC + whitespace + punct canonicalization. Most aggressive: also normalizes smart quotes (‘ ’ “ ”) to ASCII (' "), em-dashes (—) to -, etc. Applied to Tantivy BM25 chunks and matched at query time."
+                                                    " — NFKC + whitespace + punct canonicalization. Most aggressive: also normalizes smart quotes (‘ ’ “ ”) to ASCII (' \"), em-dashes (—) to -, etc. Applied to Tantivy BM25 chunks and matched at query time."
                                                 }
                                             }
                                             p { class: "text-gray-500 pt-1 italic", "So when the modal says \"Store — NFC + whitespace\", it means: this is the normalization form used for the copy that gets persisted to disk." }
@@ -1564,7 +1564,7 @@ raw query
                             p { class: "text-gray-400", "Both representations are valid UTF-8 for the same character. NFC rewrites the two-codepoint form to the single-codepoint form. Without this step, the same word can produce different byte sequences depending on the source application, causing missed matches in exact-string comparisons." }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "What NFC does NOT touch" }
                             ul { class: "ml-4 space-y-0.5 list-none text-gray-400",
-                                li { "Curly quotes (‘ ’ “ ”) and straight quotes (' ") remain distinct." }
+                                li { "Curly quotes (‘ ’ “ ”) and straight quotes (' \") remain distinct." }
                                 li { "Em-dashes (—), en-dashes (–), and hyphens (-) are left as-is." }
                                 li { "Ligatures (ﬁ, ﬂ) are preserved — NFC is typography-safe." }
                                 li { "Fullwidth ASCII characters keep their fullwidth form." }
