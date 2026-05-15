@@ -315,22 +315,22 @@ pub fn MonitorTip() -> Element {
                             button {
                                 class: if tip_tab() == 0 { "px-3 py-2 text-xs font-medium text-sky-400 border-b-2 border-sky-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(0),
-                                "0 · Parser"
+                                "0 Parser"
                             }
                             button {
                                 class: if tip_tab() == 1 { "px-3 py-2 text-xs font-medium text-amber-400 border-b-2 border-amber-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(1),
-                                "1 · Canonicalization"
+                                "1 Canonicalization"
                             }
                             button {
                                 class: if tip_tab() == 2 { "px-3 py-2 text-xs font-medium text-emerald-400 border-b-2 border-emerald-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(2),
-                                "2 · Typography & Tag Cleanup"
+                                "2 Typography & Tag Cleanup"
                             }
                             button {
                                 class: if tip_tab() == 3 { "px-3 py-2 text-xs font-medium text-violet-400 border-b-2 border-violet-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(3),
-                                "3 · Orchestration"
+                                "3 Orchestration"
                             }
                             button {
                                 class: if tip_tab() == 4 { "px-3 py-2 text-xs font-medium text-gray-200 border-b-2 border-gray-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
@@ -360,7 +360,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 0: Parser ──
                             if tip_tab() == 0 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "0 · Parser" }
+                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "0 Parser" }
                                     p { class: "text-gray-400",
                                         "Entry point. Reads raw bytes and converts them to plain text via "
                                         span {
@@ -584,7 +584,7 @@ pub fn MonitorTip() -> Element {
                                             }
 
                                             // 1. What clustering is
-                                            p { class: "text-gray-200 font-semibold", "1 · What clustering is" }
+                                            p { class: "text-gray-200 font-semibold", "1 What clustering is" }
                                             p { "Clustering groups embedding vectors so that semantically similar chunks end up together. It's unsupervised: no labels, no supervision — just geometry in vector space." }
                                             p { "In a GraphRAG pipeline, clustering is the backbone of:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -597,7 +597,7 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-200 italic", "Cluster quality → summary quality → global search quality." }
 
                                             // 2. Why parse quality sets the ceiling
-                                            p { class: "text-gray-200 font-semibold pt-1", "2 · Why parse quality sets the ceiling on cluster coherence" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "2 Why parse quality sets the ceiling on cluster coherence" }
                                             p { "Clustering can only be as good as the text fed into the embedding model. If parsing is sloppy:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                                 li { "broken sentences" }
@@ -609,7 +609,7 @@ pub fn MonitorTip() -> Element {
                                             p { "…then embeddings scatter → clusters smear → summaries degrade." }
 
                                             // 3. Why encoding detection prevents mojibake fragmentation
-                                            p { class: "text-gray-200 font-semibold pt-1", "3 · Why encoding detection prevents mojibake fragmentation" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "3 Why encoding detection prevents mojibake fragmentation" }
                                             p { "Mojibake = garbled text caused by decoding bytes with the wrong encoding (e.g., " span { class: "font-mono", "CafÃ©" } " instead of " span { class: "font-mono", "Café" } ", " span { class: "font-mono", "â€œHelloâ€" } " instead of " span { class: "font-mono", "“Hello”" } ")." }
                                             p { "Mojibake breaks characters into multiple meaningless tokens, which:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -627,10 +627,10 @@ pub fn MonitorTip() -> Element {
                                             p { "Encoding detection ensures clean Unicode before tokenization." }
 
                                             // 4. How clusters are defined and made
-                                            p { class: "text-gray-200 font-semibold pt-1", "4 · How clusters are defined and made" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "4 How clusters are defined and made" }
                                             p { "A cluster is a region in embedding space where vectors are closer to each other than to vectors in other regions, with internal density and separation from others by lower‑density areas or distance boundaries. Different algorithms define \"region\" differently." }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.1 · k‑means — clusters = Voronoi cells around "
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.1 k‑means — clusters = Voronoi cells around "
                                                 span {
                                                     class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
                                                     onclick: move |_| show_centroid_info.set(!show_centroid_info()),
@@ -682,21 +682,21 @@ pub fn MonitorTip() -> Element {
                                                 li { span { class: "text-gray-200", "Overlap: " } "❌ No — hard partitions." }
                                             }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.2 · DBSCAN — clusters = dense regions separated by sparse regions" }
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.2 DBSCAN — clusters = dense regions separated by sparse regions" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "A cluster is a connected component of high‑density points." }
                                                 li { span { class: "text-gray-200", "Formation: " } "identify core points (≥ min_samples neighbors) → expand outward → mark unreachable points as noise." }
                                                 li { span { class: "text-gray-200", "Overlap: " } "❌ No — boundaries are fuzzy and shapes are irregular." }
                                             }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.3 · HDBSCAN — clusters = stable density regions across scales" }
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.3 HDBSCAN — clusters = stable density regions across scales" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "A cluster is a persistent dense region that remains stable across multiple density thresholds." }
                                                 li { span { class: "text-gray-200", "Formation: " } "build MST of distances → condense into hierarchy → extract stable regions." }
                                                 li { span { class: "text-gray-200", "Overlap: " } "❌ No — but clusters can be nested (hierarchical)." }
                                             }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.4 · Gaussian Mixture Models (GMM) — clusters = overlapping probability distributions" }
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.4 Gaussian Mixture Models (GMM) — clusters = overlapping probability distributions" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "Each cluster is a Gaussian distribution in embedding space." }
                                                 li { span { class: "text-gray-200", "Formation: " } "EM algorithm fits multiple Gaussians." }
@@ -704,7 +704,7 @@ pub fn MonitorTip() -> Element {
                                             }
 
                                             // 5. Absolute or overlapping?
-                                            p { class: "text-gray-200 font-semibold pt-1", "5 · So are clusters absolute or overlapping?" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "5 So are clusters absolute or overlapping?" }
                                             div { class: "overflow-x-auto",
                                                 table { class: "text-xs w-full border-collapse",
                                                     thead {
@@ -746,7 +746,7 @@ pub fn MonitorTip() -> Element {
                                             p { "In most GraphRAG pipelines (k‑means or HDBSCAN): clusters do not overlap, but semantic boundaries are fuzzy, and cluster meaning is not absolute — it depends on embedding quality." }
 
                                             // 6. Pipeline summary
-                                            p { class: "text-gray-200 font-semibold pt-1", "6 · Pipeline summary (GraphRAG‑style)" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "6 Pipeline summary (GraphRAG‑style)" }
                                             ol { class: "ml-3 space-y-0.5 list-decimal list-outside text-gray-400",
                                                 li { "Clean + normalize text" }
                                                 li { "Detect encoding → prevent mojibake" }
@@ -835,7 +835,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 1: Canonicalization ──
                             if tip_tab() == 1 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "1 · Canonicalization" }
+                                    h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "1 Canonicalization" }
                                     p { class: "text-gray-400", "Three targets, applied at different stages. Each target is a strict superset of the previous." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
@@ -949,7 +949,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 2: Typography & Tag Cleanup ──
                             if tip_tab() == 2 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "2 · Typography & Tag Cleanup" }
+                                    h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "2 Typography & Tag Cleanup" }
                                     p { class: "text-gray-400", "Structures canonicalised text into semantic units for embedding, indexing, and retrieval. Includes chunking, segmentation, and boilerplate removal." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -987,7 +987,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 3: Orchestration ──
                             if tip_tab() == 3 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "3 · Orchestration" }
+                                    h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "3 Orchestration" }
                                     p { class: "text-gray-400", "Coordinates the three prior layers into a deterministic, reproducible ingestion flow. Defines configuration, execution order, and output formats." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
                                     ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
@@ -1083,22 +1083,22 @@ pub fn MonitorTip() -> Element {
                                     }
                                     tbody {
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "0 · Parser" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "0 Parser" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Extract text from bytes" }
                                             td { class: "py-1.5 text-gray-400", "Empty parse = zero vectors, zero graph nodes, zero results" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "1 · Canonicalization" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "1 Canonicalization" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Normalize text" }
                                             td { class: "py-1.5 text-gray-400", "Stable embeddings, high recall, no duplicate graph nodes" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "2 · Typography & Tag Cleanup" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "2 Typography & Tag Cleanup" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Structure text" }
                                             td { class: "py-1.5 text-gray-400", "Coherent chunks, accurate embeddings, meaningful graph nodes" }
                                         }
                                         tr {
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "3 · Orchestration" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "3 Orchestration" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Coordinate pipeline" }
                                             td { class: "py-1.5 text-gray-400", "Deterministic indexing, reproducible retrieval, stable summaries" }
                                         }
