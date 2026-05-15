@@ -818,7 +818,7 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
                                             p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                                li { "'’“” → ' \"" }
+                                                li { "‘’“” → ' \"" }
                                                 li { "— / – → \" - \"" }
                                                 li { "‑ → \"-\"" }
                                                 li { "… → \"...\"" }
