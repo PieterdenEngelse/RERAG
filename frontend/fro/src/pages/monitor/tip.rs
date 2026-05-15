@@ -858,7 +858,7 @@ pub fn MonitorTip() -> Element {
                                             ol { class: "ml-3 space-y-1.5 list-decimal list-outside text-gray-400",
                                                 li {
                                                     span { class: "text-gray-200 font-semibold", "Store" }
-                                                    " — NFC + whitespace collapse. Applied after text extraction, before chunking. The text that ends up persisted to disk and shown to users. Conservative: only unifies byte-level encodings of the same character (e.g. é as U+00E9 vs e+combining accent → both become U+00E9), leaving curly quotes, "
+                                                    " — NFC + whitespace collapse. Applied after text extraction, before chunking. The text that ends up persisted to disk and shown to users. Conservative: only unifies byte-level encodings of the same character (e.g. é as U+00E9 vs e+combining accent → both become U+00E9), leaving curly quotes (‘ ’ “ ”), "
                                                     span {
                                                         class: "text-amber-400 underline cursor-pointer hover:text-amber-300",
                                                         onclick: move |_| show_emdash_info.set(!show_emdash_info()),
@@ -880,7 +880,7 @@ pub fn MonitorTip() -> Element {
                                                             p { "The en-dash (U+2013) is the shorter sibling — used for ranges like \"pages 10–20\"." }
                                                             p { class: "text-gray-400", "NFC leaves both untouched. The "
                                                                 span { class: "text-amber-400 font-medium", "Format cleanup" }
-                                                                " step folds em/en-dashes to \" - \", but that happens before Store normalization. If a document reaches NFC with an em-dash still in it, NFC will not touch it."
+                                                                " step folds em/en-dashes (— –) to \" - \", but that happens before Store normalization. If a document reaches NFC with an em-dash still in it, NFC will not touch it."
                                                             }
                                                         }
                                                     }
@@ -904,14 +904,14 @@ pub fn MonitorTip() -> Element {
                                                 }
                                                 li {
                                                     span { class: "text-gray-200 font-semibold", "Index" }
-                                                    " — NFKC + whitespace + punct canonicalization. Most aggressive: also normalizes smart quotes to ASCII, em-dashes to -, etc. Applied to Tantivy BM25 chunks and matched at query time."
+                                                    " — NFKC + whitespace + punct canonicalization. Most aggressive: also normalizes smart quotes (‘ ’ “ ”) to ASCII (' "), em-dashes (—) to -, etc. Applied to Tantivy BM25 chunks and matched at query time."
                                                 }
                                             }
                                             p { class: "text-gray-500 pt-1 italic", "So when the modal says \"Store — NFC + whitespace\", it means: this is the normalization form used for the copy that gets persisted to disk." }
                                         }
                                     }
                                     p { class: "text-gray-400", "Applied after extraction, before chunking. Persisted to disk and shown to users." }
-                                    p { class: "text-gray-400", "NFC = canonical composition. It only normalizes canonical equivalences — different byte encodings of the same character — leaving typography intact. Example: \"é\" can be stored as a single code point (U+00E9) or as \"e\" + combining accent (U+0301). NFC rewrites both to U+00E9. Curly quotes, em-dashes, ligatures, and other typographic characters are left untouched." }
+                                    p { class: "text-gray-400", "NFC = canonical composition. It only normalizes canonical equivalences — different byte encodings of the same character — leaving typography intact. Example: \"é\" can be stored as a single code point (U+00E9) or as \"e\" + combining accent (U+0301). NFC rewrites both to U+00E9. Curly quotes (‘ ’ “ ”), em-dashes (—), ligatures (ﬁ ﬂ), and other typographic characters are left untouched." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
                                         "Embed  —  "
@@ -926,7 +926,7 @@ pub fn MonitorTip() -> Element {
                                     p { class: "text-gray-400", "Store keeps text human-readable and typographically faithful. Embed strips compatibility differences so embeddings don't diverge on irrelevant Unicode quirks. Without this split: \"ﬁ\" and \"fi\" produce different vectors; \"①\" and \"1\" don't match; full-width vs half-width characters cause embedding drift." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Index  —  NFKC + whitespace + punct canon" }
-                                    p { class: "text-gray-400", "Applied to Tantivy BM25 chunks and to the query at search time. Punct canon: smart quotes → ASCII, en/em-dash → \"-\", ellipsis → \"...\"" }
+                                    p { class: "text-gray-400", "Applied to Tantivy BM25 chunks and to the query at search time. Punct canon: ‘ ’ “ ” → ' \", – — → \" - \", … → \"...\"" }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Whitespace (all targets)" }
                                     ul { class: "ml-3 space-y-0.5 list-none text-gray-400",
@@ -1470,7 +1470,7 @@ raw query
                                     p {
                                         "Any tool that considers itself a publishing surface inserts typographic \
                                         characters automatically: Word, InDesign, LaTeX (curly quotes and ligatures \
-                                        survive PDF extraction), browser copy-paste (&nbsp;, smart quotes), \
+                                        survive PDF extraction), browser copy-paste ( , ‘ ’ “ ”), \
                                         EPUB publishers, CMS exports (WordPress, Confluence, Notion), and Excel \
                                         cells with formatted text. Plain terminals, code editors, and hand-typed \
                                         Markdown almost never produce these — those formats are left untouched."
@@ -1564,8 +1564,8 @@ raw query
                             p { class: "text-gray-400", "Both representations are valid UTF-8 for the same character. NFC rewrites the two-codepoint form to the single-codepoint form. Without this step, the same word can produce different byte sequences depending on the source application, causing missed matches in exact-string comparisons." }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "What NFC does NOT touch" }
                             ul { class: "ml-4 space-y-0.5 list-none text-gray-400",
-                                li { "Curly quotes and straight quotes remain distinct." }
-                                li { "Em-dashes, en-dashes, and hyphens are left as-is." }
+                                li { "Curly quotes (‘ ’ “ ”) and straight quotes (' ") remain distinct." }
+                                li { "Em-dashes (—), en-dashes (–), and hyphens (-) are left as-is." }
                                 li { "Ligatures (ﬁ, ﬂ) are preserved — NFC is typography-safe." }
                                 li { "Fullwidth ASCII characters keep their fullwidth form." }
                             }
@@ -1617,7 +1617,7 @@ raw query
                             p { class: "text-gray-400", "This is why the query side must use the exact same normalization as the ingestion side: if a user types \"ﬁnance\" in the search box and the indexed chunks were normalized to \"finance\", the vectors still match because the query is also normalized before embedding." }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "What NFKC does NOT do" }
                             ul { class: "ml-4 space-y-0.5 list-none text-gray-400",
-                                li { "No punctuation canonicalization — smart quotes and dashes are left as-is." }
+                                li { "No punctuation canonicalization — smart quotes (‘ ’ “ ”) and dashes (— –) are left as-is." }
                                 li { "No case folding — \"AI\" and \"ai\" remain distinct." }
                                 li { "Punctuation is left to the embedding model's own tokenizer." }
                             }
