@@ -1481,8 +1481,8 @@ raw query
                                     p { class: "text-gray-400 uppercase tracking-wide text-[10px] font-semibold", "What it does" }
                                     p { "Substitutes typographic characters with plain ASCII equivalents:" }
                                     ul { class: "ml-4 space-y-0.5 list-disc list-outside text-gray-300",
-                                        li { code { class: "text-amber-300", "' '" } " curly quotes → " code { class: "text-amber-300", "'" } }
-                                        li { code { class: "text-amber-300", "\" \"" } " curly double quotes → " code { class: "text-amber-300", "\"" } }
+                                        li { code { class: "text-amber-300", "‘ ’" } " curly quotes → " code { class: "text-amber-300", "'" } }
+                                        li { code { class: "text-amber-300", "“ ”" } " curly double quotes → " code { class: "text-amber-300", "\"" } }
                                         li { code { class: "text-amber-300", "– —" } " en/em dash → " code { class: "text-amber-300", " - " } }
                                         li { code { class: "text-amber-300", "‑" } " non-breaking hyphen → " code { class: "text-amber-300", "-" } }
                                         li { code { class: "text-amber-300", "…" } " ellipsis → " code { class: "text-amber-300", "..." } }
