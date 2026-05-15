@@ -610,7 +610,7 @@ pub fn MonitorTip() -> Element {
 
                                             // 3. Why encoding detection prevents mojibake fragmentation
                                             p { class: "text-gray-200 font-semibold pt-1", "3 · Why encoding detection prevents mojibake fragmentation" }
-                                            p { "Mojibake = garbled text caused by decoding bytes with the wrong encoding (e.g., " span { class: "font-mono", "CafÃ©" } " instead of " span { class: "font-mono", "Café" } ", " span { class: "font-mono", "â€œHelloâ€" } " instead of " span { class: "font-mono", "\u{201c}Hello\u{201d}" } ")." }
+                                            p { "Mojibake = garbled text caused by decoding bytes with the wrong encoding (e.g., " span { class: "font-mono", "CafÃ©" } " instead of " span { class: "font-mono", "Café" } ", " span { class: "font-mono", "â€œHelloâ€" } " instead of " span { class: "font-mono", "“Hello”" } ")." }
                                             p { "Mojibake breaks characters into multiple meaningless tokens, which:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                                 li { "distort embeddings" }
@@ -781,7 +781,7 @@ pub fn MonitorTip() -> Element {
                                                 p { "Examples:" }
                                                 ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
                                                     li { span { class: "font-mono text-gray-200", "CafÃ©" } " instead of " span { class: "font-mono text-gray-200", "Café" } }
-                                                    li { span { class: "font-mono text-gray-200", "â€œHelloâ€" } " instead of " span { class: "font-mono text-gray-200", "\u{201c}Hello\u{201d}" } }
+                                                    li { span { class: "font-mono text-gray-200", "â€œHelloâ€" } " instead of " span { class: "font-mono text-gray-200", "“Hello”" } }
                                                     li { "Japanese text turning into " span { class: "font-mono text-gray-200", "æ–‡åŒ–ã" } }
                                                 }
                                                 p { "This happens when the byte sequence is correct, but the decoder guesses the wrong character set. For example, UTF‑8 bytes interpreted as Windows‑1252 produce systematic corruption." }
@@ -818,10 +818,10 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
                                             p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                                li { "\u{2018}\u{2019}\u{201C}\u{201D} → ' \"" }
-                                                li { "\u{2014} / \u{2013} → \" - \"" }
-                                                li { "\u{2011} → \"-\"" }
-                                                li { "\u{2026} → \"...\"" }
+                                                li { "'’“” → ' \"" }
+                                                li { "— / – → \" - \"" }
+                                                li { "‑ → \"-\"" }
+                                                li { "… → \"...\"" }
                                                 li { "ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ → fi fl ff ffi ffl st" }
                                             }
                                             p { class: "text-gray-500 pt-1", "Runs before NFC so the canonicalizer sees consistent input regardless of source format." }
@@ -1031,7 +1031,7 @@ pub fn MonitorTip() -> Element {
                                     "  →  raw text\n  │\n  ▼\n"
                                     span { class: "text-sky-300", "Format cleanup" }
                                     "    HTML tag stripping (HTML only)  Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
-                                    "  │  unicode: \u{2018}\u{2019}\u{201C}\u{201D} → straight  \u{2014}/\u{2013} → \" - \"  \u{2026} → \"...\"\n"
+                                    "  │  unicode: ‘’“” → straight  —/– → \" - \"  … → \"...\"\n"
                                     "  │           PDF ligatures (ﬁ ﬂ ﬀ) → letter pairs\n"
                                     "  │\n  ▼\n"
                                     span { class: "text-amber-400", "normalize(Store)" }
@@ -1057,8 +1057,8 @@ pub fn MonitorTip() -> Element {
                                     "  └──► "
                                     span { class: "text-amber-400", "normalize(Index)" }
                                     "   NFKC + whitespace collapse + punct canonicalization\n"
-                                    "         punct canon: \u{2018}\u{2019}\u{201C}\u{201D} → ASCII  \u{2013}/\u{2014} → \" - \"\n"
-                                    "                      \u{2010}/\u{2011}/\u{2212} → \"-\"  \u{2026} → \"...\"\n"
+                                    "         punct canon: ‘’“” → ASCII  –/— → \" - \"\n"
+                                    "                      ‐/‑/− → \"-\"  … → \"...\"\n"
                                     "         → Tantivy BM25 index\n"
                                     "\n── QUERY ───────────────────────────────────────────────────────────────────\n\n"
                                     "raw query\n"
@@ -1489,7 +1489,7 @@ raw query
                                         li { "PDF ligatures ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ → fi fl ff ffi ffl st" }
                                     }
                                     p { class: "pt-1",
-                                        "Without this, " code { class: "text-amber-300", "\u{2018}word\u{2019}" }
+                                        "Without this, " code { class: "text-amber-300", "‘word’" }
                                         " and " code { class: "text-amber-300", "'word'" }
                                         " tokenise differently despite being the same word, \
                                         and a user who searches with a plain keyboard misses chunks \
@@ -1661,16 +1661,16 @@ raw query
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "What it adds on top of NFKC" }
                             p { class: "text-gray-400", "In addition to all NFKC folding, punctuation canonicalization rewrites typographic punctuation to its ASCII equivalent:" }
                             p { class: "text-gray-400 font-mono text-[0.7rem]",
-                                "\u{201C}word\u{201D} → \"word\"  ·  \u{2018}it\u{2019}s\u{2019} → 'it's'  ·  don\u{2019}t → don't"
+                                "“word” → \"word\"  ·  ‘it’s’ → 'it's'  ·  don’t → don't"
                             }
                             p { class: "text-gray-400 font-mono text-[0.7rem]",
-                                "em-dash (\u{2014}) → \" - \"  ·  en-dash (\u{2013}) → \" - \"  ·  ellipsis (\u{2026}) → \"...\""
+                                "em-dash (—) → \" - \"  ·  en-dash (–) → \" - \"  ·  ellipsis (…) → \"...\""
                             }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "Why BM25 needs punct canonicalization" }
-                            p { class: "text-gray-400", "BM25 is a term-frequency model: it compares exact tokens. If a document contains \u{201C}don\u{2019}t\u{201D} (curly apostrophe) and a user searches for \"don't\" (straight apostrophe), the tokens are different — BM25 returns zero matches even though the intent is identical." }
+                            p { class: "text-gray-400", "BM25 is a term-frequency model: it compares exact tokens. If a document contains “don’t” (curly apostrophe) and a user searches for \"don't\" (straight apostrophe), the tokens are different — BM25 returns zero matches even though the intent is identical." }
                             p { class: "text-gray-400", "Applying the same punct canonicalization to both the indexed text and the incoming query guarantees that what is stored and what is searched are token-identical. The Tantivy analyzer then sees the same token stream regardless of which punctuation variant was in the original source." }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "Why embeddings don't need this" }
-                            p { class: "text-gray-400", "Embedding models use subword tokenizers (BPE/SentencePiece) that treat \u{201C}don\u{2019}t\u{201D} and \"don't\" as the same or very similar token sequences anyway. Punct canonicalization at the embedding stage would be redundant and could discard nuance the model was trained to use." }
+                            p { class: "text-gray-400", "Embedding models use subword tokenizers (BPE/SentencePiece) that treat “don’t” and \"don't\" as the same or very similar token sequences anyway. Punct canonicalization at the embedding stage would be redundant and could discard nuance the model was trained to use." }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "RAG impact" }
                             ul { class: "ml-4 space-y-0.5 list-disc list-outside text-gray-400",
                                 li { "Prevents BM25 misses caused by typographic punctuation variants." }
