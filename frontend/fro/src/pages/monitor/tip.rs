@@ -890,7 +890,7 @@ pub fn MonitorTip() -> Element {
                                                                 button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_ligature_info.set(false), "✕" }
                                                             }
                                                             p { "Typographic letter combinations encoded as a single Unicode character by PDF and publishing tools. Instead of two separate characters f + i, some fonts encode them as the single character " span { class: "font-mono", "ﬁ" } " (U+FB01)." }
-                                                            p { class: "text-gray-400 font-mono", "ﬁ (fi)  ·  ﬂ (fl)  ·  ﬀ (ff)  ·  ﬃ (ffi)  ·  ﬄ (ffl)  ·  ﬆ (st)" }
+                                                            p { class: "text-gray-400 font-mono", "ﬁ (fi)  ﬂ (fl)  ﬀ (ff)  ﬃ (ffi)  ﬄ (ffl)  ﬆ (st)" }
                                                             p { class: "text-gray-400", "NFC leaves ligatures intact — they are single canonical code points, not encoding variants. It is the "
                                                                 span { class: "text-amber-400 font-medium", "Embed" }
                                                                 " step (NFKC) that folds them into their letter pairs, so the embedder sees \"fi\" not \"ﬁ\"."
@@ -920,7 +920,7 @@ pub fn MonitorTip() -> Element {
                                     }
                                     p { class: "text-gray-400", "Applied to each chunk before the embedder and NER. No punct stripping — the embedding model's tokenizer handles that." }
                                     p { class: "text-gray-400", "NFKC = compatibility composition. Goes further than NFC: it also folds characters that look different but mean the same thing for search. This prevents duplicate embeddings for visually identical content encoded differently." }
-                                    p { class: "text-gray-400 font-mono", "① → 1  ·  Ⅳ → IV  ·  ａｂｃ → abc  ·  ﬁ → fi  ·  ² → 2" }
+                                    p { class: "text-gray-400 font-mono", "① → 1  Ⅳ → IV  ａｂｃ → abc  ﬁ → fi  ² → 2" }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Why Store uses NFC and Embed uses NFKC" }
                                     p { class: "text-gray-400", "Store keeps text human-readable and typographically faithful. Embed strips compatibility differences so embeddings don't diverge on irrelevant Unicode quirks. Without this split: \"ﬁ\" and \"fi\" produce different vectors; \"①\" and \"1\" don't match; full-width vs half-width characters cause embedding drift." }
@@ -1030,16 +1030,16 @@ pub fn MonitorTip() -> Element {
                                     span { class: "text-sky-400", "Parser" }
                                     "  →  raw text\n  │\n  ▼\n"
                                     span { class: "text-sky-300", "Format cleanup" }
-                                    "    HTML tag stripping (HTML only)  ·  Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
-                                    "  │  unicode: curly quotes → straight  ·  em/en-dash → \" - \"  ·  ellipsis → \"...\"\n"
+                                    "    HTML tag stripping (HTML only),  Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
+                                    "  │  unicode: curly quotes → straight,  em/en-dash → \" - \",  ellipsis → \"...\"\n"
                                     "  │           PDF ligatures (ﬁ ﬂ ﬀ) → letter pairs\n"
                                     "  │\n  ▼\n"
                                     span { class: "text-amber-400", "normalize(Store)" }
                                     "   NFC + whitespace collapse\n"
-                                    "  │  strips : U+00AD (soft-hyphen)  ·  U+200B–D (zero-width)  ·  U+2060  ·  U+FEFF\n"
-                                    "  │  maps   : CR+LF / lone CR → LF  ·  FF (U+000C) / VT (U+000B) → LF\n"
+                                    "  │  strips : U+00AD (soft-hyphen),  U+200B–D (zero-width),  U+2060,  U+FEFF\n"
+                                    "  │  maps   : CR+LF / lone CR → LF,  FF (U+000C) / VT (U+000B) → LF\n"
                                     "  │           NBSP + all Unicode space variants → ASCII space\n"
-                                    "  │  collapses space runs  ·  preserves \\n\\n for chunker\n"
+                                    "  │  collapses space runs,  preserves \\n\\n for chunker\n"
                                     "  ▼\n"
                                     "stored content  (user-visible, NFC — typographic chars preserved)\n"
                                     "  │\n  ▼\n"
@@ -1049,16 +1049,16 @@ pub fn MonitorTip() -> Element {
                                     "  ├──► "
                                     span { class: "text-amber-400", "normalize(Embed)" }
                                     "   NFKC + whitespace collapse  (same collapse as above)\n"
-                                    "  │      NFKC decomposes: ligatures (ﬁ→fi  ﬂ→fl)  ·  fullwidth ASCII\n"
-                                    "  │                       superscripts  ·  compatibility equivalences\n"
+                                    "  │      NFKC decomposes: ligatures (ﬁ→fi  ﬂ→fl),  fullwidth ASCII\n"
+                                    "  │                       superscripts,  compatibility equivalences\n"
                                     "  │      no punct stripping — embedding model's tokenizer handles that\n"
                                     "  │      → embedder  →  HNSW vector store\n"
                                     "  │\n"
                                     "  └──► "
                                     span { class: "text-amber-400", "normalize(Index)" }
                                     "   NFKC + whitespace collapse + punct canonicalization\n"
-                                    "         punct canon: smart quotes → ASCII  ·  en-dash / em-dash → \" - \"\n"
-                                    "                      U+2010 / U+2011 / U+2212 → \"-\"  ·  ellipsis → \"...\"\n"
+                                    "         punct canon: smart quotes → ASCII,  en-dash / em-dash → \" - \"\n"
+                                    "                      U+2010 / U+2011 / U+2212 → \"-\",  ellipsis → \"...\"\n"
                                     "         → Tantivy BM25 index\n"
                                     "\n── QUERY ───────────────────────────────────────────────────────────────────\n\n"
                                     "raw query\n"
