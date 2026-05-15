@@ -818,11 +818,11 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
                                             p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
                                             ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
-                                                li { "Curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight ASCII ' \"" }
-                                                li { "Em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \"" }
-                                                li { "Non-breaking hyphen (\u{2011}) → \"-\"" }
-                                                li { "Ellipsis (\u{2026}) → \"...\"" }
-                                                li { "PDF ligatures (ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ) → letter pairs (fi fl ff ffi ffl st)" }
+                                                li { "\u{2018}\u{2019}\u{201C}\u{201D} → ' \"" }
+                                                li { "\u{2014} / \u{2013} → \" - \"" }
+                                                li { "\u{2011} → \"-\"" }
+                                                li { "\u{2026} → \"...\"" }
+                                                li { "ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ → fi fl ff ffi ffl st" }
                                             }
                                             p { class: "text-gray-500 pt-1", "Runs before NFC so the canonicalizer sees consistent input regardless of source format." }
                                             p { class: "text-gray-500", "Text and code skip both passes — they arrive as clean UTF-8 with no format artifacts." }
@@ -1031,7 +1031,7 @@ pub fn MonitorTip() -> Element {
                                     "  →  raw text\n  │\n  ▼\n"
                                     span { class: "text-sky-300", "Format cleanup" }
                                     "    HTML tag stripping (HTML only)  Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
-                                    "  │  unicode: curly quotes → straight  em/en-dash → \" - \"  ellipsis → \"...\"\n"
+                                    "  │  unicode: \u{2018}\u{2019}\u{201C}\u{201D} → straight  \u{2014}/\u{2013} → \" - \"  \u{2026} → \"...\"\n"
                                     "  │           PDF ligatures (ﬁ ﬂ ﬀ) → letter pairs\n"
                                     "  │\n  ▼\n"
                                     span { class: "text-amber-400", "normalize(Store)" }
@@ -1057,8 +1057,8 @@ pub fn MonitorTip() -> Element {
                                     "  └──► "
                                     span { class: "text-amber-400", "normalize(Index)" }
                                     "   NFKC + whitespace collapse + punct canonicalization\n"
-                                    "         punct canon: smart quotes → ASCII  en-dash / em-dash → \" - \"\n"
-                                    "                      U+2010 / U+2011 / U+2212 → \"-\"  ellipsis → \"...\"\n"
+                                    "         punct canon: \u{2018}\u{2019}\u{201C}\u{201D} → ASCII  \u{2013}/\u{2014} → \" - \"\n"
+                                    "                      \u{2010}/\u{2011}/\u{2212} → \"-\"  \u{2026} → \"...\"\n"
                                     "         → Tantivy BM25 index\n"
                                     "\n── QUERY ───────────────────────────────────────────────────────────────────\n\n"
                                     "raw query\n"
