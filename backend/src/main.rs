@@ -289,6 +289,18 @@ async fn main() -> std::io::Result<()> {
             }
         };
 
+    // Restore the persisted L1 search cache so warm queries survive a restart.
+    let search_cache_path = config
+        .path_manager
+        .search_cache_path()
+        .to_string_lossy()
+        .to_string();
+    match retriever.load_search_cache_async(&search_cache_path).await {
+        Ok(0) => {}
+        Ok(n) => info!(entries = n, "✓ Search cache restored from disk"),
+        Err(e) => warn!("Failed to restore search cache: {e:?}"),
+    }
+
     // ─────────────────────────────────────────────────────────────
     // PHASE 5: Initialize Redis L3 Cache (if enabled)
     // ─────────────────────────────────────────────────────────────
@@ -485,6 +497,21 @@ async fn main() -> std::io::Result<()> {
 
     let retriever = Arc::new(Mutex::new(retriever));
     ag::api::set_retriever_handle(Arc::clone(&retriever));
+
+    // Periodically persist the L1 search cache so it survives a crash or
+    // SIGKILL, not just a graceful shutdown.
+    {
+        let retriever_for_cache = Arc::clone(&retriever);
+        let cache_path = search_cache_path.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(300));
+            if let Ok(ret) = retriever_for_cache.lock() {
+                if let Err(e) = ret.save_search_cache(&cache_path) {
+                    warn!("Periodic search cache save failed: {e:?}");
+                }
+            }
+        });
+    }
 
     // Initialize corpus registry and register the default corpus
     ag::corpus_registry::init(Arc::new(config.path_manager.clone()), config.index_in_ram);
@@ -685,6 +712,12 @@ async fn main() -> std::io::Result<()> {
     );
 
     let result = start_api_server(&config).await;
+    // Persist the L1 search cache so warm queries survive the next restart.
+    if let Ok(ret) = retriever.lock() {
+        if let Err(e) = ret.save_search_cache(&search_cache_path) {
+            warn!("Failed to persist search cache: {e:?}");
+        }
+    }
     // Flush all stats to disk before process exits (catches snapshots from uploads
     // that completed during graceful shutdown after SIGTERM).
     ag::monitoring::flush_preprocess_stats();

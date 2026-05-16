@@ -18,14 +18,18 @@ pub fn BackendSelector(
     // Use shared runtime context
     let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
-    // Fetch active backend once on mount — broadcast handles cross-tab updates
+    // Poll the active backend so the board self-heals when a runtime
+    // starts or stops while the page is open (first fetch is immediate).
     {
         let mut runtime_ctx = runtime_ctx.clone();
         use_future(move || async move {
-            if let Ok(health) = api::fetch_runtime_health().await {
-                runtime_ctx.with_mut(|ctx| {
-                    ctx.active_backend = health.active_backend;
-                });
+            loop {
+                if let Ok(health) = api::fetch_runtime_health().await {
+                    runtime_ctx.with_mut(|ctx| {
+                        ctx.active_backend = health.active_backend;
+                    });
+                }
+                gloo_timers::future::TimeoutFuture::new(5000).await;
             }
         });
     }
@@ -37,41 +41,12 @@ pub fn BackendSelector(
                 class: "select select-sm select-bordered bg-gray-700 text-gray-200",
                 value: current_backend(),
                 onchange: move |evt| {
-                    let selected_value = evt.value();
-                    current_backend.set(selected_value.clone());
-                    let clear_model = clear_model_on_change;
+                    let selected = evt.value();
+                    current_backend.set(selected.clone());
+                    // Selection only updates the dropdown and reflects the pending
+                    // choice in the runtime board; the Save button applies it.
                     let mut runtime_ctx = runtime_ctx.clone();
-                    spawn(async move {
-                        runtime_ctx.with_mut(|ctx| ctx.switching = true);
-                        // Switch runtime (returns immediately)
-                        let _ = api::switch_runtime(&selected_value).await;
-                        // Poll until ready (max 30 attempts, 500ms each = 15s)
-                        for _ in 0..30 {
-                            gloo_timers::future::TimeoutFuture::new(500).await;
-                            if let Ok(health) = api::fetch_runtime_health().await {
-                                if health.active_backend.as_deref() == Some(&selected_value) {
-                                    runtime_ctx.with_mut(|ctx| {
-                                        ctx.active_backend = health.active_backend;
-                                        ctx.configured_backend = selected_value.clone();
-                                    });
-                                    break;
-                                }
-                            }
-                        }
-                        runtime_ctx.with_mut(|ctx| ctx.switching = false);
-                        // Notify parent of backend change
-                        if let Some(handler) = on_backend_changed {
-                            handler.call(selected_value.clone());
-                        }
-                        // Then save config
-                        if let Ok(mut config) = api::fetch_hardware_config().await {
-                            config.config.backend_type = selected_value;
-                            if clear_model {
-                                config.config.model.clear();
-                            }
-                            let _ = api::commit_hardware_config(&config.config).await;
-                        }
-                    });
+                    runtime_ctx.with_mut(|ctx| ctx.configured_backend = selected);
                 },
                 for option in backend_options.iter() {
                     option {
@@ -145,20 +120,61 @@ pub fn BackendSelector(
                     style: "background-color: #1D6B9A; border: 1px solid #1D6B9A; padding: 0.25rem 1rem;",
                     onclick: move |_| {
                         let backend_value = current_backend();
+                        let clear_model = clear_model_on_change;
                         let mut runtime_ctx = runtime_ctx.clone();
                         spawn(async move {
+                            save_status.set("Saving...".to_string());
+                            // Local runtimes have a service to start; cloud backends do not.
+                            let is_local = matches!(
+                                backend_value.as_str(),
+                                "ollama" | "llama_cpp"
+                            );
+                            if is_local {
+                                runtime_ctx.with_mut(|ctx| ctx.switching = true);
+                                let _ = api::switch_runtime(&backend_value).await;
+                                // Poll until the runtime reports ready (max 30 × 500ms = 15s)
+                                for _ in 0..30 {
+                                    gloo_timers::future::TimeoutFuture::new(500).await;
+                                    if let Ok(health) = api::fetch_runtime_health().await {
+                                        if health.active_backend.as_deref()
+                                            == Some(&backend_value)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Refresh the board with whatever actually came up.
+                                if let Ok(health) = api::fetch_runtime_health().await {
+                                    runtime_ctx
+                                        .with_mut(|ctx| ctx.active_backend = health.active_backend);
+                                }
+                                runtime_ctx.with_mut(|ctx| ctx.switching = false);
+                            }
+                            // Notify parent of backend change
+                            if let Some(handler) = on_backend_changed {
+                                handler.call(backend_value.clone());
+                            }
+                            // Persist the choice
+                            let mut saved = false;
                             if let Ok(mut config) = api::fetch_hardware_config().await {
+                                let backend_changed =
+                                    config.config.backend_type != backend_value;
                                 config.config.backend_type = backend_value.clone();
+                                if clear_model && backend_changed {
+                                    config.config.model.clear();
+                                }
                                 if api::commit_hardware_config(&config.config).await.is_ok() {
-                                    // Reflect the saved choice in the shared context
                                     runtime_ctx.with_mut(|ctx| {
                                         ctx.configured_backend = backend_value.clone();
                                     });
-                                    save_status.set("Saved".to_string());
-                                    gloo_timers::future::TimeoutFuture::new(1500).await;
-                                    save_status.set("Save".to_string());
+                                    saved = true;
                                 }
                             }
+                            if saved {
+                                save_status.set("Saved".to_string());
+                                gloo_timers::future::TimeoutFuture::new(1500).await;
+                            }
+                            save_status.set("Save".to_string());
                         });
                     },
                     "{save_status}"

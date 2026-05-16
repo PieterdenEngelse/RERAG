@@ -5,6 +5,7 @@ use crate::pages::hardware::constants::{
     INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
 };
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use gloo_timers::future::TimeoutFuture;
 
 #[component]
@@ -60,6 +61,11 @@ pub fn MonitorTip() -> Element {
     let mut preprocess_stats: Signal<Option<Result<PreprocessStats, String>>> = use_signal(|| None);
     let mut show_iouring_info = use_signal(|| false);
     let mut io_uring_stats: Signal<Option<Result<IoUringResponse, String>>> = use_signal(|| None);
+    let mut show_ring_buffer_info = use_signal(|| false);
+    let mut show_completions_info = use_signal(|| false);
+    let mut show_syscalls_info = use_signal(|| false);
+    let mut show_vector_store_info = use_signal(|| false);
+    let mut show_search_cache_info = use_signal(|| false);
 
     // Load corpus list once on mount.
     use_future(move || async move {
@@ -798,7 +804,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                     onclick: move |_| show_iouring_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[500px] max-h-[92vh] flex flex-col shadow-xl",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "I/O Layer — io_uring" }
@@ -808,13 +814,48 @@ pub fn MonitorTip() -> Element {
                                 "✕"
                             }
                         }
-                        div { class: "flex-1 overflow-y-auto min-h-0 px-6 py-4 text-xs text-gray-300 space-y-3",
+                        div { class: "flex-1 overflow-y-auto px-6 py-4 text-xs text-gray-300 columns-2 lg:columns-3 gap-x-6 [&>*]:mb-3 [&>*]:break-inside-avoid",
                             p {
                                 span { class: "font-semibold text-gray-100", "io_uring" }
-                                " is a Linux kernel async I/O mechanism (kernel 5.1+). Instead of issuing one syscall per read, it submits batches of I/O requests via a shared ring buffer and collects completions without entering the kernel for each one — eliminating the context-switch overhead that makes traditional file I/O expensive at high throughput."
+                                " is a Linux kernel async I/O mechanism (kernel 5.1+). Instead of issuing one syscall per read, it submits batches of I/O requests and collects "
+                                span {
+                                    class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
+                                    onclick: move |_| show_completions_info.set(true),
+                                    "completions"
+                                }
+                                " without entering the kernel for each one — eliminating the context-switch overhead that makes traditional file I/O expensive at high throughput."
                             }
                             p {
-                                "The I/O Layer is the first thing that touches every document. Before the Parser sees a single byte, io_uring has already read the raw file from disk. At startup, it also loads the vector store and the search cache — the two largest reads the app ever performs."
+                                "io_uring uses two "
+                                span {
+                                    class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
+                                    onclick: move |_| show_ring_buffer_info.set(true),
+                                    "ring buffers"
+                                }
+                                ", both shared-memory regions mapped between user space and the kernel:"
+                            }
+                            ul { class: "ml-3 space-y-0.5 list-none text-gray-400",
+                                li { span { class: "text-gray-200 font-medium", "Submission Queue (SQ)" } " — user space → kernel" }
+                                li { span { class: "text-gray-200 font-medium", "Completion Queue (CQ)" } " — kernel → user space" }
+                            }
+                            p { class: "text-gray-200 font-semibold", "Why this matters" }
+                            p {
+                                "Because the memory is shared, the kernel needs no syscall to read your requests. You write an entry, advance the head pointer, and the kernel sees it immediately."
+                            }
+                            p {
+                                "The I/O Layer is the first thing that touches every document. Before the Parser sees a single byte, io_uring has already read the raw file from disk. At startup it also loads the "
+                                span {
+                                    class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
+                                    onclick: move |_| show_vector_store_info.set(true),
+                                    "vector store"
+                                }
+                                " — the largest read the app performs — and restores the "
+                                span {
+                                    class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
+                                    onclick: move |_| show_search_cache_info.set(true),
+                                    "search cache"
+                                }
+                                " so warm queries survive a restart."
                             }
                             p {
                                 "On Linux 5.1+ the app uses io_uring automatically. On older kernels or non-Linux systems it falls back to "
@@ -875,7 +916,20 @@ pub fn MonitorTip() -> Element {
                                 span { class: "font-mono text-gray-200", "IO_URING_SQPOLL" }
                                 ", "
                                 span { class: "font-mono text-gray-200", "IO_URING_BUFFER_SIZE" }
-                                " — full reference on the Config › io_uring page."
+                                " — full reference on the "
+                                Link {
+                                    to: Route::ConfigIoUring {},
+                                    class: "text-blue-400 underline hover:text-blue-300",
+                                    "Config › io_uring page"
+                                }
+                                "."
+                            }
+                            p {
+                                span {
+                                    class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
+                                    onclick: move |_| show_syscalls_info.set(true),
+                                    "Why io_uring cannot replace all syscalls"
+                                }
                             }
                         }
                         div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
@@ -883,6 +937,400 @@ pub fn MonitorTip() -> Element {
                                 class: "btn btn-sm w-full",
                                 style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
                                 onclick: move |_| show_iouring_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── ring buffer info modal ──────────────────────────────────────
+            if show_ring_buffer_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_ring_buffer_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "Ring buffer — how io_uring talks to the kernel" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_ring_buffer_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto px-6 py-4 text-xs text-gray-300 columns-2 lg:columns-3 gap-x-6 [&>*]:mb-3 [&>*]:break-inside-avoid",
+                            p {
+                                "A "
+                                span { class: "font-semibold text-gray-100", "ring buffer" }
+                                " (also called a "
+                                em { "circular buffer" }
+                                ") is a fixed-size structure where the end wraps around to the beginning, forming a logical “ring.” In "
+                                span { class: "font-mono text-gray-200", "io_uring" }
+                                " it lets the kernel and user space communicate "
+                                span { class: "font-semibold text-gray-100", "without a syscall for every I/O request" }
+                                " — which is why it is so fast."
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🌀 What a ring buffer is" }
+                                p { class: "text-gray-400 mb-1", "A continuous block of memory with two moving indices:" }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400 mb-1",
+                                    li { span { class: "text-gray-200 font-medium", "head" } " — where new data is written" }
+                                    li { span { class: "text-gray-200 font-medium", "tail" } " — where data is read" }
+                                }
+                                p { class: "text-gray-400", "When the head reaches the end of the buffer it wraps back to the beginning. That makes it ideal for high-throughput, lock-free communication between two parties — exactly what io_uring needs." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🔧 How io_uring uses ring buffers" }
+                                p { class: "text-gray-400 mb-1",
+                                    "io_uring uses "
+                                    span { class: "text-gray-200 font-medium", "two" }
+                                    " ring buffers, both shared-memory regions mapped between user space and the kernel:"
+                                }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400 mb-1",
+                                    li { span { class: "text-gray-200 font-medium", "Submission Queue (SQ)" } " — user space → kernel" }
+                                    li { span { class: "text-gray-200 font-medium", "Completion Queue (CQ)" } " — kernel → user space" }
+                                }
+                                p { class: "text-gray-200 font-semibold", "Why this matters" }
+                                p { class: "text-gray-400", "Because the memory is shared, the kernel needs no syscall to read your requests. You write an entry, advance the head pointer, and the kernel sees it immediately." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "📦 How it works, step by step" }
+                                p { class: "text-gray-200 font-semibold", "1. User writes a request into the SQ ring" }
+                                p { class: "text-gray-400 mb-1", "Fill a submission entry — file descriptor, operation (read / write / accept …), buffer pointer, size — then advance the SQ head pointer." }
+                                p { class: "text-gray-200 font-semibold", "2. Kernel reads from the SQ ring" }
+                                p { class: "text-gray-400 mb-1", "The kernel sees the updated head pointer and processes the request." }
+                                p { class: "text-gray-200 font-semibold", "3. Kernel writes the result into the CQ ring" }
+                                p { class: "text-gray-400 mb-1",
+                                    "On completion it writes a completion entry — result code, bytes read/written, your "
+                                    span { class: "font-mono text-gray-200", "user_data" }
+                                    " — then advances the CQ head pointer."
+                                }
+                                p { class: "text-gray-200 font-semibold", "4. User reads from the CQ ring" }
+                                p { class: "text-gray-400", "Your application polls or waits for completions and consumes them." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🧠 Why ring buffers make io_uring fast" }
+                                p { class: "text-gray-400 mb-1", "They eliminate:" }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400 mb-1",
+                                    li { span { class: "text-gray-200 font-medium", "syscall overhead" } " on every I/O request" }
+                                    li { span { class: "text-gray-200 font-medium", "context switches" } }
+                                    li { span { class: "text-gray-200 font-medium", "locking" } " — they use lock-free producer/consumer semantics" }
+                                    li { span { class: "text-gray-200 font-medium", "kernel copies" } " — the memory is shared" }
+                                }
+                                p { class: "text-gray-400",
+                                    "This is why io_uring can outperform traditional "
+                                    span { class: "font-mono text-gray-200", "read()" }
+                                    ", "
+                                    span { class: "font-mono text-gray-200", "write()" }
+                                    ", "
+                                    span { class: "font-mono text-gray-200", "epoll" }
+                                    ", and even "
+                                    span { class: "font-mono text-gray-200", "aio" }
+                                    "."
+                                }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🧩 A non-obvious insight: batching" }
+                                p { class: "text-gray-400 mb-1", "The ring-buffer design is what enables batching:" }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400 mb-1",
+                                    li { "Submit 100 I/O operations by writing 100 entries into the SQ ring." }
+                                    li {
+                                        "Then issue "
+                                        span { class: "text-gray-200 font-medium", "one" }
+                                        " syscall ("
+                                        span { class: "font-mono text-gray-200", "io_uring_enter" }
+                                        ") to notify the kernel."
+                                    }
+                                }
+                                p { class: "text-gray-400", "That batching is a major reason io_uring achieves extremely high throughput." }
+                            }
+                        }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_ring_buffer_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── completions info modal ──────────────────────────────────────
+            if show_completions_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_completions_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "Completion — the kernel's receipt for an async I/O operation" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_completions_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto px-6 py-4 text-xs text-gray-300 columns-2 lg:columns-3 gap-x-6 [&>*]:mb-3 [&>*]:break-inside-avoid",
+                            p {
+                                "A "
+                                span { class: "font-semibold text-gray-100", "completion" }
+                                " is the "
+                                span { class: "font-semibold text-gray-100", "result of an asynchronous I/O operation" }
+                                ", delivered by the kernel through the "
+                                span { class: "font-mono text-gray-200", "Completion Queue (CQ)" }
+                                ". It tells your application that an I/O request you submitted earlier is now finished — and carries the outcome. Think of it as the kernel's receipt for each async operation you submitted."
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🎯 What exactly is a completion?" }
+                                p { class: "text-gray-400 mb-1",
+                                    "It is a "
+                                    span { class: "text-gray-200 font-medium", "CQE" }
+                                    " — a Completion Queue Entry. Each one carries:"
+                                }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400 mb-1",
+                                    li { span { class: "text-gray-200 font-medium", "result" } " — bytes read/written, or a negative errno" }
+                                    li { span { class: "font-mono text-gray-200", "user_data" } " — the 64-bit value you attached to the request" }
+                                    li { span { class: "text-gray-200 font-medium", "flags" } " — extra info, e.g. multishot events" }
+                                    li { span { class: "text-gray-200 font-medium", "operation metadata" } " — which request this corresponds to" }
+                                }
+                                p { class: "text-gray-400", "In short, a completion answers: did the operation succeed, and what was the result?" }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🔄 How completions fit io_uring's workflow" }
+                                p { class: "text-gray-200 font-semibold", "1. Submit" }
+                                p { class: "text-gray-400 mb-1", "You submit an I/O request into the Submission Queue." }
+                                p { class: "text-gray-200 font-semibold", "2. Kernel processes" }
+                                p { class: "text-gray-400 mb-1", "The kernel processes the request asynchronously." }
+                                p { class: "text-gray-200 font-semibold", "3. Kernel completes" }
+                                p { class: "text-gray-400 mb-1", "When finished, the kernel writes a completion entry into the CQ ring." }
+                                p { class: "text-gray-200 font-semibold", "4. App consumes" }
+                                p { class: "text-gray-400 mb-1", "Your application reads the CQE and continues processing." }
+                                p { class: "text-gray-400", "No syscall is needed to get each completion — the CQ is shared memory." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🧠 Why completions matter" }
+                                p { class: "text-gray-400 mb-1", "Completions let io_uring:" }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400 mb-1",
+                                    li { "avoid blocking" }
+                                    li { "avoid a syscall per operation" }
+                                    li { "avoid context switches" }
+                                    li { "handle thousands of concurrent I/O operations efficiently" }
+                                }
+                                p { class: "text-gray-400",
+                                    "This is the core reason io_uring can outperform "
+                                    span { class: "font-mono text-gray-200", "epoll" }
+                                    ", POSIX AIO, and traditional "
+                                    span { class: "font-mono text-gray-200", "read()" }
+                                    " / "
+                                    span { class: "font-mono text-gray-200", "write()" }
+                                    " loops."
+                                }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🧩 A non-obvious insight: user_data" }
+                                p { class: "text-gray-400 mb-1",
+                                    "The "
+                                    span { class: "font-mono text-gray-200", "user_data" }
+                                    " field is what makes io_uring scalable. You attach any 64-bit identifier to a request — a pointer, an index, a struct ID — and when the completion arrives you instantly know which operation it belongs to, with no extra bookkeeping."
+                                }
+                                p { class: "text-gray-400", "That is how high-performance servers map completions straight to connection state machines." }
+                            }
+                        }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_completions_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── syscalls info modal ─────────────────────────────────────────
+            if show_syscalls_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_syscalls_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "Why io_uring cannot replace all syscalls" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_syscalls_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto px-6 py-4 text-xs text-gray-300 columns-2 lg:columns-3 gap-x-6 [&>*]:mb-3 [&>*]:break-inside-avoid",
+                            p {
+                                span { class: "font-semibold text-gray-100", "io_uring" }
+                                " is excellent for asynchronous, high-performance I/O — but it cannot replace the whole syscall interface. Most syscalls simply do not fit the ring-buffer model."
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "1. Only queue-able operations" }
+                                p { class: "text-gray-400 mb-1", "A ring buffer fits an operation that can be expressed as a small request, submitted to a queue, processed asynchronously, with a result written back later." }
+                                p { class: "text-gray-400 mb-1",
+                                    "That fits I/O — "
+                                    span { class: "font-mono text-gray-200", "read, write, accept, connect, send/recv, open/close, statx" }
+                                    "."
+                                }
+                                p { class: "text-gray-400 mb-1",
+                                    "But many syscalls are not queue-able — "
+                                    span { class: "font-mono text-gray-200", "fork(), execve(), mmap(), clone3(), mount(), ptrace(), setsockopt(), ioctl()" }
+                                    "."
+                                }
+                                p { class: "text-gray-400", "These have complex semantics, many parameters, and immediate side effects, with no meaningful async version — they cannot be expressed as a small SQE (submission queue entry)." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "2. Async I/O, not general kernel interaction" }
+                                p { class: "text-gray-400", "The kernel can do I/O asynchronously, but it cannot turn process creation, memory-mapping changes, scheduler-state changes, or namespace changes into async queue tasks without breaking the kernel model. Those must stay synchronous and context-bound." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "3. Security and privilege boundaries" }
+                                p { class: "text-gray-400 mb-1", "Many syscalls require capability checks, SELinux / AppArmor (LSM) hooks, audit logging, and privilege transitions." }
+                                p { class: "text-gray-400", "Routing every syscall through a shared-memory ring would let user space bypass those checks, cost the kernel control over ordering, and break LSM hooks. The kernel must keep those calls explicit and controlled." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "4. Specialized, not universal" }
+                                p { class: "text-gray-400", "Kernel developers are explicit that io_uring is not a general syscall replacement — it is a high-performance I/O subsystem. Forcing every syscall into it would explode complexity, break security and determinism, and require rewriting huge parts of the kernel." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "5. Some syscalls must be synchronous" }
+                                p { class: "text-gray-400",
+                                    "Calls like "
+                                    span { class: "font-mono text-gray-200", "getpid(), gettimeofday(), sched_yield(), futex(), waitpid()" }
+                                    " must return immediately, not be queued for later. A ring buffer makes no sense for them."
+                                }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "✔️ What io_uring can replace" }
+                                p { class: "text-gray-400 mb-1", "It effectively replaces these — faster, and with fewer syscalls:" }
+                                p { class: "font-mono text-gray-200", "read(), write(), send(), recv(), accept(), poll() / epoll(), open(), close(), statx(), splice()" }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "🧩 Bottom line" }
+                                p { class: "text-gray-400", "io_uring is not a universal syscall mechanism. It works only for operations that are async, queue-able, buffer-based, and I/O-oriented. Most syscalls are too complex, too stateful, too security-sensitive, or too synchronous to fit a shared-memory ring buffer." }
+                            }
+                        }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_syscalls_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── vector store info modal ─────────────────────────────────────
+            if show_vector_store_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_vector_store_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "Vector store — the app's semantic memory" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_vector_store_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto px-6 py-4 text-xs text-gray-300 space-y-3",
+                            p {
+                                "The vector store holds the "
+                                span { class: "font-semibold text-gray-100", "numeric meaning" }
+                                " of every indexed chunk — one embedding vector (a list of floats) per chunk, plus a map from document ID to its vector. It is what semantic search compares your query against."
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "Where it lives" }
+                                p { class: "text-gray-400",
+                                    "The canonical copy is "
+                                    span { class: "font-mono text-gray-200", "data/vectors.json" }
+                                    "; "
+                                    span { class: "font-mono text-gray-200", "data/vectors.rkyv" }
+                                    " is a faster binary mirror of the same data. Each corpus keeps its own pair under "
+                                    span { class: "font-mono text-gray-200", "data/{{corpus}}/" }
+                                    "."
+                                }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "Why two files" }
+                                p { class: "text-gray-400", "JSON is portable and human-readable; rkyv is a zero-copy binary format the app reads roughly 2–3× faster. On startup the app loads whichever is newer — normally the fast rkyv file — and rebuilds the rkyv mirror whenever the JSON changes." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "Loaded at startup" }
+                                p { class: "text-gray-400", "It is the largest read the app performs — io_uring streams the whole file into memory before the first search can run, because vector search scans every vector. The \"Vectors\" row in the I/O Layer's Live stats shows its size and load time." }
+                            }
+                        }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_vector_store_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── search cache info modal ─────────────────────────────────────
+            if show_search_cache_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_search_cache_info.set(false),
+                    div {
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
+                            h2 { class: "text-base font-semibold text-gray-100", "Search cache — instant answers for repeated queries" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none",
+                                onclick: move |_| show_search_cache_info.set(false),
+                                "✕"
+                            }
+                        }
+                        div { class: "flex-1 overflow-y-auto px-6 py-4 text-xs text-gray-300 space-y-3",
+                            p {
+                                "The search cache remembers the results of recent searches. When the same query arrives again, the app returns the stored result list "
+                                span { class: "font-semibold text-gray-100", "instantly" }
+                                " instead of re-running full-text and vector retrieval."
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "What it holds" }
+                                p { class: "text-gray-400", "Up to 100 entries, each mapping a query to the list of result document IDs it produced. It is the fastest (L1) tier of the app's three-level cache — L1 in-memory, L2 concurrent in-memory, L3 Redis. When full, the least-recently-used query is dropped to make room." }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "Saved and restored" }
+                                p { class: "text-gray-400",
+                                    "The cache is written to "
+                                    span { class: "font-mono text-gray-200", "data/search_cache.rkyv" }
+                                    " every few minutes and again on shutdown, then reloaded at startup — so a restart, or even a crash, keeps queries warm instead of starting cold. The \"Cache\" row in the I/O Layer's Live stats shows how many entries were restored."
+                                }
+                            }
+                            div {
+                                p { class: "text-emerald-400 font-bold mb-1", "Why it matters" }
+                                p { class: "text-gray-400", "Skipping retrieval for a repeated query turns a multi-step search — tokenize, full-text scan, vector scan, rank — into a single map lookup." }
+                            }
+                        }
+                        div { class: "px-6 py-3 border-t border-gray-600 shrink-0",
+                            button {
+                                class: "btn btn-sm w-full",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;color:white;",
+                                onclick: move |_| show_search_cache_info.set(false),
                                 "Got it"
                             }
                         }
@@ -921,27 +1369,27 @@ pub fn MonitorTip() -> Element {
                             button {
                                 class: if tip_tab() == 1 { "px-3 py-2 text-xs font-medium text-sky-400 border-b-2 border-sky-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(1),
-                                "1 · Parser"
+                                "1 Parser"
                             }
                             button {
                                 class: if tip_tab() == 2 { "px-3 py-2 text-xs font-medium text-amber-400 border-b-2 border-amber-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(2),
-                                "2 · Canonicalization"
+                                "2 Canonicalization"
                             }
                             button {
                                 class: if tip_tab() == 3 { "px-3 py-2 text-xs font-medium text-emerald-400 border-b-2 border-emerald-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(3),
-                                "3 · Typography & Tag Cleanup"
+                                "3 Typography & Tag Cleanup"
                             }
                             button {
                                 class: if tip_tab() == 4 { "px-3 py-2 text-xs font-medium text-violet-400 border-b-2 border-violet-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(4),
-                                "4 · Orchestration"
+                                "4 Orchestration"
                             }
                             button {
                                 class: if tip_tab() == 5 { "px-3 py-2 text-xs font-medium text-rose-400 border-b-2 border-rose-400 -mb-px bg-transparent" } else { "px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent -mb-px" },
                                 onclick: move |_| tip_tab.set(5),
-                                "5 · DocIR"
+                                "5 DocIR"
                             }
                         }
 
@@ -968,7 +1416,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 1: Parser ──
                             if tip_tab() == 1 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "1 · Parser" }
+                                    h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "1 Parser" }
                                     p { class: "text-gray-400",
                                         "Entry point. Reads raw bytes and converts them to plain text via "
                                         span {
@@ -1006,7 +1454,7 @@ pub fn MonitorTip() -> Element {
                                                         }
                                                         p { "A heuristic pass that removes repeated boilerplate PDFs accumulate across pages — things like page headers, footers, running titles, and page numbers. These appear on every page, so in a 20-page PDF they repeat 20 times. Without this pass they pollute the index: a search for \"architecture\" starts matching chapter headers instead of content, and the LLM gets context stuffed with repeated boilerplate instead of substance." }
                                                         p { class: "text-gray-200 font-semibold pt-1", "The two-part heuristic" }
-                                                        ul { class: "ml-3 space-y-1 list-disc list-outside text-gray-400",
+                                                        ul { class: "ml-3 space-y-1 list-none list-outside text-gray-400",
                                                             li { span { class: "text-gray-200 font-medium", "4+ repetitions — " } "a line appearing that many times is almost certainly structural, not content. Real sentences rarely repeat verbatim across a document." }
                                                             li { span { class: "text-gray-200 font-medium", "≤80 chars — " } "actual content tends to be longer. This guard prevents accidentally removing a short sentence that genuinely repeats (e.g. a refrain in a poem, a repeated warning in a manual)." }
                                                         }
@@ -1047,7 +1495,7 @@ pub fn MonitorTip() -> Element {
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
                                         a { href: "http://localhost:1789/docu/index/embeddings", class: "text-sky-400 hover:text-sky-300 underline", "Embeddings" }
                                     }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Failed parse → zero chunks, zero vectors." }
                                         li {
                                             span {
@@ -1061,7 +1509,7 @@ pub fn MonitorTip() -> Element {
                                         li { "OCR fallback (300 dpi) recovers scanned PDFs." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Graph" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Empty parse → no graph nodes for that document." }
                                         li {
                                             span {
@@ -1109,7 +1557,7 @@ pub fn MonitorTip() -> Element {
                                                             button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_boilerplate_nodes_info.set(false), "✕" }
                                                         }
                                                         p { "Boilerplate nodes are graph nodes that originate from repeated, non‑informative text such as:" }
-                                                        ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                        ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                             li { "page headers (" span { class: "font-mono", "Chapter 3 — Architecture" } ")" }
                                                             li { "page footers (" span { class: "font-mono", "© 2024 Acme Corp" } ")" }
                                                             li { "navigation elements (" span { class: "font-mono", "Table of Contents" } ", " span { class: "font-mono", "Page 12 of 200" } ")" }
@@ -1158,13 +1606,13 @@ pub fn MonitorTip() -> Element {
                                                 }
                                                 p { class: "text-gray-200 font-semibold", "What Is a Knowledge Graph?" }
                                                 p { "A knowledge graph is a structured representation of information as a network of entities and relationships." }
-                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                     li { span { class: "text-gray-200 font-medium", "Nodes" } " represent entities (people, places, concepts, documents)." }
                                                     li { span { class: "text-gray-200 font-medium", "Edges" } " represent relationships between them (" span { class: "font-mono", "works at" } ", " span { class: "font-mono", "located in" } ", " span { class: "font-mono", "mentions" } ", " span { class: "font-mono", "depends on" } ")." }
                                                 }
                                                 p { class: "text-gray-200 font-semibold pt-1", "Why Knowledge Graphs for RAG?" }
                                                 p { "Standard RAG retrieves isolated chunks. Knowledge graphs add structure:" }
-                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                     li { span { class: "text-gray-200 font-medium", "Multi-hop reasoning" } " — follow relationships across documents." }
                                                     li { span { class: "text-gray-200 font-medium", "Entity disambiguation" } " — distinguish same-name entities by context." }
                                                     li { span { class: "text-gray-200 font-medium", "Cross-document connections" } " — link related chunks via shared entities." }
@@ -1172,7 +1620,7 @@ pub fn MonitorTip() -> Element {
                                                 }
                                                 p { class: "text-gray-200 font-semibold pt-1", "In the AG System" }
                                                 p { "AG uses a two-tier graph architecture:" }
-                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                     li { span { class: "font-mono text-gray-200", "Neo4j" } " — ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph." }
                                                     li { span { class: "font-mono text-gray-200", "Petgraph" } " — runtime graph queries. Loads an exported JSON snapshot from Neo4j into RAM for fast, in-process traversal." }
                                                 }
@@ -1194,10 +1642,10 @@ pub fn MonitorTip() -> Element {
                                             }
 
                                             // 1. What clustering is
-                                            p { class: "text-gray-200 font-semibold", "1 · What clustering is" }
+                                            p { class: "text-gray-200 font-semibold", "1 What clustering is" }
                                             p { "Clustering groups embedding vectors so that semantically similar chunks end up together. It's unsupervised: no labels, no supervision — just geometry in vector space." }
                                             p { "In a GraphRAG pipeline, clustering is the backbone of:" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { "topic‑level summaries" }
                                                 li { "hierarchical retrieval" }
                                                 li { "global graph coherence" }
@@ -1207,9 +1655,9 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-200 italic", "Cluster quality → summary quality → global search quality." }
 
                                             // 2. Why parse quality sets the ceiling
-                                            p { class: "text-gray-200 font-semibold pt-1", "2 · Why parse quality sets the ceiling on cluster coherence" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "2 Why parse quality sets the ceiling on cluster coherence" }
                                             p { "Clustering can only be as good as the text fed into the embedding model. If parsing is sloppy:" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { "broken sentences" }
                                                 li { "duplicated boilerplate" }
                                                 li { "HTML artifacts" }
@@ -1219,10 +1667,10 @@ pub fn MonitorTip() -> Element {
                                             p { "…then embeddings scatter → clusters smear → summaries degrade." }
 
                                             // 3. Why encoding detection prevents mojibake fragmentation
-                                            p { class: "text-gray-200 font-semibold pt-1", "3 · Why encoding detection prevents mojibake fragmentation" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "3 Why encoding detection prevents mojibake fragmentation" }
                                             p { "Mojibake = garbled text caused by decoding bytes with the wrong encoding (e.g., " span { class: "font-mono", "CafÃ©" } " instead of " span { class: "font-mono", "Café" } ", " span { class: "font-mono", "â€œHelloâ€" } " instead of " span { class: "font-mono", "\u{201c}Hello\u{201d}" } ")." }
                                             p { "Mojibake breaks characters into multiple meaningless tokens, which:" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { "distort embeddings" }
                                                 li { "scatter chunks across clusters" }
                                                 li { "pollute "
@@ -1237,10 +1685,10 @@ pub fn MonitorTip() -> Element {
                                             p { "Encoding detection ensures clean Unicode before tokenization." }
 
                                             // 4. How clusters are defined and made
-                                            p { class: "text-gray-200 font-semibold pt-1", "4 · How clusters are defined and made" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "4 How clusters are defined and made" }
                                             p { "A cluster is a region in embedding space where vectors are closer to each other than to vectors in other regions, with internal density and separation from others by lower‑density areas or distance boundaries. Different algorithms define \"region\" differently." }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.1 · k‑means — clusters = Voronoi cells around "
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.1 k‑means — clusters = Voronoi cells around "
                                                 span {
                                                     class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
                                                     onclick: move |_| show_centroid_info.set(!show_centroid_info()),
@@ -1255,14 +1703,14 @@ pub fn MonitorTip() -> Element {
                                                     p { "A centroid is the center point of a cluster — the average position of all vectors assigned to that cluster." }
                                                     p { "In embedding‑space terms, it's the mean vector: " span { class: "font-mono text-gray-200", "μ = (1/N) Σ xᵢ" } " where " span { class: "font-mono", "xᵢ" } " is an embedding vector, " span { class: "font-mono", "N" } " the cluster size, and " span { class: "font-mono", "μ" } " the centroid." }
                                                     p { class: "text-gray-200 font-semibold pt-0.5", "Intuitively" }
-                                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                         li { "the semantic center of gravity of a cluster" }
                                                         li { "the point that best represents the \"topic\" of that cluster" }
                                                         li { "the anchor around which all cluster members are grouped" }
                                                     }
                                                     p { "If you average all embeddings of \"Rust async networking,\" the centroid becomes the prototype of that topic." }
                                                     p { class: "text-gray-200 font-semibold pt-0.5", "Why centroids matter" }
-                                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                         li { "cluster boundaries (in k‑means they define Voronoi cells)" }
                                                         li { "which cluster a new point belongs to (nearest centroid)" }
                                                         li { "how stable a cluster is (centroid drift = instability)" }
@@ -1277,7 +1725,7 @@ pub fn MonitorTip() -> Element {
                                                         li { "Repeat until centroids stop moving" }
                                                     }
                                                     p { class: "text-gray-200 font-semibold pt-0.5", "Not all algorithms use centroids" }
-                                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                         li { span { class: "font-mono text-gray-200", "k‑means" } " → centroids exist and define clusters" }
                                                         li { span { class: "font-mono text-gray-200", "GMM" } " → centroids exist as Gaussian means" }
                                                         li { span { class: "font-mono text-gray-200", "DBSCAN / HDBSCAN" } " → no centroids; clusters are density regions" }
@@ -1286,35 +1734,35 @@ pub fn MonitorTip() -> Element {
                                                     p { class: "text-gray-200 italic", "\"Centroid\" is algorithm‑specific." }
                                                 }
                                             }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "A cluster is the set of points closest to a centroid." }
                                                 li { span { class: "text-gray-200", "Formation: " } "pick k centroids → assign points to nearest → recompute centroids → repeat." }
                                                 li { span { class: "text-gray-200", "Overlap: " } "❌ No — hard partitions." }
                                             }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.2 · DBSCAN — clusters = dense regions separated by sparse regions" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.2 DBSCAN — clusters = dense regions separated by sparse regions" }
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "A cluster is a connected component of high‑density points." }
                                                 li { span { class: "text-gray-200", "Formation: " } "identify core points (≥ min_samples neighbors) → expand outward → mark unreachable points as noise." }
                                                 li { span { class: "text-gray-200", "Overlap: " } "❌ No — boundaries are fuzzy and shapes are irregular." }
                                             }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.3 · HDBSCAN — clusters = stable density regions across scales" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.3 HDBSCAN — clusters = stable density regions across scales" }
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "A cluster is a persistent dense region that remains stable across multiple density thresholds." }
                                                 li { span { class: "text-gray-200", "Formation: " } "build MST of distances → condense into hierarchy → extract stable regions." }
                                                 li { span { class: "text-gray-200", "Overlap: " } "❌ No — but clusters can be nested (hierarchical)." }
                                             }
 
-                                            p { class: "text-gray-200 font-medium pt-0.5", "4.4 · Gaussian Mixture Models (GMM) — clusters = overlapping probability distributions" }
-                                            ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                            p { class: "text-gray-200 font-medium pt-0.5", "4.4 Gaussian Mixture Models (GMM) — clusters = overlapping probability distributions" }
+                                            ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                 li { span { class: "text-gray-200", "Definition: " } "Each cluster is a Gaussian distribution in embedding space." }
                                                 li { span { class: "text-gray-200", "Formation: " } "EM algorithm fits multiple Gaussians." }
                                                 li { span { class: "text-gray-200", "Overlap: " } "✅ Yes — soft clustering. A point can be 70% cluster A, 20% B, 10% C." }
                                             }
 
                                             // 5. Absolute or overlapping?
-                                            p { class: "text-gray-200 font-semibold pt-1", "5 · So are clusters absolute or overlapping?" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "5 So are clusters absolute or overlapping?" }
                                             div { class: "overflow-x-auto",
                                                 table { class: "text-xs w-full border-collapse",
                                                     thead {
@@ -1356,7 +1804,7 @@ pub fn MonitorTip() -> Element {
                                             p { "In most GraphRAG pipelines (k‑means or HDBSCAN): clusters do not overlap, but semantic boundaries are fuzzy, and cluster meaning is not absolute — it depends on embedding quality." }
 
                                             // 6. Pipeline summary
-                                            p { class: "text-gray-200 font-semibold pt-1", "6 · Pipeline summary (GraphRAG‑style)" }
+                                            p { class: "text-gray-200 font-semibold pt-1", "6 Pipeline summary (GraphRAG‑style)" }
                                             ol { class: "ml-3 space-y-0.5 list-decimal list-outside text-gray-400",
                                                 li { "Clean + normalize text" }
                                                 li { "Detect encoding → prevent mojibake" }
@@ -1370,7 +1818,7 @@ pub fn MonitorTip() -> Element {
                                             p { class: "text-gray-200 italic", "Cluster quality → summary quality → retrieval quality." }
                                         }
                                     }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Parse quality sets the ceiling on cluster coherence (because embeddings cannot recover meaning that was destroyed or corrupted before they were created)." }
                                         li { "Encoding detection prevents "
                                             span {
@@ -1389,7 +1837,7 @@ pub fn MonitorTip() -> Element {
                                                 p { class: "text-gray-200 font-semibold pt-1", "What mojibake actually is" }
                                                 p { "Mojibake (Japanese: 文字化け, \"character transformation\") refers to text that turns into nonsense symbols because software decodes it with the wrong encoding." }
                                                 p { "Examples:" }
-                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                     li { span { class: "font-mono text-gray-200", "CafÃ©" } " instead of " span { class: "font-mono text-gray-200", "Café" } }
                                                     li { span { class: "font-mono text-gray-200", "â€œHelloâ€" } " instead of " span { class: "font-mono text-gray-200", "\u{201c}Hello\u{201d}" } }
                                                     li { "Japanese text turning into " span { class: "font-mono text-gray-200", "æ–‡åŒ–ã" } }
@@ -1399,12 +1847,12 @@ pub fn MonitorTip() -> Element {
                                         }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Summarization" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Noisy extraction directly degrades summaries." }
                                         li { "Boilerplate removal reduces summarizer distraction." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Retrieval" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Bad parsing is invisible at search time but explains most retrieval failures." }
                                         li { "Empty parse → document silently absent from all results." }
                                         li { "Format drift shifts text quality across the entire index." }
@@ -1431,19 +1879,22 @@ pub fn MonitorTip() -> Element {
                                                 p { class: "text-gray-400", "HTML only. The extractor preserves markup to avoid losing structure; this pass removes all tags and decodes HTML entities, leaving only the text nodes." }
                                                 p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 2 — Unicode/typography cleanup" }
                                                 p { class: "text-gray-400", "PDF, DOCX, ODT, EPUB, PPTX, HTML. Folds characters that publishing tools emit but that have no semantic value in plain text:" }
-                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                     li { "Curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight ASCII ' \"" }
                                                     li { "Em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \"" }
                                                     li { "Non-breaking hyphen (\u{2011}) → \"-\"" }
                                                     li { "Ellipsis (\u{2026}) → \"...\"" }
-                                                    li { "PDF ligatures (ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ) → letter pairs (fi fl ff ffi ffl st)" }
+                                                    li {
+                                                        span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "PDF ligatures" }
+                                                        " (ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ) → letter pairs (fi fl ff ffi ffl st)"
+                                                    }
                                                 }
                                                 p { class: "text-gray-300 pt-1", "Runs before NFC so the canonicalizer sees consistent input regardless of source format." }
                                                 p { class: "text-gray-300", "Text and code skip both passes — they arrive as clean UTF-8 with no format artifacts." }
                                                 div { class: "ml-3 mt-1 text-gray-400 space-y-0.5",
                                                     p { class: "font-mono text-gray-400", ".txt, .md, .rs, .py, .json, .yaml, etc." }
                                                     p { "Already UTF‑8, already plain text" }
-                                                    p { "No markup, no ligatures, no publishing‑tool artifacts" }
+                                                    p { "No markup, no " span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "ligatures" } ", no publishing‑tool artifacts" }
                                                 }
                                             }
                                         }
@@ -1455,7 +1906,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 2: Canonicalization ──
                             if tip_tab() == 2 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "2 · Canonicalization" }
+                                    h3 { class: "text-xs font-bold text-amber-400 uppercase tracking-wide", "2 Canonicalization" }
                                     p { class: "text-gray-400", "Three targets, applied at different stages. Each target is a strict superset of the previous." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
@@ -1486,7 +1937,7 @@ pub fn MonitorTip() -> Element {
                                                     }
                                                     ", "
                                                     span {
-                                                        class: "text-amber-400 underline cursor-pointer hover:text-amber-300",
+                                                        class: "text-blue-400 underline cursor-pointer hover:text-blue-300",
                                                         onclick: move |_| show_ligature_info.set(!show_ligature_info()),
                                                         "ligatures"
                                                     }
@@ -1504,19 +1955,6 @@ pub fn MonitorTip() -> Element {
                                                             }
                                                         }
                                                     }
-                                                    if show_ligature_info() {
-                                                        div { class: "rounded bg-gray-900 border border-amber-800 p-3 text-xs text-gray-300 space-y-2 mt-2",
-                                                            div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_ligature_info.set(false), "✕" }
-                                                            }
-                                                            p { "Typographic letter combinations encoded as a single Unicode character by PDF and publishing tools. Instead of two separate characters f + i, some fonts encode them as the single character " span { class: "font-mono", "ﬁ" } " (U+FB01)." }
-                                                            p { class: "text-gray-400 font-mono", "ﬁ (fi)  ·  ﬂ (fl)  ·  ﬀ (ff)  ·  ﬃ (ffi)  ·  ﬄ (ffl)  ·  ﬆ (st)" }
-                                                            p { class: "text-gray-400", "NFC leaves ligatures intact — they are single canonical code points, not encoding variants. It is the "
-                                                                span { class: "text-amber-400 font-medium", "Embed" }
-                                                                " step (NFKC) that folds them into their letter pairs, so the embedder sees \"fi\" not \"ﬁ\"."
-                                                            }
-                                                        }
-                                                    }
                                                 }
                                                 li {
                                                     span { class: "text-gray-200 font-semibold", "Embed" }
@@ -1531,7 +1969,7 @@ pub fn MonitorTip() -> Element {
                                         }
                                     }
                                     p { class: "text-gray-400", "Applied after extraction, before chunking. Persisted to disk and shown to users." }
-                                    p { class: "text-gray-400", "NFC = canonical composition. It only normalizes canonical equivalences — different byte encodings of the same character — leaving typography intact. Example: \"é\" can be stored as a single code point (U+00E9) or as \"e\" + combining accent (U+0301). NFC rewrites both to U+00E9. Curly quotes, em-dashes, ligatures, and other typographic characters are left untouched." }
+                                    p { class: "text-gray-400", "NFC = canonical composition. It only normalizes canonical equivalences — different byte encodings of the same character — leaving typography intact. Example: \"é\" can be stored as a single code point (U+00E9) or as \"e\" + combining accent (U+0301). NFC rewrites both to U+00E9. Curly quotes, em-dashes, " span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "ligatures" } ", and other typographic characters are left untouched." }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
                                         "Embed  —  "
@@ -1540,7 +1978,7 @@ pub fn MonitorTip() -> Element {
                                     }
                                     p { class: "text-gray-400", "Applied to each chunk before the embedder and NER. No punct stripping — the embedding model's tokenizer handles that." }
                                     p { class: "text-gray-400", "NFKC = compatibility composition. Goes further than NFC: it also folds characters that look different but mean the same thing for search. This prevents duplicate embeddings for visually identical content encoded differently." }
-                                    p { class: "text-gray-400 font-mono", "① → 1  ·  Ⅳ → IV  ·  ａｂｃ → abc  ·  ﬁ → fi  ·  ² → 2" }
+                                    p { class: "text-gray-400 font-mono", "① → 1   Ⅳ → IV   ａｂｃ → abc   ﬁ → fi   ² → 2" }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Why Store uses NFC and Embed uses NFKC" }
                                     p { class: "text-gray-400", "Store keeps text human-readable and typographically faithful. Embed strips compatibility differences so embeddings don't diverge on irrelevant Unicode quirks. Without this split: \"ﬁ\" and \"fi\" produce different vectors; \"①\" and \"1\" don't match; full-width vs half-width characters cause embedding drift." }
@@ -1549,7 +1987,7 @@ pub fn MonitorTip() -> Element {
                                     p { class: "text-gray-400", "Applied to Tantivy BM25 chunks and to the query at search time. Punct canon: smart quotes → ASCII, en/em-dash → \"-\", ellipsis → \"...\"" }
 
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Whitespace (all targets)" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Strips U+00AD, U+200B–D, U+2060, U+FEFF (zero-width/invisible)" }
                                         li { "CR+LF, lone CR → LF" }
                                         li { "Form feed, vertical tab → LF" }
@@ -1557,7 +1995,7 @@ pub fn MonitorTip() -> Element {
                                         li { "Space runs collapsed — \\n\\n preserved for chunker" }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Query time" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "normalize(Embed) → embedder" }
                                         li { "normalize(Index) → Tantivy BM25" }
                                         li { "Raw query → NER (has its own tokenizer)" }
@@ -1569,7 +2007,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 3: Typography & Tag Cleanup ──
                             if tip_tab() == 3 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "3 · Typography & Tag Cleanup" }
+                                    h3 { class: "text-xs font-bold text-emerald-400 uppercase tracking-wide", "3 Typography & Tag Cleanup" }
                                     p { class: "text-gray-400",
                                         "Runs immediately after the parser, before NFC canonicalization. \
                                         Both passes are "
@@ -1588,11 +2026,13 @@ pub fn MonitorTip() -> Element {
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Unicode typography normalisation" }
                                     p { class: "text-gray-400",
                                         "Applied to PDF, DOCX, ODT, EPUB, PPTX, HTML — any format from a publishing tool. \
-                                        Substitutes typographic characters with plain ASCII: curly quotes → straight, \
-                                        em/en-dash → \" - \", ellipsis → \"...\", PDF ligatures (ﬁ ﬂ) → letter pairs."
+                                        Substitutes typographic characters with plain ASCII: curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight, \
+                                        em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \", ellipsis (\u{2026}) → \"...\", "
+                                        span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "PDF ligatures" }
+                                        " (ﬁ ﬂ) → letter pairs."
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "RAG impact" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li {
                                             strong { class: "text-gray-300", "Retrieval recall" }
                                             " — a user typing "
@@ -1618,30 +2058,30 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 4: Orchestration ──
                             if tip_tab() == 4 {
                                 div { class: "space-y-2",
-                                    h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "4 · Orchestration" }
+                                    h3 { class: "text-xs font-bold text-violet-400 uppercase tracking-wide", "4 Orchestration" }
                                     p { class: "text-gray-400", "Coordinates the three prior layers into a deterministic, reproducible ingestion flow. Defines configuration, execution order, and output formats." }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Embeddings" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Deterministic embedding generation across runs." }
                                         li { "Enables caching and incremental indexing." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Graph" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Stable graph topology across re-indexing cycles." }
                                         li { "Supports versioning and reproducible analytics." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Clustering" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Consistent cluster assignments over time." }
                                         li { "Enables comparison of cluster evolution." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Summarization" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Summaries stay stable when the pipeline is unchanged." }
                                         li { "Supports reproducible summary-first retrieval." }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Retrieval" }
-                                    ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                         li { "Consistent retrieval rankings." }
                                         li { "Quality changes attributable to data/model, not ingestion drift." }
                                         li { "Reliable evaluation and debugging of retrieval behaviour." }
@@ -1653,7 +2093,7 @@ pub fn MonitorTip() -> Element {
                             // ── Tab 5: DocIR ──
                             if tip_tab() == 5 {
                                 div { class: "space-y-3",
-                                    h3 { class: "text-xs font-bold text-rose-400 uppercase tracking-wide", "5 · Document IR — Structured Extraction" }
+                                    h3 { class: "text-xs font-bold text-rose-400 uppercase tracking-wide", "5 Document IR — Structured Extraction" }
                                     p { class: "text-gray-300",
                                         "Before chunking, every document is parsed into a "
                                         span { class: "font-semibold text-gray-100", "Document Intermediate Representation (DocIR)" }
@@ -1689,7 +2129,7 @@ pub fn MonitorTip() -> Element {
                                         }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Why it improves RAG" }
-                                    ul { class: "ml-3 space-y-1 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-1 list-none list-outside text-gray-400",
                                         li { span { class: "text-gray-200", "Precision retrieval: " } "a Table is retrieved as a complete object — no partial rows, no split formulas." }
                                         li { span { class: "text-gray-200", "Header context: " } "the section heading's metadata propagates forward into paragraph chunks, so the retriever knows which section a chunk belongs to." }
                                         li { span { class: "text-gray-200", "Citations: " } "page numbers survive from source → DocIR block → chunk → search result." }
@@ -1699,7 +2139,7 @@ pub fn MonitorTip() -> Element {
                                         }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1", "Extractor labels" }
-                                    ul { class: "ml-3 space-y-1 list-disc list-outside text-gray-400",
+                                    ul { class: "ml-3 space-y-1 list-none list-outside text-gray-400",
                                         li {
                                             span { class: "font-mono text-amber-300", "docling" }
                                             " — Docling sidecar (enable with "
@@ -1734,46 +2174,50 @@ pub fn MonitorTip() -> Element {
                                 }
                                 h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2", "Pipeline flow" }
                                 pre { class: "text-xs font-mono leading-snug text-gray-400",
-                                    span { class: "text-sky-400", "Parser" }
-                                    "  →  raw text\n  │\n  ▼\n"
-                                    span { class: "text-sky-300", "Format cleanup" }
-                                    "    HTML tag stripping (HTML only)  ·  Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
-                                    "  │  unicode: curly quotes → straight  ·  em/en-dash → \" - \"  ·  ellipsis → \"...\"\n"
-                                    "  │           PDF ligatures (ﬁ ﬂ ﬀ) → letter pairs\n"
+                                    span { class: "text-green-400", "Parser" }
+                                    "  →  raw extracted text (original)\n  │\n  ▼\n"
+                                    span { class: "text-green-400", "Format cleanup" }
+                                    "    HTML tag stripping (HTML only)     Unicode/typography cleanup (PDF/DOCX/ODT/EPUB/PPTX/HTML)\n"
+                                    "  │  unicode: curly quotes (\u{2018}\u{2019}\u{201C}\u{201D}) → straight     em-dash (\u{2014}) / en-dash (\u{2013}) → \" - \"     ellipsis (\u{2026}) → \"...\"\n"
+                                    "  │           PDF "
+                                    span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "ligatures" }
+                                    " (ﬁ ﬂ ﬀ) → letter pairs\n"
                                     "  │\n  ▼\n"
-                                    span { class: "text-amber-400", "normalize(Store)" }
+                                    span { class: "text-green-400", "normalize(Store)" }
                                     "   NFC + whitespace collapse\n"
-                                    "  │  strips : U+00AD (soft-hyphen)  ·  U+200B–D (zero-width)  ·  U+2060  ·  U+FEFF\n"
-                                    "  │  maps   : CR+LF / lone CR → LF  ·  FF (U+000C) / VT (U+000B) → LF\n"
+                                    "  │  strips : U+00AD (soft-hyphen)   U+200B–D (zero-width)   U+2060   U+FEFF\n"
+                                    "  │  maps   : CR+LF / lone CR → LF   FF (U+000C) / VT (U+000B) → LF\n"
                                     "  │           NBSP + all Unicode space variants → ASCII space\n"
-                                    "  │  collapses space runs  ·  preserves \\n\\n for chunker\n"
+                                    "  │  collapses space runs   preserves \\n\\n for chunker\n"
                                     "  ▼\n"
                                     "stored content  (user-visible, NFC — typographic chars preserved)\n"
                                     "  │\n  ▼\n"
-                                    span { class: "text-emerald-400", "Typography & Tag Cleanup (chunker)" }
+                                    span { class: "text-green-400", "Typography & Tag Cleanup (chunker)" }
                                     "  →  chunks\n"
                                     "  │\n"
                                     "  ├──► "
-                                    span { class: "text-amber-400", "normalize(Embed)" }
+                                    span { class: "text-green-400", "normalize(Embed)" }
                                     "   NFKC + whitespace collapse  (same collapse as above)\n"
-                                    "  │      NFKC decomposes: ligatures (ﬁ→fi  ﬂ→fl)  ·  fullwidth ASCII\n"
-                                    "  │                       superscripts  ·  compatibility equivalences\n"
+                                    "  │      NFKC decomposes: "
+                                    span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "ligatures" }
+                                    " (ﬁ→fi  ﬂ→fl)   fullwidth ASCII\n"
+                                    "  │                       superscripts   compatibility equivalences\n"
                                     "  │      no punct stripping — embedding model's tokenizer handles that\n"
                                     "  │      → embedder  →  HNSW vector store\n"
                                     "  │\n"
                                     "  └──► "
-                                    span { class: "text-amber-400", "normalize(Index)" }
+                                    span { class: "text-green-400", "normalize(Index)" }
                                     "   NFKC + whitespace collapse + punct canonicalization\n"
-                                    "         punct canon: smart quotes → ASCII  ·  en-dash / em-dash → \" - \"\n"
-                                    "                      U+2010 / U+2011 / U+2212 → \"-\"  ·  ellipsis → \"...\"\n"
+                                    "         punct canon: smart quotes → ASCII   en-dash / em-dash → \" - \"\n"
+                                    "                      U+2010 / U+2011 / U+2212 → \"-\"   ellipsis → \"...\"\n"
                                     "         → Tantivy BM25 index\n"
                                     "\n── QUERY ───────────────────────────────────────────────────────────────────\n\n"
                                     "raw query\n"
                                     "  ├──► "
-                                    span { class: "text-amber-400", "normalize(Embed)" }
+                                    span { class: "text-green-400", "normalize(Embed)" }
                                     "  →  embedder  →  vector search ──────────┐\n"
                                     "  ├──► "
-                                    span { class: "text-amber-400", "normalize(Index)" }
+                                    span { class: "text-green-400", "normalize(Index)" }
                                     "  →  Tantivy BM25 search ─────────────────┤  RRF  →  top-k  →  LLM\n"
                                     "  └──► raw               →  NER  →  graph search ────────────────┘\n"
                                     "         NER receives raw query — has its own tokenizer"
@@ -1790,27 +2234,27 @@ pub fn MonitorTip() -> Element {
                                     }
                                     tbody {
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "1 · Parser" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "1 Parser" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Extract text from bytes" }
                                             td { class: "py-1.5 text-gray-400", "Empty parse = zero vectors, zero graph nodes, zero results" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "2 · Canonicalization" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "2 Canonicalization" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Normalize text" }
                                             td { class: "py-1.5 text-gray-400", "Stable embeddings, high recall, no duplicate graph nodes" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "3 · Typography & Tag Cleanup" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "3 Typography & Tag Cleanup" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Structure text" }
                                             td { class: "py-1.5 text-gray-400", "Coherent chunks, accurate embeddings, meaningful graph nodes" }
                                         }
                                         tr { class: "border-b border-gray-700",
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "4 · Orchestration" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "4 Orchestration" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Coordinate pipeline" }
                                             td { class: "py-1.5 text-gray-400", "Deterministic indexing, reproducible retrieval, stable summaries" }
                                         }
                                         tr {
-                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "5 · DocIR" }
+                                            td { class: "py-1.5 pr-4 font-medium text-gray-200", "5 DocIR" }
                                             td { class: "py-1.5 pr-4 text-gray-400", "Typed block IR" }
                                             td { class: "py-1.5 text-gray-400", "Tables/code/formulas as atomic chunks; page numbers and extractor labels survive to search results" }
                                         }
@@ -2245,7 +2689,7 @@ raw query
                                         li { code { class: "text-amber-300", "– —" } " en/em dash → " code { class: "text-amber-300", " - " } }
                                         li { code { class: "text-amber-300", "‑" } " non-breaking hyphen → " code { class: "text-amber-300", "-" } }
                                         li { code { class: "text-amber-300", "…" } " ellipsis → " code { class: "text-amber-300", "..." } }
-                                        li { "PDF ligatures ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ → fi fl ff ffi ffl st" }
+                                        li { span { class: "text-blue-400 underline cursor-pointer hover:text-blue-300", onclick: move |_| show_ligature_info.set(!show_ligature_info()), "PDF ligatures" } " ﬁ ﬂ ﬀ ﬃ ﬄ ﬆ → fi fl ff ffi ffl st" }
                                     }
                                     p { class: "pt-1",
                                         "Without this, " code { class: "text-amber-300", "\u{2018}word\u{2019}" }
@@ -2456,6 +2900,177 @@ raw query
                     }
                 }
             }
+
+            // ── PDF ligatures info modal ──────────────────
+            if show_ligature_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |e| { e.stop_propagation(); show_ligature_info.set(false); },
+                    div {
+                        class: "bg-gray-800 border border-amber-800 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        onclick: move |e| e.stop_propagation(),
+                        // Header
+                        div { class: "flex items-center justify-between px-5 py-3 border-b border-amber-800 shrink-0",
+                            h3 { class: "text-sm font-bold text-amber-400", "\u{1F4BB} Ligatures in IT" }
+                            button { class: "text-gray-400 hover:text-gray-200 text-xl font-bold leading-none", onclick: move |_| show_ligature_info.set(false), "\u{2715}" }
+                        }
+                        // Scrollable body
+                        div { class: "flex-1 overflow-y-auto px-5 py-4 text-xs text-gray-300 columns-2 lg:columns-3 gap-x-6 [&>*]:mb-3 [&>*]:break-inside-avoid",
+                            p {
+                                "In IT, a "
+                                em { "ligature" }
+                                " means the same as in typography: "
+                                strong { class: "text-gray-100", "a single Unicode character that visually looks like two (or more) letters joined together." }
+                            }
+                            div {
+                                p { class: "text-gray-400 font-semibold mb-1", "Examples:" }
+                                ul { class: "ml-3 space-y-0.5 list-none font-mono text-gray-300",
+                                    li { span { class: "text-amber-300", "ﬁ" } " \u{2192} f + i" }
+                                    li { span { class: "text-amber-300", "ﬂ" } " \u{2192} f + l" }
+                                    li { span { class: "text-amber-300", "ﬀ" } " \u{2192} f + f" }
+                                    li { span { class: "text-amber-300", "ﬃ" } " \u{2192} f + f + i" }
+                                    li { span { class: "text-amber-300", "ﬄ" } " \u{2192} f + f + l" }
+                                }
+                            }
+                            p { "In IT they matter because they " strong { class: "text-gray-100", "cause problems in text processing." } }
+
+                            // Section 2
+                            p { class: "text-amber-400 font-bold pt-1", "\u{1F4A5} Why ligatures are a problem in IT" }
+
+                            div {
+                                p { class: "text-gray-200 font-semibold mb-1", "1. It\u{2019}s one character, not two" }
+                                p { class: "text-gray-400 mb-1", "In code or data you expect:" }
+                                pre { class: "bg-gray-900 rounded px-3 py-1.5 font-mono text-gray-300 mb-1", "fi" }
+                                p { class: "text-gray-400 mb-1", "But a PDF or Word document may contain:" }
+                                pre { class: "bg-gray-900 rounded px-3 py-1.5 font-mono text-amber-300 mb-1", "\u{FB01}" }
+                                p {
+                                    "That is "
+                                    span { class: "font-mono text-gray-200", "U+FB01" }
+                                    ", a single character. Search, regex, NLP, diff tools, and parsers do "
+                                    strong { class: "text-gray-100", "not" }
+                                    " recognize it as f\u{202F}+\u{202F}i."
+                                }
+                            }
+
+                            div {
+                                p { class: "text-gray-200 font-semibold mb-1", "2. PDF extraction makes it worse" }
+                                p { class: "text-gray-400 mb-1", "PDF text extraction often replaces letter pairs with ligatures:" }
+                                ul { class: "ml-3 space-y-0.5 list-none font-mono text-gray-400 mb-1",
+                                    li { "fi \u{2192} " span { class: "text-amber-300", "\u{FB01}" } }
+                                    li { "fl \u{2192} " span { class: "text-amber-300", "\u{FB02}" } }
+                                    li { "ff \u{2192} " span { class: "text-amber-300", "\u{FB00}" } }
+                                }
+                                p { class: "text-gray-400 mb-1", "So you get:" }
+                                pre { class: "bg-gray-900 rounded px-3 py-1.5 font-mono text-amber-300 mb-1", "o\u{FB03}ce" }
+                                p { class: "text-gray-400 mb-1", "instead of:" }
+                                pre { class: "bg-gray-900 rounded px-3 py-1.5 font-mono text-gray-300", "office" }
+                            }
+
+                            div {
+                                p { class: "text-gray-200 font-semibold mb-0.5", "3. Breaks search" }
+                                p { class: "text-gray-400",
+                                    "Searching for "
+                                    span { class: "font-mono text-gray-200", "\"office\"" }
+                                    " will not match "
+                                    span { class: "font-mono text-amber-300", "\"o\u{FB03}ce\"" }
+                                    "."
+                                }
+                            }
+
+                            div {
+                                p { class: "text-gray-200 font-semibold mb-0.5", "4. Breaks tokenizers and NLP" }
+                                p { class: "text-gray-400", "Machine\u{2011}learning models treat ligatures as unknown tokens." }
+                            }
+
+                            div {
+                                p { class: "text-gray-200 font-semibold mb-0.5", "5. Breaks diffs and version control" }
+                                p { class: "text-gray-400",
+                                    "Git sees "
+                                    span { class: "font-mono text-gray-300", "office" }
+                                    " vs. "
+                                    span { class: "font-mono text-amber-300", "o\u{FB03}ce" }
+                                    " as completely different strings."
+                                }
+                            }
+
+                            div {
+                                p { class: "text-gray-200 font-semibold mb-0.5", "6. Breaks ASCII\u{2011}only systems" }
+                                p { class: "text-gray-400",
+                                    "In terminals, CSV, JSON, logs, ligatures often become "
+                                    span { class: "font-mono", "\u{E2}\u{80}\u{A6}" }
+                                    ", "
+                                    span { class: "font-mono", "?" }
+                                    ", or disappear entirely."
+                                }
+                            }
+
+                            // Section 3
+                            div {
+                                p { class: "text-amber-400 font-bold pt-1 mb-1", "\u{1F6E0} Where ligatures appear in IT" }
+                                ul { class: "ml-3 space-y-0.5 list-none text-gray-400",
+                                    li { strong { class: "text-gray-200", "PDF extraction" } " (by far the biggest source)" }
+                                    li { "Microsoft Word / DOCX" }
+                                    li { "EPUB / ODT" }
+                                    li { "OCR software" }
+                                    li { "Fonts with OpenType features" }
+                                    li { "Code editors (but those are " em { "visual" } " ligatures, not Unicode characters)" }
+                                }
+                            }
+
+                            // Section 4
+                            div {
+                                p { class: "text-amber-400 font-bold pt-1 mb-1", "\u{26A0}\u{FE0F} Important distinction in IT" }
+                                p { class: "text-gray-200 font-semibold mb-0.5", "1. Unicode ligatures (real characters)" }
+                                p { class: "text-gray-400 mb-1",
+                                    "Like "
+                                    span { class: "font-mono text-amber-300", "\u{FB01}" }
+                                    ", "
+                                    span { class: "font-mono text-amber-300", "\u{FB02}" }
+                                    ", "
+                                    span { class: "font-mono text-amber-300", "\u{FB00}" }
+                                    ". \u{2192} These must be "
+                                    strong { class: "text-gray-100", "replaced" }
+                                    " with normal letter pairs."
+                                }
+                                p { class: "text-gray-200 font-semibold mb-0.5", "2. Font ligatures in code editors (visual only)" }
+                                p { class: "text-gray-400 mb-1", "In fonts like Fira Code, JetBrains Mono, Cascadia Code:" }
+                                div { class: "bg-gray-900 rounded px-3 py-1.5 font-mono space-y-0.5 mb-1",
+                                    p { span { class: "text-gray-300", "!=" } "   \u{2192} visually becomes  \u{2260}" }
+                                    p { span { class: "text-gray-300", "->" } "   \u{2192} visually becomes  \u{2192}" }
+                                    p { span { class: "text-gray-300", "===" } "  \u{2192} visually becomes  triple\u{2011}bar" }
+                                }
+                                p { class: "text-gray-400",
+                                    "But the underlying text stays "
+                                    strong { class: "text-gray-100", "ASCII" }
+                                    ". These are safe."
+                                }
+                            }
+
+                            // Section 5
+                            div {
+                                p { class: "text-amber-400 font-bold pt-1 mb-1", "\u{1F527} Why the cleanup spec says: PDF ligatures (\u{FB01} \u{FB02} \u{FB00}) \u{2192} letter pairs" }
+                                ul { class: "ml-3 space-y-0.5 list-none font-mono text-gray-400 mb-1",
+                                    li { span { class: "text-amber-300", "\u{FB01}" } " \u{2192} fi" }
+                                    li { span { class: "text-amber-300", "\u{FB02}" } " \u{2192} fl" }
+                                    li { span { class: "text-amber-300", "\u{FB00}" } " \u{2192} ff" }
+                                    li { span { class: "text-amber-300", "\u{FB03}" } " \u{2192} ffi" }
+                                    li { span { class: "text-amber-300", "\u{FB04}" } " \u{2192} ffl" }
+                                }
+                                p { class: "text-gray-400", "Essential for: searchability, NLP, indexing, diffing, data cleaning, normalization." }
+                            }
+                        }
+                        // Footer
+                        div { class: "px-5 py-3 border-t border-amber-800 shrink-0 flex justify-end bg-gray-800 rounded-b-lg",
+                            button {
+                                class: "px-5 py-1.5 text-sm font-medium rounded text-white hover:opacity-80",
+                                style: "background-color:#7C2A02;border:1px solid #7C2A02;",
+                                onclick: move |_| show_ligature_info.set(false),
+                                "Got it"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2579,7 +3194,7 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                                                     " — the parser ran without error but returned no text. The file is silently absent from your RAG index."
                                                 }
                                                 p { class: "text-gray-400", "Common causes of empty:" }
-                                                ul { class: "ml-3 space-y-0.5 list-disc list-outside text-gray-400",
+                                                ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
                                                     li { "PDF with only scanned images (no text layer)" }
                                                     li { "DOCX or ODT with no body content" }
                                                     li { "File misidentified as the wrong format" }

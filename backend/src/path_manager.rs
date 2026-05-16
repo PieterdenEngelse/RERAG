@@ -107,6 +107,11 @@ impl PathManager {
         self.data_dir.join("vectors.json")
     }
 
+    /// Path for the persisted L1 search cache (query → result doc IDs, rkyv).
+    pub fn search_cache_path(&self) -> PathBuf {
+        self.data_dir.join("search_cache.rkyv")
+    }
+
     pub fn log_path(&self, name: &str) -> PathBuf {
         self.logs_dir.join(format!("{}.log", name))
     }

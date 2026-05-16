@@ -327,6 +327,17 @@ pub fn index_content_direct(
         embed_duration.as_millis()
     );
 
+    let mut snap = crate::monitoring::ChunkingStatsSnapshot::new(
+        filename,
+        chunker_mode,
+        ok,
+        total_tokens,
+        chunk_duration.as_millis() as u64,
+        None,
+    );
+    snap.tokenizer_model = crate::api::get_token_counter().map(|h| h.model_name());
+    crate::monitoring::record_chunking_snapshot(snap);
+
     Ok(ok)
 }
 

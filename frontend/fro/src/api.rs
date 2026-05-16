@@ -695,7 +695,7 @@ impl BackendType {
     /// Human-readable label for the backend
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Ollama => "Ollama 0.12.6",
+            Self::Ollama => "Ollama",
             Self::LlamaCpp => "llama.cpp",
             Self::OpenAi => "OpenAI",
             Self::Anthropic => "Anthropic",

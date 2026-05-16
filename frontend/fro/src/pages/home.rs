@@ -1,9 +1,7 @@
 use crate::api::{self, RagMemoryItem};
 use crate::app::{ClearChat, PendingChatQuery, Route, ShowRagInfo};
 use crate::components::HomeSettingsBoards;
-use crate::pages::hardware::components::info_modal;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
-use crate::pages::hardware::help_content::HelpTopic;
 use dioxus::prelude::*;
 use dioxus_router::Link;
 use futures_util::StreamExt;
@@ -296,7 +294,8 @@ pub fn Home() -> Element {
                     runtime_ctx.with_mut(|ctx| {
                         ctx.configured_backend = backend.clone();
                         ctx.configured_model = model;
-                        ctx.active_backend = Some(backend.clone());
+                        // active_backend reflects what is actually running and
+                        // is only set from runtime-health, never from config.
                     });
                     models_loading.set(true);
                     if let Ok(models) = api::fetch_models(&backend).await {
@@ -307,7 +306,8 @@ pub fn Home() -> Element {
             }
         });
     }
-    let show_backend_info = use_signal(|| false);
+    let mut show_backend_info = use_signal(|| false);
+    let mut show_llama_mem_info = use_signal(|| false);
 
     // Load documents on mount
     use_effect(move || {
@@ -1956,7 +1956,91 @@ pub fn Home() -> Element {
 
             // Backend Info Modal
             if show_backend_info() {
-                { info_modal(HelpTopic::Backend.title(), show_backend_info, HelpTopic::Backend.paragraphs()) }
+                div {
+                    class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_backend_info.set(false),
+                    div {
+                        class: "bg-gray-900 border border-gray-700 rounded-lg p-6 w-[90vw] max-w-[90vw] max-h-[95vh] overflow-y-auto shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between mb-4",
+                            h2 { class: "text-xl font-bold text-gray-100", "Inference backend" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                onclick: move |_| show_backend_info.set(false),
+                                "×"
+                            }
+                        }
+                        div { class: "text-sm text-gray-300 leading-relaxed",
+                            p { class: "mt-2 text-gray-200", "Select the runtime that executes prompts (local llama.cpp, Ollama, vLLM, OpenAI, etc.)." }
+                            p { class: "mt-2 text-gray-200", "Switching backend clears the model name so you can pick a compatible artifact." }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "Ollama" }
+                            p { class: "mt-2 text-gray-200", "Ollama is a model server. It runs as an empty process \u{2014} no model loaded at startup. When a request arrives with e.g. `\"model\": \"phi:latest\"`, Ollama checks if that model is already in memory. If not, it loads it from its own model store (`~/.ollama/models/`). If a different model was loaded, it evicts the old one (after ~5 min idle) and loads the new one." }
+                            p { class: "mt-2 text-gray-200", "The model selection happens at request time, driven by the API call, not at startup. That\u{2019}s why the systemd service file just says `ollama serve` \u{2014} no model path needed." }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "llama-server (llama.cpp)" }
+                            p { class: "mt-2 text-gray-200", "llama-server is a single-model server. At startup, it reads the `--model /path/to/file.gguf` flag, loads that one model into memory, and serves only that model for its entire lifetime." }
+                            p { class: "mt-2 text-gray-200", "To switch models, you must stop the process, change the `--model` argument, and restart. There\u{2019}s no API to swap models at runtime." }
+                            p { class: "mt-2",
+                                span {
+                                    class: "text-blue-400 underline hover:text-blue-300 cursor-pointer",
+                                    onclick: move |_| show_llama_mem_info.set(true),
+                                    "Mem usage during startup"
+                                }
+                            }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "What this means in the UI" }
+                            p { class: "mt-2 text-gray-200", "Ollama: changing the model dropdown just changes which model name gets sent in API requests \u{2014} no restart needed." }
+                            p { class: "mt-2 text-gray-200", "llama-server: changing the model means rewriting the env file and restarting the llama-server service \u{2014} a heavier operation with a brief downtime." }
+                        }
+                    }
+                }
+            }
+            // llama-server startup memory modal
+            if show_llama_mem_info() {
+                div {
+                    class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
+                    onclick: move |_| show_llama_mem_info.set(false),
+                    div {
+                        class: "bg-gray-900 border border-gray-700 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[88vh] overflow-y-auto shadow-xl",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "flex items-center justify-between mb-4",
+                            h2 { class: "text-xl font-bold text-gray-100", "llama-server \u{2014} memory usage at startup" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                                onclick: move |_| show_llama_mem_info.set(false),
+                                "×"
+                            }
+                        }
+                        div { class: "text-sm text-gray-300 leading-relaxed",
+                            p { class: "mt-2 text-gray-200", "llama-server allocates its large buffers eagerly at startup \u{2014} it reaches peak memory before serving a single token. Handling requests afterward stays within that envelope." }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "Startup timeline" }
+                            p { class: "mt-2 text-gray-200", "Process start \u{2014} the binary and its libraries load (tens of MB)." }
+                            p { class: "mt-2 text-gray-200", "Model load \u{2014} the model weights are read into memory; resident size climbs toward the model file size." }
+                            p { class: "mt-2 text-gray-200", "Buffer allocation \u{2014} the KV cache and compute buffers are allocated in full." }
+                            p { class: "mt-2 text-gray-200", "Ready \u{2014} the server listens on its port at steady-state peak." }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "Where the memory goes" }
+                            p { class: "mt-2 text-gray-200", "Model weights \u{2014} roughly the GGUF file size. For Qwen2.5-3B Q4_K_M that is about 2.0 GB." }
+                            p { class: "mt-2 text-gray-200", "KV cache \u{2014} allocated once at startup, sized for the context window. It scales linearly with the context size: about 1.2 GB at the model\u{2019}s full 32K context, about 150 MB at 4K." }
+                            p { class: "mt-2 text-gray-200", "Compute buffers \u{2014} activation scratch space sized by the batch settings; typically a few hundred MB." }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "Rule of thumb" }
+                            pre { class: "bg-gray-950 border border-gray-700 rounded p-3 mt-2 text-xs font-mono text-green-200 overflow-x-auto whitespace-pre-wrap", "startup peak \u{2248} model weights + KV cache + compute buffers" }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "What moves the number" }
+                            p { class: "mt-2 text-gray-200", "Context size \u{2014} the biggest lever; the KV cache is linear in context length." }
+                            p { class: "mt-2 text-gray-200", "KV cache quantization \u{2014} storing the cache as q8_0 roughly halves it versus f16." }
+                            p { class: "mt-2 text-gray-200", "Flash attention \u{2014} trims attention and KV overhead." }
+                            p { class: "mt-2 text-gray-200", "Memory mapping (mmap) \u{2014} does not change how much memory is used, only how it behaves under pressure: mapped weight pages are file-backed and can be dropped and re-read from disk, while non-mapped weights are anonymous and can be pushed to swap." }
+                            p { class: "mt-2 text-gray-200", "GPU offload \u{2014} moves weight and KV memory from RAM to VRAM; CPU-only keeps it all in RAM." }
+                            div { class: "h-2" }
+                            h4 { class: "text-sm font-semibold text-green-300 pt-2", "Why it matters" }
+                            p { class: "mt-2 text-gray-200", "A model only \u{2018}fits\u{2019} if there is room for the weights plus the KV cache plus the compute buffers \u{2014} not just the weight file. And because allocation is eager, an out-of-memory kill at startup means the machine never had room for the full envelope, not that a request triggered it." }
+                        }
+                    }
+                }
             }
             // KV Cache Info Modal
             if show_cache_info() {
