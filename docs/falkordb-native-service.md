@@ -1,6 +1,6 @@
 # FalkorDB as a Native systemd User Service
 
-**Status:** Implemented — `falkordb.service` runs natively (`redis-server` + `falkordb.so` on `127.0.0.1:6380`, ~32 MB RSS). End-to-end graph-data verification still pending (Step 7).
+**Status:** Implemented and verified — `falkordb.service` runs natively (`redis-server` + `falkordb.so` on `127.0.0.1:6380`, ~32 MB RSS); a test ingest landed nodes in FalkorDB (Step 7 done).
 **Depends on:** the code migration in [`falkordb-migration.md`](./falkordb-migration.md) (complete; `cargo check`/clippy clean)
 **Scope:** Swap FalkorDB's deployment shell from a Docker container to a native
 systemd **user** service. Multi-file: `docker-compose.yml`, two systemd units,
@@ -71,9 +71,9 @@ build FalkorDB from source).
   and header comments removed.
 - [x] **6. Docs** — container-specific parts of `falkordb-migration.md` (header,
   §7, §8 rollback) reconciled to point here.
-- [ ] **7. Verify** — service starts cleanly and `journalctl` shows AOF loaded.
-  *Still pending:* restart `ag.service` and confirm `Connecting to FalkorDB →
-  Successfully connected`, then ingest a corpus and confirm nodes land.
+- [x] **7. Verify** — service starts cleanly; `ag` logs `Successfully connected
+  to FalkorDB`; a test ingest (`CLAUDE.md`) landed 1 Document / 24 Chunks /
+  1 Entity / 25 relationships in graph `ag`, cross-checked via `GRAPH.QUERY`.
 
 ---
 

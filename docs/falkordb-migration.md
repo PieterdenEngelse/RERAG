@@ -1,7 +1,7 @@
 # Neo4j → FalkorDB Migration
 
-**Status:** Code migration + rename complete (Steps 0–8). Pending: end-to-end data
-verification (ingest a corpus → confirm nodes land) and the `CLAUDE.md` architecture-label fix.
+**Status:** Complete — code migration, rename (Steps 0–8), and end-to-end data
+verification all done. FalkorDB is the live knowledge-graph backend.
 **Branch:** `falkordb-migration`
 **Scope:** Replace the Neo4j knowledge-graph backend with FalkorDB. ~13 files.
 **Deployment:** FalkorDB runs as a **native systemd user service**, not a Docker
@@ -171,9 +171,10 @@ rename commit):
   so the two instances SIGKILLed each other every cycle. Fixed by
   `sudo systemctl disable --now ag.service` (system scope) — see
   [memory: ag-service-single-scope].
-- [ ] Ingest a test corpus; confirm entities/episodes land in FalkorDB.
-- [ ] Update the architecture description in `CLAUDE.md` (fix the stale
-  "Neo4jDB (vector)" label) and `AGENTS.md` if relevant.
+- [x] Test corpus ingested (`CLAUDE.md`) — 1 Document, 24 Chunks, 1 Entity, 25
+  relationships landed in FalkorDB graph `ag`; cross-checked via `GRAPH.QUERY`.
+- [x] `CLAUDE.md` architecture section already describes FalkorDB; `AGENTS.md`
+  has been removed from the repo.
 
 ### Step 8 — rename (done)
 - [x] `neo4j` cargo feature → `graph`; `default` / `full` feature lists and every `#[cfg(feature = …)]` updated.
