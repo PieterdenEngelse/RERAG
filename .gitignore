@@ -19,3 +19,7 @@ models/ner/model.onnx
 .env
 .env.graph
 .claude/
+
+# Editor / backup junk
+*.bak*
+*.swp
