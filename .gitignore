@@ -2,7 +2,13 @@
 test_ag_home6/data/vectors.new.json
 test_ag_home6/data/vectors.new.json
 .fastembed_cache/
+
+# Large model weights — re-downloadable artifacts, not versioned
 models/ner/model.onnx
+models/layout_detr/model.onnx
+models/embedding_model.onnx
+models/embedding_model.onnx.data
+backend/models/embedding_model.onnx
 .aider*
 .env
 .env
