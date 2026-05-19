@@ -1,0 +1,12 @@
+#!/bin/bash
+systemctl --user restart ag.service
+
+# wachten tot systemd klaar is met de restart
+systemctl --user is-active --quiet ag.service
+while [ $? -ne 0 ]; do
+    sleep 0.2
+    systemctl --user is-active --quiet ag.service
+done
+
+echo "ag.service is succesvol herstart."
+

@@ -1060,6 +1060,10 @@ pub fn start_api_server(
             // ROOT & CORE ROUTES
             // ============================================================================
             .route("/", web::get().to(root_handler))
+            // Root-level aliases for /monitoring/health and /monitoring/ready so
+            // Docker/k8s/uptime tooling works with its default probe paths.
+            .route("/health", web::get().to(health_check))
+            .route("/ready", web::get().to(ready_check))
             .route("/documents", web::get().to(list_documents))
             .route("/config/chunk_size", web::get().to(get_chunk_config))
             .route("/config/chunk_size", web::post().to(commit_chunk_config))
