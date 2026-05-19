@@ -177,43 +177,43 @@ pub fn get_corpus_retriever(slug: &str) -> Option<Arc<Mutex<Retriever>>> {
     None
 }
 
-// Global Neo4j client handle (Phase 27)
-#[cfg(feature = "neo4j")]
-static NEO4J_CLIENT: std::sync::RwLock<Option<crate::graph::Neo4jClient>> =
+// Global FalkorDB client handle (Phase 27)
+#[cfg(feature = "graph")]
+static GRAPH_CLIENT: std::sync::RwLock<Option<crate::graph::GraphClient>> =
     std::sync::RwLock::new(None);
 
-#[cfg(feature = "neo4j")]
-pub fn set_neo4j_client(client: crate::graph::Neo4jClient) {
-    let mut lock = NEO4J_CLIENT.write().expect("NEO4J_CLIENT lock poisoned");
+#[cfg(feature = "graph")]
+pub fn set_graph_client(client: crate::graph::GraphClient) {
+    let mut lock = GRAPH_CLIENT.write().expect("GRAPH_CLIENT lock poisoned");
     *lock = Some(client);
 }
 
-#[cfg(feature = "neo4j")]
-pub fn get_neo4j_client() -> Option<std::sync::Arc<crate::graph::Neo4jClient>> {
-    NEO4J_CLIENT
+#[cfg(feature = "graph")]
+pub fn get_graph_client() -> Option<std::sync::Arc<crate::graph::GraphClient>> {
+    GRAPH_CLIENT
         .read()
         .ok()?
         .as_ref()
         .map(|c| std::sync::Arc::new(c.clone()))
 }
 
-#[cfg(not(feature = "neo4j"))]
-pub fn set_neo4j_client(_client: ()) {
-    // No-op when neo4j feature is disabled
+#[cfg(not(feature = "graph"))]
+pub fn set_graph_client(_client: ()) {
+    // No-op when graph feature is disabled
 }
 
-#[cfg(not(feature = "neo4j"))]
-pub fn get_neo4j_client() -> Option<()> {
+#[cfg(not(feature = "graph"))]
+pub fn get_graph_client() -> Option<()> {
     None
 }
 
 // Global KnowledgeBuilder for graph integration during indexing
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 static KNOWLEDGE_BUILDER: std::sync::RwLock<
     Option<std::sync::Arc<crate::graph::KnowledgeBuilder>>,
 > = std::sync::RwLock::new(None);
 
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 pub fn set_knowledge_builder(builder: std::sync::Arc<crate::graph::KnowledgeBuilder>) {
     let mut lock = KNOWLEDGE_BUILDER
         .write()
@@ -221,19 +221,19 @@ pub fn set_knowledge_builder(builder: std::sync::Arc<crate::graph::KnowledgeBuil
     *lock = Some(builder);
 }
 
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 pub fn get_knowledge_builder() -> Option<std::sync::Arc<crate::graph::KnowledgeBuilder>> {
     KNOWLEDGE_BUILDER.read().ok()?.clone()
 }
 
-#[cfg(not(feature = "neo4j"))]
+#[cfg(not(feature = "graph"))]
 pub fn get_knowledge_builder() -> Option<()> {
     None
 }
 
 /// Process a document and its chunks through the knowledge graph
-/// This extracts entities and stores them in Neo4j
-#[cfg(feature = "neo4j")]
+/// This extracts entities and stores them in FalkorDB
+#[cfg(feature = "graph")]
 pub async fn index_to_knowledge_graph(
     doc_id: &str,
     title: &str,
@@ -373,14 +373,14 @@ pub async fn index_to_knowledge_graph(
     );
 }
 
-#[cfg(not(feature = "neo4j"))]
+#[cfg(not(feature = "graph"))]
 pub async fn index_to_knowledge_graph(
     _doc_id: &str,
     _title: &str,
     _source: &str,
     _chunks: &[(String, String)],
 ) {
-    // No-op when neo4j feature is disabled
+    // No-op when graph feature is disabled
 }
 
 static CHAT_STATE: OnceLock<Arc<Mutex<AgentChatState>>> = OnceLock::new();
@@ -1090,10 +1090,13 @@ pub fn start_api_server(
             .route("/config/ner", web::post().to(set_ner_config))
             .route("/config/onnx", web::get().to(get_onnx_config))
             .route("/config/onnx", web::post().to(set_onnx_config))
-            // Neo4j Knowledge Graph config (Phase 27)
-            .route("/config/neo4j", web::get().to(get_neo4j_config))
-            .route("/config/neo4j", web::post().to(save_neo4j_config))
-            .route("/config/neo4j/test", web::post().to(test_neo4j_connection))
+            // FalkorDB Knowledge Graph config (Phase 27)
+            .route("/config/graph", web::get().to(get_graph_config))
+            .route("/config/graph", web::post().to(save_graph_config))
+            .route("/config/graph/test", web::post().to(test_graph_connection))
+            // Redis / FalkorDB server parameters (live CONFIG tuning)
+            .route("/config/redis", web::get().to(get_redis_config))
+            .route("/config/redis", web::post().to(apply_redis_config))
             .route("/config/api_keys", web::get().to(get_api_keys))
             .route("/config/api_keys", web::post().to(save_api_keys))
             .route(

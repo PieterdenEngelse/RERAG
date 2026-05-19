@@ -1542,7 +1542,7 @@ pub fn MonitorTip() -> Element {
                                                         onclick: move |_| show_kg_info.set(!show_kg_info()),
                                                         "knowledge graph"
                                                     }
-                                                    " (when Neo4j is enabled). Without dedup, every page header and footer becomes a chunk, and each chunk becomes a node — so a 20-page PDF produces 20 identical nodes for " span { class: "font-mono", "\"Chapter 3 — Architecture\"" } " and 20 more for " span { class: "font-mono", "\"© 2024 Acme Corp\"" } " (when they are in a header or footer)." }
+                                                    " (when FalkorDB is enabled). Without dedup, every page header and footer becomes a chunk, and each chunk becomes a node — so a 20-page PDF produces 20 identical nodes for " span { class: "font-mono", "\"Chapter 3 — Architecture\"" } " and 20 more for " span { class: "font-mono", "\"© 2024 Acme Corp\"" } " (when they are in a header or footer)." }
                                                 p { "These noise nodes are structurally meaningless — they carry no content, but they connect to real content nodes via co-occurrence edges. Graph traversal and entity extraction then has to wade through dozens of "
                                                     span {
                                                         class: "text-sky-400 underline cursor-pointer hover:text-sky-300",
@@ -1621,10 +1621,10 @@ pub fn MonitorTip() -> Element {
                                                 p { class: "text-gray-200 font-semibold pt-1", "In the AG System" }
                                                 p { "AG uses a two-tier graph architecture:" }
                                                 ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
-                                                    li { span { class: "font-mono text-gray-200", "Neo4j" } " — ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph." }
-                                                    li { span { class: "font-mono text-gray-200", "Petgraph" } " — runtime graph queries. Loads an exported JSON snapshot from Neo4j into RAM for fast, in-process traversal." }
+                                                    li { span { class: "font-mono text-gray-200", "FalkorDB" } " — ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph." }
+                                                    li { span { class: "font-mono text-gray-200", "Petgraph" } " — runtime graph queries. Loads an exported JSON snapshot from FalkorDB into RAM for fast, in-process traversal." }
                                                 }
-                                                p { class: "text-gray-200 italic", "Neo4j never runs at query time. All runtime graph traversal goes through petgraph — nanoseconds with no network overhead." }
+                                                p { class: "text-gray-200 italic", "FalkorDB never runs at query time. All runtime graph traversal goes through petgraph — nanoseconds with no network overhead." }
                                             }
                                         }
                                     }
@@ -2557,7 +2557,7 @@ chunker
   │
   ├──► normalize(Embed)   NFKC + whitespace                →  embedder  →  HNSW vector store
   ├──► normalize(Index)   NFKC + whitespace + punct canon  →  Tantivy BM25 index
-  └──► chunks (Embed)                                      →  Neo4j / petgraph
+  └──► chunks (Embed)                                      →  FalkorDB / petgraph
 
 ── QUERY ───────────────────────────────────────────────────────────────────
 

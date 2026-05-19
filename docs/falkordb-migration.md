@@ -1,8 +1,11 @@
 # Neo4j → FalkorDB Migration
 
-**Status:** Planned — not started
-**Branch:** _(create before step 2)_
+**Status:** Code migration + rename complete (Steps 0–8). Pending: end-to-end data
+verification (ingest a corpus → confirm nodes land) and the `CLAUDE.md` architecture-label fix.
+**Branch:** `falkordb-migration`
 **Scope:** Replace the Neo4j knowledge-graph backend with FalkorDB. ~13 files.
+**Deployment:** FalkorDB runs as a **native systemd user service**, not a Docker
+container — see [`falkordb-native-service.md`](./falkordb-native-service.md).
 
 ---
 
@@ -121,45 +124,62 @@ rename commit):
 ## 7. Phased plan
 
 ### Step 0 — prep
-- [ ] Commit or stash the 8 unrelated modified files on `main`.
-- [ ] Create branch, e.g. `falkordb-migration`.
+- [x] Working tree cleaned (the 8 unrelated files were handled by the user).
+- [x] Branch `falkordb-migration` created.
 
 ### Step 1 — infra
-- [ ] `backend/Cargo.toml`: replace `neo4rs` + `deadpool` with `falkordb`; add `uuid`. Keep the `neo4j` feature name for now.
-- [ ] `docker-compose.yml`: replace the `neo4j:5` service with `falkordb/falkordb`; drop the APOC plugin, the `/var/lib/neo4j/conf` and `/certs` mounts, the `neo4j-logs` volume; expose `:6379` (+ `:3000` browser, optional).
+- [x] `backend/Cargo.toml`: `neo4rs` + `deadpool` → `falkordb 0.2`. `uuid`/`chrono` were already deps. `neo4j` feature name kept.
+- [x] `docker-compose.yml`: `neo4j:5` service removed (APOC, conf/certs mounts and
+  `neo4j-logs` volume gone with it). FalkorDB was briefly a `falkordb/falkordb`
+  compose service, then moved to a **native systemd user service** — that compose
+  service and the `falkordb-data` volume have since been removed too. See
+  [`falkordb-native-service.md`](./falkordb-native-service.md).
 
 ### Step 2 — client layer
-- [ ] `graph/client.rs`: full rewrite — connection, `init_schema`, `get_stats`, `health_check`, `execute_query`, `run_query` against the `falkordb` API. Keep the `Neo4jClient` / `Neo4jError` type names for now (renamed later).
+- [x] `graph/client.rs`: full rewrite. Adds `GraphHandle` (cloneable, replaces `Arc<neo4rs::Graph>`), a `lit` Cypher-literal encoder, positional `row_*` extractors, `now_millis()`, and the `params!` macro. Type names `Neo4jClient`/`Neo4jError` kept.
 
 ### Step 3 — DDL
-- [ ] `graph/schema.rs`: constraints via `GRAPH.CONSTRAINT`, indexes via `CREATE INDEX FOR …`, full-text via `db.idx.fulltext.*`. `_Meta` schema-version node uses a Rust-supplied epoch-ms timestamp.
+- [x] **`graph/schema.rs` deleted** — it was dead code (no callers; the real schema init is `client.rs::init_schema`). Index DDL now lives in `init_schema`: range indexes on merge keys + full-text indexes. Explicit unique constraints omitted — `MERGE` already enforces uniqueness.
 
 ### Step 4 — write paths
-- [ ] `graph/knowledge_builder.rs`: port every `neo4rs::query(...).param(...)`; `datetime()` → `$now`, `randomUUID()` → `$id`.
-- [ ] `graph/agent_memory_graph.rs`: same — this file is the heaviest `datetime()` user.
+- [x] `graph/knowledge_builder.rs`: ported; `datetime()` → `$now` (epoch-ms), `randomUUID()` → app-side `uuid` param.
+- [x] `graph/agent_memory_graph.rs`: ported; same datetime/uuid treatment.
 
 ### Step 5 — read paths
-- [ ] `graph/graph_retriever.rs`: port query call sites and result deserialization.
-- [ ] `graph/petgraph_runtime.rs`: port `compile_from_neo4j`, `initialize_from_neo4j`, `new` / `new_with_neo4j`.
+- [x] `graph/graph_retriever.rs`: ported query sites + positional result extraction.
+- [x] `graph/petgraph_runtime.rs`: `compile_from_neo4j` ported (`r.metadata` column dropped — never written).
+- Note: `AgentMemoryGraph` and `GraphRetriever` have no external callers — compiled/exported only.
 
 ### Step 6 — wiring
-- [ ] `api/graph_routes.rs`: port ~9 `neo4rs::query` sites.
-- [ ] `api/mod.rs`: the `NEO4J_CLIENT` static + getter/setter (type change only).
-- [ ] `main.rs`: the Phase 5.5 init block.
-- [ ] `graph/mod.rs`: re-exports.
+- [x] `api/graph_routes.rs`: 6 handlers ported; `elementId()` → `ID()` (integer node handle).
+- [x] `graph/mod.rs`: `schema` module removed, `GraphHandle` re-exported.
+- `api/mod.rs` and `main.rs` needed **no changes** — the `Neo4jClient` API surface (`new`, `graph()`, `init_schema`, `Clone`) was preserved deliberately.
 
 ### Step 7 — verify
-- [ ] User restarts `ag.service` to surface build errors (no speculative builds).
-- [ ] Fix compile errors.
-- [ ] `docker compose --profile core up -d` (FalkorDB); ingest a test corpus; confirm entities/episodes appear; hit `/graph/*` admin endpoints; confirm petgraph compiles at startup.
-- [ ] Update the architecture description in `CLAUDE.md` (fix the stale "Neo4jDB (vector)" label) and `AGENTS.md` if relevant.
+- [x] `cargo check` clean.
+- [x] `cargo fmt` applied; `cargo clippy --all-targets` clean.
+- [x] `falkordb.service` (native systemd user unit) runs healthy on `127.0.0.1:6380`; `GRAPH.QUERY` works.
+- [x] **Migration code verified live** — across multiple service starts `ag` logs
+  `Successfully connected to FalkorDB` → `FalkorDB schema initialization complete`
+  → `Application Started Successfully`; `GET /graph/stats` queries FalkorDB and
+  returns cleanly (empty — nothing ingested into the fresh graph yet);
+  `GET /graph/rt/stats` works.
+- [x] **`ag.service` runs stably** (`active`, `NRestarts=0`, `/graph/stats` serving
+  live from FalkorDB). The crash loop hit during verification was a **pre-existing
+  systemd misconfig, not the migration**: `ag.service` was active in *both* the user
+  and the system systemd scope; both run `pre-start-clear-port.sh`'s `pkill -9 -x ag`,
+  so the two instances SIGKILLed each other every cycle. Fixed by
+  `sudo systemctl disable --now ag.service` (system scope) — see
+  [memory: ag-service-single-scope].
+- [ ] Ingest a test corpus; confirm entities/episodes land in FalkorDB.
+- [ ] Update the architecture description in `CLAUDE.md` (fix the stale
+  "Neo4jDB (vector)" label) and `AGENTS.md` if relevant.
 
-### Step 8 — rename (separate commit, only after Step 7 is green)
-- [ ] `neo4j` cargo feature → `graph`; update `default` / `full` feature lists and every `#[cfg(feature = "neo4j")]`.
-- [ ] `Neo4jClient` / `Neo4jError` → `GraphClient` / `GraphError`.
-- [ ] `NEO4J_*` env vars → `FALKOR_*` in `.env.example` and `config.rs`.
-- [ ] Live `.env` is gitignored — update it by hand:
-      `sed -i 's/^NEO4J_/FALKOR_/' .env` (then fix `FALKOR_URI` / drop `FALKOR_USER`).
+### Step 8 — rename (done)
+- [x] `neo4j` cargo feature → `graph`; `default` / `full` feature lists and every `#[cfg(feature = …)]` updated.
+- [x] `Neo4jClient` / `Neo4jError` → `GraphClient` / `GraphError`.
+- [x] `NEO4J_*` env vars → `FALKOR_*` in `.env.example` and `config.rs`.
+- [x] Live runtime env (`~/.config/ag/ag.env`) updated: `FALKOR_URI`, `FALKOR_PASSWORD`, `FALKOR_ENABLED` (no `FALKOR_USER`).
 
 ---
 
@@ -172,8 +192,9 @@ rename commit):
 | FalkorDB durability weaker than Neo4j | Enable AOF; separate instance from cache Redis; the graph is also rebuildable from source documents via re-ingest. |
 | Lost Neo4j temporal type | Accepted — timestamps become epoch-ms `i64`; format at the display layer. |
 
-**Rollback:** the work is one branch and one `docker-compose.yml` service. Revert
-the branch and `docker compose up -d neo4j` to return to Neo4j.
+**Rollback:** revert the branch (this restores the Neo4j `docker-compose.yml`
+service), `systemctl --user disable --now falkordb.service`, then
+`docker compose up -d neo4j` to return to Neo4j.
 
 ---
 

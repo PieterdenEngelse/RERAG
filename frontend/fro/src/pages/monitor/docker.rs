@@ -100,7 +100,6 @@ pub fn MonitorDocker() -> Element {
                         div { class: "text-sm text-gray-300 space-y-2",
                             p { "This page monitors Docker containers that provide infrastructure services for ag:" }
                             ul { class: "list-disc ml-5 space-y-1",
-                                li { strong { "Neo4j" } " - Knowledge graph database for GraphRAG" }
                                 li { strong { "Redis" } " - L3 cache for fast query responses" }
                                 li { strong { "Prometheus" } " - Metrics collection and storage" }
                                 li { strong { "Grafana" } " - Dashboards and visualization" }
@@ -181,7 +180,6 @@ pub fn MonitorDocker() -> Element {
                                     li { "Both can be true independently \u{2014} the container can be healthy while the backend is disconnected." }
                                 }
                                 p { "This is unique to Redis because a healthy Docker status can mask a real connectivity problem affecting L3 cache behavior." }
-                                p { "Neo4j also connects to the backend, but being disconnected is the expected runtime state \u{2014} it runs only during document ingestion." }
                             }
                         }
                     }
@@ -215,13 +213,7 @@ pub fn MonitorDocker() -> Element {
                         }
                     } else {
                         {
-                            let mut containers = snapshot.containers.clone();
-                            // Swap Neo4j and OTel container cards if both exist
-                            let neo_idx = containers.iter().position(|c| c.name == "ag-neo4j");
-                            let otel_idx = containers.iter().position(|c| c.name == "ag-otel");
-                            if let (Some(i), Some(j)) = (neo_idx, otel_idx) {
-                                containers.swap(i, j);
-                            }
+                            let containers = snapshot.containers.clone();
 
                             rsx! {
                                 div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4",
@@ -304,7 +296,6 @@ pub fn MonitorDocker() -> Element {
                 // Service URLs
                 Panel { title: Some("Service URLs".into()),
                     div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm",
-                        ServiceLink { name: "Neo4j Browser", url: "http://localhost:7474", port: "7474" }
                         ServiceLink { name: "Grafana", url: "http://localhost:3001", port: "3001" }
                         ServiceLink { name: "Prometheus", url: "http://localhost:9090", port: "9090" }
                         ServiceLink { name: "Loki", url: "http://localhost:3100", port: "3100" }
@@ -325,7 +316,6 @@ fn container_info_title(name: &str) -> &'static str {
         "loki" => "Loki",
         "tempo" => "Tempo",
         "otel" => "OTel Collector",
-        "neo4j" => "Neo4j",
         _ => "Container",
     }
 }
@@ -381,17 +371,6 @@ fn ContainerInfoBody(name: String) -> Element {
             }
             p { class: "mt-2 text-gray-400", "Ports: 4318 (OTLP HTTP in), 4317 (Tempo out)" }
         },
-        "neo4j" => rsx! {
-            p {
-                "Knowledge graph database used "
-                strong { "only during document ingestion" }
-                " to extract and store entities."
-            }
-            p { class: "mt-2",
-                "Not used at runtime — all runtime graph queries use petgraph loaded from an exported JSON snapshot. Neo4j is stopped after ingestion to save ~800MB RAM."
-            }
-            p { class: "mt-2 text-gray-400", "Ports: 7474 (HTTP), 7687 (Bolt)" }
-        },
         _ => rsx! {
             p { "Infrastructure container for the ag observability stack." }
         },
@@ -439,13 +418,13 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
         .unwrap_or_else(|| "latest".to_string());
 
     // Extract ports for display.
-    // We prefer host/external ports when present ("0.0.0.0:7474->7474/tcp"),
-    // but fall back to container port specs ("7474/tcp") so ports remain visible even
+    // We prefer host/external ports when present ("0.0.0.0:6379->6379/tcp"),
+    // but fall back to container port specs ("6379/tcp") so ports remain visible even
     // when the container is stopped and there are no published mappings.
     let mut port_set = std::collections::BTreeSet::new();
     for p in &container.ports {
         if let Some(arrow) = p.find("->") {
-            // host mapping: "...:7474->7474/tcp"
+            // host mapping: "...:6379->6379/tcp"
             let before_arrow = &p[..arrow];
             if let Some(colon) = before_arrow.rfind(':') {
                 let port = &before_arrow[colon + 1..];
@@ -454,32 +433,21 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
                 }
             }
         } else {
-            // container-only: "7474/tcp"
+            // container-only: "6379/tcp"
             let port_part = p.split('/').next().unwrap_or("");
             if !port_part.is_empty() {
                 port_set.insert(port_part.to_string());
             }
         }
     }
-    let mut ports_simple: Vec<String> = port_set.into_iter().collect();
-    let mut ports_detail = container.ports.join("\n");
-    let mut has_ports = !container.ports.is_empty();
-
-    // When the container is stopped, docker sometimes reports an empty ports list.
-    // For Neo4j we still want to show the well-known ports for operator clarity.
-    if container.name.eq_ignore_ascii_case("ag-neo4j") || display_name.eq_ignore_ascii_case("neo4j")
-    {
-        if !has_ports {
-            ports_simple = vec!["7474".into(), "7687".into()];
-            ports_detail = "7474/tcp\n7687/tcp".to_string();
-            has_ports = true;
-        }
-    }
+    let ports_simple: Vec<String> = port_set.into_iter().collect();
+    let ports_detail = container.ports.join("\n");
+    let has_ports = !container.ports.is_empty();
 
     rsx! {
         div { class: BOARD_CLASS,
             div { class: "relative mb-2",
-                // Header row (title left, badge right, Neo4j note centered on same top line)
+                // Header row (title left, badge right)
                 div { class: "relative",
                     div { class: "flex items-end gap-1",
                         h3 { class: "text-gray-200 font-semibold text-sm", "{display_name}" }
@@ -523,26 +491,8 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
                         }
                     }
 
-                    if display_name.eq_ignore_ascii_case("neo4j") {
-                        p {
-                            class: "text-cyan-400 text-xs text-center absolute top-0 left-1/2 -translate-x-1/2 w-full",
-                            "Only for ingestion"
-                        }
-                    }
-
                     if let Some((icon, class)) = health_badge {
                         span { class: "absolute top-0 right-0 px-2 py-0.5 rounded text-xs {class}", "{icon}" }
-                    }
-                }
-
-                // Neo4j quick link (positioned so it doesn't affect card layout)
-                if display_name.eq_ignore_ascii_case("neo4j") {
-                    a {
-                        href: "/config/neo4j",
-                        class: "btn btn-sm absolute left-1/2 -translate-x-1/2 z-10",
-                        // ~1.5cm + 5mm lower than the top of the card (~76px at 96dpi)
-                        style: "top: 76px; background-color: #1D6B9A; border-color: #1D6B9A; color: white;",
-                        "Config"
                     }
                 }
 

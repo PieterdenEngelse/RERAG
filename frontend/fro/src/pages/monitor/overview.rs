@@ -38,9 +38,9 @@ struct OverviewState {
     io_uring_backend: Option<String>,
     io_uring_bytes_read: Option<u64>,
     io_uring_errors: Option<u64>,
-    // Neo4j status
-    neo4j_enabled: Option<bool>,
-    neo4j_connected: Option<bool>,
+    // FalkorDB status
+    falkor_enabled: Option<bool>,
+    falkor_connected: Option<bool>,
     // Redis status
     redis_enabled: Option<bool>,
     redis_connected: Option<bool>,
@@ -106,7 +106,7 @@ pub fn MonitorOverview() -> Element {
                 None => api::fetch_requests_snapshot().await,
             };
             let io_uring = api::fetch_io_uring_stats().await;
-            let neo4j = api::fetch_neo4j_config().await;
+            let falkor = api::fetch_falkor_config().await;
             let docker = api::fetch_docker_status().await;
             let cache = api::fetch_cache_info().await;
             let tool_stats = api::fetch_tool_stats().await;
@@ -122,7 +122,7 @@ pub fn MonitorOverview() -> Element {
                         Err(_) => (None, None, None),
                     };
 
-                    let (neo4j_enabled, neo4j_connected) = match &neo4j {
+                    let (falkor_enabled, falkor_connected) = match &falkor {
                         Ok(n) => (Some(n.enabled), Some(n.connected)),
                         Err(_) => (None, None),
                     };
@@ -165,8 +165,8 @@ pub fn MonitorOverview() -> Element {
                         io_uring_backend: io_backend,
                         io_uring_bytes_read: io_bytes,
                         io_uring_errors: io_errors,
-                        neo4j_enabled,
-                        neo4j_connected,
+                        falkor_enabled,
+                        falkor_connected,
                         redis_enabled,
                         redis_connected,
                         docker_available,

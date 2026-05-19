@@ -1,5 +1,5 @@
 // src/graph/petgraph_runtime.rs
-// Version: 2.0.1 - Standalone mode with optional Neo4j
+// Version: 2.0.1 - Standalone mode with optional FalkorDB
 
 use petgraph::graph::{Graph, NodeIndex};
 use petgraph::Directed;
@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-#[cfg(feature = "neo4j")]
-use super::client::Neo4jClient;
+#[cfg(feature = "graph")]
+use super::client::GraphClient;
 
 // ─────────────────────────────────────────────────────────────
 // Data Structures
@@ -119,15 +119,15 @@ pub async fn reload_from_json_path(path: &str) {
 // ─────────────────────────────────────────────────────────────
 
 pub struct GraphCompiler {
-    #[cfg(feature = "neo4j")]
-    neo4j_client: Option<Neo4jClient>,
+    #[cfg(feature = "graph")]
+    graph_client: Option<GraphClient>,
     #[allow(dead_code)]
-    neo4j_enabled: bool,
+    graph_enabled: bool,
     data_dir: String,
 }
 
 impl GraphCompiler {
-    /// Create compiler WITHOUT Neo4j (file-only mode)
+    /// Create compiler WITHOUT FalkorDB (file-only mode)
     pub fn new_standalone_from_path(json_path: &str) -> Self {
         let dir = std::path::Path::new(json_path)
             .parent()
@@ -135,36 +135,36 @@ impl GraphCompiler {
             .to_string_lossy()
             .to_string();
         Self {
-            #[cfg(feature = "neo4j")]
-            neo4j_client: None,
-            neo4j_enabled: false,
+            #[cfg(feature = "graph")]
+            graph_client: None,
+            graph_enabled: false,
             data_dir: dir,
         }
     }
 
     pub fn new_standalone(data_dir: &str) -> Self {
         Self {
-            #[cfg(feature = "neo4j")]
-            neo4j_client: None,
-            neo4j_enabled: false,
+            #[cfg(feature = "graph")]
+            graph_client: None,
+            graph_enabled: false,
             data_dir: data_dir.into(),
         }
     }
 
-    /// Create compiler WITH Neo4j client
-    #[cfg(feature = "neo4j")]
-    pub fn new_with_neo4j(neo4j_client: Neo4jClient, data_dir: &str) -> Self {
+    /// Create compiler WITH FalkorDB client
+    #[cfg(feature = "graph")]
+    pub fn new_with_graph(graph_client: GraphClient, data_dir: &str) -> Self {
         Self {
-            neo4j_client: Some(neo4j_client),
-            neo4j_enabled: true,
+            graph_client: Some(graph_client),
+            graph_enabled: true,
             data_dir: data_dir.into(),
         }
     }
 
     /// Legacy constructor for backward compatibility
-    #[cfg(feature = "neo4j")]
-    pub fn new(neo4j_client: Neo4jClient, data_dir: &str) -> Self {
-        Self::new_with_neo4j(neo4j_client, data_dir)
+    #[cfg(feature = "graph")]
+    pub fn new(graph_client: GraphClient, data_dir: &str) -> Self {
+        Self::new_with_graph(graph_client, data_dir)
     }
 
     pub async fn compile(&self) -> RuntimeGraph {
@@ -190,7 +190,7 @@ impl GraphCompiler {
             }
         }
 
-        // 2. Try JSON file (human-readable, no Neo4j needed)
+        // 2. Try JSON file (human-readable, no FalkorDB needed)
         if Path::new(&json_path).exists() {
             match Self::load_from_json(&json_path) {
                 Ok(graph) => {
@@ -212,18 +212,18 @@ impl GraphCompiler {
             }
         }
 
-        // 3. Try Neo4j if enabled
-        #[cfg(feature = "neo4j")]
-        if self.neo4j_enabled {
-            if let Some(ref client) = self.neo4j_client {
-                info!("ParallelGroup: Compiling from Neo4j (cold start)...");
-                match self.compile_from_neo4j(client).await {
+        // 3. Try FalkorDB if enabled
+        #[cfg(feature = "graph")]
+        if self.graph_enabled {
+            if let Some(ref client) = self.graph_client {
+                info!("ParallelGroup: Compiling from FalkorDB (cold start)...");
+                match self.compile_from_graph(client).await {
                     Ok(graph) => {
                         if let Err(e) = Self::save_to_disk(&graph, &disk_path) {
                             warn!("ParallelGroup: Failed to save binary cache: {}", e);
                         }
                         info!(
-                            "ParallelGroup: Compiled {} nodes, {} edges from Neo4j in {:?}",
+                            "ParallelGroup: Compiled {} nodes, {} edges from FalkorDB in {:?}",
                             graph.node_count(),
                             graph.edge_count(),
                             start.elapsed()
@@ -231,7 +231,7 @@ impl GraphCompiler {
                         return graph;
                     }
                     Err(e) => {
-                        warn!("ParallelGroup: Neo4j compilation failed: {}", e);
+                        warn!("ParallelGroup: FalkorDB compilation failed: {}", e);
                     }
                 }
             }
@@ -242,46 +242,43 @@ impl GraphCompiler {
         RuntimeGraph::new()
     }
 
-    #[cfg(feature = "neo4j")]
-    async fn compile_from_neo4j(
+    #[cfg(feature = "graph")]
+    async fn compile_from_graph(
         &self,
-        client: &Neo4jClient,
+        client: &GraphClient,
     ) -> Result<RuntimeGraph, Box<dyn std::error::Error>> {
-        let query = neo4rs::Query::new(
-            r#"
-            MATCH (n:Chunk)-[r]->(m:Chunk)
-            RETURN 
+        use crate::graph::client::{row_f64, row_str, row_str_vec};
+
+        // r.metadata is never written by the builders, so it is omitted here;
+        // petgraph relationship metadata is populated only via the JSON export.
+        let cypher = "MATCH (n:Chunk)-[r]->(m:Chunk)
+            RETURN
                 n.id AS from_id, n.content AS from_content,
                 coalesce(n.entities, []) AS from_entities,
                 coalesce(n.source, 'unknown') AS from_source,
                 type(r) AS rel_type,
                 coalesce(r.confidence, 0.8) AS confidence,
-                coalesce(r.metadata, {}) AS metadata,
                 m.id AS to_id, m.content AS to_content,
                 coalesce(m.entities, []) AS to_entities,
-                coalesce(m.source, 'unknown') AS to_source
-            "#
-            .to_string(),
-        );
+                coalesce(m.source, 'unknown') AS to_source";
 
-        let graph_client = client.graph();
-        let mut stream = graph_client.execute(query).await?;
+        let rows = client.graph().query(cypher, &HashMap::new()).await?;
 
         let mut runtime = RuntimeGraph::new();
         let mut node_cache: HashMap<String, NodeIndex> = HashMap::new();
 
-        while let Some(row) = stream.next().await? {
-            let from_id: String = row.get("from_id")?;
-            let from_content: String = row.get("from_content")?;
-            let from_entities: Vec<String> = row.get("from_entities").unwrap_or_default();
-            let from_source: String = row.get("from_source").unwrap_or_default();
-            let to_id: String = row.get("to_id")?;
-            let to_content: String = row.get("to_content")?;
-            let to_entities: Vec<String> = row.get("to_entities").unwrap_or_default();
-            let to_source: String = row.get("to_source").unwrap_or_default();
-            let rel_type: String = row.get("rel_type")?;
-            let confidence: f32 = row.get("confidence").unwrap_or(0.8);
-            let meta: serde_json::Value = row.get("metadata").unwrap_or(serde_json::json!({}));
+        for row in rows {
+            let from_id = row_str(&row, 0);
+            let from_content = row_str(&row, 1);
+            let from_entities = row_str_vec(&row, 2);
+            let from_source = row_str(&row, 3);
+            let rel_type = row_str(&row, 4);
+            let confidence = row_f64(&row, 5, 0.8) as f32;
+            let to_id = row_str(&row, 6);
+            let to_content = row_str(&row, 7);
+            let to_entities = row_str_vec(&row, 8);
+            let to_source = row_str(&row, 9);
+            let meta = serde_json::json!({});
 
             let from_idx = *node_cache.entry(from_id.clone()).or_insert_with(|| {
                 let idx = runtime.graph.add_node(ChunkNode {
@@ -494,9 +491,9 @@ impl<'a> GraphQuery<'a> {
 // Initialization Functions
 // ─────────────────────────────────────────────────────────────
 
-#[cfg(feature = "neo4j")]
-pub async fn initialize_from_neo4j(neo4j_client: Neo4jClient) {
-    let compiler = GraphCompiler::new_with_neo4j(neo4j_client, "data");
+#[cfg(feature = "graph")]
+pub async fn initialize_from_graph(graph_client: GraphClient) {
+    let compiler = GraphCompiler::new_with_graph(graph_client, "data");
     let runtime_graph = Arc::new(compiler.compile().await);
     set_runtime_graph(runtime_graph);
 }

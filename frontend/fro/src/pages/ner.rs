@@ -687,10 +687,10 @@ pub fn ConfigNer() -> Element {
         }
         if show_graph_storage_info() {
             { info_modal("ENTITY_INTEGRATION_GRAPH_STORAGE_ENABLED", show_graph_storage_info, vec![
-                "When true, extracted entities and their relationships are persisted to the Neo4j knowledge graph.",
+                "When true, extracted entities and their relationships are persisted to the FalkorDB knowledge graph.",
                 "Each entity becomes a graph node; co-occurrence and document provenance edges link entities to source documents and to each other.",
-                "Disable if Neo4j is unavailable or if you want NER output for downstream use without graph persistence.",
-                "Requires NEO4J_ENABLED=true and a running Neo4j instance — entity storage is silently skipped if the graph is unreachable.",
+                "Disable if FalkorDB is unavailable or if you want NER output for downstream use without graph persistence.",
+                "Requires FALKOR_ENABLED=true and a running FalkorDB instance — entity storage is silently skipped if the graph is unreachable.",
                 "Default: true.",
             ]) }
         }

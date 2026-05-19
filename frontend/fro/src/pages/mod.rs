@@ -7,11 +7,11 @@ pub mod config_embedding;
 pub mod config_io_uring;
 pub mod docu;
 pub mod docu_index;
+pub mod falkordb;
 pub mod hardware;
 pub mod home;
 pub mod memories;
 pub mod monitor;
-pub mod neo4j;
 pub mod ner;
 pub mod not_found;
 pub mod onnx;
@@ -19,6 +19,7 @@ pub mod onnx_help;
 pub mod other;
 pub mod parameters;
 pub mod prompt;
+pub mod redis;
 pub mod sampling;
 pub mod terms;
 pub mod train;
@@ -35,9 +36,10 @@ pub use docu_index::DocuIndex;
 pub use docu_index::{
     DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
     DocuEmbeddings, DocuEntitiesProduction, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport,
-    DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads,
+    DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads,
     DocuTokenizersGeneral,
 };
+pub use falkordb::ConfigFalkorDb;
 pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use memories::ConfigMemories;
@@ -47,13 +49,13 @@ pub use monitor::{
     MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits,
     MonitorRequests, MonitorTip, MonitorTools,
 };
-pub use neo4j::ConfigNeo4j;
 pub use ner::ConfigNer;
 pub use not_found::PageNotFound;
 pub use onnx::ConfigOnnx;
 pub use other::ConfigOther;
 pub use parameters::Parameters;
 pub use prompt::ConfigPrompt;
+pub use redis::ConfigRedis;
 pub use sampling::ConfigSampling;
 pub use terms::ConfigTerms;
 pub use train::Train;

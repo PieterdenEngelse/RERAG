@@ -1,33 +1,34 @@
 // backend/src/graph/config.rs
-// Configuration for Neo4j Knowledge Graph integration
+// Configuration for FalkorDB Knowledge Graph integration
 
 use serde::{Deserialize, Serialize};
 use std::env;
 
-/// Neo4j connection and feature configuration
+/// FalkorDB connection and feature configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphConfig {
-    /// Enable/disable Neo4j integration
+    /// Enable/disable FalkorDB integration
     pub enabled: bool,
 
-    /// Neo4j Bolt URI (e.g., "bolt://localhost:7687")
+    /// FalkorDB connection URI (e.g., "redis://localhost:6380")
     pub uri: String,
 
-    /// Neo4j username
-    pub user: String,
-
-    /// Neo4j password (not serialized for security)
+    /// FalkorDB password (not serialized for security)
     #[serde(skip_serializing)]
     pub password: String,
 
-    /// Database name (default: "neo4j")
+    /// Database name (default: "ag")
     pub database: String,
 
     /// Maximum connections in pool
     pub max_connections: usize,
 
-    /// Connection timeout in milliseconds
+    /// Connection timeout in milliseconds (time to *open* a connection)
     pub connection_timeout_ms: u64,
+
+    /// Per-query command timeout in milliseconds (0 = no timeout). Caps how
+    /// long a FalkorDB query may run; enforced server-side.
+    pub command_timeout_ms: u64,
 
     /// Graph expansion settings
     pub expansion: GraphExpansionSettings,
@@ -76,12 +77,12 @@ impl Default for GraphConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            uri: "bolt://localhost:7687".to_string(),
-            user: "neo4j".to_string(),
+            uri: "redis://localhost:6380".to_string(),
             password: "password".to_string(),
-            database: "neo4j".to_string(),
+            database: "ag".to_string(),
             max_connections: 10,
             connection_timeout_ms: 5000,
+            command_timeout_ms: 0,
             expansion: GraphExpansionSettings::default(),
             entity_extraction: EntityExtractionSettings::default(),
         }
@@ -119,31 +120,57 @@ impl Default for EntityExtractionSettings {
     }
 }
 
+/// Apply UI-saved overrides from `.env.graph` (written by the config page's
+/// Save button) into the process environment.
+///
+/// Values here intentionally OVERRIDE existing environment variables: a UI
+/// Save is the user's explicit, most-recent intent and should win over vars
+/// inherited from `ag.env` / `.env`. Delete `.env.graph` to revert.
+fn load_env_graph_file() {
+    let Ok(content) = std::fs::read_to_string(".env.graph") else {
+        return;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            env::set_var(key.trim(), value.trim());
+        }
+    }
+}
+
 impl GraphConfig {
-    /// Load configuration from environment variables
+    /// Load configuration from environment variables (and `.env.graph` overrides)
     pub fn from_env() -> Self {
+        // UI-saved overrides (.env.graph) win over inherited env vars.
+        load_env_graph_file();
         Self {
-            enabled: env::var("NEO4J_ENABLED")
+            enabled: env::var("FALKOR_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
 
-            uri: env::var("NEO4J_URI").unwrap_or_else(|_| "bolt://localhost:7687".to_string()),
+            uri: env::var("FALKOR_URI").unwrap_or_else(|_| "redis://localhost:6380".to_string()),
 
-            user: env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string()),
+            password: env::var("FALKOR_PASSWORD").unwrap_or_else(|_| "password".to_string()),
 
-            password: env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "password".to_string()),
+            database: env::var("FALKOR_DATABASE").unwrap_or_else(|_| "ag".to_string()),
 
-            database: env::var("NEO4J_DATABASE").unwrap_or_else(|_| "neo4j".to_string()),
-
-            max_connections: env::var("NEO4J_MAX_CONNECTIONS")
+            max_connections: env::var("FALKOR_MAX_CONNECTIONS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10),
 
-            connection_timeout_ms: env::var("NEO4J_CONNECTION_TIMEOUT_MS")
+            connection_timeout_ms: env::var("FALKOR_CONNECTION_TIMEOUT_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5000),
+
+            command_timeout_ms: env::var("FALKOR_COMMAND_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
 
             expansion: GraphExpansionSettings::from_env(),
             entity_extraction: EntityExtractionSettings::from_env(),
@@ -154,13 +181,10 @@ impl GraphConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.enabled {
             if self.uri.is_empty() {
-                return Err("NEO4J_URI is required when Neo4j is enabled".to_string());
-            }
-            if self.user.is_empty() {
-                return Err("NEO4J_USER is required when Neo4j is enabled".to_string());
+                return Err("FALKOR_URI is required when FalkorDB is enabled".to_string());
             }
             if self.password.is_empty() {
-                return Err("NEO4J_PASSWORD is required when Neo4j is enabled".to_string());
+                return Err("FALKOR_PASSWORD is required when FalkorDB is enabled".to_string());
             }
         }
         Ok(())
@@ -234,7 +258,7 @@ mod tests {
     fn test_default_config() {
         let config = GraphConfig::default();
         assert!(!config.enabled);
-        assert_eq!(config.uri, "bolt://localhost:7687");
+        assert_eq!(config.uri, "redis://localhost:6380");
         assert_eq!(config.max_connections, 10);
     }
 

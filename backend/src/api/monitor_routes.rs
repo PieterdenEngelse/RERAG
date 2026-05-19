@@ -287,12 +287,12 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
         (None, false, None)
     };
 
-    // Check Neo4j status if enabled
-    #[cfg(feature = "neo4j")]
-    let neo4j_status: Option<(bool, bool)> = {
+    // Check FalkorDB status if enabled
+    #[cfg(feature = "graph")]
+    let graph_status: Option<(bool, bool)> = {
         let config = crate::graph::config::GraphConfig::from_env();
         if config.enabled {
-            if let Some(client) = get_neo4j_client() {
+            if let Some(client) = get_graph_client() {
                 match client.health_check().await {
                     Ok(connected) => Some((true, connected)),
                     Err(_) => Some((true, false)),
@@ -305,8 +305,8 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
         }
     };
 
-    #[cfg(not(feature = "neo4j"))]
-    let neo4j_status: Option<(bool, bool)> = None;
+    #[cfg(not(feature = "graph"))]
+    let graph_status: Option<(bool, bool)> = None;
 
     if let Some(retriever) = RETRIEVER.get() {
         let retriever = match retriever.try_lock() {
@@ -336,7 +336,7 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
         };
         match retriever.health_check() {
             Ok(()) => {
-                // Neo4j is ingestion-only — not running is normal.
+                // FalkorDB is ingestion-only — not running is normal.
                 // Still report its status in the response, but never downgrade health.
 
                 // Check if Redis is enabled but backend not connected
@@ -396,9 +396,9 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                     response["message"] = json!(msg);
                 }
 
-                // Add Neo4j status
-                if let Some((enabled, connected)) = neo4j_status {
-                    response["neo4j"] = json!({
+                // Add FalkorDB status
+                if let Some((enabled, connected)) = graph_status {
+                    response["graph"] = json!({
                         "enabled": enabled,
                         "connected": connected
                     });

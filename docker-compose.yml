@@ -2,13 +2,15 @@
 #
 # Usage:
 #   docker compose up -d              # Start all services
-#   docker compose up -d neo4j redis  # Start only core dependencies
+#   docker compose up -d redis        # Start just the L3 cache
 #   docker compose down               # Stop all services
 #
 # Services:
 #   Core (required for full functionality):
-#     - neo4j     :7474 (browser), :7687 (bolt) - Knowledge Graph
-#     - redis     :6379                          - L3 Cache
+#     - redis     :6379  - L3 Cache
+#
+#   FalkorDB (knowledge graph) is NOT a container — it runs as a native systemd
+#   user service. See docs/falkordb-native-service.md.
 #
 #   Extractors (optional):
 #     - docling   :5001  - Structural PDF/DOCX/PPTX extraction (set DOCLING_ENABLED=true)
@@ -22,7 +24,7 @@
 #
 # Profiles:
 #   docker compose up -d                        # All services
-#   docker compose --profile core up -d         # Just Neo4j + Redis
+#   docker compose --profile core up -d         # Just Redis + Ollama
 #   docker compose --profile observability up -d # Just observability stack
 #   docker compose --profile docling up -d      # Docling extractor sidecar
 
@@ -31,37 +33,8 @@ services:
   # CORE SERVICES (Required for full ag functionality)
   # ═══════════════════════════════════════════════════════════════
 
-  neo4j:
-    image: neo4j:5
-    container_name: ag-neo4j
-    # Neo4j is only needed for ingestion/GraphRAG. Keep it opt-in.
-    # Start explicitly with: docker compose --profile core up -d neo4j
-    restart: "no"
-    profiles: ["core"]
-    ports:
-      - "7474:7474"  # Browser UI
-      - "7687:7687"  # Bolt protocol
-    environment:
-      - NEO4J_AUTH=neo4j/agpassword123
-      - NEO4J_PLUGINS=["apoc"]
-      - NEO4J_dbms_memory_heap_initial__size=256m
-      - NEO4J_dbms_memory_heap_max__size=512m
-    volumes:
-      - neo4j-data:/data
-      - neo4j-logs:/logs
-      - /home/pde/.conf/neo4j:/var/lib/neo4j/conf
-      - /home/pde/.certs/neo4j:/certs:ro
-
-
-      
-
-      
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+  # FalkorDB (knowledge-graph store) is intentionally absent here — it runs as a
+  # native systemd user service, not a container. See docs/falkordb-native-service.md.
 
   redis:
     image: redis:7-alpine
@@ -196,17 +169,6 @@ services:
       retries: 3
       start_period: 10s
 
-  visual-cypher:
-    image: nginx:alpine
-    container_name: visual-cypher
-    profiles: ["core"]
-    volumes:
-      - ./visual-cypher-builder/dist:/usr/share/nginx/html:ro
-    ports:
-      - "8081:80"
-    depends_on:
-      - neo4j
-
   # ═══════════════════════════════════════════════════════════════
   # LLM SERVICE (Ollama for embeddings and chat)
   # ═══════════════════════════════════════════════════════════════
@@ -263,8 +225,6 @@ services:
       start_period: 90s
 
 volumes:
-  neo4j-data:
-  neo4j-logs:
   redis-data:
   prometheus-data:
   grafana-data:

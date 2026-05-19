@@ -1,5 +1,5 @@
 // backend/src/graph/mod.rs
-// Neo4j Knowledge Graph integration for GraphRAG (Phase 27)
+// FalkorDB Knowledge Graph integration for GraphRAG (Phase 27)
 //
 // This module provides graph-augmented retrieval capabilities:
 // - Entity extraction and linking
@@ -7,25 +7,23 @@
 // - Context expansion via entity relationships
 // - Agent memory as a knowledge graph
 //
-// Enable Neo4j with: cargo build --features neo4j
-// Petgraph runtime is ALWAYS available (no Neo4j needed)
+// Enable FalkorDB with: cargo build --features graph
+// Petgraph runtime is ALWAYS available (no FalkorDB needed)
 
 pub mod config;
 
-// Petgraph runtime is ALWAYS available (no Neo4j needed at runtime)
+// Petgraph runtime is ALWAYS available (no FalkorDB needed at runtime)
 pub mod petgraph_runtime;
 
-// Only compile Neo4j modules when the feature is enabled
-#[cfg(feature = "neo4j")]
+// Only compile FalkorDB modules when the feature is enabled
+#[cfg(feature = "graph")]
 pub mod agent_memory_graph;
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 pub mod client;
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 pub mod graph_retriever;
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 pub mod knowledge_builder;
-#[cfg(feature = "neo4j")]
-pub mod schema;
 
 // Re-exports: Petgraph (always available)
 pub use petgraph_runtime::{
@@ -33,29 +31,29 @@ pub use petgraph_runtime::{
     set_runtime_graph, ChunkNode, GraphQuery, Relationship, RuntimeGraph,
 };
 
-// Re-exports: Neo4j (only when feature enabled)
-#[cfg(feature = "neo4j")]
+// Re-exports: FalkorDB (only when feature enabled)
+#[cfg(feature = "graph")]
 pub use agent_memory_graph::{AgentMemoryGraph, AgentStats, Pattern, SimilarEpisode};
-#[cfg(feature = "neo4j")]
-pub use client::{GraphStats, Neo4jClient, Neo4jError};
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
+pub use client::{GraphHandle, GraphStats, GraphClient, GraphClientError};
+#[cfg(feature = "graph")]
 pub use graph_retriever::{ExpandedChunk, GraphExpansionConfig, GraphRetriever, RelatedEntity};
-#[cfg(feature = "neo4j")]
+#[cfg(feature = "graph")]
 pub use knowledge_builder::{ChunkMeta, DocumentMeta, GraphBuildStats, KnowledgeBuilder};
 
-/// Check if Neo4j feature is enabled at compile time
-pub fn is_neo4j_compiled() -> bool {
-    cfg!(feature = "neo4j")
+/// Check if FalkorDB feature is enabled at compile time
+pub fn is_graph_compiled() -> bool {
+    cfg!(feature = "graph")
 }
 
-/// Check if Neo4j is enabled via configuration
-pub fn is_neo4j_enabled() -> bool {
+/// Check if FalkorDB is enabled via configuration
+pub fn is_graph_enabled() -> bool {
     config::GraphConfig::from_env().enabled
 }
 
 /// Process a document and its chunks through the knowledge graph.
-/// Extracts entities and stores them in Neo4j.
-#[cfg(feature = "neo4j")]
+/// Extracts entities and stores them in FalkorDB.
+#[cfg(feature = "graph")]
 pub async fn index_to_knowledge_graph(
     kb: &KnowledgeBuilder,
     doc_id: &str,
@@ -191,8 +189,8 @@ pub async fn index_to_knowledge_graph(
     );
 }
 
-/// No-op when neo4j feature is disabled
-#[cfg(not(feature = "neo4j"))]
+/// No-op when graph feature is disabled
+#[cfg(not(feature = "graph"))]
 pub async fn index_to_knowledge_graph(
     _doc_id: &str,
     _title: &str,

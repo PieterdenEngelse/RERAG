@@ -29,9 +29,9 @@ cd frontend/fro && npm install && npm run css:build
 # Frontend live preview
 cd frontend/fro && dx serve --platform web
 
-# Full stack (Neo4j, Redis, Ollama, observability)
+# Full stack (FalkorDB, Redis, Ollama, observability)
 docker compose up -d
-docker compose --profile core up -d       # Just Neo4j + Redis
+docker compose --profile core up -d       # Just FalkorDB + Redis
 docker compose --profile observability up -d
 ```
 
@@ -42,9 +42,9 @@ docker compose --profile observability up -d
 [UI / CLI / External]
         │ HTTP REST (port 3010)
         ▼
-[Actix backend (backend/src/)] ──► [Tantivy (full-text) + Neo4jDB (vector) + SQLite]
+[Actix backend (backend/src/)] ──► [Tantivy (full-text) + FalkorDB (graph) + SQLite]
         │                                         │
-        ├─► [Redis L3 cache]*              [Neo4j GraphRAG]*
+        ├─► [Redis L3 cache]*              [FalkorDB GraphRAG]*
         └─► [OTel exporters] ──► [Tempo / Prometheus / Grafana / Loki]
 ```
 
@@ -70,7 +70,7 @@ docker compose --profile observability up -d
 
 | File | Purpose |
 |------|---------|
-| `backend/src/main.rs` | Startup: env parsing, tracing init, Redis/Neo4j feature wiring, background workers |
+| `backend/src/main.rs` | Startup: env parsing, tracing init, Redis/graph feature wiring, background workers |
 | `backend/src/api/mod.rs` | Central route registry (upload, search, memory, monitoring, rate-limits) |
 | `backend/src/retriever.rs` | Tantivy/LanceDB orchestration, HNSW/PQ builds, cache management |
 | `backend/src/chunker.rs` | Configurable chunkers with semantic thresholds and telemetry |
@@ -109,7 +109,7 @@ BACKEND_PORT=3010
 RUST_LOG=info
 CHUNKER_MODE=fixed|lightweight|semantic
 REDIS_ENABLED=true
-NEO4J_ENABLED=true
+FALKOR_ENABLED=true
 OTEL_TRACES_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 OLLAMA_URL=http://localhost:11434
@@ -122,10 +122,10 @@ Histogram bucket shapes are tunable without rebuilds: `SEARCH_HISTO_BUCKETS` and
 ## Cargo Feature Flags
 
 ```toml
-default = ["onnx", "io_uring", "neo4j"]
+default = ["onnx", "io_uring", "graph"]
 onnx     # ONNX Runtime (FastEmbed embeddings)
 io_uring # tokio-uring async I/O (Linux 5.1+)
-neo4j    # GraphRAG via neo4rs + deadpool
+graph    # GraphRAG via the falkordb crate
 ```
 
 ## Security Notes

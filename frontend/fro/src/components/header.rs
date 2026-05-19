@@ -77,19 +77,12 @@ pub fn Header() -> Element {
                     match api::fetch_docker_status().await {
                         Ok(docker_info) => {
                             if docker_info.docker_available {
-                                // Neo4j is ingestion-only (manual start) — always
-                                // exclude it and visual-cypher from the health count.
-                                let required_containers: Vec<_> = docker_info
+                                let running = docker_info
                                     .containers
-                                    .iter()
-                                    .filter(|c| c.name != "ag-neo4j" && c.name != "visual-cypher")
-                                    .collect();
-
-                                let running = required_containers
                                     .iter()
                                     .filter(|c| c.state == "running")
                                     .count();
-                                let total = required_containers.len();
+                                let total = docker_info.containers.len();
 
                                 if total > 0 && running < total {
                                     page_errors.with_mut(|e| {

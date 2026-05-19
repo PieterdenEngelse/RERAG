@@ -43,4 +43,4 @@ pub mod graph;
 pub mod pdf;
 pub mod perf;
 pub mod security;
-pub mod training; // Performance optimizations (SIMD, compression, HNSW, etc.) // Neo4j Knowledge Graph for GraphRAG (Phase 27)
+pub mod training; // Performance optimizations (SIMD, compression, HNSW, etc.) // FalkorDB Knowledge Graph for GraphRAG (Phase 27)

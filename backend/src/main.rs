@@ -6,8 +6,8 @@ use ag::api::start_api_server;
 use ag::cache::redis_cache::RedisCache;
 use ag::config::ApiConfig;
 use ag::db::schema_init::SchemaInitializer;
-#[cfg(feature = "neo4j")]
-use ag::graph::{config::GraphConfig, Neo4jClient};
+#[cfg(feature = "graph")]
+use ag::graph::{config::GraphConfig, GraphClient};
 use ag::index;
 use ag::monitoring::metrics;
 use ag::monitoring::tracing_config::init_tracing;
@@ -333,29 +333,29 @@ async fn main() -> std::io::Result<()> {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // PHASE 5.5: Initialize Neo4j Knowledge Graph (if enabled)
+    // PHASE 5.5: Initialize FalkorDB Knowledge Graph (if enabled)
     // ─────────────────────────────────────────────────────────────
 
-    #[cfg(feature = "neo4j")]
+    #[cfg(feature = "graph")]
     {
         let graph_config = GraphConfig::from_env();
         if graph_config.enabled {
-            let neo4j_start = Instant::now();
-            info!("🔗 Initializing Neo4j Knowledge Graph...");
+            let graph_start = Instant::now();
+            info!("🔗 Initializing FalkorDB Knowledge Graph...");
 
-            match Neo4jClient::new(graph_config.clone()).await {
+            match GraphClient::new(graph_config.clone()).await {
                 Ok(client) => {
-                    let duration_ms = neo4j_start.elapsed().as_millis() as u64;
+                    let duration_ms = graph_start.elapsed().as_millis() as u64;
                     info!(
                         duration_ms = duration_ms,
-                        "✅ Neo4j Knowledge Graph initialized"
+                        "✅ FalkorDB Knowledge Graph initialized"
                     );
 
                     // Initialize schema
                     if let Err(e) = client.init_schema().await {
-                        warn!(error = %e, "Failed to initialize Neo4j schema");
+                        warn!(error = %e, "Failed to initialize FalkorDB schema");
                     } else {
-                        info!("✅ Neo4j schema initialized");
+                        info!("✅ FalkorDB schema initialized");
                     }
 
                     // Initialize KnowledgeBuilder for graph integration during indexing
@@ -366,17 +366,17 @@ async fn main() -> std::io::Result<()> {
                     info!("✅ KnowledgeBuilder initialized for entity extraction");
 
                     // Store client globally for API access
-                    ag::api::set_neo4j_client(client);
+                    ag::api::set_graph_client(client);
 
-                    // Spawn background task to compile Neo4j → petgraph runtime
-                    // Create a NEW Neo4j connection for the background task
+                    // Spawn background task to compile FalkorDB → petgraph runtime
+                    // Create a NEW FalkorDB connection for the background task
                     let graph_config_for_petgraph = GraphConfig::from_env();
                     actix_web::rt::spawn(async move {
-                        info!("ParallelGroup: Compiling Neo4j → petgraph runtime (background)...");
+                        info!("ParallelGroup: Compiling FalkorDB → petgraph runtime (background)...");
 
-                        match Neo4jClient::new(graph_config_for_petgraph).await {
+                        match GraphClient::new(graph_config_for_petgraph).await {
                             Ok(client_for_graph) => {
-                                ag::graph::petgraph_runtime::initialize_from_neo4j(
+                                ag::graph::petgraph_runtime::initialize_from_graph(
                                     client_for_graph,
                                 )
                                 .await;
@@ -390,24 +390,24 @@ async fn main() -> std::io::Result<()> {
                                 );
                             }
                             Err(e) => {
-                                warn!("ParallelGroup: Failed to create Neo4j client for graph compilation: {}", e);
+                                warn!("ParallelGroup: Failed to create FalkorDB client for graph compilation: {}", e);
                             }
                         }
                     });
                 }
                 Err(e) => {
-                    warn!(error = %e, "Failed to initialize Neo4j Knowledge Graph");
-                    warn!("Continuing without Neo4j...");
+                    warn!(error = %e, "Failed to initialize FalkorDB Knowledge Graph");
+                    warn!("Continuing without FalkorDB...");
                 }
             }
         } else {
-            debug!("Neo4j Knowledge Graph disabled (set NEO4J_ENABLED=true to enable)");
+            debug!("FalkorDB Knowledge Graph disabled (set FALKOR_ENABLED=true to enable)");
         }
     }
 
-    #[cfg(not(feature = "neo4j"))]
+    #[cfg(not(feature = "graph"))]
     {
-        debug!("Neo4j feature not compiled (build with --features neo4j)");
+        debug!("FalkorDB feature not compiled (build with --features graph)");
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ async fn main() -> std::io::Result<()> {
         if runtime.is_empty() {
             info!(
                 duration_ms = duration_ms,
-                "📊 Petgraph runtime initialized (empty - export from Neo4j with POST /graph/export)"
+                "📊 Petgraph runtime initialized (empty - export from FalkorDB with POST /graph/export)"
             );
         } else {
             info!(

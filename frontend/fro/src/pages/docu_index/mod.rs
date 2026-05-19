@@ -11,7 +11,6 @@ mod entities_production;
 mod io_uring;
 mod knowledge_graphs;
 mod lora_export;
-mod neo4j;
 mod onnx;
 mod onnx_params;
 mod rig;
@@ -31,7 +30,6 @@ pub use entities_production::DocuEntitiesProduction;
 pub use io_uring::DocuIoUring;
 pub use knowledge_graphs::DocuKnowledgeGraphs;
 pub use lora_export::DocuLoraExport;
-pub use neo4j::DocuNeo4j;
 pub use onnx::DocuOnnx;
 pub use onnx_params::DocuOnnxParams;
 pub use rig::DocuRig;
@@ -109,11 +107,6 @@ pub fn DocuIndex() -> Element {
                         to: Route::DocuLoraExport {},
                         class: "text-primary hover:underline text-lg font-semibold block",
                         "LoRA Export"
-                    }
-                    Link {
-                        to: Route::DocuNeo4j {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "Neo4j"
                     }
                     Link {
                         to: Route::DocuTantivy {},

@@ -459,7 +459,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                         text_anchor: "middle",
                                         fill: "#4b5563",
                                         font_size: "14",
-                                        "Upload documents and enable Neo4j integration to build the knowledge graph"
+                                        "Upload documents and enable FalkorDB integration to build the knowledge graph"
                                     }
                                     text {
                                         x: if fullscreen() { "900" } else { "600" },
@@ -467,7 +467,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                         text_anchor: "middle",
                                         fill: "#4b5563",
                                         font_size: "12",
-                                        "Go to Settings → Neo4j to configure"
+                                        "Go to Settings → FalkorDB to configure"
                                     }
                                 }
 
@@ -567,16 +567,15 @@ pub fn MonitorKnowledgeGraph() -> Element {
 
                 }
 
-                // Neo4j Browser link
+                // FalkorDB query console link
                 div { class: "mt-4 text-sm text-gray-400",
-                    "For advanced queries, open "
+                    "For advanced queries, use the Cypher console on the "
                     a {
-                        href: "http://localhost:7474",
-                        target: "_blank",
-                        class: "text-primary hover:underline",
-                        "Neo4j Browser"
+                        href: "/config/falkordb",
+                        class: "text-blue-400 hover:text-blue-300 underline",
+                        "FalkorDB settings page"
                     }
-                    " (login: neo4j / agpassword123)"
+                    "."
                 }
             }
         }

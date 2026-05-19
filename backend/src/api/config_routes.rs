@@ -1839,11 +1839,11 @@ pub(crate) struct ApiKeysRequest {
 }
 
 // ============================================================================
-// NEO4J KNOWLEDGE GRAPH CONFIG (Phase 27)
+// FALKORDB KNOWLEDGE GRAPH CONFIG (Phase 27)
 // ============================================================================
 
 #[derive(Debug, Serialize)]
-pub(crate) struct Neo4jConfigResponse {
+pub(crate) struct GraphConfigResponse {
     pub status: String,
     pub message: String,
     pub request_id: String,
@@ -1851,10 +1851,10 @@ pub(crate) struct Neo4jConfigResponse {
     pub enabled: bool,
     pub connected: bool,
     pub uri: String,
-    pub user: String,
     pub database: String,
     pub max_connections: usize,
     pub connection_timeout_ms: u64,
+    pub command_timeout_ms: u64,
     // Graph expansion settings
     pub expansion_enabled: bool,
     pub max_hops: usize,
@@ -1867,11 +1867,11 @@ pub(crate) struct Neo4jConfigResponse {
     pub confidence_threshold: f32,
     pub fuzzy_threshold: f32,
     // Stats (if connected)
-    pub stats: Option<Neo4jStats>,
+    pub stats: Option<GraphStats>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct Neo4jStats {
+pub(crate) struct GraphStats {
     pub total_nodes: usize,
     pub total_relationships: usize,
     pub documents: usize,
@@ -1880,14 +1880,14 @@ pub(crate) struct Neo4jStats {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub(crate) struct Neo4jConfigRequest {
+pub(crate) struct GraphConfigRequest {
     pub enabled: Option<bool>,
     pub uri: Option<String>,
-    pub user: Option<String>,
     pub password: Option<String>,
     pub database: Option<String>,
     pub max_connections: Option<usize>,
     pub connection_timeout_ms: Option<u64>,
+    pub command_timeout_ms: Option<u64>,
     // Graph expansion
     pub expansion_enabled: Option<bool>,
     pub max_hops: Option<usize>,
@@ -1901,20 +1901,20 @@ pub(crate) struct Neo4jConfigRequest {
     pub fuzzy_threshold: Option<f32>,
 }
 
-pub(crate) async fn get_neo4j_config() -> Result<HttpResponse, Error> {
+pub(crate) async fn get_graph_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    let feature_compiled = crate::graph::is_neo4j_compiled();
+    let feature_compiled = crate::graph::is_graph_compiled();
     let config = crate::graph::config::GraphConfig::from_env();
 
     // Check if connected
-    #[cfg(feature = "neo4j")]
+    #[cfg(feature = "graph")]
     let (connected, stats) = {
-        if let Some(client) = get_neo4j_client() {
+        if let Some(client) = get_graph_client() {
             match client.health_check().await {
                 Ok(true) => {
                     // Get stats
-                    let stats = client.get_stats().await.ok().map(|s| Neo4jStats {
+                    let stats = client.get_stats().await.ok().map(|s| GraphStats {
                         total_nodes: s.total_nodes,
                         total_relationships: s.total_relationships,
                         documents: *s.node_counts.get("Document").unwrap_or(&0),
@@ -1930,13 +1930,13 @@ pub(crate) async fn get_neo4j_config() -> Result<HttpResponse, Error> {
         }
     };
 
-    #[cfg(not(feature = "neo4j"))]
-    let (connected, stats): (bool, Option<Neo4jStats>) = (false, None);
+    #[cfg(not(feature = "graph"))]
+    let (connected, stats): (bool, Option<GraphStats>) = (false, None);
 
-    Ok(HttpResponse::Ok().json(Neo4jConfigResponse {
+    Ok(HttpResponse::Ok().json(GraphConfigResponse {
         status: "ok".into(),
         message: if connected {
-            "Connected to Neo4j".into()
+            "Connected to FalkorDB".into()
         } else {
             "Not connected".into()
         },
@@ -1945,10 +1945,10 @@ pub(crate) async fn get_neo4j_config() -> Result<HttpResponse, Error> {
         enabled: config.enabled,
         connected,
         uri: config.uri,
-        user: config.user,
         database: config.database,
         max_connections: config.max_connections,
         connection_timeout_ms: config.connection_timeout_ms,
+        command_timeout_ms: config.command_timeout_ms,
         expansion_enabled: config.expansion.enabled,
         max_hops: config.expansion.max_hops,
         max_chunks: config.expansion.max_chunks,
@@ -1962,18 +1962,18 @@ pub(crate) async fn get_neo4j_config() -> Result<HttpResponse, Error> {
     }))
 }
 
-pub(crate) async fn save_neo4j_config(
-    payload: web::Json<Neo4jConfigRequest>,
+pub(crate) async fn save_graph_config(
+    payload: web::Json<GraphConfigRequest>,
 ) -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
-    let Neo4jConfigRequest {
+    let GraphConfigRequest {
         enabled,
         uri,
-        user,
         password,
         database,
         max_connections,
         connection_timeout_ms,
+        command_timeout_ms,
         expansion_enabled,
         max_hops,
         max_chunks,
@@ -1985,62 +1985,104 @@ pub(crate) async fn save_neo4j_config(
         fuzzy_threshold,
     } = payload.into_inner();
 
-    // Capture the requested changes so operators can see what was submitted even
-    // though we still require editing .env + restart for them to take effect.
-    let requested_changes = json!({
-        "enabled": enabled,
-        "uri": uri,
-        "user": user,
-        "password": password.as_ref().map(|_| "***"),
-        "database": database,
-        "max_connections": max_connections,
-        "connection_timeout_ms": connection_timeout_ms,
-        "expansion": {
-            "enabled": expansion_enabled,
-            "max_hops": max_hops,
-            "max_chunks": max_chunks,
-            "entity_weight": entity_weight,
-            "concept_weight": concept_weight,
-            "min_relationship_strength": min_relationship_strength,
-        },
-        "entity_extraction": {
-            "enabled": extraction_enabled,
-            "confidence_threshold": confidence_threshold,
-            "fuzzy_threshold": fuzzy_threshold,
-        }
-    });
+    // Merge submitted values over the current config so any omitted field is
+    // preserved rather than reset. `current` already reflects .env.graph.
+    let current = crate::graph::config::GraphConfig::from_env();
+    let enabled = enabled.unwrap_or(current.enabled);
+    let uri = uri.unwrap_or(current.uri);
+    let database = database.unwrap_or(current.database);
+    let max_connections = max_connections.unwrap_or(current.max_connections);
+    let connection_timeout_ms = connection_timeout_ms.unwrap_or(current.connection_timeout_ms);
+    let command_timeout_ms = command_timeout_ms.unwrap_or(current.command_timeout_ms);
+    let expansion_enabled = expansion_enabled.unwrap_or(current.expansion.enabled);
+    let max_hops = max_hops.unwrap_or(current.expansion.max_hops);
+    let max_chunks = max_chunks.unwrap_or(current.expansion.max_chunks);
+    let entity_weight = entity_weight.unwrap_or(current.expansion.entity_weight);
+    let concept_weight = concept_weight.unwrap_or(current.expansion.concept_weight);
+    let min_relationship_strength =
+        min_relationship_strength.unwrap_or(current.expansion.min_relationship_strength);
+    let extraction_enabled = extraction_enabled.unwrap_or(current.entity_extraction.enabled);
+    let confidence_threshold =
+        confidence_threshold.unwrap_or(current.entity_extraction.confidence_threshold);
+    let fuzzy_threshold = fuzzy_threshold.unwrap_or(current.entity_extraction.fuzzy_threshold);
 
-    Ok(HttpResponse::Ok().json(json!({
-        "status": "ok",
-        "message": "Neo4j configuration is read from environment variables. Update .env and restart the application to apply changes.",
-        "request_id": request_id,
-        "restart_required": true,
-        "requested_changes": requested_changes
-    })))
+    // Password is write-only: only persisted when a non-empty value is sent,
+    // otherwise the existing FALKOR_PASSWORD (from ag.env/.env) is left intact.
+    let password_line = match password.as_deref() {
+        Some(p) if !p.is_empty() => format!("FALKOR_PASSWORD={p}\n"),
+        _ => String::new(),
+    };
+
+    let env_content = format!(
+        "# FalkorDB Knowledge Graph configuration (saved by the config UI).\n\
+         # This file OVERRIDES environment variables. Delete it to revert to ag.env/.env.\n\
+         \n\
+         # Connection\n\
+         FALKOR_ENABLED={enabled}\n\
+         FALKOR_URI={uri}\n\
+         {password_line}\
+         FALKOR_DATABASE={database}\n\
+         FALKOR_MAX_CONNECTIONS={max_connections}\n\
+         FALKOR_CONNECTION_TIMEOUT_MS={connection_timeout_ms}\n\
+         FALKOR_COMMAND_TIMEOUT_MS={command_timeout_ms}\n\
+         \n\
+         # Graph expansion\n\
+         GRAPH_EXPANSION_ENABLED={expansion_enabled}\n\
+         GRAPH_EXPANSION_MAX_HOPS={max_hops}\n\
+         GRAPH_EXPANSION_MAX_CHUNKS={max_chunks}\n\
+         GRAPH_ENTITY_WEIGHT={entity_weight}\n\
+         GRAPH_CONCEPT_WEIGHT={concept_weight}\n\
+         GRAPH_MIN_RELATIONSHIP_STRENGTH={min_relationship_strength}\n\
+         \n\
+         # Entity extraction\n\
+         ENTITY_EXTRACTION_ENABLED={extraction_enabled}\n\
+         ENTITY_EXTRACTION_CONFIDENCE_THRESHOLD={confidence_threshold}\n\
+         ENTITY_LINKING_FUZZY_THRESHOLD={fuzzy_threshold}\n",
+    );
+
+    match std::fs::write(".env.graph", &env_content) {
+        Ok(_) => {
+            info!("Saved FalkorDB config to .env.graph");
+            Ok(HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": "Saved to .env.graph. Restart ag — or click Reconnect for connection changes — to apply.",
+                "request_id": request_id,
+                "restart_required": true
+            })))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to write .env.graph");
+            Ok(HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Failed to write .env.graph: {e}"),
+                "request_id": request_id
+            })))
+        }
+    }
 }
 
-pub(crate) async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
+pub(crate) async fn test_graph_connection() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    #[cfg(feature = "neo4j")]
+    #[cfg(feature = "graph")]
     {
-        if let Some(client) = get_neo4j_client() {
+        if let Some(client) = get_graph_client() {
             match client.health_check().await {
                 Ok(true) => Ok(HttpResponse::Ok().json(json!({
                     "status": "ok",
-                    "message": "Successfully connected to Neo4j",
+                    "message": "Successfully connected to FalkorDB",
                     "request_id": request_id,
                     "connected": true
                 }))),
                 Ok(false) => Ok(HttpResponse::Ok().json(json!({
                     "status": "error",
-                    "message": "Neo4j health check failed",
+                    "message": "FalkorDB health check failed",
                     "request_id": request_id,
                     "connected": false
                 }))),
                 Err(e) => Ok(HttpResponse::Ok().json(json!({
                     "status": "error",
-                    "message": format!("Neo4j connection error: {}", e),
+                    "message": format!("FalkorDB connection error: {}", e),
                     "request_id": request_id,
                     "connected": false
                 }))),
@@ -2048,23 +2090,602 @@ pub(crate) async fn test_neo4j_connection() -> Result<HttpResponse, Error> {
         } else {
             Ok(HttpResponse::Ok().json(json!({
                 "status": "error",
-                "message": "Neo4j client not initialized. Check NEO4J_ENABLED=true in .env and restart.",
+                "message": "FalkorDB client not initialized. Check FALKOR_ENABLED=true in .env and restart.",
                 "request_id": request_id,
                 "connected": false
             })))
         }
     }
 
-    #[cfg(not(feature = "neo4j"))]
+    #[cfg(not(feature = "graph"))]
     {
         Ok(HttpResponse::Ok().json(json!({
             "status": "error",
-            "message": "Neo4j feature not compiled. Build with: cargo build --features neo4j",
+            "message": "FalkorDB feature not compiled. Build with: cargo build --features graph",
             "request_id": request_id,
             "connected": false,
             "feature_compiled": false
         })))
     }
+}
+
+// ============================================================================
+// REDIS / FALKORDB SERVER PARAMETERS  (/config/redis)
+// ============================================================================
+//
+// Two-mode tuning of the FalkorDB instance. `runtime` params are set live via
+// Redis `CONFIG SET` / the module's `GRAPH.CONFIG SET`. `restart` params are
+// persisted into the falkordb.service systemd unit's ExecStart and applied
+// with daemon-reload + restart (the unit is backed up and rolled back on
+// failure). See docs/redis.md.
+
+/// Tunable-parameter catalog: (section, key, mode, help).
+/// section = "redis" (CONFIG) or "falkordb" (GRAPH.CONFIG).
+/// mode    = "runtime" (CONFIG SET / GRAPH.CONFIG SET, live) or
+///           "restart" (persisted into the unit + daemon-reload + restart).
+const REDIS_PARAM_CATALOG: &[(&str, &str, &str, &str)] = &[
+    // ── Redis server (CONFIG) ──
+    ("redis", "maxmemory", "runtime", "Hard memory ceiling for the FalkorDB instance, in bytes (accepts forms like 100mb, 1gb). 0 = no limit."),
+    ("redis", "maxmemory-policy", "runtime", "What Redis does when maxmemory is hit (noeviction, allkeys-lru, …). For a graph store, noeviction is safest."),
+    ("redis", "appendonly", "runtime", "AOF persistence on/off (yes/no). The migration enables this so the graph survives a restart."),
+    ("redis", "appendfsync", "runtime", "How often the AOF is flushed to disk: always, everysec, or no."),
+    ("redis", "save", "runtime", "RDB snapshot schedule, e.g. \"3600 1 300 100\". An empty value disables RDB snapshots."),
+    ("redis", "maxclients", "runtime", "Maximum number of simultaneous client connections."),
+    ("redis", "timeout", "runtime", "Close idle client connections after this many seconds. 0 = never."),
+    ("redis", "tcp-keepalive", "runtime", "TCP keepalive interval, in seconds, for client connections."),
+    ("redis", "loglevel", "runtime", "Log verbosity: debug, verbose, notice, or warning."),
+    ("redis", "lazyfree-lazy-eviction", "runtime", "Free evicted keys in a background thread instead of inline (yes/no)."),
+    ("redis", "port", "restart", "TCP port FalkorDB listens on. Restart parameter — applying it rewrites the falkordb.service unit and restarts FalkorDB."),
+    ("redis", "bind", "restart", "Network interfaces FalkorDB binds to. Restart parameter — rewrites the unit and restarts FalkorDB."),
+    ("redis", "dir", "restart", "Working directory for the RDB/AOF files. Restart parameter — rewrites the unit and restarts FalkorDB."),
+    ("redis", "io-threads", "restart", "Number of Redis I/O threads. Restart parameter — rewrites the unit and restarts FalkorDB."),
+    ("redis", "databases", "restart", "Number of logical Redis databases (SELECT 0..N-1). Restart parameter — rewrites the unit and restarts FalkorDB."),
+    // ── FalkorDB module (GRAPH.CONFIG) ──
+    ("falkordb", "TIMEOUT_DEFAULT", "runtime", "Default server-side query timeout in milliseconds. 0 = no timeout."),
+    ("falkordb", "TIMEOUT_MAX", "runtime", "Maximum query timeout a client may request, in milliseconds."),
+    ("falkordb", "QUERY_MEM_CAPACITY", "runtime", "Memory cap per query, in bytes. 0 = unlimited."),
+    ("falkordb", "RESULTSET_SIZE", "runtime", "Maximum number of rows a query may return. -1 = unlimited."),
+    ("falkordb", "MAX_QUEUED_QUERIES", "runtime", "How many queries may wait in the queue before new ones are rejected."),
+    ("falkordb", "EFFECTS_THRESHOLD", "runtime", "Queries whose effects exceed this size are replicated as effects rather than as the query."),
+    ("falkordb", "THREAD_COUNT", "restart", "Threads in the FalkorDB query-execution pool. Load-time parameter — applying it rewrites the unit's module args and restarts FalkorDB."),
+    ("falkordb", "OMP_THREAD_COUNT", "restart", "OpenMP threads for GraphBLAS matrix operations. Load-time parameter — rewrites the unit's module args and restarts FalkorDB."),
+    ("falkordb", "CACHE_SIZE", "restart", "Compiled-query cache size per graph. Load-time parameter — rewrites the unit's module args and restarts FalkorDB."),
+    ("falkordb", "NODE_CREATION_BUFFER", "restart", "Node/edge preallocation buffer. Load-time parameter — rewrites the unit's module args and restarts FalkorDB."),
+];
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RedisParam {
+    pub section: String,
+    pub key: String,
+    pub value: String,
+    /// "runtime" (live CONFIG SET) or "restart" (unit rewrite + restart).
+    pub mode: String,
+    pub help: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RedisConfigResponse {
+    pub status: String,
+    pub connected: bool,
+    pub message: String,
+    pub request_id: String,
+    pub redis_version: String,
+    pub used_memory_human: String,
+    /// systemd MemoryMax cgroup cap for falkordb.service, in bytes.
+    /// None = uncapped or not determinable. `maxmemory` may not exceed it.
+    pub memory_max_bytes: Option<u64>,
+    pub params: Vec<RedisParam>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct RedisChange {
+    pub section: String,
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct RedisApplyRequest {
+    pub changes: Vec<RedisChange>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RedisApplyResult {
+    pub key: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RedisApplyResponse {
+    pub status: String,
+    pub message: String,
+    pub request_id: String,
+    pub results: Vec<RedisApplyResult>,
+}
+
+/// Open a plain Redis connection to the FalkorDB instance (for CONFIG commands).
+async fn open_falkor_redis_conn() -> Result<redis::aio::ConnectionManager, String> {
+    let cfg = crate::graph::config::GraphConfig::from_env();
+    // Inject the password as userinfo, matching the graph client's URL builder.
+    let url = if cfg.password.is_empty() {
+        cfg.uri.clone()
+    } else if let Some(idx) = cfg.uri.find("://") {
+        let (scheme, rest) = cfg.uri.split_at(idx + 3);
+        format!("{scheme}:{}@{rest}", cfg.password)
+    } else {
+        cfg.uri.clone()
+    };
+    let client = redis::Client::open(url).map_err(|e| e.to_string())?;
+    redis::aio::ConnectionManager::new(client)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Stringify a Redis reply value.
+fn redis_value_to_string(v: &redis::Value) -> String {
+    match v {
+        redis::Value::Nil => String::new(),
+        redis::Value::Int(i) => i.to_string(),
+        redis::Value::BulkString(b) => String::from_utf8_lossy(b).into_owned(),
+        redis::Value::SimpleString(s) => s.clone(),
+        redis::Value::Double(d) => d.to_string(),
+        redis::Value::Boolean(b) => b.to_string(),
+        redis::Value::Okay => "OK".to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Read the systemd `MemoryMax` cgroup cap for `falkordb.service`, in bytes.
+/// Returns `None` when uncapped (`infinity`) or not determinable.
+async fn read_memory_max() -> Option<u64> {
+    let out = tokio::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            "falkordb.service",
+            "-p",
+            "MemoryMax",
+            "--value",
+        ])
+        .output()
+        .await
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() || s == "infinity" {
+        return None;
+    }
+    s.parse::<u64>().ok()
+}
+
+/// Parse a Redis memory value (`0`, `104857600`, `256mb`, `1gb`, `512m`, …)
+/// into bytes, mirroring Redis's unit rules: `k`=1000 / `kb`=1024, etc.
+fn parse_redis_memory(s: &str) -> Option<u64> {
+    let s = s.trim().to_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(n) = s.parse::<u64>() {
+        return Some(n);
+    }
+    let (num, mult): (&str, u64) = if let Some(n) = s.strip_suffix("kb") {
+        (n, 1024)
+    } else if let Some(n) = s.strip_suffix("mb") {
+        (n, 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix("gb") {
+        (n, 1024 * 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix('k') {
+        (n, 1000)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 1_000_000)
+    } else if let Some(n) = s.strip_suffix('g') {
+        (n, 1_000_000_000)
+    } else if let Some(n) = s.strip_suffix('b') {
+        (n, 1)
+    } else {
+        return None;
+    };
+    num.trim().parse::<u64>().ok().and_then(|n| n.checked_mul(mult))
+}
+
+/// Apply mode for a catalogued parameter — `"runtime"` or `"restart"`.
+/// `None` when the (section, key) pair is not in the catalog.
+fn param_mode(section: &str, key: &str) -> Option<&'static str> {
+    REDIS_PARAM_CATALOG
+        .iter()
+        .find(|&&(s, k, _, _)| s == section && k == key)
+        .map(|&(_, _, m, _)| m)
+}
+
+/// Path to the `falkordb.service` systemd user unit.
+fn falkordb_unit_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(std::path::PathBuf::from(home).join(".config/systemd/user/falkordb.service"))
+}
+
+/// Run a `systemctl --user` command; `Err` carries stderr on failure.
+async fn systemctl_user(args: &[&str]) -> Result<(), String> {
+    let out = tokio::process::Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Health check — is FalkorDB answering `PING`? Retries to allow for startup.
+async fn falkordb_ping_ok() -> bool {
+    for _ in 0..8 {
+        if let Ok(mut conn) = open_falkor_redis_conn().await {
+            if redis::cmd("PING")
+                .query_async::<String>(&mut conn)
+                .await
+                .is_ok()
+            {
+                return true;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    }
+    false
+}
+
+/// Splice restart-mode changes into a unit `ExecStart` value.
+///
+/// `ExecStart` is `<binary> <redis flags…> --loadmodule <so> [MODULE ARGS…]`.
+/// Redis params become `--key value` flags before `--loadmodule`; FalkorDB
+/// module params become `KEY VALUE` pairs after the `.so` path. Each value
+/// must be a single whitespace-free token.
+fn splice_execstart(execstart: &str, changes: &[(&str, &str, &str)]) -> Result<String, String> {
+    let mut tokens: Vec<String> = execstart.split_whitespace().map(str::to_string).collect();
+    if tokens.is_empty() {
+        return Err("ExecStart is empty".into());
+    }
+    for &(section, key, value) in changes {
+        if value.split_whitespace().count() != 1 {
+            return Err(format!(
+                "value for `{key}` must be a single token with no spaces"
+            ));
+        }
+        let lm = tokens
+            .iter()
+            .position(|t| t == "--loadmodule")
+            .ok_or("ExecStart has no --loadmodule directive")?;
+        if section == "falkordb" {
+            // Module args: KEY VALUE pairs after the .so path at index lm+1.
+            let mut j = lm + 2;
+            let mut found = false;
+            while j + 1 < tokens.len() {
+                if tokens[j] == key {
+                    tokens[j + 1] = value.to_string();
+                    found = true;
+                    break;
+                }
+                j += 2;
+            }
+            if !found {
+                tokens.push(key.to_string());
+                tokens.push(value.to_string());
+            }
+        } else {
+            // Redis flag `--key value`, somewhere in tokens[1..lm].
+            let flag = format!("--{key}");
+            if let Some(rel) = tokens[1..lm].iter().position(|t| t == &flag) {
+                let vi = rel + 2; // 1 (slice offset) + rel + 1 (value follows flag)
+                if vi < lm {
+                    tokens[vi] = value.to_string();
+                } else {
+                    return Err(format!("flag `{flag}` has no value to replace"));
+                }
+            } else {
+                tokens.insert(lm, value.to_string());
+                tokens.insert(lm, flag);
+            }
+        }
+    }
+    Ok(tokens.join(" "))
+}
+
+/// Persist restart-mode changes into the falkordb.service unit, then
+/// daemon-reload + restart. Backs the unit up first; rolls back if FalkorDB
+/// fails to come up. Returns one result per change.
+async fn apply_restart_changes(changes: &[(&str, &str, &str)]) -> Vec<RedisApplyResult> {
+    let fail_all = |msg: String| -> Vec<RedisApplyResult> {
+        changes
+            .iter()
+            .map(|&(_, k, _)| RedisApplyResult {
+                key: k.to_string(),
+                ok: false,
+                error: Some(msg.clone()),
+            })
+            .collect()
+    };
+    let ok_all = || -> Vec<RedisApplyResult> {
+        changes
+            .iter()
+            .map(|&(_, k, _)| RedisApplyResult {
+                key: k.to_string(),
+                ok: true,
+                error: None,
+            })
+            .collect()
+    };
+
+    let Some(unit) = falkordb_unit_path() else {
+        return fail_all("Cannot locate the falkordb.service unit".into());
+    };
+    let original = match std::fs::read_to_string(&unit) {
+        Ok(s) => s,
+        Err(e) => return fail_all(format!("Cannot read {}: {e}", unit.display())),
+    };
+
+    // Locate the single ExecStart= line.
+    let lines: Vec<&str> = original.lines().collect();
+    let exec_idxs: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start().starts_with("ExecStart="))
+        .map(|(i, _)| i)
+        .collect();
+    if exec_idxs.len() != 1 {
+        return fail_all(format!(
+            "Expected exactly one ExecStart= line in the unit, found {}",
+            exec_idxs.len()
+        ));
+    }
+    let exec_idx = exec_idxs[0];
+    let exec_value = lines[exec_idx]
+        .trim_start()
+        .trim_start_matches("ExecStart=");
+
+    let new_exec = match splice_execstart(exec_value, changes) {
+        Ok(v) => v,
+        Err(e) => return fail_all(format!("Could not edit ExecStart: {e}")),
+    };
+
+    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+    new_lines[exec_idx] = format!("ExecStart={new_exec}");
+    let mut new_content = new_lines.join("\n");
+    if original.ends_with('\n') {
+        new_content.push('\n');
+    }
+
+    // Back up, then write the new unit.
+    let backup = unit.with_extension("service.bak");
+    if let Err(e) = std::fs::write(&backup, &original) {
+        return fail_all(format!("Cannot write unit backup: {e}"));
+    }
+    if let Err(e) = std::fs::write(&unit, &new_content) {
+        return fail_all(format!("Cannot write the unit: {e}"));
+    }
+
+    // Reload + restart.
+    let restart_result: Result<(), String> = async {
+        systemctl_user(&["daemon-reload"]).await?;
+        systemctl_user(&["restart", "falkordb.service"]).await?;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = restart_result {
+        let _ = std::fs::write(&unit, &original);
+        let _ = systemctl_user(&["daemon-reload"]).await;
+        let _ = systemctl_user(&["restart", "falkordb.service"]).await;
+        return fail_all(format!(
+            "Restart failed ({e}); rolled back to the previous unit."
+        ));
+    }
+
+    // Health-check the restarted process.
+    if falkordb_ping_ok().await {
+        info!("Applied restart-mode FalkorDB config; service restarted");
+        ok_all()
+    } else {
+        tracing::warn!("FalkorDB did not come up after a config change; rolling back");
+        let _ = std::fs::write(&unit, &original);
+        let _ = systemctl_user(&["daemon-reload"]).await;
+        let _ = systemctl_user(&["restart", "falkordb.service"]).await;
+        let msg = if falkordb_ping_ok().await {
+            "FalkorDB failed to start with the new value; rolled back to the previous unit."
+                .to_string()
+        } else {
+            "FalkorDB failed to start with the new value; rollback attempted but FalkorDB is \
+             still down — check `journalctl --user -u falkordb.service`."
+                .to_string()
+        };
+        fail_all(msg)
+    }
+}
+
+/// GET /config/redis — read live Redis + FalkorDB-module parameters.
+pub(crate) async fn get_redis_config() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    let mut conn = match open_falkor_redis_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(HttpResponse::Ok().json(RedisConfigResponse {
+                status: "error".into(),
+                connected: false,
+                message: format!("Cannot reach FalkorDB: {e}"),
+                request_id,
+                redis_version: String::new(),
+                used_memory_human: String::new(),
+                memory_max_bytes: read_memory_max().await,
+                params: vec![],
+            }));
+        }
+    };
+
+    // Server identity + memory from INFO.
+    let (mut redis_version, mut used_memory_human) = (String::new(), String::new());
+    if let Ok(info) = redis::cmd("INFO").query_async::<String>(&mut conn).await {
+        for line in info.lines() {
+            if let Some(v) = line.strip_prefix("redis_version:") {
+                redis_version = v.trim().to_string();
+            } else if let Some(v) = line.strip_prefix("used_memory_human:") {
+                used_memory_human = v.trim().to_string();
+            }
+        }
+    }
+
+    // Each parameter: run the matching GET; tolerate per-key failure.
+    let mut params = Vec::new();
+    for &(section, key, mode, help) in REDIS_PARAM_CATALOG {
+        let cmd = if section == "falkordb" {
+            "GRAPH.CONFIG"
+        } else {
+            "CONFIG"
+        };
+        let value = match redis::cmd(cmd)
+            .arg("GET")
+            .arg(key)
+            .query_async::<Vec<redis::Value>>(&mut conn)
+            .await
+        {
+            Ok(pair) if pair.len() >= 2 => redis_value_to_string(&pair[1]),
+            Ok(_) => "(unset)".to_string(),
+            Err(_) => "(unavailable)".to_string(),
+        };
+        params.push(RedisParam {
+            section: section.to_string(),
+            key: key.to_string(),
+            value,
+            mode: mode.to_string(),
+            help: help.to_string(),
+        });
+    }
+
+    Ok(HttpResponse::Ok().json(RedisConfigResponse {
+        status: "ok".into(),
+        connected: true,
+        message: "Connected".into(),
+        request_id,
+        redis_version,
+        used_memory_human,
+        memory_max_bytes: read_memory_max().await,
+        params,
+    }))
+}
+
+/// POST /config/redis — two-mode apply. Runtime parameters are set live via
+/// CONFIG SET / GRAPH.CONFIG SET; restart parameters are persisted into the
+/// falkordb.service unit and applied with daemon-reload + restart.
+pub(crate) async fn apply_redis_config(
+    payload: web::Json<RedisApplyRequest>,
+) -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+    let mut results: Vec<RedisApplyResult> = Vec::new();
+
+    // Partition changes by mode; anything not in the catalog is rejected.
+    let mut restart_changes: Vec<(&str, &str, &str)> = Vec::new();
+    let mut runtime_changes: Vec<&RedisChange> = Vec::new();
+    for change in &payload.changes {
+        match param_mode(&change.section, &change.key) {
+            Some("restart") => restart_changes.push((
+                change.section.as_str(),
+                change.key.as_str(),
+                change.value.trim(),
+            )),
+            Some(_) => runtime_changes.push(change),
+            None => results.push(RedisApplyResult {
+                key: change.key.clone(),
+                ok: false,
+                error: Some("not a known parameter".into()),
+            }),
+        }
+    }
+
+    // Restart-mode changes first, so the restart cannot wipe runtime ones.
+    let restarted = !restart_changes.is_empty();
+    if restarted {
+        results.extend(apply_restart_changes(&restart_changes).await);
+    }
+
+    // Runtime-mode changes via CONFIG SET / GRAPH.CONFIG SET.
+    if !runtime_changes.is_empty() {
+        // systemd cgroup cap — maxmemory is hard-guarded against exceeding it.
+        let memory_max = read_memory_max().await;
+        match open_falkor_redis_conn().await {
+            Ok(mut conn) => {
+                for change in runtime_changes {
+                    // Hard guard: maxmemory must not exceed the MemoryMax cap.
+                    if change.section == "redis" && change.key == "maxmemory" {
+                        if let (Some(want), Some(cap)) =
+                            (parse_redis_memory(&change.value), memory_max)
+                        {
+                            if want > 0 && want > cap {
+                                results.push(RedisApplyResult {
+                                    key: change.key.clone(),
+                                    ok: false,
+                                    error: Some(format!(
+                                        "Refused: maxmemory ({want} B) exceeds the systemd \
+                                         MemoryMax cgroup cap ({cap} B). Raise MemoryMax in \
+                                         falkordb.service first."
+                                    )),
+                                });
+                                continue;
+                            }
+                        }
+                    }
+                    let cmd = if change.section == "falkordb" {
+                        "GRAPH.CONFIG"
+                    } else {
+                        "CONFIG"
+                    };
+                    match redis::cmd(cmd)
+                        .arg("SET")
+                        .arg(&change.key)
+                        .arg(&change.value)
+                        .query_async::<()>(&mut conn)
+                        .await
+                    {
+                        Ok(_) => {
+                            info!(key = %change.key, "Applied live FalkorDB/Redis config");
+                            results.push(RedisApplyResult {
+                                key: change.key.clone(),
+                                ok: true,
+                                error: None,
+                            });
+                        }
+                        Err(e) => results.push(RedisApplyResult {
+                            key: change.key.clone(),
+                            ok: false,
+                            error: Some(e.to_string()),
+                        }),
+                    }
+                }
+            }
+            Err(e) => {
+                for change in runtime_changes {
+                    results.push(RedisApplyResult {
+                        key: change.key.clone(),
+                        ok: false,
+                        error: Some(format!("Cannot reach FalkorDB: {e}")),
+                    });
+                }
+            }
+        }
+    }
+
+    let all_ok = results.iter().all(|r| r.ok);
+    let message = if restarted {
+        "Applied. Restart-mode changes were written to the falkordb.service unit and the \
+         service was restarted — use Reconnect on the FalkorDB page if graph features are needed."
+            .to_string()
+    } else {
+        "Applied live via CONFIG SET / GRAPH.CONFIG SET.".to_string()
+    };
+    Ok(HttpResponse::Ok().json(RedisApplyResponse {
+        status: if all_ok { "ok".into() } else { "partial".into() },
+        message,
+        request_id,
+        results,
+    }))
 }
 
 // ============================================================================

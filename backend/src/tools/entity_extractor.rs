@@ -238,7 +238,7 @@ impl EntityExtractorTool {
             "onnx",
             "onnxruntime",
             "ollama",
-            "neo4j",
+            "falkordb",
             "loki",
             "grafana",
             "prometheus",

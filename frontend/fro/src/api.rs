@@ -84,12 +84,12 @@ pub struct HealthResponse {
     pub index_path: Option<String>,
     pub message: Option<String>,
     pub load: Option<LoadMetrics>,
-    pub neo4j: Option<Neo4jHealthStatus>,
+    pub graph: Option<GraphHealthStatus>,
     pub onnx_pool: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Neo4jHealthStatus {
+pub struct GraphHealthStatus {
     pub enabled: bool,
     pub connected: bool,
 }
@@ -3215,12 +3215,15 @@ pub async fn log_frontend_error(page: &str, error: &str) -> Result<(), String> {
 }
 
 // ============================================================================
-// NEO4J KNOWLEDGE GRAPH API (Phase 27)
+// FALKORDB KNOWLEDGE GRAPH API
 // ============================================================================
+// Drives the /config/falkordb page. The graph store is FalkorDB (Redis +
+// GraphBLAS, OpenCypher). Reused endpoints: GET /config/graph,
+// POST /config/graph/test, plus the /graph/* admin routes.
 
-/// Neo4j configuration response
+/// FalkorDB configuration + live status (`GET /config/graph`).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct Neo4jConfigResponse {
+pub struct FalkorConfigResponse {
     pub status: String,
     pub message: String,
     pub request_id: String,
@@ -3228,10 +3231,10 @@ pub struct Neo4jConfigResponse {
     pub enabled: bool,
     pub connected: bool,
     pub uri: String,
-    pub user: String,
     pub database: String,
     pub max_connections: usize,
     pub connection_timeout_ms: u64,
+    pub command_timeout_ms: u64,
     // Graph expansion settings
     pub expansion_enabled: bool,
     pub max_hops: usize,
@@ -3243,12 +3246,13 @@ pub struct Neo4jConfigResponse {
     pub extraction_enabled: bool,
     pub confidence_threshold: f32,
     pub fuzzy_threshold: f32,
-    // Stats (if connected)
-    pub stats: Option<Neo4jStats>,
+    // Stats (present only when connected)
+    pub stats: Option<FalkorStats>,
 }
 
+/// Node/relationship counts from the FalkorDB ingestion store.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct Neo4jStats {
+pub struct FalkorStats {
     pub total_nodes: usize,
     pub total_relationships: usize,
     pub documents: usize,
@@ -3256,38 +3260,179 @@ pub struct Neo4jStats {
     pub entities: usize,
 }
 
-/// Neo4j connection test response
+/// FalkorDB connection-test result (`POST /config/graph/test`).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct Neo4jTestResponse {
+pub struct FalkorTestResponse {
     pub status: String,
     pub message: String,
+    #[serde(default)]
     pub request_id: String,
     pub connected: bool,
 }
 
-/// Fetch Neo4j configuration and status
-pub async fn fetch_neo4j_config() -> Result<Neo4jConfigResponse, String> {
-    fetch_json("/config/neo4j").await
+/// In-process petgraph runtime stats (`GET /graph/rt/stats`) — works without FalkorDB.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PetgraphRuntimeStats {
+    pub source: String,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub is_empty: bool,
 }
 
-/// Test Neo4j connection
-pub async fn test_neo4j_connection() -> Result<Neo4jTestResponse, String> {
-    let url = api_url("/config/neo4j/test");
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+/// Result of FalkorDB → JSON snapshot → petgraph reload (`POST /graph/export`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GraphExportResponse {
+    pub status: String,
+    pub nodes: usize,
+    pub relationships: usize,
+    pub path: String,
+}
 
-    if response.status().is_success() {
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {}", e))
-    } else {
-        Err(format!("Server error: {}", response.status()))
-    }
+/// Result of `POST /graph/reconnect`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GraphReconnectResponse {
+    pub status: String,
+}
+
+/// Rows from an ad-hoc read-only Cypher query (`POST /graph/query`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct CypherQueryResponse {
+    pub row_count: usize,
+    pub rows: Vec<Vec<serde_json::Value>>,
+}
+
+/// Fetch FalkorDB configuration + live status.
+pub async fn fetch_falkor_config() -> Result<FalkorConfigResponse, String> {
+    fetch_json("/config/graph").await
+}
+
+/// Test the FalkorDB connection (health check only — no data change).
+pub async fn test_falkor_connection() -> Result<FalkorTestResponse, String> {
+    post_json("/config/graph/test", &serde_json::json!({})).await
+}
+
+/// Fetch in-process petgraph runtime stats (works even when FalkorDB is down).
+pub async fn fetch_petgraph_stats() -> Result<PetgraphRuntimeStats, String> {
+    fetch_json("/graph/rt/stats").await
+}
+
+/// Export the FalkorDB graph to a JSON snapshot and reload the petgraph runtime.
+pub async fn export_graph() -> Result<GraphExportResponse, String> {
+    post_json("/graph/export", &serde_json::json!({})).await
+}
+
+/// Reconnect the app to FalkorDB (useful after a service restart).
+pub async fn reconnect_graph() -> Result<GraphReconnectResponse, String> {
+    post_json("/graph/reconnect", &serde_json::json!({})).await
+}
+
+/// Run an ad-hoc read-only Cypher query against FalkorDB.
+pub async fn run_cypher_query(cypher: &str) -> Result<CypherQueryResponse, String> {
+    post_json("/graph/query", &serde_json::json!({ "cypher": cypher })).await
+}
+
+/// Payload for saving FalkorDB config (`POST /config/graph`).
+/// The backend persists this to a `.env.graph` file that overrides env vars.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FalkorConfigSave {
+    pub enabled: bool,
+    pub uri: String,
+    /// Write-only — omitted when blank so the existing password is kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    pub database: String,
+    pub max_connections: usize,
+    pub connection_timeout_ms: u64,
+    pub command_timeout_ms: u64,
+    pub expansion_enabled: bool,
+    pub max_hops: usize,
+    pub max_chunks: usize,
+    pub entity_weight: f32,
+    pub concept_weight: f32,
+    pub min_relationship_strength: f32,
+    pub extraction_enabled: bool,
+    pub confidence_threshold: f32,
+    pub fuzzy_threshold: f32,
+}
+
+/// Result of saving FalkorDB config.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct FalkorSaveResponse {
+    pub status: String,
+    pub message: String,
+}
+
+/// Save FalkorDB config — the backend persists it to `.env.graph`.
+pub async fn save_falkor_config(cfg: &FalkorConfigSave) -> Result<FalkorSaveResponse, String> {
+    post_json("/config/graph", cfg).await
+}
+
+// ============================================================================
+// REDIS / FALKORDB SERVER PARAMETERS API  (/config/redis)
+// ============================================================================
+
+/// One tunable Redis / FalkorDB-module parameter.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RedisParam {
+    /// "redis" (Redis CONFIG) or "falkordb" (FalkorDB GRAPH.CONFIG).
+    pub section: String,
+    pub key: String,
+    pub value: String,
+    /// "runtime" (live CONFIG SET) or "restart" (unit rewrite + restart).
+    pub mode: String,
+    pub help: String,
+}
+
+/// Live Redis + FalkorDB-module parameters (`GET /config/redis`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RedisConfigResponse {
+    pub status: String,
+    pub connected: bool,
+    pub message: String,
+    pub redis_version: String,
+    pub used_memory_human: String,
+    /// systemd MemoryMax cgroup cap for falkordb.service, in bytes (None = uncapped).
+    pub memory_max_bytes: Option<u64>,
+    pub params: Vec<RedisParam>,
+}
+
+/// One parameter change submitted to `POST /config/redis`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RedisChange {
+    pub section: String,
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RedisApplyRequest {
+    pub changes: Vec<RedisChange>,
+}
+
+/// Outcome of applying one parameter.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RedisApplyResult {
+    pub key: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Result of `POST /config/redis`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RedisApplyResponse {
+    pub status: String,
+    pub message: String,
+    pub results: Vec<RedisApplyResult>,
+}
+
+/// Fetch live Redis + FalkorDB-module parameters.
+pub async fn fetch_redis_config() -> Result<RedisConfigResponse, String> {
+    fetch_json("/config/redis").await
+}
+
+/// Apply runtime-settable parameters via CONFIG SET / GRAPH.CONFIG SET.
+pub async fn apply_redis_config(changes: Vec<RedisChange>) -> Result<RedisApplyResponse, String> {
+    post_json("/config/redis", &RedisApplyRequest { changes }).await
 }
 
 // ============================================================================

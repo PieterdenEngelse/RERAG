@@ -1,17 +1,16 @@
 // backend/src/graph/graph_retriever.rs
-// Graph-augmented retrieval for context expansion
+// Graph-augmented retrieval for context expansion.
 //
 // This module provides graph-based context expansion to enhance RAG retrieval:
 // - Find related chunks through shared entities
 // - Expand context via concept relationships
 // - Multi-hop reasoning paths
 
-use crate::graph::client::Neo4jError;
+use crate::graph::client::{lit, row_f64, row_i64, row_str, row_str_vec, GraphHandle, GraphClientError};
 use crate::graph::config::GraphExpansionSettings;
-use neo4rs::{query, Graph};
+use crate::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Configuration for graph expansion
@@ -67,13 +66,13 @@ pub struct ExpandedChunk {
 
 /// Graph-based retriever for context expansion
 pub struct GraphRetriever {
-    graph: Arc<Graph>,
+    graph: GraphHandle,
     config: GraphExpansionConfig,
 }
 
 impl GraphRetriever {
     /// Create a new graph retriever
-    pub fn new(graph: Arc<Graph>, config: GraphExpansionConfig) -> Self {
+    pub fn new(graph: GraphHandle, config: GraphExpansionConfig) -> Self {
         info!(
             max_hops = config.max_hops,
             max_chunks = config.max_expanded_chunks,
@@ -87,7 +86,7 @@ impl GraphRetriever {
         &self,
         seed_chunk_ids: &[String],
         query_entities: &[String],
-    ) -> Result<Vec<ExpandedChunk>, Neo4jError> {
+    ) -> Result<Vec<ExpandedChunk>, GraphClientError> {
         if seed_chunk_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -142,97 +141,91 @@ impl GraphRetriever {
     async fn expand_via_entities(
         &self,
         seed_chunk_ids: &[String],
-    ) -> Result<Vec<ExpandedChunk>, Neo4jError> {
-        let q = query(
-            "UNWIND $chunk_ids AS seed_id
-             MATCH (seed:Chunk {id: seed_id})-[:MENTIONS]->(e:Entity)<-[m:MENTIONS]-(related:Chunk)
-             WHERE related.id <> seed_id
-             WITH related, e, m, count(DISTINCT seed_id) as shared_count
-             RETURN related.id as chunk_id,
-                    related.content as content,
-                    related.source as source,
-                    collect(DISTINCT e.name) as shared_entities,
-                    shared_count as score
-             ORDER BY score DESC
-             LIMIT $limit",
-        )
-        .param("chunk_ids", seed_chunk_ids.to_vec())
-        .param("limit", (self.config.max_expanded_chunks * 2) as i64);
+    ) -> Result<Vec<ExpandedChunk>, GraphClientError> {
+        let params = params! {
+            "chunk_ids" => lit::str_list(seed_chunk_ids),
+            "limit" => lit::int((self.config.max_expanded_chunks * 2) as i64),
+        };
+        let rows = self
+            .graph
+            .query(
+                "UNWIND $chunk_ids AS seed_id
+                 MATCH (seed:Chunk {id: seed_id})-[:MENTIONS]->(e:Entity)<-[m:MENTIONS]-(related:Chunk)
+                 WHERE related.id <> seed_id
+                 WITH related, e, m, count(DISTINCT seed_id) AS shared_count
+                 RETURN related.id AS chunk_id,
+                        related.content AS content,
+                        related.source AS source,
+                        collect(DISTINCT e.name) AS shared_entities,
+                        shared_count AS score
+                 ORDER BY score DESC
+                 LIMIT $limit",
+                &params,
+            )
+            .await?;
 
-        let mut result = self.graph.execute(q).await?;
-        let mut expanded = Vec::new();
-
-        while let Ok(Some(row)) = result.next().await {
-            let chunk_id: String = row.get("chunk_id").unwrap_or_default();
-            let content: String = row.get("content").unwrap_or_default();
-            let source: Option<String> = row.get("source").ok();
-            let shared_entities: Vec<String> = row.get("shared_entities").unwrap_or_default();
-            let score: i64 = row.get("score").unwrap_or(0);
-
-            expanded.push(ExpandedChunk {
-                chunk_id,
-                content,
-                source,
-                expansion_score: (score as f32) * self.config.entity_weight,
-                expansion_path: vec!["entity_link".to_string()],
-                shared_entities,
-            });
-        }
-
-        Ok(expanded)
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let score = row_i64(&row, 4);
+                ExpandedChunk {
+                    chunk_id: row_str(&row, 0),
+                    content: row_str(&row, 1),
+                    source: opt_str(row_str(&row, 2)),
+                    expansion_score: (score as f32) * self.config.entity_weight,
+                    expansion_path: vec!["entity_link".to_string()],
+                    shared_entities: row_str_vec(&row, 3),
+                }
+            })
+            .collect())
     }
 
     /// Find chunks that mention specific entities
     async fn find_chunks_by_entities(
         &self,
         entity_names: &[String],
-    ) -> Result<Vec<ExpandedChunk>, Neo4jError> {
+    ) -> Result<Vec<ExpandedChunk>, GraphClientError> {
         if entity_names.is_empty() {
             return Ok(Vec::new());
         }
 
         // Normalize entity names for matching
         let normalized: Vec<String> = entity_names.iter().map(|e| e.to_lowercase()).collect();
+        let params = params! {
+            "entities" => lit::str_list(&normalized),
+            "limit" => lit::int((self.config.max_expanded_chunks * 2) as i64),
+        };
+        let rows = self
+            .graph
+            .query(
+                "UNWIND $entities AS entity_name
+                 MATCH (e:Entity)
+                 WHERE toLower(e.name) CONTAINS entity_name
+                    OR toLower(e.normalized_name) CONTAINS entity_name
+                 MATCH (c:Chunk)-[m:MENTIONS]->(e)
+                 WITH c, collect(DISTINCT e.name) AS matched_entities
+                 RETURN c.id AS chunk_id,
+                        c.content AS content,
+                        c.source AS source,
+                        matched_entities AS shared_entities,
+                        size(matched_entities) AS score
+                 ORDER BY score DESC
+                 LIMIT $limit",
+                &params,
+            )
+            .await?;
 
-        let q = query(
-            "UNWIND $entities AS entity_name
-             MATCH (e:Entity)
-             WHERE toLower(e.name) CONTAINS entity_name
-                OR toLower(e.normalized_name) CONTAINS entity_name
-             MATCH (c:Chunk)-[m:MENTIONS]->(e)
-             WITH c, collect(DISTINCT e.name) as matched_entities
-             RETURN c.id as chunk_id,
-                    c.content as content,
-                    c.source as source,
-                    matched_entities as shared_entities,
-                    size(matched_entities) as score
-             ORDER BY score DESC
-             LIMIT $limit",
-        )
-        .param("entities", normalized)
-        .param("limit", (self.config.max_expanded_chunks * 2) as i64);
-
-        let mut result = self.graph.execute(q).await?;
-        let mut expanded = Vec::new();
-
-        while let Ok(Some(row)) = result.next().await {
-            let chunk_id: String = row.get("chunk_id").unwrap_or_default();
-            let content: String = row.get("content").unwrap_or_default();
-            let source: Option<String> = row.get("source").ok();
-            let shared_entities: Vec<String> = row.get("shared_entities").unwrap_or_default();
-            let score: i64 = row.get("score").unwrap_or(0);
-
-            expanded.push(ExpandedChunk {
-                chunk_id,
-                content,
-                source,
-                expansion_score: score as f32,
+        Ok(rows
+            .into_iter()
+            .map(|row| ExpandedChunk {
+                chunk_id: row_str(&row, 0),
+                content: row_str(&row, 1),
+                source: opt_str(row_str(&row, 2)),
+                expansion_score: row_i64(&row, 4) as f32,
                 expansion_path: vec!["query_entity".to_string()],
-                shared_entities,
-            });
-        }
-
-        Ok(expanded)
+                shared_entities: row_str_vec(&row, 3),
+            })
+            .collect())
     }
 
     /// Get entities related to a given entity
@@ -240,39 +233,45 @@ impl GraphRetriever {
         &self,
         entity_name: &str,
         limit: usize,
-    ) -> Result<Vec<RelatedEntity>, Neo4jError> {
-        let q = query(
-            "MATCH (e:Entity)
-             WHERE toLower(e.name) CONTAINS toLower($name)
-             MATCH (e)-[r:RELATED_TO]-(related:Entity)
-             RETURN related.name as name,
-                    related.entity_type as entity_type,
-                    r.relation_type as relation_type,
-                    r.strength as strength
-             ORDER BY r.strength DESC
-             LIMIT $limit",
-        )
-        .param("name", entity_name.to_string())
-        .param("limit", limit as i64);
+    ) -> Result<Vec<RelatedEntity>, GraphClientError> {
+        let params = params! {
+            "name" => lit::str(entity_name),
+            "limit" => lit::int(limit as i64),
+        };
+        let rows = self
+            .graph
+            .query(
+                "MATCH (e:Entity)
+                 WHERE toLower(e.name) CONTAINS toLower($name)
+                 MATCH (e)-[r:RELATED_TO]-(related:Entity)
+                 RETURN related.name AS name,
+                        related.entity_type AS entity_type,
+                        r.relation_type AS relation_type,
+                        r.strength AS strength
+                 ORDER BY r.strength DESC
+                 LIMIT $limit",
+                &params,
+            )
+            .await?;
 
-        let mut result = self.graph.execute(q).await?;
-        let mut related = Vec::new();
+        Ok(rows
+            .into_iter()
+            .map(|row| RelatedEntity {
+                name: row_str(&row, 0),
+                entity_type: opt_str(row_str(&row, 1)),
+                relation_type: opt_str(row_str(&row, 2)),
+                strength: row_f64(&row, 3, 0.5) as f32,
+            })
+            .collect())
+    }
+}
 
-        while let Ok(Some(row)) = result.next().await {
-            let name: String = row.get("name").unwrap_or_default();
-            let entity_type: Option<String> = row.get("entity_type").ok();
-            let relation_type: Option<String> = row.get("relation_type").ok();
-            let strength: f64 = row.get("strength").unwrap_or(0.5);
-
-            related.push(RelatedEntity {
-                name,
-                entity_type,
-                relation_type,
-                strength: strength as f32,
-            });
-        }
-
-        Ok(related)
+/// Map an empty string (an absent FalkorDB property) to `None`.
+fn opt_str(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }
 

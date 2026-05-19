@@ -86,7 +86,7 @@ pub fn DocuAgPipeline() -> Element {
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
                             h3 { class: "text-sm font-bold text-white mb-0.5", "6. Graph Building" }
                             p { class: "text-xs text-gray-300",
-                                code { class: "text-green-300", "knowledge_builder.rs" } " creates Document, Chunk, and Entity nodes in Neo4j. Builds HAS_CHUNK, MENTIONS, RELATED_TO relationships."
+                                code { class: "text-green-300", "knowledge_builder.rs" } " creates Document, Chunk, and Entity nodes in FalkorDB. Builds HAS_CHUNK, MENTIONS, RELATED_TO relationships."
                             }
                         }
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",

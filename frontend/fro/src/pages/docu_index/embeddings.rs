@@ -77,11 +77,11 @@ pub fn DocuEmbeddings() -> Element {
                         }
                     }
 
-                    // Col 3: Neo4j + how they work together
+                    // Col 3: FalkorDB + how they work together
                     div { class: "space-y-2",
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
-                            h3 { class: "text-sm font-bold text-white mb-1", "Neo4j: Embedding Store" }
-                            p { class: "text-xs text-gray-300 mb-0.5", "Neo4j has native vector properties, indexes, and similarity search (cosine, dot, Euclidean). Store embeddings on nodes:" }
+                            h3 { class: "text-sm font-bold text-white mb-1", "FalkorDB: Embedding Store" }
+                            p { class: "text-xs text-gray-300 mb-0.5", "FalkorDB has native vector properties, indexes, and similarity search (cosine, Euclidean). Store embeddings on nodes:" }
                             div { class: "bg-gray-700 rounded p-1.5 font-mono text-xs text-green-300 leading-tight",
                                 "CREATE (d:Document {{"
                                 br {}
@@ -100,15 +100,15 @@ pub fn DocuEmbeddings() -> Element {
                                     p { class: "text-gray-400 ml-2", "Input text → ONNX model → vector v ∈ ℝⁿ" }
                                 }
                                 div {
-                                    p { strong { "Step 2 — Store (Neo4j)" } }
+                                    p { strong { "Step 2 — Store (FalkorDB)" } }
                                     p { class: "text-gray-400 ml-2", "Attach vector to node: Document, User, Product…" }
                                 }
                                 div {
-                                    p { strong { "Step 3 — Query (Neo4j)" } }
+                                    p { strong { "Step 3 — Query (FalkorDB)" } }
                                     ul { class: "text-gray-400 list-disc ml-4 space-y-0.5",
                                         li { "Nearest-neighbor search" }
                                         li { "Rank by similarity" }
-                                        li { "Mix embeddings with graph structure (Neo4j's strength)" }
+                                        li { "Mix embeddings with graph structure (FalkorDB's strength)" }
                                     }
                                 }
                             }

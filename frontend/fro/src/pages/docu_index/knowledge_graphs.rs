@@ -44,16 +44,16 @@ pub fn DocuKnowledgeGraphs() -> Element {
                         p { class: "text-xs text-gray-300 mb-1", "AG uses a two-tier graph architecture:" }
                         div { class: "text-xs text-gray-300 space-y-1",
                             p {
-                                span { class: "text-white font-medium", "Neo4j " }
+                                span { class: "text-white font-medium", "FalkorDB " }
                                 "— ingestion-time graph building. Extracts entities, builds relationships, stores the full knowledge graph."
                             }
                             p {
                                 span { class: "text-white font-medium", "Petgraph " }
-                                "— runtime graph queries. Loads an exported JSON snapshot from Neo4j into RAM for fast, in-process traversal."
+                                "— runtime graph queries. Loads an exported JSON snapshot from FalkorDB into RAM for fast, in-process traversal."
                             }
                         }
-                        p { class: "text-xs text-gray-500 mt-1",
-                            "Neo4j never runs at query time. All runtime graph traversal goes through petgraph — nanoseconds with no network overhead."
+                        p { class: "text-xs text-gray-400 mt-1",
+                            "FalkorDB never runs at query time. All runtime graph traversal goes through petgraph — nanoseconds with no network overhead."
                         }
                     }
                 }

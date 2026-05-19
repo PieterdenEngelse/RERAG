@@ -2,11 +2,13 @@ use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigHardware, ConfigIoUring, ConfigMemories,
-    ConfigNeo4j, ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigSampling, ConfigTerms, Docu,
+    About, Config, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigFalkorDb, ConfigHardware,
+    ConfigIoUring, ConfigMemories,
+    ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigRedis, ConfigSampling,
+    ConfigTerms, Docu,
     DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
     DocuEmbeddings, DocuEntitiesProduction, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
-    DocuLoraExport, DocuNeo4j, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy,
+    DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy,
     DocuThreads, DocuTokenizersGeneral,
     Home,
     MonitorAgSystemd, MonitorAgentic, MonitorCache,
@@ -76,8 +78,10 @@ pub enum Route {
         ConfigEmbedding {},
         #[route("/config/onnx")]
         ConfigOnnx {},
-        #[route("/config/neo4j")]
-        ConfigNeo4j {},
+        #[route("/config/falkordb")]
+        ConfigFalkorDb {},
+        #[route("/config/redis")]
+        ConfigRedis {},
         #[route("/config/terms")]
         ConfigTerms {},
         #[route("/monitor/requests")]
@@ -136,8 +140,6 @@ pub enum Route {
         DocuAgPipeline {},
         #[route("/docu/index/lora-export")]
         DocuLoraExport {},
-        #[route("/docu/index/neo4j")]
-        DocuNeo4j {},
         #[route("/docu/index/tantivy")]
         DocuTantivy {},
         #[route("/docu/index/bm25")]

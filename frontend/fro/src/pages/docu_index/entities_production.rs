@@ -80,7 +80,7 @@ pub fn DocuEntitiesProduction() -> Element {
                             }
                             p {
                                 span { class: "text-gray-400", "Stored to: " }
-                                "Neo4j as Entity nodes with MENTIONS edges to Chunk nodes"
+                                "FalkorDB as Entity nodes with MENTIONS edges to Chunk nodes"
                             }
                             p {
                                 span { class: "text-gray-400", "Threshold: " }
