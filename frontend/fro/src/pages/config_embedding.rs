@@ -30,7 +30,7 @@ pub fn ConfigEmbedding() -> Element {
     let mut restarting = use_signal(|| false);
 
     // ─── ONNX model info (read-only) ──────────────────────────
-    let mut model_path = use_signal(|| String::new());
+    let mut model_path = use_signal(String::new);
     let mut onnx_max_length = use_signal(|| 0usize);
     let mut onnx_loading = use_signal(|| true);
 

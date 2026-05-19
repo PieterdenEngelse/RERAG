@@ -386,7 +386,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                         style: "background-color: #f59e0b;"
                                     }
                                     span {
-                                        class: if fullscreen() { "text-xs" } else { "text-xs" },
+                                        class: "text-xs",
                                         style: "color: #f59e0b;",
                                         "HAS_CHUNK"
                                     }
@@ -397,7 +397,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                         style: "background-color: #10b981;"
                                     }
                                     span {
-                                        class: if fullscreen() { "text-xs" } else { "text-xs" },
+                                        class: "text-xs",
                                         style: "color: #10b981;",
                                         "MENTIONS"
                                     }
@@ -408,7 +408,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                         style: "background-color: #8b5cf6;"
                                     }
                                     span {
-                                        class: if fullscreen() { "text-xs" } else { "text-xs" },
+                                        class: "text-xs",
                                         style: "color: #8b5cf6;",
                                         "RELATED_TO"
                                     }
@@ -419,7 +419,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                         style: "background-color: #ec4899;"
                                     }
                                     span {
-                                        class: if fullscreen() { "text-xs" } else { "text-xs" },
+                                        class: "text-xs",
                                         style: "color: #ec4899;",
                                         "co_occurs"
                                     }

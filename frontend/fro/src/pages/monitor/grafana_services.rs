@@ -41,7 +41,7 @@ async fn fetch_logs(unit: &str, scope: &str, limit: usize) -> Result<(String, us
 pub fn MonitorGrafanaServices() -> Element {
     let mut show_info = use_signal(|| false);
     let mut expanded: Signal<Option<usize>> = use_signal(|| None);
-    let mut log_content = use_signal(|| String::new());
+    let mut log_content = use_signal(String::new);
     let mut log_total = use_signal(|| 0usize);
     let mut log_loading = use_signal(|| false);
     let mut log_error: Signal<Option<String>> = use_signal(|| None);

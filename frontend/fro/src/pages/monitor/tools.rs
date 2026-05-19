@@ -30,7 +30,7 @@ struct ToolsState {
 const SPARKLINE_WIDTH: f64 = 80.0;
 const SPARKLINE_HEIGHT: f64 = 22.0;
 
-fn find_cost_sparkline<'a>(trends: &'a [api::ToolTrend], tool_type: &str) -> Option<Vec<f64>> {
+fn find_cost_sparkline(trends: &[api::ToolTrend], tool_type: &str) -> Option<Vec<f64>> {
     let trend = trends.iter().find(|trend| trend.tool_type == tool_type)?;
     if trend.buckets.is_empty() {
         return None;
@@ -114,7 +114,7 @@ pub fn MonitorTools() -> Element {
 
     // Fetch tool execution data
     {
-        let mut state = state.clone();
+        let mut state = state;
         use_future(move || async move {
             loop {
                 {
@@ -542,7 +542,7 @@ pub fn MonitorTools() -> Element {
                                         class: "h-full bg-blue-500 rounded",
                                         style: format!(
                                             "width: {:.2}%;",
-                                            entry.percentage.min(100.0).max(0.0)
+                                            entry.percentage.clamp(0.0, 100.0)
                                         ),
                                     }
                                 }
@@ -623,7 +623,7 @@ pub fn MonitorTools() -> Element {
                                                 div { class: "w-32 h-2 bg-gray-900 rounded overflow-hidden",
                                                     div {
                                                         class: "h-full bg-green-500",
-                                                        style: format!("width: {:.2}%;", (stats.hit_rate * 100.0).min(100.0).max(0.0)),
+                                                        style: format!("width: {:.2}%;", (stats.hit_rate * 100.0).clamp(0.0, 100.0)),
                                                     }
                                                 }
                                                 span { class: "text-gray-300 text-xs font-mono",
@@ -708,7 +708,7 @@ pub fn MonitorTools() -> Element {
                                                 div { class: "w-32 h-2 bg-gray-900 rounded overflow-hidden",
                                                     div {
                                                         class: format!("h-full {}", if status.utilization > 0.8 { "bg-red-500" } else if status.utilization > 0.6 { "bg-yellow-400" } else { "bg-green-500" }),
-                                                        style: format!("width: {:.2}%;", (status.utilization * 100.0).min(100.0).max(0.0)),
+                                                        style: format!("width: {:.2}%;", (status.utilization * 100.0).clamp(0.0, 100.0)),
                                                     }
                                                 }
                                                 span { class: "text-gray-300 text-xs font-mono",

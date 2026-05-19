@@ -96,7 +96,10 @@ pub fn index_all_documents(
                 ) {
                     Ok(chunks) => {
                         if let Err(e) = retriever.commit() {
-                            warn!("index_all_documents: commit failed for '{}': {}", path_str, e);
+                            warn!(
+                                "index_all_documents: commit failed for '{}': {}",
+                                path_str, e
+                            );
                         } else {
                             debug!(
                                 "indexed file='{}' chunks={} type={:?}",
@@ -192,7 +195,14 @@ pub async fn index_all_documents_async(
     for path in file_paths {
         let content = extract_text_async(&path).await;
         if let Some(content) = content {
-            match index_content_direct(retriever, &path, &content, chunker_mode, chunker, context_prefix_enabled) {
+            match index_content_direct(
+                retriever,
+                &path,
+                &content,
+                chunker_mode,
+                chunker,
+                context_prefix_enabled,
+            ) {
                 Ok(chunks) => {
                     indexed_count += chunks;
                     debug!("indexed file='{}' chunks={}", path.display(), chunks);
@@ -259,16 +269,20 @@ pub fn index_content_direct(
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
     let mut embed_file_out = 0usize;
-    let chunks: Vec<String> = apply_context_prefix(chunker.chunk_text(content), filename, context_prefix_enabled)
-        .into_iter()
-        .map(|c| {
-            let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
-            embed_file_in += c.len();
-            embed_file_out += out.len();
-            crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
-            out
-        })
-        .collect();
+    let chunks: Vec<String> = apply_context_prefix(
+        chunker.chunk_text(content),
+        filename,
+        context_prefix_enabled,
+    )
+    .into_iter()
+    .map(|c| {
+        let out = crate::normalizer::normalize(&c, crate::normalizer::NormalizeTarget::Embed);
+        embed_file_in += c.len();
+        embed_file_out += out.len();
+        crate::monitoring::record_canon_embed_ingestion(c.len(), out.len());
+        out
+    })
+    .collect();
     let mut index_file_in = 0usize;
     let mut index_file_out = 0usize;
     let index_chunks: Vec<String> = chunks
@@ -528,7 +542,14 @@ pub fn index_content_with_graph(
     corpus_slug: &str,
     context_prefix_enabled: bool,
 ) -> Result<(usize, Vec<(String, String)>), String> {
-    let prepared = prepare_doc(path, ir, chunker_mode, chunker, corpus_slug, context_prefix_enabled);
+    let prepared = prepare_doc(
+        path,
+        ir,
+        chunker_mode,
+        chunker,
+        corpus_slug,
+        context_prefix_enabled,
+    );
     index_prepared_doc(retriever, prepared)
 }
 

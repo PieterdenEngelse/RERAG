@@ -22,7 +22,7 @@ pub fn MonitorLogs() -> Element {
     let mut search_query = use_signal(String::new);
 
     {
-        let mut state = state.clone();
+        let mut state = state;
         use_future(move || async move {
             loop {
                 if state.read().paused {
@@ -81,7 +81,7 @@ pub fn MonitorLogs() -> Element {
     let current_file = snapshot.data.as_ref().and_then(|d| d.file.clone());
 
     let toggle_pause = {
-        let mut state = state.clone();
+        let mut state = state;
         move |_| {
             let current = state.read().paused;
             state.write().paused = !current;

@@ -291,7 +291,7 @@ pub fn MonitorAgentic() -> Element {
 
     // Fetch data on mount and periodically
     {
-        let mut state = state.clone();
+        let mut state = state;
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {

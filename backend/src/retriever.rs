@@ -2577,6 +2577,7 @@ mod tests {
         let mut retriever = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
+            false,
         )
         .unwrap();
 
@@ -2597,6 +2598,7 @@ mod tests {
         let mut retriever2 = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
+            false,
         )
         .unwrap();
         retriever2
@@ -2622,6 +2624,7 @@ mod tests {
         let mut retriever = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
+            false,
         )
         .unwrap();
 
@@ -2680,6 +2683,7 @@ mod tests {
         let mut retriever = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
+            false,
         )
         .unwrap();
         retriever.add_vector_with_id("doc1".to_string(), vec![0.1, 0.2, 0.3]);
@@ -2699,6 +2703,7 @@ mod tests {
         let mut retriever2 = Retriever::new_with_vector_file(
             index_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
+            false,
         )
         .unwrap();
         retriever2

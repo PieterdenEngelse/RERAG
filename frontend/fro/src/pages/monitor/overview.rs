@@ -101,7 +101,9 @@ pub fn MonitorOverview() -> Element {
     use_future(move || async move {
         loop {
             let health = api::health_check().await;
-            let requests = match server_filter.read().key() {
+            // Resolve the key before the await so the signal read guard is released.
+            let server = server_filter.read().key();
+            let requests = match server {
                 Some(server) => api::fetch_requests_snapshot_for(server).await,
                 None => api::fetch_requests_snapshot().await,
             };
@@ -259,7 +261,7 @@ pub fn MonitorOverview() -> Element {
                     {
                         let is_active = *server_filter.read() == filter;
                         let label = filter.label();
-                        let mut sf = server_filter.clone();
+                        let mut sf = server_filter;
                         let color = if is_active {
                             "bg-teal-700 text-white border-teal-500"
                         } else {

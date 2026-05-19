@@ -65,12 +65,12 @@ pub fn MonitorChunks() -> Element {
     let mut show_golden_read_info = use_signal(|| false);
 
     // Corpus filter
-    let mut corpus_filter = use_signal(|| String::new());
+    let mut corpus_filter = use_signal(String::new);
     let mut corpora: Signal<Vec<api::CorpusEntry>> = use_signal(Vec::new);
 
     // Chunk preview state
-    let mut preview_text = use_signal(|| String::new());
-    let mut preview_filename = use_signal(|| String::new());
+    let mut preview_text = use_signal(String::new);
+    let mut preview_filename = use_signal(String::new);
     let mut preview_loading = use_signal(|| false);
     let mut preview_result = use_signal(|| None::<api::ChunkPreviewResponse>);
     let mut preview_error = use_signal(|| None::<String>);
@@ -89,7 +89,11 @@ pub fn MonitorChunks() -> Element {
             stats.set(None);
             canon_stats.set(None);
             loading.set(true);
-            let c = if corpus_val.is_empty() { None } else { Some(corpus_val.as_str()) };
+            let c = if corpus_val.is_empty() {
+                None
+            } else {
+                Some(corpus_val.as_str())
+            };
             loop {
                 let (tok_res, stats_res, canon_res, golden_res) = futures_util::join!(
                     api::fetch_tokenizer_info(),
@@ -178,7 +182,11 @@ pub fn MonitorChunks() -> Element {
                 if let Some(ref m) = s.tokenizer_model {
                     if !tok_model.is_empty() && m != &tok_model {
                         models.insert(m.clone());
-                        let c = if s.corpus.is_empty() { "default" } else { s.corpus.as_str() };
+                        let c = if s.corpus.is_empty() {
+                            "default"
+                        } else {
+                            s.corpus.as_str()
+                        };
                         corpora.insert(c.to_string());
                     }
                 }
@@ -190,11 +198,26 @@ pub fn MonitorChunks() -> Element {
         })
         .unwrap_or_default();
     let has_mismatch = !mismatch_models.is_empty();
-    let corpus_count = mismatch_corpora.split(", ").filter(|s| !s.is_empty()).count();
-    let corpus_label = if corpus_count == 1 { "Corpus" } else { "Corpora" };
+    let corpus_count = mismatch_corpora
+        .split(", ")
+        .filter(|s| !s.is_empty())
+        .count();
+    let corpus_label = if corpus_count == 1 {
+        "Corpus"
+    } else {
+        "Corpora"
+    };
     let was_were = if corpus_count == 1 { "was" } else { "were" };
-    let that_corpus = if corpus_count == 1 { "that corpus" } else { "those corpora" };
-    let the_affected = if corpus_count == 1 { "the affected corpus" } else { "each affected corpus" };
+    let that_corpus = if corpus_count == 1 {
+        "that corpus"
+    } else {
+        "those corpora"
+    };
+    let the_affected = if corpus_count == 1 {
+        "the affected corpus"
+    } else {
+        "each affected corpus"
+    };
 
     // Detection mismatch: extension implies a strategy that doesn't match chosen_strategy.
     // Only flagged when the extension is unambiguous; heuristic-only detections are skipped.
@@ -206,8 +229,8 @@ pub fn MonitorChunks() -> Element {
             "html" | "htm" => Some("tag_aware"),
             "xml" => Some("tag_aware"),
             "json" => Some("structure_aware"),
-            "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp"
-            | "go" | "java" | "cs" | "rb" | "php" | "swift" | "kt" | "scala" => Some("ast_based"),
+            "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp" | "go"
+            | "java" | "cs" | "rb" | "php" | "swift" | "kt" | "scala" => Some("ast_based"),
             "docx" => Some("paragraph_split"),
             "odt" => Some("paragraph_split"),
             "xlsx" => Some("row_split"),
@@ -222,23 +245,36 @@ pub fn MonitorChunks() -> Element {
     let detection_mismatches: Vec<(String, String, String)> = stats()
         .as_ref()
         .map(|snaps| {
-            snaps.iter().filter_map(|s| {
-                let det = s.detection.as_ref()?;
-                let ext = det.extension.as_deref()
-                    .or_else(|| s.file.rsplit('.').next())?;
-                let expected = expected_strategy(ext)?;
-                if det.chosen_strategy != expected {
-                    let file_short = s.file.rsplit('/').next().unwrap_or(&s.file).to_string();
-                    Some((file_short, expected.to_string(), det.chosen_strategy.clone()))
-                } else {
-                    None
-                }
-            }).collect()
+            snaps
+                .iter()
+                .filter_map(|s| {
+                    let det = s.detection.as_ref()?;
+                    let ext = det
+                        .extension
+                        .as_deref()
+                        .or_else(|| s.file.rsplit('.').next())?;
+                    let expected = expected_strategy(ext)?;
+                    if det.chosen_strategy != expected {
+                        let file_short = s.file.rsplit('/').next().unwrap_or(&s.file).to_string();
+                        Some((
+                            file_short,
+                            expected.to_string(),
+                            det.chosen_strategy.clone(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         })
         .unwrap_or_default();
     let has_detection_mismatch = !detection_mismatches.is_empty();
     let detection_mismatch_count = detection_mismatches.len();
-    let detection_mismatch_plural = if detection_mismatch_count == 1 { "file" } else { "files" };
+    let detection_mismatch_plural = if detection_mismatch_count == 1 {
+        "file"
+    } else {
+        "files"
+    };
 
     rsx! {
         div { class: "space-y-6",
@@ -1126,9 +1162,7 @@ pub fn MonitorChunks() -> Element {
                                                         } else {
                                                             "text-yellow-400 text-xs"
                                                         };
-                                                        let icon = if snap_tok == "unknown" {
-                                                            "●"
-                                                        } else if matches_active {
+                                                        let icon = if snap_tok == "unknown" || matches_active {
                                                             "●"
                                                         } else {
                                                             "⚠"

@@ -177,7 +177,7 @@ pub fn MonitorIndex() -> Element {
     let corpora: Signal<Vec<api::CorpusEntry>> = use_signal(Vec::new);
 
     {
-        let mut corpora = corpora.clone();
+        let mut corpora = corpora;
         use_future(move || async move {
             if let Ok(list) = api::fetch_corpora().await {
                 corpora.set(list);
@@ -186,8 +186,8 @@ pub fn MonitorIndex() -> Element {
     }
 
     {
-        let mut state = state.clone();
-        let mut index_info = index_info.clone();
+        let mut state = state;
+        let mut index_info = index_info;
         use_future(move || async move {
             loop {
                 match api::fetch_index_info().await {
@@ -235,11 +235,9 @@ pub fn MonitorIndex() -> Element {
     }
 
     {
-        let state = state.clone();
-        let jobs = jobs.clone();
         use_future(move || async move {
             loop {
-                refresh_job_statuses(jobs.clone(), state.clone(), false).await;
+                refresh_job_statuses(jobs, state, false).await;
 
                 // Poll faster (2s) when there's an active job, slower (5s) when idle
                 let has_active_job = {
@@ -253,8 +251,7 @@ pub fn MonitorIndex() -> Element {
     }
 
     {
-        let mut state = state.clone();
-        let mem_info = mem_info.clone();
+        let mut state = state;
         use_future(move || async move {
             loop {
                 let status_result = api::fetch_export_snapshot_status().await;
@@ -320,9 +317,8 @@ pub fn MonitorIndex() -> Element {
     }
 
     let trigger_lora_export = {
-        let state = state.clone();
         Rc::new(move |_| {
-            let mut state = state.clone();
+            let mut state = state;
             spawn(async move {
                 {
                     let mut snapshot = state.write();
@@ -348,9 +344,8 @@ pub fn MonitorIndex() -> Element {
     };
 
     let save_lora_config = {
-        let state = state.clone();
         Rc::new(move |_| {
-            let mut state = state.clone();
+            let mut state = state;
             spawn(async move {
                 let (auto_enabled, debounce_str) = {
                     let snapshot = state.read();
@@ -397,9 +392,8 @@ pub fn MonitorIndex() -> Element {
     };
 
     let save_lora_filter = {
-        let state = state.clone();
         Rc::new(move |_| {
-            let mut state = state.clone();
+            let mut state = state;
             spawn(async move {
                 let filter_value = {
                     let snapshot = state.read();
@@ -438,9 +432,8 @@ pub fn MonitorIndex() -> Element {
     };
 
     let trigger_synthetic_qa = {
-        let state = state.clone();
         Rc::new(move |_| {
-            let mut state = state.clone();
+            let mut state = state;
             spawn(async move {
                 let (questions_per_chunk, max_chunks) = {
                     let snapshot = state.read();
@@ -472,9 +465,8 @@ pub fn MonitorIndex() -> Element {
     };
 
     let load_synthetic_qa_examples = {
-        let state = state.clone();
         Rc::new(move |offset: usize| {
-            let mut state = state.clone();
+            let mut state = state;
             spawn(async move {
                 state.write().synthetic_qa_examples_loading = true;
                 state.write().synthetic_qa_examples_offset = offset;
@@ -494,11 +486,9 @@ pub fn MonitorIndex() -> Element {
     };
 
     let trigger_sync_reindex = {
-        let state = state.clone();
-        let selected_corpus = selected_corpus.clone();
         Rc::new(move |_| {
-            let mut state = state.clone();
-            let selected_corpus = selected_corpus.clone();
+            let mut state = state;
+            let selected_corpus = selected_corpus;
             spawn(async move {
                 let slug = selected_corpus.read().clone();
                 {
@@ -538,13 +528,10 @@ pub fn MonitorIndex() -> Element {
     };
 
     let trigger_async_reindex = {
-        let state = state.clone();
-        let jobs = jobs.clone();
-        let selected_corpus = selected_corpus.clone();
         Rc::new(move |_| {
-            let mut state = state.clone();
-            let mut jobs = jobs.clone();
-            let selected_corpus = selected_corpus.clone();
+            let mut state = state;
+            let mut jobs = jobs;
+            let selected_corpus = selected_corpus;
             spawn(async move {
                 let slug = selected_corpus.read().clone();
 
@@ -583,9 +570,7 @@ pub fn MonitorIndex() -> Element {
                             state.write().status_message =
                                 Some(format!("Async job {} accepted", resp.job_id));
 
-                            if let Err(err) =
-                                refresh_single_job(resp.job_id, jobs.clone(), state.clone()).await
-                            {
+                            if let Err(err) = refresh_single_job(resp.job_id, jobs, state).await {
                                 state.write().status_message =
                                     Some(format!("Failed to fetch async status: {}", err));
                             }
@@ -666,7 +651,7 @@ pub fn MonitorIndex() -> Element {
                     select {
                         class: "select select-sm select-bordered bg-gray-700 text-gray-200",
                         onchange: {
-                            let mut selected_corpus = selected_corpus.clone();
+                            let mut selected_corpus = selected_corpus;
                             move |evt: Event<FormData>| {
                                 let val = evt.value();
                                 if val == "__default__" {
@@ -735,9 +720,8 @@ pub fn MonitorIndex() -> Element {
                                                 button {
                                                     class: "text-[11px] px-3 py-1 rounded border border-slate-500 text-slate-200 hover:bg-slate-600/20 disabled:opacity-40",
                                                     onclick: {
-                                                        let state = state.clone();
                                                         move |_| {
-                                                            let mut state = state.clone();
+                                                            let mut state = state;
                                                             spawn(async move {
                                                                 let current = state.read().chunking_logging_enabled;
                                                                 if let Some(current) = current {
@@ -782,7 +766,7 @@ pub fn MonitorIndex() -> Element {
                                 div {
                                     class: "fixed inset-0 z-40 bg-black/60 backdrop-blur-sm",
                                     onclick: {
-                                        let mut chunk_info_open = chunk_info_open.clone();
+                                        let mut chunk_info_open = chunk_info_open;
                                         move |_| chunk_info_open.set(false)
                                     }
                                 }
@@ -797,7 +781,7 @@ pub fn MonitorIndex() -> Element {
                                         button {
                                             class: "text-slate-400 hover:text-red-400 text-xl leading-none",
                                             onclick: {
-                                                let mut chunk_info_open = chunk_info_open.clone();
+                                                let mut chunk_info_open = chunk_info_open;
                                                 move |_| chunk_info_open.set(false)
                                             },
                                             "×"
@@ -868,7 +852,7 @@ pub fn MonitorIndex() -> Element {
                             class: QUICK_ACTION_INFO_BUTTON_CLASS,
                             style: PARAM_ICON_BUTTON_STYLE,
                             onclick: {
-                                let mut show_lora_info = show_lora_info.clone();
+                                let mut show_lora_info = show_lora_info;
                                 move |_| show_lora_info.set(true)
                             },
                             InfoIcon {}
@@ -966,7 +950,7 @@ pub fn MonitorIndex() -> Element {
                                         r#type: "checkbox",
                                         checked: snapshot.lora_auto_enabled,
                                         onchange: {
-                                            let mut state = state.clone();
+                                            let mut state = state;
                                             move |evt: Event<FormData>| {
                                                 let value = evt.checked();
                                                 let mut snapshot = state.write();
@@ -979,7 +963,7 @@ pub fn MonitorIndex() -> Element {
                                 }
                                 // Memory usage indicator — shown only when auto-export is on
                                 if snapshot.lora_auto_enabled {
-                                    if let Some((pct, bar_color, used_gb, total_gb)) = mem_bar.clone() {
+                                    if let Some((pct, bar_color, used_gb, total_gb)) = mem_bar {
                                         div { class: "space-y-0.5",
                                             div { class: "flex justify-between text-[10px] text-gray-400",
                                                 span { "RAM" }
@@ -1003,7 +987,7 @@ pub fn MonitorIndex() -> Element {
                                         min: "0",
                                         value: "{snapshot.lora_debounce_input}",
                                         oninput: {
-                                            let mut state = state.clone();
+                                            let mut state = state;
                                             move |evt: Event<FormData>| {
                                                 let value = evt.value();
                                                 let mut snapshot = state.write();
@@ -1027,8 +1011,7 @@ pub fn MonitorIndex() -> Element {
                                         class: "text-[11px] px-3 py-1 rounded border border-slate-500 text-slate-200 disabled:opacity-40",
                                         disabled: snapshot.lora_saving_config,
                                         onclick: {
-                                            let state = state.clone();
-                                            move |_| reset_lora_config_inputs(state.clone())
+                                            move |_| reset_lora_config_inputs(state)
                                         },
                                         "Reset"
                                     }
@@ -1041,7 +1024,7 @@ pub fn MonitorIndex() -> Element {
                                     value: "{snapshot.lora_filter_input}",
                                     placeholder: "Comma-separated file names (docs/example.md,notes/todo.md)…",
                                     oninput: {
-                                        let mut state = state.clone();
+                                        let mut state = state;
                                         move |evt: Event<FormData>| {
                                             let value = evt.value();
                                             let mut snapshot = state.write();
@@ -1064,8 +1047,7 @@ pub fn MonitorIndex() -> Element {
                                         class: "text-[11px] px-3 py-1 rounded border border-slate-500 text-slate-200 disabled:opacity-40",
                                         disabled: snapshot.lora_saving_filter,
                                         onclick: {
-                                            let state = state.clone();
-                                            move |_| reset_lora_filter_input(state.clone())
+                                            move |_| reset_lora_filter_input(state)
                                         },
                                         "Reset"
                                     }
@@ -1121,7 +1103,7 @@ pub fn MonitorIndex() -> Element {
                                         class: "w-full rounded border border-cyan-700/50 bg-slate-800 px-2 py-1 text-xs text-gray-100",
                                         value: "{snapshot.synthetic_qa_questions_per_chunk}",
                                         onchange: {
-                                            let mut state = state.clone();
+                                            let mut state = state;
                                             move |evt: Event<FormData>| {
                                                 if let Ok(val) = evt.value().parse::<u32>() {
                                                     state.write().synthetic_qa_questions_per_chunk = val;
@@ -1144,7 +1126,7 @@ pub fn MonitorIndex() -> Element {
                                         placeholder: "All documents",
                                         value: "{snapshot.synthetic_qa_max_chunks}",
                                         oninput: {
-                                            let mut state = state.clone();
+                                            let mut state = state;
                                             move |evt: Event<FormData>| {
                                                 state.write().synthetic_qa_max_chunks = evt.value();
                                             }
@@ -1192,7 +1174,7 @@ pub fn MonitorIndex() -> Element {
                                     class: "text-[11px] px-2 py-1 rounded border border-cyan-600/50 text-cyan-300 hover:bg-cyan-600/20",
                                     onclick: {
                                         let load_synthetic_qa_examples = load_synthetic_qa_examples.clone();
-                                        let mut show_synthetic_qa_examples = show_synthetic_qa_examples.clone();
+                                        let mut show_synthetic_qa_examples = show_synthetic_qa_examples;
                                         move |_| {
                                             (load_synthetic_qa_examples)(0);
                                             show_synthetic_qa_examples.set(true);
@@ -1209,7 +1191,7 @@ pub fn MonitorIndex() -> Element {
                         div {
                             class: "fixed inset-0 z-40 bg-black/70 backdrop-blur-sm",
                             onclick: {
-                                let mut show_synthetic_qa_examples = show_synthetic_qa_examples.clone();
+                                let mut show_synthetic_qa_examples = show_synthetic_qa_examples;
                                 move |_| show_synthetic_qa_examples.set(false)
                             }
                         }
@@ -1228,7 +1210,7 @@ pub fn MonitorIndex() -> Element {
                                 button {
                                     class: "text-slate-400 hover:text-red-400 text-xl leading-none",
                                     onclick: {
-                                        let mut show_synthetic_qa_examples = show_synthetic_qa_examples.clone();
+                                        let mut show_synthetic_qa_examples = show_synthetic_qa_examples;
                                         move |_| show_synthetic_qa_examples.set(false)
                                     },
                                     "×"
@@ -1293,7 +1275,7 @@ pub fn MonitorIndex() -> Element {
                                             "← Previous"
                                         }
                                         span { class: "text-xs text-gray-400",
-                                            "Page {(examples.offset / 10) + 1} of {(examples.total + 9) / 10}"
+                                            "Page {(examples.offset / 10) + 1} of {examples.total.div_ceil(10)}"
                                         }
                                         button {
                                             class: "text-[11px] px-3 py-1 rounded border border-slate-600 text-slate-300 disabled:opacity-40",
@@ -1316,7 +1298,7 @@ pub fn MonitorIndex() -> Element {
                         div {
                             class: "fixed inset-0 z-40 bg-black/70 backdrop-blur-sm",
                             onclick: {
-                                let mut show_synthetic_qa_info = show_synthetic_qa_info.clone();
+                                let mut show_synthetic_qa_info = show_synthetic_qa_info;
                                 move |_| show_synthetic_qa_info.set(false)
                             }
                         }
@@ -1331,7 +1313,7 @@ pub fn MonitorIndex() -> Element {
                                 button {
                                     class: "text-slate-400 hover:text-red-400 text-xl leading-none",
                                     onclick: {
-                                        let mut show_synthetic_qa_info = show_synthetic_qa_info.clone();
+                                        let mut show_synthetic_qa_info = show_synthetic_qa_info;
                                         move |_| show_synthetic_qa_info.set(false)
                                     },
                                     "×"
@@ -1396,7 +1378,7 @@ pub fn MonitorIndex() -> Element {
                         div {
                             class: "fixed inset-0 z-40 bg-black/70 backdrop-blur-sm",
                             onclick: {
-                                let mut show_lora_info = show_lora_info.clone();
+                                let mut show_lora_info = show_lora_info;
                                 move |_| show_lora_info.set(false)
                             }
                         }
@@ -1411,7 +1393,7 @@ pub fn MonitorIndex() -> Element {
                                 button {
                                     class: "text-slate-400 hover:text-red-400 text-xl leading-none",
                                     onclick: {
-                                        let mut show_lora_info = show_lora_info.clone();
+                                        let mut show_lora_info = show_lora_info;
                                         move |_| show_lora_info.set(false)
                                     },
                                     "×"
@@ -1576,7 +1558,7 @@ pub fn MonitorIndex() -> Element {
                         div {
                             class: "fixed inset-0 z-40 bg-black/70 backdrop-blur-sm",
                             onclick: {
-                                let mut show_chunking_logging_info = show_chunking_logging_info.clone();
+                                let mut show_chunking_logging_info = show_chunking_logging_info;
                                 move |_| show_chunking_logging_info.set(false)
                             }
                         }
@@ -1591,7 +1573,7 @@ pub fn MonitorIndex() -> Element {
                                 button {
                                     class: "text-slate-400 hover:text-red-400 text-xl leading-none",
                                     onclick: {
-                                        let mut show_chunking_logging_info = show_chunking_logging_info.clone();
+                                        let mut show_chunking_logging_info = show_chunking_logging_info;
                                         move |_| show_chunking_logging_info.set(false)
                                     },
                                     "×"
@@ -1672,7 +1654,7 @@ pub fn MonitorIndex() -> Element {
                         class: QUICK_ACTION_INFO_BUTTON_CLASS,
                         style: PARAM_ICON_BUTTON_STYLE,
                         onclick: {
-                            let mut reindex_control_info_open = reindex_control_info_open.clone();
+                            let mut reindex_control_info_open = reindex_control_info_open;
                             move |_| reindex_control_info_open.set(true)
                         },
                         InfoIcon {}
@@ -1732,11 +1714,9 @@ pub fn MonitorIndex() -> Element {
                                     multiple: true,
                                     disabled: snapshot.upload_running,
                                     onchange: {
-                                        let state = state.clone();
-                                        let selected_corpus = selected_corpus.clone();
                                         move |evt: Event<FormData>| {
-                                            let mut state = state.clone();
-                                            let selected_corpus = selected_corpus.clone();
+                                            let mut state = state;
+                                            let selected_corpus = selected_corpus;
                                             spawn(async move {
                                                 let files = evt.files();
                                                 let total = files.len();
@@ -1982,10 +1962,9 @@ fn CopyButton(props: CopyButtonProps) -> Element {
 
     let handle_click = {
         let text = props.text.clone();
-        let copied = copied.clone();
         move |_| {
             let text = text.clone();
-            let mut copied = copied.clone();
+            let mut copied = copied;
             spawn(async move {
                 copy_text_to_clipboard(&text);
                 copied.set(true);
@@ -2199,7 +2178,7 @@ async fn refresh_job_statuses(
     };
 
     for job_id in job_ids {
-        if let Err(err) = refresh_single_job(job_id.clone(), jobs.clone(), state.clone()).await {
+        if let Err(err) = refresh_single_job(job_id.clone(), jobs, state).await {
             state.write().status_message = Some(format!("Failed to refresh {}: {}", job_id, err));
         }
     }

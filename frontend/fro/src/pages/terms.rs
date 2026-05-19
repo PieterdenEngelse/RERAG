@@ -66,18 +66,18 @@ fn category_color(cat: &str) -> &'static str {
 #[component]
 pub fn ConfigTerms() -> Element {
     let mut terms = use_signal(Vec::<TermEntry>::new);
-    let mut file_path = use_signal(|| String::new());
+    let mut file_path = use_signal(String::new);
     let mut loading = use_signal(|| true);
     let mut saving = use_signal(|| false);
     let mut status_msg = use_signal(|| Option::<String>::None);
     let mut error_msg = use_signal(|| Option::<String>::None);
-    let mut new_term = use_signal(|| String::new());
+    let mut new_term = use_signal(String::new);
     let mut new_category = use_signal(|| "EVENT".to_string());
     let mut filter_cat = use_signal(|| "ALL".to_string());
     let mut show_info = use_signal(|| false);
 
     // Test section state
-    let mut test_text = use_signal(|| String::new());
+    let mut test_text = use_signal(String::new);
     let mut test_results = use_signal(|| Option::<Vec<ExtractedEntity>>::None);
     let mut testing = use_signal(|| false);
     let mut test_error = use_signal(|| Option::<String>::None);

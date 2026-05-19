@@ -88,7 +88,7 @@ pub fn ConfigHardware() -> Element {
     let models: Signal<Vec<api::ModelInfo>> = use_signal(Vec::new);
     let models_loading = use_signal(|| false);
     let model_error = use_signal(|| Option::<String>::None);
-    let last_model_backend = use_signal(|| String::new());
+    let last_model_backend = use_signal(String::new);
 
     let api_key_status = use_signal(|| Option::<String>::None);
     let api_key_error = use_signal(|| Option::<String>::None);
@@ -184,14 +184,14 @@ pub fn ConfigHardware() -> Element {
     let show_xtc_threshold_info = use_signal(|| false);
 
     {
-        let mut hardware_config = hardware_config.clone();
-        let mut status = status.clone();
-        let mut error = error.clone();
-        let mut loading = loading.clone();
-        let mut models = models.clone();
-        let mut models_loading = models_loading.clone();
-        let mut model_error = model_error.clone();
-        let mut last_model_backend = last_model_backend.clone();
+        let mut hardware_config = hardware_config;
+        let mut status = status;
+        let mut error = error;
+        let mut loading = loading;
+        let mut models = models;
+        let mut models_loading = models_loading;
+        let mut model_error = model_error;
+        let mut last_model_backend = last_model_backend;
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loading.set(true);
@@ -232,7 +232,7 @@ pub fn ConfigHardware() -> Element {
     }
 
     {
-        let mut physical_cores = physical_cores.clone();
+        let mut physical_cores = physical_cores;
         use_future(move || async move {
             if let Ok(cores) = api::fetch_physical_cores().await {
                 physical_cores.set(Some(cores));
@@ -241,9 +241,9 @@ pub fn ConfigHardware() -> Element {
     }
 
     {
-        let mut gpus = gpus.clone();
-        let mut system_info = system_info.clone();
-        let mut memory_info = memory_info.clone();
+        let mut gpus = gpus;
+        let mut system_info = system_info;
+        let mut memory_info = memory_info;
         use_future(move || async move {
             if let Ok(info) = api::fetch_gpus().await {
                 gpus.set(Some(info));
@@ -259,11 +259,11 @@ pub fn ConfigHardware() -> Element {
 
     // Reload models when backend changes (local changes only)
     {
-        let mut models = models.clone();
-        let mut models_loading = models_loading.clone();
-        let mut model_error = model_error.clone();
-        let mut hardware_config = hardware_config.clone();
-        let mut last_model_backend = last_model_backend.clone();
+        let mut models = models;
+        let mut models_loading = models_loading;
+        let mut model_error = model_error;
+        let mut hardware_config = hardware_config;
+        let mut last_model_backend = last_model_backend;
         use_effect(move || {
             let backend = hardware_config().backend_type.clone();
             if backend == last_model_backend.peek().clone() {
@@ -313,9 +313,9 @@ pub fn ConfigHardware() -> Element {
     }
 
     {
-        let mut anthropic_llm_config = anthropic_llm_config.clone();
-        let mut anthropic_llm_loading = anthropic_llm_loading.clone();
-        let mut anthropic_llm_error = anthropic_llm_error.clone();
+        let mut anthropic_llm_config = anthropic_llm_config;
+        let mut anthropic_llm_loading = anthropic_llm_loading;
+        let mut anthropic_llm_error = anthropic_llm_error;
         use_future(move || async move {
             anthropic_llm_loading.set(true);
             anthropic_llm_error.set(None);
@@ -335,9 +335,9 @@ pub fn ConfigHardware() -> Element {
 
     // Load sampling config
     {
-        let mut sampling_config = sampling_config.clone();
-        let mut sampling_loading = sampling_loading.clone();
-        let mut sampling_error = sampling_error.clone();
+        let mut sampling_config = sampling_config;
+        let mut sampling_loading = sampling_loading;
+        let mut sampling_error = sampling_error;
         use_future(move || async move {
             sampling_loading.set(true);
             sampling_error.set(None);
@@ -357,18 +357,18 @@ pub fn ConfigHardware() -> Element {
     }
 
     {
-        let mut api_key_status = api_key_status.clone();
-        let mut api_key_error = api_key_error.clone();
-        let mut api_keys_loaded = api_keys_loaded.clone();
-        let mut has_openai_key = has_openai_key.clone();
-        let mut has_anthropic_key = has_anthropic_key.clone();
-        let mut has_openrouter_key = has_openrouter_key.clone();
-        let mut openai_masked = openai_masked.clone();
-        let mut anthropic_masked = anthropic_masked.clone();
-        let mut openrouter_masked = openrouter_masked.clone();
-        let mut openai_from_env = openai_from_env.clone();
-        let mut anthropic_from_env = anthropic_from_env.clone();
-        let mut openrouter_from_env = openrouter_from_env.clone();
+        let mut api_key_status = api_key_status;
+        let mut api_key_error = api_key_error;
+        let mut api_keys_loaded = api_keys_loaded;
+        let mut has_openai_key = has_openai_key;
+        let mut has_anthropic_key = has_anthropic_key;
+        let mut has_openrouter_key = has_openrouter_key;
+        let mut openai_masked = openai_masked;
+        let mut anthropic_masked = anthropic_masked;
+        let mut openrouter_masked = openrouter_masked;
+        let mut openai_from_env = openai_from_env;
+        let mut anthropic_from_env = anthropic_from_env;
+        let mut openrouter_from_env = openrouter_from_env;
         use_future(move || async move {
             match api::fetch_api_keys().await {
                 Ok(resp) => {
@@ -392,21 +392,20 @@ pub fn ConfigHardware() -> Element {
     }
 
     let on_save = {
-        let hardware_config = hardware_config.clone();
-        let sampling_config = sampling_config.clone();
-        let status = status.clone();
-        let mut error = error.clone();
-        let mut saving = saving.clone();
+        let hardware_config = hardware_config;
+        let sampling_config = sampling_config;
+        let mut error = error;
+        let mut saving = saving;
         move |_| {
             saving.set(true);
             error.set(None);
             let hw_payload = hardware_config();
             let sampling_payload = sampling_config();
-            let mut hardware_config = hardware_config.clone();
-            let mut sampling_config = sampling_config.clone();
-            let mut status = status.clone();
-            let mut error = error.clone();
-            let mut saving = saving.clone();
+            let mut hardware_config = hardware_config;
+            let mut sampling_config = sampling_config;
+            let mut status = status;
+            let mut error = error;
+            let mut saving = saving;
             spawn(async move {
                 // Save hardware config
                 let hw_result = api::commit_hardware_config(&hw_payload).await;
@@ -458,18 +457,8 @@ pub fn ConfigHardware() -> Element {
     };
 
     let on_save_keys = {
-        let openai_input = openai_input.clone();
-        let anthropic_input = anthropic_input.clone();
-        let openrouter_input = openrouter_input.clone();
-        let mut saving_keys = saving_keys.clone();
-        let api_key_status = api_key_status.clone();
-        let mut api_key_error = api_key_error.clone();
-        let has_openai_key = has_openai_key.clone();
-        let has_anthropic_key = has_anthropic_key.clone();
-        let has_openrouter_key = has_openrouter_key.clone();
-        let openai_masked = openai_masked.clone();
-        let anthropic_masked = anthropic_masked.clone();
-        let openrouter_masked = openrouter_masked.clone();
+        let mut saving_keys = saving_keys;
+        let mut api_key_error = api_key_error;
         move |_| {
             if saving_keys() {
                 return;
@@ -481,18 +470,18 @@ pub fn ConfigHardware() -> Element {
                 anthropic_api_key: anthropic_input(),
                 openrouter_api_key: openrouter_input(),
             };
-            let mut saving_keys = saving_keys.clone();
-            let mut api_key_status = api_key_status.clone();
-            let mut api_key_error = api_key_error.clone();
-            let mut has_openai_key = has_openai_key.clone();
-            let mut has_anthropic_key = has_anthropic_key.clone();
-            let mut has_openrouter_key = has_openrouter_key.clone();
-            let mut openai_masked = openai_masked.clone();
-            let mut anthropic_masked = anthropic_masked.clone();
-            let mut openrouter_masked = openrouter_masked.clone();
-            let mut openai_input = openai_input.clone();
-            let mut anthropic_input = anthropic_input.clone();
-            let mut openrouter_input = openrouter_input.clone();
+            let mut saving_keys = saving_keys;
+            let mut api_key_status = api_key_status;
+            let mut api_key_error = api_key_error;
+            let mut has_openai_key = has_openai_key;
+            let mut has_anthropic_key = has_anthropic_key;
+            let mut has_openrouter_key = has_openrouter_key;
+            let mut openai_masked = openai_masked;
+            let mut anthropic_masked = anthropic_masked;
+            let mut openrouter_masked = openrouter_masked;
+            let mut openai_input = openai_input;
+            let mut anthropic_input = anthropic_input;
+            let mut openrouter_input = openrouter_input;
             spawn(async move {
                 match api::save_api_keys(&payload).await {
                     Ok(resp) => {
@@ -563,10 +552,10 @@ pub fn ConfigHardware() -> Element {
     };
 
     let refresh_models = {
-        let hardware_config = hardware_config.clone();
-        let mut models = models.clone();
-        let mut models_loading = models_loading.clone();
-        let mut model_error = model_error.clone();
+        let hardware_config = hardware_config;
+        let mut models = models;
+        let mut models_loading = models_loading;
+        let mut model_error = model_error;
         move |_| {
             if models_loading() {
                 return;
@@ -597,70 +586,70 @@ pub fn ConfigHardware() -> Element {
     let memory_info_value = memory_info();
     let anthropic_llm = anthropic_llm_config();
 
-    let mut backend_info_signal = show_backend_info.clone();
-    let mut model_info_signal = show_model_info.clone();
-    let mut num_thread_info_signal = show_num_thread_info.clone();
-    let mut num_batch_info_signal = show_num_batch_info.clone();
-    let mut num_gpu_info_signal = show_num_gpu_info.clone();
-    let mut main_gpu_info_signal = show_main_gpu_info.clone();
-    let mut gpu_layers_info_signal = show_gpu_layers_info.clone();
-    let mut low_vram_info_signal = show_low_vram_info.clone();
-    let mut f16_kv_info_signal = show_f16_kv_info.clone();
-    let mut rope_base_info_signal = show_rope_base_info.clone();
-    let mut rope_scale_info_signal = show_rope_scale_info.clone();
-    let mut num_ctx_info_signal = show_num_ctx_info.clone();
-    let mut numa_info_signal = show_numa_info.clone();
-    let mut mmap_info_signal = show_mmap_info.clone();
-    let mut mlock_info_signal = show_mlock_info.clone();
-    let mut logits_all_info_signal = show_logits_all_info.clone();
-    let mut vocab_only_info_signal = show_vocab_only_info.clone();
-    let mut reload_info_signal = show_reload_info.clone();
-    let mut rope_tuning_info_signal = show_rope_tuning_info.clone();
-    let mut quantization_info_signal = show_quantization_info.clone();
-    let mut sampling_params_info_signal = show_sampling_params_info.clone();
-    let mut temperature_info_signal = show_temperature_info.clone();
-    let mut top_k_info_signal = show_top_k_info.clone();
-    let mut top_p_info_signal = show_top_p_info.clone();
-    let mut min_p_info_signal = show_min_p_info.clone();
-    let mut typical_p_info_signal = show_typical_p_info.clone();
-    let mut tfs_z_info_signal = show_tfs_z_info.clone();
-    let mut seed_info_signal = show_seed_info.clone();
-    let mut repeat_last_n_info_signal = show_repeat_last_n_info.clone();
-    let mut repeat_penalty_info_signal = show_repeat_penalty_info.clone();
-    let mut presence_penalty_info_signal = show_presence_penalty_info.clone();
-    let mut frequency_penalty_info_signal = show_frequency_penalty_info.clone();
-    let mut penalize_newline_info_signal = show_penalize_newline_info.clone();
-    let mut mirostat_info_signal = show_mirostat_info.clone();
-    let mut mirostat_tau_info_signal = show_mirostat_tau_info.clone();
-    let mut mirostat_eta_info_signal = show_mirostat_eta_info.clone();
-    let mut num_predict_info_signal = show_num_predict_info.clone();
-    let mut num_keep_info_signal = show_num_keep_info.clone();
-    let mut stop_sequences_info_signal = show_stop_sequences_info.clone();
+    let mut backend_info_signal = show_backend_info;
+    let mut model_info_signal = show_model_info;
+    let mut num_thread_info_signal = show_num_thread_info;
+    let mut num_batch_info_signal = show_num_batch_info;
+    let mut num_gpu_info_signal = show_num_gpu_info;
+    let mut main_gpu_info_signal = show_main_gpu_info;
+    let mut gpu_layers_info_signal = show_gpu_layers_info;
+    let mut low_vram_info_signal = show_low_vram_info;
+    let mut f16_kv_info_signal = show_f16_kv_info;
+    let mut rope_base_info_signal = show_rope_base_info;
+    let mut rope_scale_info_signal = show_rope_scale_info;
+    let mut num_ctx_info_signal = show_num_ctx_info;
+    let mut numa_info_signal = show_numa_info;
+    let mut mmap_info_signal = show_mmap_info;
+    let mut mlock_info_signal = show_mlock_info;
+    let mut logits_all_info_signal = show_logits_all_info;
+    let mut vocab_only_info_signal = show_vocab_only_info;
+    let mut reload_info_signal = show_reload_info;
+    let mut rope_tuning_info_signal = show_rope_tuning_info;
+    let mut quantization_info_signal = show_quantization_info;
+    let mut sampling_params_info_signal = show_sampling_params_info;
+    let mut temperature_info_signal = show_temperature_info;
+    let mut top_k_info_signal = show_top_k_info;
+    let mut top_p_info_signal = show_top_p_info;
+    let mut min_p_info_signal = show_min_p_info;
+    let mut typical_p_info_signal = show_typical_p_info;
+    let mut tfs_z_info_signal = show_tfs_z_info;
+    let mut seed_info_signal = show_seed_info;
+    let mut repeat_last_n_info_signal = show_repeat_last_n_info;
+    let mut repeat_penalty_info_signal = show_repeat_penalty_info;
+    let mut presence_penalty_info_signal = show_presence_penalty_info;
+    let mut frequency_penalty_info_signal = show_frequency_penalty_info;
+    let mut penalize_newline_info_signal = show_penalize_newline_info;
+    let mut mirostat_info_signal = show_mirostat_info;
+    let mut mirostat_tau_info_signal = show_mirostat_tau_info;
+    let mut mirostat_eta_info_signal = show_mirostat_eta_info;
+    let mut num_predict_info_signal = show_num_predict_info;
+    let mut num_keep_info_signal = show_num_keep_info;
+    let mut stop_sequences_info_signal = show_stop_sequences_info;
 
-    let mut split_mode_info_signal = show_split_mode_info.clone();
-    let mut num_ubatch_info_signal = show_num_ubatch_info.clone();
-    let mut num_seq_max_info_signal = show_num_seq_max_info.clone();
-    let mut flash_attn_info_signal = show_flash_attn_info.clone();
-    let mut offload_kqv_info_signal = show_offload_kqv_info.clone();
-    let mut embeddings_info_signal = show_embeddings_info.clone();
-    let mut num_thread_batch_info_signal = show_num_thread_batch_info.clone();
-    let mut cpu_strict_info_signal = show_cpu_strict_info.clone();
-    let mut poll_info_signal = show_poll_info.clone();
-    let mut priority_info_signal = show_priority_info.clone();
-    let mut ignore_eos_info_signal = show_ignore_eos_info.clone();
-    let mut typical_p_info_local_signal = show_typical_p_info_local.clone();
-    let mut tfs_z_info_local_signal = show_tfs_z_info_local.clone();
-    let mut freq_penalty_info_local_signal = show_freq_penalty_info_local.clone();
-    let mut pres_penalty_info_local_signal = show_pres_penalty_info_local.clone();
-    let mut dry_multiplier_info_signal = show_dry_multiplier_info.clone();
-    let mut dry_base_info_signal = show_dry_base_info.clone();
-    let mut dry_allowed_len_info_signal = show_dry_allowed_len_info.clone();
-    let mut xtc_probability_info_signal = show_xtc_probability_info.clone();
-    let mut xtc_threshold_info_signal = show_xtc_threshold_info.clone();
+    let mut split_mode_info_signal = show_split_mode_info;
+    let mut num_ubatch_info_signal = show_num_ubatch_info;
+    let mut num_seq_max_info_signal = show_num_seq_max_info;
+    let mut flash_attn_info_signal = show_flash_attn_info;
+    let mut offload_kqv_info_signal = show_offload_kqv_info;
+    let mut embeddings_info_signal = show_embeddings_info;
+    let mut num_thread_batch_info_signal = show_num_thread_batch_info;
+    let mut cpu_strict_info_signal = show_cpu_strict_info;
+    let mut poll_info_signal = show_poll_info;
+    let mut priority_info_signal = show_priority_info;
+    let mut ignore_eos_info_signal = show_ignore_eos_info;
+    let mut typical_p_info_local_signal = show_typical_p_info_local;
+    let mut tfs_z_info_local_signal = show_tfs_z_info_local;
+    let mut freq_penalty_info_local_signal = show_freq_penalty_info_local;
+    let mut pres_penalty_info_local_signal = show_pres_penalty_info_local;
+    let mut dry_multiplier_info_signal = show_dry_multiplier_info;
+    let mut dry_base_info_signal = show_dry_base_info;
+    let mut dry_allowed_len_info_signal = show_dry_allowed_len_info;
+    let mut xtc_probability_info_signal = show_xtc_probability_info;
+    let mut xtc_threshold_info_signal = show_xtc_threshold_info;
 
-    let mut openai_input_signal = openai_input.clone();
-    let mut anthropic_input_signal = anthropic_input.clone();
-    let mut openrouter_input_signal = openrouter_input.clone();
+    let mut openai_input_signal = openai_input;
+    let mut anthropic_input_signal = anthropic_input;
+    let mut openrouter_input_signal = openrouter_input;
 
     rsx! {
         div { class: "space-y-5",
@@ -963,7 +952,7 @@ pub fn ConfigHardware() -> Element {
                         button {
                             class: "btn btn-md px-8",
                             style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white; box-shadow: none;",
-                            onclick: on_save.clone(),
+                            onclick: on_save,
                             disabled: saving() || loading(),
                             if saving() {
                                 "Saving…"
@@ -2881,7 +2870,7 @@ pub fn ConfigHardware() -> Element {
                         button {
                             class: "btn btn-xs",
                             style: "background-color: #1D6B9A; border-color: #1D6B9A; color: white; box-shadow: none;",
-                            onclick: on_save_keys.clone(),
+                            onclick: on_save_keys,
                             disabled: saving_keys(),
                             if saving_keys() {
                                 "Saving…"

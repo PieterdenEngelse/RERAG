@@ -49,7 +49,7 @@ pub fn ConfigChunker() -> Element {
 
     // ─── Corpus selector ──────────────────────────────────────
     let mut active_corpus = use_context::<Signal<ActiveCorpus>>();
-    let mut corpora = use_signal(|| Vec::<api::CorpusEntry>::new());
+    let mut corpora = use_signal(Vec::<api::CorpusEntry>::new);
     let mut show_corpus_dropdown = use_signal(|| false);
     let _corpus_res = use_resource(move || async move {
         let _ = active_corpus.read().slug().to_string(); // reactive dep
@@ -92,12 +92,12 @@ pub fn ConfigChunker() -> Element {
                 semantic_threshold.set(c.semantic_similarity_threshold as f64);
                 context_prefix_enabled.set(c.context_prefix_enabled);
                 context_prefix_tokens.set(c.context_prefix_tokens);
-                let has_lw  = c.pipeline_stages.split(',').any(|s| s.trim() == "lw");
+                let has_lw = c.pipeline_stages.split(',').any(|s| s.trim() == "lw");
                 let has_sem = c.pipeline_stages.split(',').any(|s| s.trim() == "sem");
                 pipeline_preset.set(match (has_lw, has_sem) {
-                    (true,  true)  => "lw_sent_sem".to_string(),
-                    (false, true)  => "sent_sem".to_string(),
-                    _              => "lw_sent".to_string(),
+                    (true, true) => "lw_sent_sem".to_string(),
+                    (false, true) => "sent_sem".to_string(),
+                    _ => "lw_sent".to_string(),
                 });
             }
             if let Ok(emb) = api::fetch_embedding_config().await {
@@ -108,7 +108,10 @@ pub fn ConfigChunker() -> Element {
                 index_doc_count.set(info.total_documents);
                 index_size_bytes.set(info.index_size_bytes.unwrap_or(0));
                 index_size_human.set(info.index_size_human.unwrap_or_else(|| "?".into()));
-                memory_label.set(info.memory_label.unwrap_or_else(|| "Est. RAM if active".into()));
+                memory_label.set(
+                    info.memory_label
+                        .unwrap_or_else(|| "Est. RAM if active".into()),
+                );
             }
         });
     });
@@ -117,23 +120,39 @@ pub fn ConfigChunker() -> Element {
     let _per_corpus_res = use_resource(move || async move {
         let slug = active_corpus.read().slug().to_string();
         // Re-fetch global base first so switching back to "default" resets correctly.
-        let (global_mode, global_target, global_min, global_max, global_overlap,
-             global_threshold, global_cp_en, global_cp_tok, global_stages) =
-            if let Ok(resp) = api::fetch_chunk_config().await {
-                let c = resp.chunker_config;
-                let has_lw  = c.pipeline_stages.split(',').any(|s| s.trim() == "lw");
-                let has_sem = c.pipeline_stages.split(',').any(|s| s.trim() == "sem");
-                let preset = match (has_lw, has_sem) {
-                    (true,  true)  => "lw_sent_sem".to_string(),
-                    (false, true)  => "sent_sem".to_string(),
-                    _              => "lw_sent".to_string(),
-                };
-                (c.mode, c.target_size, c.min_size, c.max_size, c.overlap,
-                 c.semantic_similarity_threshold as f64,
-                 c.context_prefix_enabled, c.context_prefix_tokens, preset)
-            } else {
-                return;
+        let (
+            global_mode,
+            global_target,
+            global_min,
+            global_max,
+            global_overlap,
+            global_threshold,
+            global_cp_en,
+            global_cp_tok,
+            global_stages,
+        ) = if let Ok(resp) = api::fetch_chunk_config().await {
+            let c = resp.chunker_config;
+            let has_lw = c.pipeline_stages.split(',').any(|s| s.trim() == "lw");
+            let has_sem = c.pipeline_stages.split(',').any(|s| s.trim() == "sem");
+            let preset = match (has_lw, has_sem) {
+                (true, true) => "lw_sent_sem".to_string(),
+                (false, true) => "sent_sem".to_string(),
+                _ => "lw_sent".to_string(),
             };
+            (
+                c.mode,
+                c.target_size,
+                c.min_size,
+                c.max_size,
+                c.overlap,
+                c.semantic_similarity_threshold as f64,
+                c.context_prefix_enabled,
+                c.context_prefix_tokens,
+                preset,
+            )
+        } else {
+            return;
+        };
 
         // Apply per-corpus overrides.
         if let Ok(s) = api::fetch_corpus_settings(&slug).await {
@@ -147,12 +166,12 @@ pub fn ConfigChunker() -> Element {
             context_prefix_enabled.set(cs.context_prefix_enabled.unwrap_or(global_cp_en));
             context_prefix_tokens.set(cs.context_prefix_tokens.unwrap_or(global_cp_tok));
             if let Some(stages_raw) = cs.pipeline_stages {
-                let has_lw  = stages_raw.split(',').any(|s| s.trim() == "lw");
+                let has_lw = stages_raw.split(',').any(|s| s.trim() == "lw");
                 let has_sem = stages_raw.split(',').any(|s| s.trim() == "sem");
                 pipeline_preset.set(match (has_lw, has_sem) {
-                    (true,  true)  => "lw_sent_sem".to_string(),
-                    (false, true)  => "sent_sem".to_string(),
-                    _              => "lw_sent".to_string(),
+                    (true, true) => "lw_sent_sem".to_string(),
+                    (false, true) => "sent_sem".to_string(),
+                    _ => "lw_sent".to_string(),
                 });
             } else {
                 pipeline_preset.set(global_stages);
@@ -167,9 +186,9 @@ pub fn ConfigChunker() -> Element {
             save_message.set(None);
             let slug = active_corpus.read().slug().to_string();
             let stages = match pipeline_preset().as_str() {
-                "lw_sent"  => "lw,sent".to_string(),
+                "lw_sent" => "lw,sent".to_string(),
                 "sent_sem" => "sent,sem".to_string(),
-                _          => "lw,sent,sem".to_string(),
+                _ => "lw,sent,sem".to_string(),
             };
             let settings = api::CorpusSettings {
                 chunker_mode: Some(mode()),
@@ -191,8 +210,8 @@ pub fn ConfigChunker() -> Element {
         });
     };
 
-    let is_semantic = mode() == "semantic"
-        || (mode() == "pipeline" && pipeline_preset() != "lw_sent");
+    let is_semantic =
+        mode() == "semantic" || (mode() == "pipeline" && pipeline_preset() != "lw_sent");
 
     rsx! {
         div { class: "space-y-6",

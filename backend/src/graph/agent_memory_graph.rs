@@ -10,7 +10,8 @@
 // (`$now`); timestamps are stored as plain `i64`.
 
 use crate::graph::client::{
-    lit, now_millis, row_bool, row_f64, row_i64, row_str, row_str_vec, GraphHandle, GraphClientError,
+    lit, now_millis, row_bool, row_f64, row_i64, row_str, row_str_vec, GraphClientError,
+    GraphHandle,
 };
 use crate::params;
 use serde::{Deserialize, Serialize};
@@ -308,7 +309,11 @@ impl AgentMemoryGraph {
     }
 
     /// Update goal status
-    pub async fn update_goal_status(&self, goal_id: &str, status: &str) -> Result<(), GraphClientError> {
+    pub async fn update_goal_status(
+        &self,
+        goal_id: &str,
+        status: &str,
+    ) -> Result<(), GraphClientError> {
         let params = params! {
             "goal_id" => lit::str(goal_id),
             "status" => lit::str(status),

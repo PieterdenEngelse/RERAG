@@ -21,7 +21,7 @@ pub fn BackendSelector(
     // Poll the active backend so the board self-heals when a runtime
     // starts or stops while the page is open (first fetch is immediate).
     {
-        let mut runtime_ctx = runtime_ctx.clone();
+        let mut runtime_ctx = runtime_ctx;
         use_future(move || async move {
             loop {
                 if let Ok(health) = api::fetch_runtime_health().await {
@@ -45,7 +45,7 @@ pub fn BackendSelector(
                     current_backend.set(selected.clone());
                     // Selection only updates the dropdown and reflects the pending
                     // choice in the runtime board; the Save button applies it.
-                    let mut runtime_ctx = runtime_ctx.clone();
+                    let mut runtime_ctx = runtime_ctx;
                     runtime_ctx.with_mut(|ctx| ctx.configured_backend = selected);
                 },
                 for option in backend_options.iter() {
@@ -121,7 +121,7 @@ pub fn BackendSelector(
                     onclick: move |_| {
                         let backend_value = current_backend();
                         let clear_model = clear_model_on_change;
-                        let mut runtime_ctx = runtime_ctx.clone();
+                        let mut runtime_ctx = runtime_ctx;
                         spawn(async move {
                             save_status.set("Saving...".to_string());
                             // Local runtimes have a service to start; cloud backends do not.

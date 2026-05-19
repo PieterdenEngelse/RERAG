@@ -9,7 +9,7 @@
 // FalkorDB notes: `datetime()` is replaced by app-supplied epoch-millis
 // (`$now`), and `randomUUID()` by app-supplied UUIDs (`$new_id`).
 
-use crate::graph::client::{lit, now_millis, row_str, GraphHandle, GraphClientError};
+use crate::graph::client::{lit, now_millis, row_str, GraphClientError, GraphHandle};
 use crate::graph::config::GraphConfig;
 use crate::params;
 use serde::{Deserialize, Serialize};

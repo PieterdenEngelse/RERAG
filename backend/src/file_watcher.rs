@@ -169,14 +169,21 @@ async fn run_watcher(
 
             info!("📄 New file detected: {}", path.display());
 
-            let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
 
             // Phase 0: quick already-indexed check — hold lock only long enough to read doc IDs.
             let already_indexed = retriever
                 .lock()
                 .ok()
                 .and_then(|ret| ret.get_all_doc_ids().ok())
-                .map(|ids| ids.iter().any(|id| id.split('#').next() == Some(filename.as_str())))
+                .map(|ids| {
+                    ids.iter()
+                        .any(|id| id.split('#').next() == Some(filename.as_str()))
+                })
                 .unwrap_or(false);
             if already_indexed {
                 debug!("Skipping already-indexed file: {}", filename);
@@ -198,7 +205,8 @@ async fn run_watcher(
                 };
                 crate::db::corpora::effective_chunker_config(&global, &settings)
             };
-            let effective_mode = effective_cfg.mode
+            let effective_mode = effective_cfg
+                .mode
                 .parse::<ChunkerMode>()
                 .unwrap_or(config.chunker_mode);
 
@@ -222,7 +230,14 @@ async fn run_watcher(
                     effective_mode.into(),
                     &cfg_clone,
                 );
-                index::prepare_doc(&path_clone, &ir, effective_mode, chunker.as_ref(), &corpus_slug, cp_enabled)
+                index::prepare_doc(
+                    &path_clone,
+                    &ir,
+                    effective_mode,
+                    chunker.as_ref(),
+                    &corpus_slug,
+                    cp_enabled,
+                )
             })
             .await;
 

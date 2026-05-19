@@ -237,7 +237,11 @@ pub struct RateLimitMiddleware {
 
 impl RateLimitMiddleware {
     pub fn new_with_options(rate_limiter: Arc<RateLimiter>, opts: RateLimitOptions) -> Self {
-        Self { rate_limiter, opts, server: "search" }
+        Self {
+            rate_limiter,
+            opts,
+            server: "search",
+        }
     }
 
     pub fn with_server(mut self, server: &'static str) -> Self {

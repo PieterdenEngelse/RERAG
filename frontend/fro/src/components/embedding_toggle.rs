@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 #[component]
 pub fn EmbeddingToggle() -> Element {
     let mut status = use_signal(|| None::<String>);
-    let mut model_path = use_signal(|| String::new());
+    let mut model_path = use_signal(String::new);
     let mut ready = use_signal(|| false);
     let mut loading = use_signal(|| true);
     let mut show_info = use_signal(|| false);

@@ -6,7 +6,9 @@
 // - Expand context via concept relationships
 // - Multi-hop reasoning paths
 
-use crate::graph::client::{lit, row_f64, row_i64, row_str, row_str_vec, GraphHandle, GraphClientError};
+use crate::graph::client::{
+    lit, row_f64, row_i64, row_str, row_str_vec, GraphClientError, GraphHandle,
+};
 use crate::graph::config::GraphExpansionSettings;
 use crate::params;
 use serde::{Deserialize, Serialize};

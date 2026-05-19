@@ -26,7 +26,7 @@ pub fn MonitorCache() -> Element {
     let mut deep_dive_more_info = use_signal(|| false);
 
     {
-        let mut state = state.clone();
+        let mut state = state;
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
@@ -250,9 +250,9 @@ pub fn MonitorCache() -> Element {
                                 headers: vec!["Metric".into(), "Value".into()],
                                 rows: vec![
                                     vec!["Enabled".into(), yes_no(data.l1.enabled)],
-                                    vec!["Hits".into(), data.l1.hits.to_string().into()],
-                                    vec!["Misses".into(), data.l1.misses.to_string().into()],
-                                    vec!["Total Searches".into(), data.l1.total_searches.to_string().into()],
+                                    vec!["Hits".into(), data.l1.hits.to_string()],
+                                    vec!["Misses".into(), data.l1.misses.to_string()],
+                                    vec!["Total Searches".into(), data.l1.total_searches.to_string()],
                                 ],
                             }
                         }
@@ -261,11 +261,11 @@ pub fn MonitorCache() -> Element {
                                 headers: vec!["Metric".into(), "Value".into()],
                                 rows: vec![
                                     vec!["Enabled".into(), yes_no(data.l2.enabled)],
-                                    vec!["L1 Hits".into(), data.l2.l1_hits.to_string().into()],
-                                    vec!["L1 Misses".into(), data.l2.l1_misses.to_string().into()],
-                                    vec!["L2 Hits".into(), data.l2.l2_hits.to_string().into()],
-                                    vec!["L2 Misses".into(), data.l2.l2_misses.to_string().into()],
-                                    vec!["Entries".into(), data.l2.total_items.to_string().into()],
+                                    vec!["L1 Hits".into(), data.l2.l1_hits.to_string()],
+                                    vec!["L1 Misses".into(), data.l2.l1_misses.to_string()],
+                                    vec!["L2 Hits".into(), data.l2.l2_hits.to_string()],
+                                    vec!["L2 Misses".into(), data.l2.l2_misses.to_string()],
+                                    vec!["Entries".into(), data.l2.total_items.to_string()],
                                 ],
                             }
                         }
@@ -277,9 +277,9 @@ pub fn MonitorCache() -> Element {
                             rows: vec![
                                 vec!["Enabled".into(), yes_no(data.redis.enabled)],
                                 vec!["Connected".into(), yes_no(data.redis.connected)],
-                                vec!["TTL".into(), format!("{}s", data.redis.ttl_seconds).into()],
-                                vec!["L1 Hits".into(), data.counters.hits_total.to_string().into()],
-                                vec!["L1 Misses".into(), data.counters.misses_total.to_string().into()],
+                                vec!["TTL".into(), format!("{}s", data.redis.ttl_seconds)],
+                                vec!["L1 Hits".into(), data.counters.hits_total.to_string()],
+                                vec!["L1 Misses".into(), data.counters.misses_total.to_string()],
                             ],
                         }
                     }

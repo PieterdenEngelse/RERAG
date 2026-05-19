@@ -1611,7 +1611,11 @@ pub async fn delete_api_key(provider: &str) -> Result<serde_json::Value, String>
 }
 
 pub async fn fetch_reindex_status(job_id: &str) -> Result<ReindexStatusResponse, String> {
-    let url = format!("{}/reindex/status/{}", resolve_upload_api_base_url(), job_id);
+    let url = format!(
+        "{}/reindex/status/{}",
+        resolve_upload_api_base_url(),
+        job_id
+    );
 
     gloo_net::http::Request::get(&url)
         .send()
@@ -1947,7 +1951,11 @@ pub async fn upload_document(filename: &str, data: &[u8]) -> Result<UploadRespon
         .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
-pub async fn upload_document_to_corpus(slug: &str, filename: &str, data: &[u8]) -> Result<UploadResponse, String> {
+pub async fn upload_document_to_corpus(
+    slug: &str,
+    filename: &str,
+    data: &[u8],
+) -> Result<UploadResponse, String> {
     use gloo_net::http::Request;
     use js_sys::{Array, Uint8Array};
     use web_sys::{Blob, BlobPropertyBag, FormData};
@@ -1979,7 +1987,10 @@ pub async fn upload_document_to_corpus(slug: &str, filename: &str, data: &[u8]) 
         let body = response.text().await.unwrap_or_default();
         return Err(format!("HTTP {}: {}", status, body));
     }
-    response.json().await.map_err(|e| format!("Failed to parse response: {}", e))
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 pub async fn reindex_corpus(slug: &str) -> Result<serde_json::Value, String> {
@@ -1993,7 +2004,10 @@ pub async fn reindex_corpus(slug: &str) -> Result<serde_json::Value, String> {
         let body = response.text().await.unwrap_or_default();
         return Err(format!("HTTP {}: {}", status, body));
     }
-    response.json().await.map_err(|e| format!("Failed to parse response: {}", e))
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 async fn post_empty(path: &str) -> Result<(), String> {
@@ -2409,8 +2423,6 @@ pub async fn switch_runtime(backend: &str) -> Result<RuntimeHealth, String> {
     fetch_runtime_health().await
 }
 
-/// Fetch available tools list
-
 /// Update llama-server model env file and restart service
 pub async fn set_llama_model(model: &str) -> Result<(), String> {
     let url = api_url("/sys/llama-model");
@@ -2674,7 +2686,10 @@ pub struct ChunkingStatsResponse {
 }
 
 /// Fetch chunking stats history for observability
-pub async fn fetch_chunking_stats(limit: usize, corpus: Option<&str>) -> Result<ChunkingStatsResponse, String> {
+pub async fn fetch_chunking_stats(
+    limit: usize,
+    corpus: Option<&str>,
+) -> Result<ChunkingStatsResponse, String> {
     let url = match corpus.filter(|s| !s.is_empty()) {
         Some(c) => format!("/monitoring/chunking/latest?limit={}&corpus={}", limit, c),
         None => format!("/monitoring/chunking/latest?limit={}", limit),
@@ -3010,7 +3025,9 @@ pub struct OnnxConfigInfo {
     pub layout_model_ready: bool,
 }
 
-fn default_embedding_batch_size() -> usize { 32 }
+fn default_embedding_batch_size() -> usize {
+    32
+}
 
 /// Response from ONNX config endpoint
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -3142,7 +3159,10 @@ pub async fn fetch_embedding_config() -> Result<EmbeddingConfigResponse, String>
                 ready: json["ready"].as_bool().unwrap_or(false),
             },
             note: json["note"].as_str().map(|s| s.to_string()),
-            model: json["model"].as_str().unwrap_or("bge-small-en-v1.5").to_string(),
+            model: json["model"]
+                .as_str()
+                .unwrap_or("bge-small-en-v1.5")
+                .to_string(),
             tokenizer_exists: json["tokenizer_exists"].as_bool().unwrap_or(false),
             dimension: json["dimension"].as_u64().unwrap_or(384) as usize,
             hf_id: json["hf_id"].as_str().unwrap_or("").to_string(),
@@ -3168,9 +3188,15 @@ pub async fn download_tokenizer() -> Result<String, String> {
         .await
         .map_err(|e| format!("Parse error: {}", e))?;
     if json["status"].as_str().unwrap_or("") == "success" {
-        Ok(json["message"].as_str().unwrap_or("Downloaded.").to_string())
+        Ok(json["message"]
+            .as_str()
+            .unwrap_or("Downloaded.")
+            .to_string())
     } else {
-        Err(json["message"].as_str().unwrap_or("Unknown error").to_string())
+        Err(json["message"]
+            .as_str()
+            .unwrap_or("Unknown error")
+            .to_string())
     }
 }
 
@@ -3193,7 +3219,10 @@ pub async fn set_embedding_model(model: &str) -> Result<String, String> {
     if json["status"].as_str().unwrap_or("") == "success" {
         Ok(json["message"].as_str().unwrap_or("Saved.").to_string())
     } else {
-        Err(json["message"].as_str().unwrap_or("Unknown error").to_string())
+        Err(json["message"]
+            .as_str()
+            .unwrap_or("Unknown error")
+            .to_string())
     }
 }
 
@@ -3944,12 +3973,30 @@ pub async fn fetch_corpora() -> Result<Vec<CorpusEntry>, String> {
     Ok(resp.corpora)
 }
 
-pub async fn create_corpus(slug: &str, name: &str, description: &str) -> Result<CorpusEntry, String> {
+pub async fn create_corpus(
+    slug: &str,
+    name: &str,
+    description: &str,
+) -> Result<CorpusEntry, String> {
     #[derive(Serialize)]
-    struct Body<'a> { slug: &'a str, name: &'a str, description: &'a str }
+    struct Body<'a> {
+        slug: &'a str,
+        name: &'a str,
+        description: &'a str,
+    }
     #[derive(Deserialize)]
-    struct Resp { corpus: CorpusEntry }
-    let resp: Resp = post_json("/corpora", &Body { slug, name, description }).await?;
+    struct Resp {
+        corpus: CorpusEntry,
+    }
+    let resp: Resp = post_json(
+        "/corpora",
+        &Body {
+            slug,
+            name,
+            description,
+        },
+    )
+    .await?;
     Ok(resp.corpus)
 }
 
@@ -3969,7 +4016,9 @@ pub async fn delete_corpus(slug: &str) -> Result<(), String> {
 
 pub async fn rename_corpus(slug: &str, new_name: &str) -> Result<(), String> {
     #[derive(Serialize)]
-    struct Body<'a> { name: &'a str }
+    struct Body<'a> {
+        name: &'a str,
+    }
     let url = api_url(&format!("/corpora/{}", slug));
     let body = serde_json::to_string(&Body { name: new_name })
         .map_err(|e| format!("Encode error: {}", e))?;
@@ -3991,10 +4040,12 @@ pub async fn rename_corpus(slug: &str, new_name: &str) -> Result<(), String> {
 
 pub async fn update_corpus_description(slug: &str, description: &str) -> Result<(), String> {
     #[derive(Serialize)]
-    struct Body<'a> { description: &'a str }
+    struct Body<'a> {
+        description: &'a str,
+    }
     let url = api_url(&format!("/corpora/{}/description", slug));
-    let body = serde_json::to_string(&Body { description })
-        .map_err(|e| format!("Encode error: {}", e))?;
+    let body =
+        serde_json::to_string(&Body { description }).map_err(|e| format!("Encode error: {}", e))?;
     let response = reqwest::Client::new()
         .patch(&url)
         .header("Content-Type", "application/json")
@@ -4056,7 +4107,10 @@ pub async fn fetch_corpus_settings(slug: &str) -> Result<CorpusSettingsWithMeta,
         build_meta: CorpusBuildMeta,
     }
     let resp: Resp = fetch_json(&format!("/corpora/{}/settings", slug)).await?;
-    Ok(CorpusSettingsWithMeta { settings: resp.settings, build_meta: resp.build_meta })
+    Ok(CorpusSettingsWithMeta {
+        settings: resp.settings,
+        build_meta: resp.build_meta,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -4067,12 +4121,16 @@ pub struct AgentMemorySettings {
 
 pub async fn fetch_agent_memory_settings() -> Result<AgentMemorySettings, String> {
     #[derive(Deserialize)]
-    struct Resp { settings: AgentMemorySettings }
+    struct Resp {
+        settings: AgentMemorySettings,
+    }
     let resp: Resp = fetch_json("/agent/memory/settings").await?;
     Ok(resp.settings)
 }
 
-pub async fn patch_agent_memory_settings(settings: &AgentMemorySettings) -> Result<AgentMemorySettings, String> {
+pub async fn patch_agent_memory_settings(
+    settings: &AgentMemorySettings,
+) -> Result<AgentMemorySettings, String> {
     let url = api_url("/agent/memory/settings");
     let body = serde_json::to_string(settings).map_err(|e| format!("Encode error: {}", e))?;
     let response = reqwest::Client::new()
@@ -4084,8 +4142,13 @@ pub async fn patch_agent_memory_settings(settings: &AgentMemorySettings) -> Resu
         .map_err(|e| format!("Request failed: {}", e))?;
     if response.status().is_success() {
         #[derive(Deserialize)]
-        struct Resp { settings: AgentMemorySettings }
-        let resp: Resp = response.json().await.map_err(|e| format!("Parse error: {}", e))?;
+        struct Resp {
+            settings: AgentMemorySettings,
+        }
+        let resp: Resp = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))?;
         Ok(resp.settings)
     } else {
         Err(format!("HTTP {}", response.status()))
@@ -4094,8 +4157,7 @@ pub async fn patch_agent_memory_settings(settings: &AgentMemorySettings) -> Resu
 
 pub async fn patch_corpus_settings(slug: &str, settings: &CorpusSettings) -> Result<(), String> {
     let url = api_url(&format!("/corpora/{}/settings", slug));
-    let body = serde_json::to_string(settings)
-        .map_err(|e| format!("Encode error: {}", e))?;
+    let body = serde_json::to_string(settings).map_err(|e| format!("Encode error: {}", e))?;
     let response = reqwest::Client::new()
         .patch(&url)
         .header("Content-Type", "application/json")

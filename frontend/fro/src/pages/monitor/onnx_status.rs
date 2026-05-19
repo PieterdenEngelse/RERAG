@@ -21,13 +21,10 @@ pub fn MonitorOnnxStatus() -> Element {
             }
             // Fetch ONNX runtime config
             let url = format!("{}/config/onnx", api::resolve_api_base_url());
-            match gloo_net::http::Request::get(&url).send().await {
-                Ok(resp) => {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        onnx_config.set(Some(json));
-                    }
+            if let Ok(resp) = gloo_net::http::Request::get(&url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    onnx_config.set(Some(json));
                 }
-                Err(_) => {}
             }
             is_loading.set(false);
         });
@@ -82,7 +79,7 @@ pub fn MonitorOnnxStatus() -> Element {
             }
 
             if let Some(ref oc) = ocfg {
-                if let Some(ref cfg_obj) = oc.get("config") {
+                if let Some(cfg_obj) = oc.get("config") {
                     Panel { title: "ONNX Runtime Configuration",
                         div { class: "grid grid-cols-2 gap-x-6 gap-y-1 text-xs",
                             span { class: "text-gray-400", "Max Length" }

@@ -133,8 +133,8 @@ struct AgentResponseInner {
 
 #[component]
 pub fn Home() -> Element {
-    let mut messages = use_signal(|| Vec::<ChatMessage>::new());
-    let mut input_text = use_signal(|| String::new());
+    let mut messages = use_signal(Vec::<ChatMessage>::new);
+    let mut input_text = use_signal(String::new);
     let mut is_loading = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut selected_model = use_signal(|| "phi:latest".to_string());
@@ -146,12 +146,12 @@ pub fn Home() -> Element {
 
     // File upload state
     let mut show_upload_panel = use_signal(|| false);
-    let mut documents = use_signal(|| Vec::<String>::new());
+    let mut documents = use_signal(Vec::<String>::new);
     let mut upload_status = use_signal(|| Option::<String>::None);
     let is_uploading = use_signal(|| false);
     let mut show_file_types_info = use_signal(|| false);
     let mut show_delete_docs_modal = use_signal(|| false);
-    let mut selected_documents = use_signal(|| Vec::<String>::new());
+    let mut selected_documents = use_signal(Vec::<String>::new);
     let mut deleting_documents = use_signal(|| false);
     let mut delete_docs_status = use_signal(|| Option::<String>::None);
 
@@ -162,9 +162,9 @@ pub fn Home() -> Element {
     let rag_priority_override = use_signal(|| Option::<f64>::None);
 
     let mut show_delete_memories_modal = use_signal(|| false);
-    let mut rag_memories = use_signal(|| Vec::<RagMemoryItem>::new());
+    let mut rag_memories = use_signal(Vec::<RagMemoryItem>::new);
     let mut memories_loading = use_signal(|| false);
-    let mut selected_memories = use_signal(|| Vec::<i64>::new());
+    let mut selected_memories = use_signal(Vec::<i64>::new);
     let mut deleting_memories = use_signal(|| false);
     let mut delete_memories_status = use_signal(|| Option::<String>::None);
     let mut memory_error = use_signal(|| Option::<String>::None);
@@ -194,7 +194,7 @@ pub fn Home() -> Element {
             input_text.set(String::new());
             error_msg.set(None);
 
-            let mut clear_chat = clear_chat.clone();
+            let mut clear_chat = clear_chat;
             spawn(async move {
                 gloo_timers::future::TimeoutFuture::new(0).await;
                 clear_chat.set(ClearChat(false));
@@ -204,7 +204,7 @@ pub fn Home() -> Element {
 
     // Help modal state
     let mut show_help_modal = use_signal(|| false);
-    let mut help_content = use_signal(|| String::new());
+    let mut help_content = use_signal(String::new);
 
     // Mode info modal states
     let mut show_llm_info = use_signal(|| false);
@@ -213,8 +213,8 @@ pub fn Home() -> Element {
     let mut show_agentic_info = use_signal(|| false);
 
     // Training feedback state - track last response for rating
-    let mut last_query = use_signal(|| String::new());
-    let mut last_response = use_signal(|| String::new());
+    let mut last_query = use_signal(String::new);
+    let mut last_response = use_signal(String::new);
     let mut last_context = use_signal(|| Option::<String>::None);
     let mut last_response_rated = use_signal(|| false);
     let mut feedback_status = use_signal(|| Option::<String>::None);
@@ -236,10 +236,8 @@ pub fn Home() -> Element {
 
     // Watch RuntimeContext for changes from OTHER pages (not our own changes)
     {
-        let mut current_backend = current_backend.clone();
-        let available_models = available_models.clone();
-        let models_loading = models_loading.clone();
-        let runtime_ctx = runtime_ctx.clone();
+        let mut current_backend = current_backend;
+        let runtime_ctx = runtime_ctx;
         use_effect(move || {
             let ctx = runtime_ctx();
             let ctx_backend = ctx.configured_backend.clone();
@@ -248,8 +246,8 @@ pub fn Home() -> Element {
             if !ctx_backend.is_empty() && ctx_backend != current_backend() {
                 current_backend.set(ctx_backend.clone());
                 // Reload models for new backend
-                let mut available_models = available_models.clone();
-                let mut models_loading = models_loading.clone();
+                let mut available_models = available_models;
+                let mut models_loading = models_loading;
                 spawn(async move {
                     models_loading.set(true);
                     if let Ok(models) = api::fetch_models(&ctx_backend).await {
@@ -265,11 +263,11 @@ pub fn Home() -> Element {
     }
     // Listen for config changes from other tabs
     {
-        let mut selected_model = selected_model.clone();
-        let mut current_backend = current_backend.clone();
-        let mut available_models = available_models.clone();
-        let mut models_loading = models_loading.clone();
-        let mut runtime_ctx = runtime_ctx.clone();
+        let mut selected_model = selected_model;
+        let mut current_backend = current_backend;
+        let mut available_models = available_models;
+        let mut models_loading = models_loading;
+        let mut runtime_ctx = runtime_ctx;
         use_future(move || async move {
             let bc = match web_sys::BroadcastChannel::new("ag_config_sync") {
                 Ok(bc) => bc,
@@ -312,19 +310,17 @@ pub fn Home() -> Element {
     // Load documents on mount
     use_effect(move || {
         spawn(async move {
-            match api::list_documents().await {
-                Ok(mut resp) => {
-                    resp.documents.sort();
-                    documents.set(resp.documents);
-                }
-                Err(_) => {} // Silently fail
+            // Silently fail if documents can't be loaded
+            if let Ok(mut resp) = api::list_documents().await {
+                resp.documents.sort();
+                documents.set(resp.documents);
             }
         });
     });
 
     // Load prompt caching state on mount
     {
-        let mut prompt_caching_enabled = prompt_caching_enabled.clone();
+        let mut prompt_caching_enabled = prompt_caching_enabled;
         use_effect(move || {
             spawn(async move {
                 if let Ok(resp) = api::get_prompt_caching().await {
@@ -336,11 +332,11 @@ pub fn Home() -> Element {
 
     // Load active model and available models from hardware config once on mount
     {
-        let mut selected_model = selected_model.clone();
-        let mut available_models = available_models.clone();
-        let mut models_loading = models_loading.clone();
-        let mut error_signal = error_msg.clone();
-        let mut current_backend = current_backend.clone();
+        let mut selected_model = selected_model;
+        let mut available_models = available_models;
+        let mut models_loading = models_loading;
+        let mut error_signal = error_msg;
+        let mut current_backend = current_backend;
         use_future(move || async move {
             // Try to load hardware config (with a quick retry) to keep home page in sync
             let mut last_error = None;
@@ -444,7 +440,7 @@ pub fn Home() -> Element {
         error_msg.set(None);
         cancel_requested.set(false);
 
-        let cancel_flag = cancel_requested.clone();
+        let cancel_flag = cancel_requested;
         let mode = chat_mode();
 
         spawn(async move {
@@ -584,8 +580,7 @@ pub fn Home() -> Element {
 
                                     // Parse SSE events
                                     for line in text.lines() {
-                                        if line.starts_with("data: ") {
-                                            let json_str = &line[6..];
+                                        if let Some(json_str) = line.strip_prefix("data: ") {
                                             if let Ok(event) =
                                                 serde_json::from_str::<serde_json::Value>(json_str)
                                             {
@@ -711,7 +706,7 @@ pub fn Home() -> Element {
             error_msg.set(None);
             cancel_requested.set(false);
 
-            let cancel_flag = cancel_requested.clone();
+            let cancel_flag = cancel_requested;
             let mode = chat_mode();
 
             spawn(async move {
@@ -851,8 +846,7 @@ pub fn Home() -> Element {
                                         let text = String::from_utf8_lossy(&bytes);
 
                                         for line in text.lines() {
-                                            if line.starts_with("data: ") {
-                                                let json_str = &line[6..];
+                                            if let Some(json_str) = line.strip_prefix("data: ") {
                                                 if let Ok(event) =
                                                     serde_json::from_str::<serde_json::Value>(
                                                         json_str,
@@ -967,7 +961,7 @@ pub fn Home() -> Element {
     };
 
     let mut toggle_doc_selection = {
-        let mut selected_documents = selected_documents.clone();
+        let mut selected_documents = selected_documents;
         move |name: String| {
             let mut current = selected_documents.write();
             if let Some(idx) = current.iter().position(|d| d == &name) {
@@ -979,7 +973,7 @@ pub fn Home() -> Element {
     };
 
     let mut toggle_memory_selection = {
-        let mut selected_memories = selected_memories.clone();
+        let mut selected_memories = selected_memories;
         move |id: i64| {
             let mut current = selected_memories.write();
             if let Some(idx) = current.iter().position(|m| *m == id) {
@@ -1001,11 +995,9 @@ pub fn Home() -> Element {
         HomeSettingsBoards {
             current_backend: current_backend,
             on_backend_changed: {
-                let available_models = available_models.clone();
-                let models_loading = models_loading.clone();
                 move |backend: String| {
-                    let mut available_models = available_models.clone();
-                    let mut models_loading = models_loading.clone();
+                    let mut available_models = available_models;
+                    let mut models_loading = models_loading;
                     spawn(async move {
                         models_loading.set(true);
                         if let Ok(models) = api::fetch_models(&backend).await {
@@ -1108,13 +1100,12 @@ pub fn Home() -> Element {
                                     accept: ".pdf,.txt,.text,.md,.markdown,.html,.htm,.xhtml,.xml,.json,.docx,.xlsx,.csv,.odt,.ods,.epub,.pptx,.rs,.py,.pyw,.js,.mjs,.cjs,.ts,.tsx,.go,.java,.cs,.cpp,.cc,.cxx,.hpp,.c,.h,.rb,.php,.sh,.bash,.zsh,.sql,.yaml,.yml,.toml",
                                     disabled: is_uploading(),
                                     onchange: {
-                                        let is_uploading = is_uploading.clone();
-                                        let upload_status = upload_status.clone();
-                                        let documents = documents.clone();
+                                        let upload_status = upload_status;
+                                        let documents = documents;
                                         move |evt: dioxus::prelude::Event<dioxus::prelude::FormData>| {
-                                            let mut is_uploading = is_uploading.clone();
-                                            let mut upload_status = upload_status.clone();
-                                            let mut documents = documents.clone();
+                                            let mut is_uploading = is_uploading;
+                                            let mut upload_status = upload_status;
+                                            let mut documents = documents;
                                             spawn(async move {
                                                 is_uploading.set(true);
                                                 upload_status.set(Some("Uploading...".to_string()));
@@ -1143,7 +1134,7 @@ pub fn Home() -> Element {
                                                 if !bad_exts.is_empty() {
                                                     upload_status.set(Some(format!("✗ Unsupported: {}", bad_exts.join(", "))));
                                                     is_uploading.set(false);
-                                                    let mut upload_status_clear = upload_status.clone();
+                                                    let mut upload_status_clear = upload_status;
                                                     spawn(async move {
                                                         gloo_timers::future::TimeoutFuture::new(5000).await;
                                                         upload_status_clear.set(None);
@@ -1232,7 +1223,7 @@ pub fn Home() -> Element {
                                                 is_uploading.set(false);
 
                                                 // Clear status after 3 seconds using spawn
-                                                let mut upload_status_clear = upload_status.clone();
+                                                let mut upload_status_clear = upload_status;
                                                 spawn(async move {
                                                     gloo_timers::future::TimeoutFuture::new(3000).await;
                                                     upload_status_clear.set(None);

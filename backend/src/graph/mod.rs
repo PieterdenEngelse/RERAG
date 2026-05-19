@@ -35,7 +35,7 @@ pub use petgraph_runtime::{
 #[cfg(feature = "graph")]
 pub use agent_memory_graph::{AgentMemoryGraph, AgentStats, Pattern, SimilarEpisode};
 #[cfg(feature = "graph")]
-pub use client::{GraphHandle, GraphStats, GraphClient, GraphClientError};
+pub use client::{GraphClient, GraphClientError, GraphHandle, GraphStats};
 #[cfg(feature = "graph")]
 pub use graph_retriever::{ExpandedChunk, GraphExpansionConfig, GraphRetriever, RelatedEntity};
 #[cfg(feature = "graph")]

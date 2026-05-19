@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn SearchBar() -> Element {
-    let mut query = use_signal(|| String::new());
-    let mut results = use_signal(|| Vec::<SearchResult>::new());
+    let mut query = use_signal(String::new);
+    let mut results = use_signal(Vec::<SearchResult>::new);
     let mut loading = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
     let mut backend_status = use_signal(|| String::from("Checking..."));

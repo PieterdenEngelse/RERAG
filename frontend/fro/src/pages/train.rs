@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 #[component]
 pub fn Train() -> Element {
     // State
-    let mut stats = use_signal(|| TrainingStats::default());
+    let mut stats = use_signal(TrainingStats::default);
     let mut collection_enabled = use_signal(|| false);
     let mut loading = use_signal(|| true);
     let mut error_msg = use_signal(|| Option::<String>::None);
@@ -17,9 +17,9 @@ pub fn Train() -> Element {
     let mut clearing = use_signal(|| false);
 
     // Manual feedback form state
-    let mut feedback_query = use_signal(|| String::new());
-    let mut feedback_response = use_signal(|| String::new());
-    let mut feedback_context = use_signal(|| String::new());
+    let mut feedback_query = use_signal(String::new);
+    let mut feedback_response = use_signal(String::new);
+    let mut feedback_context = use_signal(String::new);
     let mut feedback_score = use_signal(|| 4u8);
     let mut submitting_feedback = use_signal(|| false);
 

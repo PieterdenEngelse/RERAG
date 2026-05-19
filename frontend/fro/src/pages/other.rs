@@ -114,32 +114,32 @@ const TIPS: &[&str] = &[
 #[component]
 pub fn ConfigOther() -> Element {
     // Search fields
-    let mut s_host       = use_signal(|| String::new());
-    let mut s_port       = use_signal(|| String::new());
-    let mut s_workers    = use_signal(|| String::new());
-    let mut s_max_conn   = use_signal(|| String::new());
-    let mut s_body_kb    = use_signal(|| String::new());
-    let mut s_timeout    = use_signal(|| String::new());
-    let mut s_proxy      = use_signal(|| false);
-    let mut s_lru        = use_signal(|| String::new());
+    let mut s_host = use_signal(String::new);
+    let mut s_port = use_signal(String::new);
+    let mut s_workers = use_signal(String::new);
+    let mut s_max_conn = use_signal(String::new);
+    let mut s_body_kb = use_signal(String::new);
+    let mut s_timeout = use_signal(String::new);
+    let mut s_proxy = use_signal(|| false);
+    let mut s_lru = use_signal(String::new);
 
     // Upload fields
-    let mut u_host        = use_signal(|| String::new());
-    let mut u_port        = use_signal(|| String::new());
-    let mut u_workers     = use_signal(|| String::new());
-    let mut u_max_conn    = use_signal(|| String::new());
-    let mut u_max_conc    = use_signal(|| String::new());
-    let mut u_max_mb      = use_signal(|| String::new());
-    let mut u_timeout     = use_signal(|| String::new());
-    let mut u_proxy       = use_signal(|| false);
-    let mut u_lru         = use_signal(|| String::new());
-    let mut u_cors        = use_signal(|| String::new());
-    let mut u_onnx        = use_signal(|| String::new());
+    let mut u_host = use_signal(String::new);
+    let mut u_port = use_signal(String::new);
+    let mut u_workers = use_signal(String::new);
+    let mut u_max_conn = use_signal(String::new);
+    let mut u_max_conc = use_signal(String::new);
+    let mut u_max_mb = use_signal(String::new);
+    let mut u_timeout = use_signal(String::new);
+    let mut u_proxy = use_signal(|| false);
+    let mut u_lru = use_signal(String::new);
+    let mut u_cors = use_signal(String::new);
+    let mut u_onnx = use_signal(String::new);
 
-    let mut loaded               = use_signal(|| false);
-    let mut saving               = use_signal(|| false);
+    let mut loaded = use_signal(|| false);
+    let mut saving = use_signal(|| false);
     let mut save_msg: Signal<Option<(bool, String)>> = use_signal(|| None);
-    let mut show_info            = use_signal(|| false);
+    let mut show_info = use_signal(|| false);
     let mut show_restart_confirm = use_signal(|| false);
     let mut restart_msg: Signal<Option<String>> = use_signal(|| None);
     // Drives the single shared per-field modal; None = closed.
@@ -185,27 +185,27 @@ pub fn ConfigOther() -> Element {
             saving.set(true);
             save_msg.set(None);
             let mut p = std::collections::HashMap::new();
-            p.insert("BACKEND_HOST".into(),                   s_host());
-            p.insert("BACKEND_PORT".into(),                   s_port());
-            p.insert("SEARCH_WORKERS".into(),                 s_workers());
-            p.insert("SEARCH_MAX_CONNECTIONS".into(),         s_max_conn());
-            p.insert("SEARCH_MAX_BODY_KB".into(),             s_body_kb());
-            p.insert("SEARCH_TIMEOUT_SECS".into(),            s_timeout());
-            p.insert("TRUST_PROXY_SEARCH".into(),             s_proxy().to_string());
-            p.insert("RATE_LIMIT_LRU_CAPACITY".into(),        s_lru());
-            p.insert("UPLOAD_HOST".into(),                    u_host());
-            p.insert("UPLOAD_PORT".into(),                    u_port());
-            p.insert("UPLOAD_WORKERS".into(),                 u_workers());
-            p.insert("UPLOAD_MAX_CONNECTIONS".into(),         u_max_conn());
-            p.insert("UPLOAD_MAX_CONCURRENT".into(),          u_max_conc());
-            p.insert("UPLOAD_MAX_MB".into(),                  u_max_mb());
-            p.insert("UPLOAD_TIMEOUT_SECS".into(),            u_timeout());
-            p.insert("TRUST_PROXY_UPLOAD".into(),             u_proxy().to_string());
+            p.insert("BACKEND_HOST".into(), s_host());
+            p.insert("BACKEND_PORT".into(), s_port());
+            p.insert("SEARCH_WORKERS".into(), s_workers());
+            p.insert("SEARCH_MAX_CONNECTIONS".into(), s_max_conn());
+            p.insert("SEARCH_MAX_BODY_KB".into(), s_body_kb());
+            p.insert("SEARCH_TIMEOUT_SECS".into(), s_timeout());
+            p.insert("TRUST_PROXY_SEARCH".into(), s_proxy().to_string());
+            p.insert("RATE_LIMIT_LRU_CAPACITY".into(), s_lru());
+            p.insert("UPLOAD_HOST".into(), u_host());
+            p.insert("UPLOAD_PORT".into(), u_port());
+            p.insert("UPLOAD_WORKERS".into(), u_workers());
+            p.insert("UPLOAD_MAX_CONNECTIONS".into(), u_max_conn());
+            p.insert("UPLOAD_MAX_CONCURRENT".into(), u_max_conc());
+            p.insert("UPLOAD_MAX_MB".into(), u_max_mb());
+            p.insert("UPLOAD_TIMEOUT_SECS".into(), u_timeout());
+            p.insert("TRUST_PROXY_UPLOAD".into(), u_proxy().to_string());
             p.insert("UPLOAD_RATE_LIMIT_LRU_CAPACITY".into(), u_lru());
-            p.insert("UPLOAD_CORS_ORIGINS".into(),            u_cors());
-            p.insert("UPLOAD_ONNX_THREADS".into(),            u_onnx());
+            p.insert("UPLOAD_CORS_ORIGINS".into(), u_cors());
+            p.insert("UPLOAD_ONNX_THREADS".into(), u_onnx());
             match api::save_server_config(p).await {
-                Ok(_)  => save_msg.set(Some((true,  "Saved — restart backend to apply".into()))),
+                Ok(_) => save_msg.set(Some((true, "Saved — restart backend to apply".into()))),
                 Err(e) => save_msg.set(Some((false, format!("Error: {e}")))),
             }
             saving.set(false);

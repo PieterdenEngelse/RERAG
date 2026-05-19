@@ -119,15 +119,33 @@ pub fn effective_chunker_config(
     settings: &CorpusSettings,
 ) -> crate::memory::chunker::ChunkerConfig {
     let mut cfg = global.clone();
-    if let Some(v) = &settings.chunker_mode { cfg.mode = v.clone(); }
-    if let Some(v) = settings.target_size { cfg.target_size = v; }
-    if let Some(v) = settings.min_size { cfg.min_size = v; }
-    if let Some(v) = settings.max_size { cfg.max_size = v; }
-    if let Some(v) = settings.overlap { cfg.overlap = v; }
-    if let Some(v) = settings.semantic_similarity_threshold { cfg.semantic_similarity_threshold = v; }
-    if let Some(v) = settings.context_prefix_enabled { cfg.context_prefix_enabled = v; }
-    if let Some(v) = settings.context_prefix_tokens { cfg.context_prefix_tokens = v; }
-    if let Some(v) = &settings.pipeline_stages { cfg.pipeline_stages = v.clone(); }
+    if let Some(v) = &settings.chunker_mode {
+        cfg.mode = v.clone();
+    }
+    if let Some(v) = settings.target_size {
+        cfg.target_size = v;
+    }
+    if let Some(v) = settings.min_size {
+        cfg.min_size = v;
+    }
+    if let Some(v) = settings.max_size {
+        cfg.max_size = v;
+    }
+    if let Some(v) = settings.overlap {
+        cfg.overlap = v;
+    }
+    if let Some(v) = settings.semantic_similarity_threshold {
+        cfg.semantic_similarity_threshold = v;
+    }
+    if let Some(v) = settings.context_prefix_enabled {
+        cfg.context_prefix_enabled = v;
+    }
+    if let Some(v) = settings.context_prefix_tokens {
+        cfg.context_prefix_tokens = v;
+    }
+    if let Some(v) = &settings.pipeline_stages {
+        cfg.pipeline_stages = v.clone();
+    }
     cfg
 }
 

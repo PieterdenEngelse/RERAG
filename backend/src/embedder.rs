@@ -12,8 +12,7 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{debug, info, info_span, warn, Instrument};
 
-static UPLOAD_BLOCKING_RT: std::sync::OnceLock<tokio::runtime::Handle> =
-    std::sync::OnceLock::new();
+static UPLOAD_BLOCKING_RT: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
 
 pub fn upload_pool_ready() -> bool {
     UPLOAD_BLOCKING_RT.get().is_some()
@@ -385,9 +384,10 @@ impl EmbeddingService {
             } else {
                 tokio::task::spawn_blocking(move || runtime.embed_batch_owned(owned))
             };
-            let results = embedding_future
-                .await
-                .unwrap_or_else(|e| { warn!("embed_batch join error: {e}"); vec![] });
+            let results = embedding_future.await.unwrap_or_else(|e| {
+                warn!("embed_batch join error: {e}");
+                vec![]
+            });
 
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
             info!(
@@ -425,14 +425,12 @@ impl EmbeddingService {
         } else {
             tokio::task::spawn_blocking(move || runtime.embed_batch_owned(owned))
         };
-        let vectors = embedding_future
-            .await
-            .unwrap_or_else(|e| { warn!("embed_batch_indexed join error: {e}"); vec![] });
+        let vectors = embedding_future.await.unwrap_or_else(|e| {
+            warn!("embed_batch_indexed join error: {e}");
+            vec![]
+        });
 
-        let results: Vec<(usize, EmbeddingVector)> = indices
-            .into_iter()
-            .zip(vectors)
-            .collect();
+        let results: Vec<(usize, EmbeddingVector)> = indices.into_iter().zip(vectors).collect();
 
         info!(
             total_embeddings = results.len(),

@@ -43,8 +43,8 @@ impl CorpusRegistry {
         }
         let index_dir = self.pm.corpus_index_dir(slug);
         let vector_file = self.pm.corpus_vector_file(slug);
-        let mut retriever =
-            Retriever::new_with_paths(index_dir, vector_file, self.index_in_ram).map_err(|e| e.to_string())?;
+        let mut retriever = Retriever::new_with_paths(index_dir, vector_file, self.index_in_ram)
+            .map_err(|e| e.to_string())?;
         // Apply per-corpus settings (best-effort — don't fail if DB unavailable).
         let db_path = self.pm.db_path("documents");
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {

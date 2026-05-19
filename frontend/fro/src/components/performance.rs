@@ -66,7 +66,7 @@ pub fn calculate_visible_range(scroll_top: f64, config: &VirtualScrollConfig) ->
 /// 1. Track scroll position via JS interop
 /// 2. Apply transform to offset visible items
 /// 3. Set total height for proper scrollbar
-
+///
 /// Lazy loading state
 #[derive(Clone, Debug, PartialEq)]
 pub enum LazyLoadState<T> {
@@ -131,8 +131,7 @@ impl PaginationState {
     }
 
     pub fn total_pages(&self) -> Option<usize> {
-        self.total_items
-            .map(|total| (total + self.page_size - 1) / self.page_size)
+        self.total_items.map(|total| total.div_ceil(self.page_size))
     }
 }
 

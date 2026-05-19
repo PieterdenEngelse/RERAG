@@ -181,9 +181,7 @@ pub fn falkor_value_to_json(value: &FalkorValue) -> serde_json::Value {
         FalkorValue::I64(n) => Value::from(*n),
         FalkorValue::F64(f) => Value::from(*f),
         FalkorValue::None => Value::Null,
-        FalkorValue::Array(items) => {
-            Value::Array(items.iter().map(falkor_value_to_json).collect())
-        }
+        FalkorValue::Array(items) => Value::Array(items.iter().map(falkor_value_to_json).collect()),
         FalkorValue::Map(map) => Value::Object(
             map.iter()
                 .map(|(k, v)| (k.clone(), falkor_value_to_json(v)))

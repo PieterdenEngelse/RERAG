@@ -3,18 +3,15 @@ use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigFalkorDb, ConfigHardware,
-    ConfigIoUring, ConfigMemories,
-    ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigRedis, ConfigSampling,
-    ConfigTerms, Docu,
-    DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
-    DocuEmbeddings, DocuEntitiesProduction, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
-    DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy,
-    DocuThreads, DocuTokenizersGeneral,
-    Home,
-    MonitorAgSystemd, MonitorAgentic, MonitorCache,
-    MonitorChunks, MonitorDocker, MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph,
-    MonitorLogs, MonitorObservations, MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag,
-    MonitorRateLimits, MonitorRequests, MonitorTip, MonitorTools, PageNotFound, Parameters, Train,
+    ConfigIoUring, ConfigMemories, ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigRedis,
+    ConfigSampling, ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25,
+    DocuBpeUnigram, DocuCanonicalization, DocuEmbeddings, DocuEntitiesProduction, DocuIndex,
+    DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv,
+    DocuTantivy, DocuThreads, DocuTokenizersGeneral, Home, MonitorAgSystemd, MonitorAgentic,
+    MonitorCache, MonitorChunks, MonitorDocker, MonitorGrafanaServices, MonitorIndex,
+    MonitorKnowledgeGraph, MonitorLogs, MonitorObservations, MonitorOnnx, MonitorOnnxStatus,
+    MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip, MonitorTools,
+    PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 
@@ -188,7 +185,11 @@ pub struct ActiveCorpus(pub String);
 
 impl ActiveCorpus {
     pub fn slug(&self) -> &str {
-        if self.0.is_empty() { "default" } else { &self.0 }
+        if self.0.is_empty() {
+            "default"
+        } else {
+            &self.0
+        }
     }
 }
 
@@ -326,7 +327,7 @@ fn Layout() -> Element {
 
     // Initialize RuntimeContext from API on first load
     {
-        let mut runtime_ctx = runtime_ctx.clone();
+        let mut runtime_ctx = runtime_ctx;
         use_future(move || async move {
             if let Ok(resp) = crate::api::fetch_hardware_config().await {
                 runtime_ctx.with_mut(|ctx| {
@@ -431,7 +432,7 @@ fn Layout() -> Element {
                                     for entry in help_entries.iter().take(16).cloned() {
                                         HelpCommandRow {
                                             detail: entry,
-                                            selected_command: selected_command.clone(),
+                                            selected_command: selected_command,
                                         }
                                     }
                                 }
@@ -442,7 +443,7 @@ fn Layout() -> Element {
                                     for entry in help_entries.iter().skip(16).cloned() {
                                         HelpCommandRow {
                                             detail: entry,
-                                            selected_command: selected_command.clone(),
+                                            selected_command: selected_command,
                                         }
                                     }
                                 }

@@ -36,11 +36,11 @@ pub fn HomeSettingsBoards(
     let navigator = use_navigator();
     let mut show_no_tools_msg = use_signal(|| false);
     let mut active_corpus = use_context::<Signal<ActiveCorpus>>();
-    let mut corpora = use_signal(|| Vec::<api::CorpusEntry>::new());
+    let mut corpora = use_signal(Vec::<api::CorpusEntry>::new);
     let mut show_corpus_info = use_signal(|| false);
     let mut show_new_corpus = use_signal(|| false);
-    let mut new_corpus_slug = use_signal(|| String::new());
-    let mut new_corpus_description = use_signal(|| String::new());
+    let mut new_corpus_slug = use_signal(String::new);
+    let mut new_corpus_description = use_signal(String::new);
     let mut new_corpus_error = use_signal(|| Option::<String>::None);
     let mut show_delete_confirm = use_signal(|| false);
     let mut delete_error = use_signal(|| Option::<String>::None);

@@ -16,7 +16,7 @@
 //! The page separates two graphs deliberately:
 //!   - FalkorDB        — the persistent ingestion store, written during indexing.
 //!   - Petgraph runtime — the in-process graph that every retrieval-time query
-//!                        actually reads. FalkorDB is never on the read path.
+//!     actually reads. FalkorDB is never on the read path.
 
 use crate::pages::hardware::constants::{
     INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,

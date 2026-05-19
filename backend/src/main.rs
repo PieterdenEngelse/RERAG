@@ -272,22 +272,25 @@ async fn main() -> std::io::Result<()> {
     let retriever_start = Instant::now();
     info!("📦 Initializing Retriever with PathManager...");
 
-    let mut retriever =
-        match Retriever::new_with_paths(pm.index_path("tantivy"), pm.vector_store_path(), config.index_in_ram) {
-            Ok(mut ret) => {
-                ret.set_search_top_k(config.search_top_k);
-                let duration_ms = retriever_start.elapsed().as_millis() as u64;
-                info!(duration_ms = duration_ms, "✓ Retriever initialized");
-                // Initialize Prometheus app_info and initial gauges
-                metrics::APP_INFO.set(1);
-                metrics::refresh_retriever_gauges(&ret);
-                ret
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to initialize retriever");
-                return Err(std::io::Error::other(e));
-            }
-        };
+    let mut retriever = match Retriever::new_with_paths(
+        pm.index_path("tantivy"),
+        pm.vector_store_path(),
+        config.index_in_ram,
+    ) {
+        Ok(mut ret) => {
+            ret.set_search_top_k(config.search_top_k);
+            let duration_ms = retriever_start.elapsed().as_millis() as u64;
+            info!(duration_ms = duration_ms, "✓ Retriever initialized");
+            // Initialize Prometheus app_info and initial gauges
+            metrics::APP_INFO.set(1);
+            metrics::refresh_retriever_gauges(&ret);
+            ret
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to initialize retriever");
+            return Err(std::io::Error::other(e));
+        }
+    };
 
     // Restore the persisted L1 search cache so warm queries survive a restart.
     let search_cache_path = config
@@ -372,7 +375,9 @@ async fn main() -> std::io::Result<()> {
                     // Create a NEW FalkorDB connection for the background task
                     let graph_config_for_petgraph = GraphConfig::from_env();
                     actix_web::rt::spawn(async move {
-                        info!("ParallelGroup: Compiling FalkorDB → petgraph runtime (background)...");
+                        info!(
+                            "ParallelGroup: Compiling FalkorDB → petgraph runtime (background)..."
+                        );
 
                         match GraphClient::new(graph_config_for_petgraph).await {
                             Ok(client_for_graph) => {
@@ -568,7 +573,8 @@ async fn main() -> std::io::Result<()> {
                     let effective_cfg_default = settings_default
                         .map(|s| ag::db::corpora::effective_chunker_config(&global_cfg, &s))
                         .unwrap_or(global_cfg.clone());
-                    let effective_mode = effective_cfg_default.mode
+                    let effective_mode = effective_cfg_default
+                        .mode
                         .parse::<ag::config::ChunkerMode>()
                         .unwrap_or(config.chunker_mode);
                     let chunker = ag::memory::chunker_factory::create_chunker(
@@ -603,10 +609,15 @@ async fn main() -> std::io::Result<()> {
                             .corpus_upload_dir(slug)
                             .to_string_lossy()
                             .to_string();
-                        let corpus_settings = ag::db::corpora::get_corpus_settings(&conn, slug).unwrap_or_default();
+                        let corpus_settings =
+                            ag::db::corpora::get_corpus_settings(&conn, slug).unwrap_or_default();
                         let global_cfg2 = ag::db::chunk_settings::global_config();
-                        let eff_cfg = ag::db::corpora::effective_chunker_config(&global_cfg2, &corpus_settings);
-                        let effective_mode = eff_cfg.mode
+                        let eff_cfg = ag::db::corpora::effective_chunker_config(
+                            &global_cfg2,
+                            &corpus_settings,
+                        );
+                        let effective_mode = eff_cfg
+                            .mode
                             .parse::<ag::config::ChunkerMode>()
                             .unwrap_or(config.chunker_mode);
                         if let Some(handle) = ag::corpus_registry::get_registry()

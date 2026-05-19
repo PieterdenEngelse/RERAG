@@ -4,8 +4,12 @@ use tempfile::tempdir;
 
 /// Helper to create a retriever with a temporary index directory and vector file
 fn make_retriever_with_vector_file(temp_dir: &Path, vector_file: &Path) -> Retriever {
-    Retriever::new_with_vector_file(temp_dir.to_str().unwrap(), vector_file.to_str().unwrap())
-        .expect("Failed to create retriever")
+    Retriever::new_with_vector_file(
+        temp_dir.to_str().unwrap(),
+        vector_file.to_str().unwrap(),
+        false,
+    )
+    .expect("Failed to create retriever")
 }
 
 #[cfg(test)]

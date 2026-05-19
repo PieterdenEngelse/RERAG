@@ -29,16 +29,16 @@ fn info_icon() -> Element {
 
 #[component]
 pub fn ConfigCorpus() -> Element {
-    let mut corpora = use_signal(|| Vec::<api::CorpusEntry>::new());
+    let mut corpora = use_signal(Vec::<api::CorpusEntry>::new);
     let mut selected = use_signal(|| "default".to_string());
 
     // Per-corpus settings (editable)
-    let mut top_k_str = use_signal(|| String::new());
-    let mut chunker_mode = use_signal(|| String::new());
-    let mut metric = use_signal(|| String::new());
-    let mut ef_construction_str = use_signal(|| String::new());
-    let mut ef_search_str = use_signal(|| String::new());
-    let mut pq_str = use_signal(|| String::new());
+    let mut top_k_str = use_signal(String::new);
+    let mut chunker_mode = use_signal(String::new);
+    let mut metric = use_signal(String::new);
+    let mut ef_construction_str = use_signal(String::new);
+    let mut ef_search_str = use_signal(String::new);
+    let mut pq_str = use_signal(String::new);
     let mut saving = use_signal(|| false);
     let mut save_msg = use_signal(|| Option::<String>::None);
 
@@ -75,7 +75,11 @@ pub fn ConfigCorpus() -> Element {
             top_k_str.set(s.search_top_k.map(|v| v.to_string()).unwrap_or_default());
             chunker_mode.set(s.chunker_mode.unwrap_or_default());
             metric.set(s.distance_metric.unwrap_or_default());
-            ef_construction_str.set(s.hnsw_ef_construction.map(|v| v.to_string()).unwrap_or_default());
+            ef_construction_str.set(
+                s.hnsw_ef_construction
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            );
             ef_search_str.set(s.hnsw_ef_search.map(|v| v.to_string()).unwrap_or_default());
             pq_str.set(s.pq_subvectors.map(|v| v.to_string()).unwrap_or_default());
             build_meta.set(Some(r.build_meta));
@@ -107,7 +111,11 @@ pub fn ConfigCorpus() -> Element {
                 top_k_str.set(s.search_top_k.map(|v| v.to_string()).unwrap_or_default());
                 chunker_mode.set(s.chunker_mode.unwrap_or_default());
                 metric.set(s.distance_metric.unwrap_or_default());
-                ef_construction_str.set(s.hnsw_ef_construction.map(|v| v.to_string()).unwrap_or_default());
+                ef_construction_str.set(
+                    s.hnsw_ef_construction
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                );
                 ef_search_str.set(s.hnsw_ef_search.map(|v| v.to_string()).unwrap_or_default());
                 pq_str.set(s.pq_subvectors.map(|v| v.to_string()).unwrap_or_default());
                 build_meta.set(Some(r.build_meta));
@@ -146,15 +154,27 @@ pub fn ConfigCorpus() -> Element {
     // Drift detection — compute before rsx!
     let drift = build_meta().and_then(|meta| {
         meta.built_at.as_ref()?;
-        let current_metric = if metric().is_empty() { "cosine".to_string() } else { metric() };
+        let current_metric = if metric().is_empty() {
+            "cosine".to_string()
+        } else {
+            metric()
+        };
         let current_ef_c = ef_construction_str().parse::<usize>().unwrap_or(100);
         let current_ef_s = ef_search_str().parse::<usize>().unwrap_or(100);
         let current_pq = pq_str().parse::<usize>().unwrap_or(48);
-        let needs_reindex = current_metric != meta.distance_metric.clone().unwrap_or_else(|| "cosine".to_string())
+        let needs_reindex = current_metric
+            != meta
+                .distance_metric
+                .clone()
+                .unwrap_or_else(|| "cosine".to_string())
             || current_ef_c != meta.hnsw_ef_construction.unwrap_or(100)
             || current_pq != meta.pq_subvectors.unwrap_or(48);
         let ef_s_changed = current_ef_s != meta.hnsw_ef_search.unwrap_or(100);
-        if needs_reindex || ef_s_changed { Some((needs_reindex, ef_s_changed)) } else { None }
+        if needs_reindex || ef_s_changed {
+            Some((needs_reindex, ef_s_changed))
+        } else {
+            None
+        }
     });
 
     rsx! {

@@ -57,7 +57,7 @@ pub fn ChartPlaceholder(props: ChartPlaceholderProps) -> Element {
 
 #[component]
 pub fn ChartBar(props: ChartBarProps) -> Element {
-    let height = if props.max - props.min < f64::EPSILON {
+    let height = if (props.max - props.min).abs() < f64::EPSILON {
         1.0
     } else {
         (props.value - props.min) / (props.max - props.min)

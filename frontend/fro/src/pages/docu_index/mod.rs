@@ -2,10 +2,10 @@
 
 mod ag_pipeline;
 mod agglutinative;
-mod bpe_unigram;
-mod canonicalization;
 mod bias;
 mod bm25;
+mod bpe_unigram;
+mod canonicalization;
 mod embeddings;
 mod entities_production;
 mod io_uring;
@@ -21,10 +21,10 @@ mod tokenizers_general;
 
 pub use ag_pipeline::DocuAgPipeline;
 pub use agglutinative::DocuAgglutinative;
-pub use bpe_unigram::DocuBpeUnigram;
-pub use canonicalization::DocuCanonicalization;
 pub use bias::DocuBias;
 pub use bm25::DocuBm25;
+pub use bpe_unigram::DocuBpeUnigram;
+pub use canonicalization::DocuCanonicalization;
 pub use embeddings::DocuEmbeddings;
 pub use entities_production::DocuEntitiesProduction;
 pub use io_uring::DocuIoUring;

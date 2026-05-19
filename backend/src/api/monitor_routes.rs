@@ -961,7 +961,11 @@ pub(crate) async fn get_rate_limit_monitor_info(
         .collect();
     let drops_by_server_route = metrics::rate_limit_drops_by_server_route_snapshot()
         .into_iter()
-        .map(|(server, route, drops)| ServerRouteDrop { server, route, drops })
+        .map(|(server, route, drops)| ServerRouteDrop {
+            server,
+            route,
+            drops,
+        })
         .collect();
     let config = state.config_snapshot(limiter_state.enabled);
 

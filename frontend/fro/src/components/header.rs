@@ -27,8 +27,8 @@ pub fn Header() -> Element {
 
     // Log modal state
     let mut show_log_modal = use_signal(|| false);
-    let mut log_status_type = use_signal(|| String::new());
-    let mut log_content = use_signal(|| String::new());
+    let mut log_status_type = use_signal(String::new);
+    let mut log_content = use_signal(String::new);
     let mut log_loading = use_signal(|| false);
     let mut log_error = use_signal(|| Option::<String>::None);
     let mut log_total_lines = use_signal(|| 0usize);
@@ -259,8 +259,7 @@ pub fn Header() -> Element {
                 }
                 Err(_) => {
                     last_upload_health_response.set(None);
-                    page_errors
-                        .with_mut(|e| e.set_error("upload_server", "Upload server offline"));
+                    page_errors.with_mut(|e| e.set_error("upload_server", "Upload server offline"));
                 }
             }
             gloo_timers::future::TimeoutFuture::new(5000).await;
@@ -306,17 +305,25 @@ pub fn Header() -> Element {
         let mut lines: Vec<String> = Vec::new();
         if let Some(resp) = last_health_response() {
             let mut line = format!("Search (3010): {}", resp.status);
-            if let Some(d) = resp.documents { line = format!("{} | {} docs", line, d); }
-            if let Some(v) = resp.vectors { line = format!("{}, {} vecs", line, v); }
+            if let Some(d) = resp.documents {
+                line = format!("{} | {} docs", line, d);
+            }
+            if let Some(v) = resp.vectors {
+                line = format!("{}, {} vecs", line, v);
+            }
             lines.push(line);
         } else {
             lines.push(format!("Search (3010): {}", status));
         }
         if let Some(resp) = last_upload_health_response() {
             let mut line = format!("Upload (3011): {}", resp.status);
-            if let Some(m) = resp.message { line = format!("{} | {}", line, m); }
+            if let Some(m) = resp.message {
+                line = format!("{} | {}", line, m);
+            }
             if let Some(l) = resp.load {
-                if l.indexing { line = format!("{} | indexing", line); }
+                if l.indexing {
+                    line = format!("{} | indexing", line);
+                }
                 line = format!("{} | queue:{}", line, l.queue_depth);
             }
             lines.push(line);

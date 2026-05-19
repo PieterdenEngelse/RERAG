@@ -122,10 +122,10 @@ pub fn ConfigSampling() -> Element {
     let backend_error = use_signal(|| Option::<String>::None);
 
     {
-        let mut llm_config = llm_config.clone();
-        let mut llm_loading = llm_loading.clone();
-        let mut llm_error = llm_error.clone();
-        let mut llm_status = llm_status.clone();
+        let mut llm_config = llm_config;
+        let mut llm_loading = llm_loading;
+        let mut llm_error = llm_error;
+        let mut llm_status = llm_status;
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             llm_loading.set(true);
@@ -149,8 +149,8 @@ pub fn ConfigSampling() -> Element {
     }
 
     {
-        let mut backend_type = backend_type.clone();
-        let mut backend_error = backend_error.clone();
+        let mut backend_type = backend_type;
+        let mut backend_error = backend_error;
         use_future(move || async move {
             match api::fetch_hardware_config().await {
                 Ok(resp) => {
@@ -168,10 +168,10 @@ pub fn ConfigSampling() -> Element {
         llm_saving.set(true);
         llm_error.set(None);
         let payload = sanitize_llm_config(llm_config());
-        let mut llm_config = llm_config.clone();
-        let mut llm_status = llm_status.clone();
-        let mut llm_error = llm_error.clone();
-        let mut llm_saving = llm_saving.clone();
+        let mut llm_config = llm_config;
+        let mut llm_status = llm_status;
+        let mut llm_error = llm_error;
+        let mut llm_saving = llm_saving;
         spawn(async move {
             match api::commit_llm_config(&payload).await {
                 Ok(resp) => {
@@ -209,7 +209,7 @@ pub fn ConfigSampling() -> Element {
                     span { class: "text-base text-gray-200 font-semibold", "Parameters" }
                     button {
                         class: "btn btn-primary btn-xs",
-                        onclick: on_llm_save.clone(),
+                        onclick: on_llm_save,
                         disabled: llm_saving() || llm_loading(),
                         if llm_saving() { "Saving…" } else { "Save" }
                     }
@@ -629,7 +629,7 @@ pub fn ConfigSampling() -> Element {
             }
 
             if show_temp_info() {
-                { info_modal("Temperature", show_temp_info.clone(), vec![
+                { info_modal("Temperature", show_temp_info, vec![
                     "Temperature in an LLM typically ranges from 0.0 to 2.0. Even though it is stored as a float32, which technically allows around seven significant digits, in practice one decimal place is usually enough. When finer control is needed, two decimals such as 0.75 or 0.85 are sometimes used, but going beyond that offers almost no practical benefit.",
                     "Temperature influences how the model selects the next token from the probability distribution it produces. A token is the smallest textual unit a language model processes. Depending on the tokenizer, a token may be a whole word, part of a word, punctuation, or even whitespace.",
                     "Each token is mapped to a dense embedding vector containing a real-valued number for every dimension. These values encode semantic information in a continuous vector space, and the distance between vectors reflects how similar their meanings are across all dimensions.",
@@ -645,31 +645,31 @@ pub fn ConfigSampling() -> Element {
                 ]) }
             }
             if show_repeat_penalty_info() {
-                { info_modal("Repeat penalty", show_repeat_penalty_info.clone(), vec![
+                { info_modal("Repeat penalty", show_repeat_penalty_info, vec![
                     "The repeat_penalty parameter discourages the model from repeating the same words or phrases too often by lowering the probability of tokens that have already appeared.",
                     "The more often a token has appeared, the stronger the penalty becomes. It does not forbid repetition but it nudges the model to pick new words unless repeating something is genuinely the best choice.",
                 ]) }
             }
             if show_topk_info() {
-                { info_modal("Top K", show_topk_info.clone(), vec![
+                { info_modal("Top K", show_topk_info, vec![
                     "Top‑k works by letting the model choose the next token only from the k most likely options. The model first produces a probability score for every possible token, then sorts them from most to least likely, keeps only the top k of them, sets all others to zero, renormalizes the remaining probabilities, and finally samples one token from that reduced set.",
                     "It's a hard cutoff: if a token isn't in the top k, it simply cannot be chosen. For more background, see the temperature explanation on this page.",
                 ]) }
             }
             if show_max_tokens_info() {
-                { info_modal("Max tokens", show_max_tokens_info.clone(), vec![
+                { info_modal("Max tokens", show_max_tokens_info, vec![
                     "Max_tokens simply limits how many tokens the model may emit before it must stop. It does not affect creativity or randomness; it is only a length cap.",
                     "If the model reaches that limit it stops, even if the answer is not finished. A higher limit lets the model continue until it naturally decides to stop.",
                 ]) }
             }
             if show_topp_info() {
-                { info_modal("Top P", show_topp_info.clone(), vec![
+                { info_modal("Top P", show_topp_info, vec![
                     "Top‑p is a way of sampling that constantly reshapes itself around whatever the model believes is most likely at that moment. After the model produces a probability for every possible next token, those tokens are sorted from most to least likely. Then the algorithm begins adding their probabilities together, one by one, until the running total reaches the threshold p that you chose. The moment the cumulative sum crosses that value, the process stops, and the tokens included so far become the entire pool the model is allowed to choose from. Everything outside that pool is discarded by setting its probability to zero, and the remaining probabilities are renormalized so they add up to one again.",
                     "What makes top‑p interesting is that it adapts to the shape of the distribution. When the model is \"confident\" — meaning one or a few tokens have very high probability and the rest are far behind — the cumulative sum reaches p quickly, so the allowed pool is small. When the model is \"uncertain\" — meaning many tokens have similar probabilities and no single option dominates — the cumulative sum rises slowly, so the pool grows larger. The threshold p doesn't come from the model at all — it's a number you choose, and the algorithm just keeps adding probabilities until it reaches that target. For more info see temperature info on this page.",
                 ]) }
             }
             if show_seed_info() {
-                { info_modal("Seed", show_seed_info.clone(), vec![
+                { info_modal("Seed", show_seed_info, vec![
                     "Use case: If you don't like the output, you can try a different seed to explore a different variation of the same prompt. Each seed gives you a different sampling path, so you get a different version of the answer without changing temperature or other settings.",
                     "A seed is just a number that selects one specific random sequence. Changing the seed changes the sampling path. Keeping the seed the same reproduces the exact same output every time, as long as the prompt and sampling settings stay the same.",
                     "You don't need to try many seeds. Even a few (3–10) will give you noticeably different variations. The full seed range (0 to 4,294,967,295) exists for technical reasons, not because you should explore all of it.",
@@ -679,21 +679,21 @@ pub fn ConfigSampling() -> Element {
                 ]) }
             }
             if show_frequency_penalty_info() {
-                { info_modal("Frequency penalty", show_frequency_penalty_info.clone(), vec![
+                { info_modal("Frequency penalty", show_frequency_penalty_info, vec![
                     "Frequency penalty reduces the likelihood of tokens proportionally to how often they have already appeared in the generated text. The more frequently a token appears, the stronger the penalty becomes.",
                     "This is different from repeat_penalty, which applies a fixed penalty regardless of how many times a token appeared. Frequency penalty scales with occurrence count, making it more aggressive against heavily repeated words.",
                     "A value of 0 means no penalty. Higher values (up to 2.0) increasingly discourage repetition. Use this when you want to reduce word repetition while still allowing occasional reuse of common words.",
                 ]) }
             }
             if show_presence_penalty_info() {
-                { info_modal("Presence penalty", show_presence_penalty_info.clone(), vec![
+                { info_modal("Presence penalty", show_presence_penalty_info, vec![
                     "Presence penalty applies a flat penalty to any token that has already appeared in the text, regardless of how many times it appeared. A token that appeared once gets the same penalty as one that appeared ten times.",
                     "This encourages the model to explore new topics and vocabulary rather than staying focused on the same concepts. It's useful for creative writing or brainstorming where you want diverse ideas.",
                     "A value of 0 means no penalty. Higher values (up to 2.0) push the model to use new words. Unlike frequency_penalty, this doesn't scale with repetition count — it just asks: has this token appeared before?",
                 ]) }
             }
             if show_stop_sequences_info() {
-                { info_modal("Stop sequences", show_stop_sequences_info.clone(), vec![
+                { info_modal("Stop sequences", show_stop_sequences_info, vec![
                     "Stop sequences are strings that tell the model to stop generating as soon as one of them is encountered. When the model produces any of these sequences, generation immediately halts.",
                     "This is useful for controlling output structure. For example, if you're generating a list, you might use a stop sequence like \"11.\" to limit the list to 10 items. For dialogue, you might stop at a specific character's name.",
                     "Enter multiple stop sequences separated by commas. Common examples include: </s>, <|endoftext|>, <|im_end|>, <|end|>, ###, or custom markers like [DONE].",
@@ -702,44 +702,44 @@ pub fn ConfigSampling() -> Element {
                 ]) }
             }
             if show_min_p_info() {
-                { info_modal("min_p", show_min_p_info.clone(), vec![
+                { info_modal("min_p", show_min_p_info, vec![
                     "min_p is an alternative nucleus cutoff: tokens below this minimum probability are ignored before sampling continues.",
                     "Educational link: comparing it with top-p teaches how probability mass can be trimmed from either the top or the bottom of the distribution.",
                 ]) }
             }
             if show_typical_p_info() {
-                { info_modal("typical_p", show_typical_p_info.clone(), vec![
+                { info_modal("typical_p", show_typical_p_info, vec![
                     "Typical sampling keeps tokens whose cumulative surprise (entropy) is below this threshold.",
                     "Educational value: illustrates entropy-driven sampling and why some models prefer \"typical\" tokens over purely likely ones.",
                 ]) }
             }
             if show_tfs_z_info() {
-                { info_modal("tfs_z", show_tfs_z_info.clone(), vec![
+                { info_modal("tfs_z", show_tfs_z_info, vec![
                     "Tail Free Sampling removes the long tail of the distribution until the remaining mass reaches z.",
                     "Educational link: demonstrates how trimming heavy tails affects diversity versus coherence.",
                 ]) }
             }
             if show_mirostat_info() {
-                { info_modal("Mirostat", show_mirostat_info.clone(), vec![
+                { info_modal("Mirostat", show_mirostat_info, vec![
                     "Mirostat is an adaptive sampling algorithm that tries to keep the surprise (entropy) near a target value.",
                     "Set 0 to disable, 1 for the v1 algorithm, or 2 for v2.",
                     "Educational value: shows how adaptive controllers keep sampling stable over long generations.",
                 ]) }
             }
             if show_mirostat_eta_info() {
-                { info_modal("mirostat_eta", show_mirostat_eta_info.clone(), vec![
+                { info_modal("mirostat_eta", show_mirostat_eta_info, vec![
                     "Eta is the learning rate for Mirostat: higher values react faster but can overshoot.",
                     "Educational value: connects eta to standard optimization / control theory concepts.",
                 ]) }
             }
             if show_mirostat_tau_info() {
-                { info_modal("mirostat_tau", show_mirostat_tau_info.clone(), vec![
+                { info_modal("mirostat_tau", show_mirostat_tau_info, vec![
                     "Tau is the target entropy that Mirostat tries to maintain.",
                     "Educational value: demonstrates how steering entropy changes model behaviour (creative vs focused).",
                 ]) }
             }
             if show_repeat_last_n_info() {
-                { info_modal("repeat_last_n", show_repeat_last_n_info.clone(), vec![
+                { info_modal("repeat_last_n", show_repeat_last_n_info, vec![
                     "repeat_last_n decides how many of the last tokens are considered when applying repetition penalties.",
                     "Educational value: frames the penalty as a moving \"memory span\" that controls how far back the model looks when discouraging repeats.",
                 ]) }

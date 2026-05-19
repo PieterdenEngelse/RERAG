@@ -852,9 +852,7 @@ pub(crate) async fn get_ui_requests_upload() -> Result<HttpResponse, Error> {
 }
 
 /// GET /config/servers — read-only snapshot of both servers' tuning parameters
-pub(crate) async fn get_server_config(
-    config: web::Data<ApiConfig>,
-) -> Result<HttpResponse, Error> {
+pub(crate) async fn get_server_config(config: web::Data<ApiConfig>) -> Result<HttpResponse, Error> {
     let upload_max_mb = std::env::var("UPLOAD_MAX_MB")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -901,13 +899,25 @@ pub(crate) async fn save_server_config(
     body: web::Json<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, Error> {
     const ALLOWED: &[&str] = &[
-        "BACKEND_HOST", "BACKEND_PORT",
-        "SEARCH_WORKERS", "SEARCH_MAX_CONNECTIONS", "SEARCH_MAX_BODY_KB",
-        "SEARCH_TIMEOUT_SECS", "TRUST_PROXY_SEARCH", "RATE_LIMIT_LRU_CAPACITY",
-        "UPLOAD_HOST", "UPLOAD_PORT",
-        "UPLOAD_WORKERS", "UPLOAD_MAX_CONNECTIONS", "UPLOAD_MAX_CONCURRENT",
-        "UPLOAD_MAX_MB", "UPLOAD_TIMEOUT_SECS", "TRUST_PROXY_UPLOAD",
-        "UPLOAD_RATE_LIMIT_LRU_CAPACITY", "UPLOAD_CORS_ORIGINS", "UPLOAD_ONNX_THREADS",
+        "BACKEND_HOST",
+        "BACKEND_PORT",
+        "SEARCH_WORKERS",
+        "SEARCH_MAX_CONNECTIONS",
+        "SEARCH_MAX_BODY_KB",
+        "SEARCH_TIMEOUT_SECS",
+        "TRUST_PROXY_SEARCH",
+        "RATE_LIMIT_LRU_CAPACITY",
+        "UPLOAD_HOST",
+        "UPLOAD_PORT",
+        "UPLOAD_WORKERS",
+        "UPLOAD_MAX_CONNECTIONS",
+        "UPLOAD_MAX_CONCURRENT",
+        "UPLOAD_MAX_MB",
+        "UPLOAD_TIMEOUT_SECS",
+        "TRUST_PROXY_UPLOAD",
+        "UPLOAD_RATE_LIMIT_LRU_CAPACITY",
+        "UPLOAD_CORS_ORIGINS",
+        "UPLOAD_ONNX_THREADS",
     ];
     let mut lines = String::new();
     for key in ALLOWED {
@@ -931,7 +941,10 @@ pub(crate) async fn save_server_config(
 pub(crate) async fn set_index_in_ram(
     body: web::Json<serde_json::Value>,
 ) -> Result<HttpResponse, Error> {
-    let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let enabled = body
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let env_content = format!("INDEX_IN_RAM={}\n", if enabled { "true" } else { "false" });
     let env_path = std::path::Path::new(".env.index");
     match std::fs::write(env_path, &env_content) {
@@ -946,7 +959,6 @@ pub(crate) async fn set_index_in_ram(
         }))),
     }
 }
-
 
 pub(crate) async fn get_chunking_stats(
     query: web::Query<ChunkingQuery>,
@@ -2285,7 +2297,10 @@ fn parse_redis_memory(s: &str) -> Option<u64> {
     } else {
         return None;
     };
-    num.trim().parse::<u64>().ok().and_then(|n| n.checked_mul(mult))
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(mult))
 }
 
 /// Apply mode for a catalogued parameter — `"runtime"` or `"restart"`.
@@ -2681,7 +2696,11 @@ pub(crate) async fn apply_redis_config(
         "Applied live via CONFIG SET / GRAPH.CONFIG SET.".to_string()
     };
     Ok(HttpResponse::Ok().json(RedisApplyResponse {
-        status: if all_ok { "ok".into() } else { "partial".into() },
+        status: if all_ok {
+            "ok".into()
+        } else {
+            "partial".into()
+        },
         message,
         request_id,
         results,

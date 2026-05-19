@@ -768,11 +768,10 @@ pub fn start_api_server(
     );
 
     // CORS: search is always permissive; upload restricts when UPLOAD_CORS_ORIGINS is set.
-    let upload_cors_origins: Option<Arc<Vec<String>>> =
-        std::env::var("UPLOAD_CORS_ORIGINS")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| Arc::new(s.split(',').map(|o| o.trim().to_string()).collect()));
+    let upload_cors_origins: Option<Arc<Vec<String>>> = std::env::var("UPLOAD_CORS_ORIGINS")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| Arc::new(s.split(',').map(|o| o.trim().to_string()).collect()));
 
     if let Some(ref origins) = upload_cors_origins {
         info!(origins = ?origins, "Upload CORS restricted to explicit origin list");
@@ -842,18 +841,14 @@ pub fn start_api_server(
     let upload_opts = RateLimitOptions {
         trust_proxy: trust_proxy_upload,
         thresholds: Arc::clone(&rl_thresholds),
-        rules: vec![
-            RouteRule {
-                pattern: "/reindex".into(),
-                match_kind: MatchKind::Exact,
-                qps: 0.5,
-                burst: 2.0,
-                label: Some("admin-reindex".into()),
-            },
-        ],
-        exempt_prefixes: vec![
-            "/monitoring".into(),
-        ],
+        rules: vec![RouteRule {
+            pattern: "/reindex".into(),
+            match_kind: MatchKind::Exact,
+            qps: 0.5,
+            burst: 2.0,
+            label: Some("admin-reindex".into()),
+        }],
+        exempt_prefixes: vec!["/monitoring".into()],
     };
 
     info!(
@@ -909,7 +904,9 @@ pub fn start_api_server(
             .app_data(web::Data::new(api_config.clone()))
             .app_data(rate_limit_state_data.clone())
             .app_data(web::PayloadConfig::default().limit(search_max_body_bytes))
-            .wrap(crate::trace_middleware::TraceMiddleware::new_with_server("search"))
+            .wrap(crate::trace_middleware::TraceMiddleware::new_with_server(
+                "search",
+            ))
             .wrap(
                 crate::monitoring::rate_limit_middleware::RateLimitMiddleware::new_with_options(
                     rl.clone(),
@@ -1299,17 +1296,15 @@ pub fn start_api_server(
         let sem = Arc::clone(&upload_semaphore_ref);
         let origins = upload_cors_origins_ref.clone();
 
-            // CORS voor upload + monitoring server
-    let upload_cors = Cors::default()
-        .allow_any_origin()
-        .allowed_methods(vec!["GET", "POST"])
-        .allowed_headers(vec![
-            actix_web::http::header::CONTENT_TYPE,
-            actix_web::http::header::AUTHORIZATION,
-        ])
-        .max_age(3600);
-
-   
+        // CORS voor upload + monitoring server
+        let upload_cors = Cors::default()
+            .allow_any_origin()
+            .allowed_methods(vec!["GET", "POST"])
+            .allowed_headers(vec![
+                actix_web::http::header::CONTENT_TYPE,
+                actix_web::http::header::AUTHORIZATION,
+            ])
+            .max_age(3600);
 
         let _cors = {
             let mut c = Cors::default()
@@ -1333,7 +1328,9 @@ pub fn start_api_server(
             .app_data(web::Data::new(api_config.clone()))
             .app_data(rate_limit_state_data.clone())
             .app_data(web::PayloadConfig::default().limit(upload_max_bytes))
-            .wrap(crate::trace_middleware::TraceMiddleware::new_with_server("upload"))
+            .wrap(crate::trace_middleware::TraceMiddleware::new_with_server(
+                "upload",
+            ))
             .wrap(
                 crate::monitoring::rate_limit_middleware::RateLimitMiddleware::new_with_options(
                     rl.clone(),
@@ -1347,7 +1344,6 @@ pub fn start_api_server(
                 ),
             )
             // Upload-only corpus routes
-            
             .wrap(upload_cors)
             .service(
                 web::scope("/corpora")
@@ -1394,7 +1390,12 @@ pub fn start_api_server(
         .client_request_timeout(upload_timeout)
         .keep_alive(std::time::Duration::from_secs(75))
         .bind(upload_bind_addr.clone())
-        .unwrap_or_else(|e| panic!("Failed to bind upload server to {}: {}", upload_bind_addr, e));
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to bind upload server to {}: {}",
+                upload_bind_addr, e
+            )
+        });
 
     info!("Upload server bound to http://{}", upload_bind_addr);
 

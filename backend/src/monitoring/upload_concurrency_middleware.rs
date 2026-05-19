@@ -81,10 +81,7 @@ where
                         "Upload concurrency limit reached — returning 503"
                     );
                     let resp = HttpResponse::ServiceUnavailable()
-                        .insert_header((
-                            RETRY_AFTER,
-                            HeaderValue::from_static("1"),
-                        ))
+                        .insert_header((RETRY_AFTER, HeaderValue::from_static("1")))
                         .json(serde_json::json!({
                             "status": "overloaded",
                             "message": "Upload server at capacity — retry after 1s",
@@ -92,11 +89,10 @@ where
                     Ok(req.into_response(resp.map_into_right_body()))
                 }
                 Err(TryAcquireError::Closed) => {
-                    let resp = HttpResponse::ServiceUnavailable()
-                        .json(serde_json::json!({
-                            "status": "unavailable",
-                            "message": "Upload server shutting down",
-                        }));
+                    let resp = HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                        "status": "unavailable",
+                        "message": "Upload server shutting down",
+                    }));
                     Ok(req.into_response(resp.map_into_right_body()))
                 }
             }

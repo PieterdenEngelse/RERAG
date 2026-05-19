@@ -1,4 +1,9 @@
-use crate::api::{fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_corpora, fetch_io_uring_stats, fetch_parser_stats, fetch_preprocess_stats, update_corpus_description, CanonStats, CallSiteStats, ChunkMetaStats, ChunkingStatsSnapshot, CorpusEntry, FileRecord, IoUringResponse, ParserStats, PreprocessFileRecord, PreprocessStats, StoreRecord};
+use crate::api::{
+    fetch_canon_stats, fetch_chunk_meta_stats, fetch_chunking_stats, fetch_corpora,
+    fetch_io_uring_stats, fetch_parser_stats, fetch_preprocess_stats, update_corpus_description,
+    CallSiteStats, CanonStats, ChunkMetaStats, ChunkingStatsSnapshot, CorpusEntry, FileRecord,
+    IoUringResponse, ParserStats, PreprocessFileRecord, PreprocessStats, StoreRecord,
+};
 use crate::app::Route;
 use crate::components::monitor::*;
 use crate::pages::hardware::constants::{
@@ -48,14 +53,15 @@ pub fn MonitorTip() -> Element {
     let mut show_extractors_info = use_signal(|| false);
     let mut show_chunker_info = use_signal(|| false);
     let mut show_docir_info = use_signal(|| false);
-    let mut corpus_filter = use_signal(|| String::new());
+    let mut corpus_filter = use_signal(String::new);
     let mut corpora: Signal<Vec<CorpusEntry>> = use_signal(Vec::new);
     let mut show_desc_for = use_signal(|| Option::<String>::None);
     let mut edit_desc_for = use_signal(|| Option::<String>::None);
-    let mut edit_desc_value = use_signal(|| String::new());
+    let mut edit_desc_value = use_signal(String::new);
     let mut edit_desc_error = use_signal(|| Option::<String>::None);
     let mut parser_stats: Signal<Option<Result<ParserStats, String>>> = use_signal(|| None);
-    let mut chunking_stats: Signal<Option<Result<Vec<ChunkingStatsSnapshot>, String>>> = use_signal(|| None);
+    let mut chunking_stats: Signal<Option<Result<Vec<ChunkingStatsSnapshot>, String>>> =
+        use_signal(|| None);
     let mut canon_stats: Signal<Option<Result<CanonStats, String>>> = use_signal(|| None);
     let mut chunk_meta_stats: Signal<Option<Result<ChunkMetaStats, String>>> = use_signal(|| None);
     let mut preprocess_stats: Signal<Option<Result<PreprocessStats, String>>> = use_signal(|| None);
@@ -84,12 +90,14 @@ pub fn MonitorTip() -> Element {
             canon_stats.set(None);
             chunk_meta_stats.set(None);
             preprocess_stats.set(None);
-            let c = if corpus_val.is_empty() { None } else { Some(corpus_val.as_str()) };
+            let c = if corpus_val.is_empty() {
+                None
+            } else {
+                Some(corpus_val.as_str())
+            };
             loop {
                 parser_stats.set(Some(fetch_parser_stats(c).await));
-                chunking_stats.set(Some(
-                    fetch_chunking_stats(20, c).await.map(|r| r.snapshots)
-                ));
+                chunking_stats.set(Some(fetch_chunking_stats(20, c).await.map(|r| r.snapshots)));
                 canon_stats.set(Some(fetch_canon_stats(c).await));
                 chunk_meta_stats.set(Some(fetch_chunk_meta_stats(c).await));
                 preprocess_stats.set(Some(fetch_preprocess_stats(c).await));
@@ -3096,10 +3104,16 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
 
     let extra_files = deduped.len().saturating_sub(5);
 
-    let mut fmt_map: std::collections::HashMap<String, (u64, u64, u64)> = std::collections::HashMap::new();
+    let mut fmt_map: std::collections::HashMap<String, (u64, u64, u64)> =
+        std::collections::HashMap::new();
     for rec in &deduped {
         let entry = fmt_map.entry(rec.format.clone()).or_insert((0, 0, 0));
-        if rec.ok { entry.0 += 1; entry.2 += rec.chars; } else { entry.1 += 1; }
+        if rec.ok {
+            entry.0 += 1;
+            entry.2 += rec.chars;
+        } else {
+            entry.1 += 1;
+        }
     }
     let mut fmt_sorted: Vec<(String, u64, u64, u64)> = fmt_map
         .into_iter()
@@ -3491,7 +3505,9 @@ struct StoreRecordsViewProps {
 fn StoreRecordsView(props: StoreRecordsViewProps) -> Element {
     // Deduplicate by filename — records are newest-first, so first occurrence wins.
     let mut seen = std::collections::HashSet::new();
-    let records: Vec<&StoreRecord> = props.records.iter()
+    let records: Vec<&StoreRecord> = props
+        .records
+        .iter()
         .filter(|r| seen.insert(r.file.clone()))
         .collect();
     rsx! {
@@ -3544,14 +3560,20 @@ struct NfkcFileRecordsViewProps {
 #[component]
 fn NfkcFileRecordsView(props: NfkcFileRecordsViewProps) -> Element {
     let mut seen = std::collections::HashSet::new();
-    let records: Vec<&StoreRecord> = props.records.iter()
+    let records: Vec<&StoreRecord> = props
+        .records
+        .iter()
         .filter(|r| {
-            let nonzero = if props.use_index { r.index_chars_in > 0 } else { r.embed_chars_in > 0 };
+            let nonzero = if props.use_index {
+                r.index_chars_in > 0
+            } else {
+                r.embed_chars_in > 0
+            };
             nonzero && seen.insert(r.file.clone())
         })
         .collect();
     if records.is_empty() {
-        return rsx! { };
+        return rsx! {};
     }
     rsx! {
         div { class: "mt-2 pt-2 border-t border-gray-700 overflow-y-auto", style: "max-height:160px;",
@@ -3600,7 +3622,8 @@ struct ChunkerStatsViewProps {
 #[component]
 fn ChunkerStatsView(props: ChunkerStatsViewProps) -> Element {
     let mut seen = std::collections::HashSet::new();
-    let deduped: Vec<&ChunkingStatsSnapshot> = props.snapshots
+    let deduped: Vec<&ChunkingStatsSnapshot> = props
+        .snapshots
         .iter()
         .filter(|s| seen.insert(s.file.clone()))
         .collect();
@@ -3645,7 +3668,11 @@ fn delta_pct(site: &CallSiteStats) -> String {
         return "—".to_string();
     }
     let d = site.chars_out as f64 / site.chars_in as f64 * 100.0 - 100.0;
-    if d >= 0.0 { format!("+{:.1}%", d) } else { format!("{:.1}%", d) }
+    if d >= 0.0 {
+        format!("+{:.1}%", d)
+    } else {
+        format!("{:.1}%", d)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -3700,7 +3727,11 @@ struct CanonRowProps {
 
 #[component]
 fn CanonRow(props: CanonRowProps) -> Element {
-    let dim = if props.site.calls == 0 { "text-gray-600" } else { "text-gray-300" };
+    let dim = if props.site.calls == 0 {
+        "text-gray-600"
+    } else {
+        "text-gray-300"
+    };
     let mut show = use_signal(|| false);
     rsx! {
         tr { class: "border-b border-gray-700 {dim}",

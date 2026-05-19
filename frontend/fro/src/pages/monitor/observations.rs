@@ -17,7 +17,7 @@ pub fn MonitorObservations() -> Element {
     let state = use_signal(ObservationsState::default);
 
     {
-        let mut state = state.clone();
+        let mut state = state;
         use_future(move || async move {
             state.set(ObservationsState {
                 loading: true,

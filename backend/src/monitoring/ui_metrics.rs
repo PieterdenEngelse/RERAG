@@ -49,9 +49,8 @@ pub struct RequestsSnapshot {
     pub server: String,
 }
 
-static REQUEST_SAMPLES: Lazy<Mutex<VecDeque<RequestSample>>> = Lazy::new(|| {
-    Mutex::new(VecDeque::with_capacity(1024))
-});
+static REQUEST_SAMPLES: Lazy<Mutex<VecDeque<RequestSample>>> =
+    Lazy::new(|| Mutex::new(VecDeque::with_capacity(1024)));
 
 // Keep at most this many seconds of samples for UI purposes.
 const MAX_WINDOW_SECS: i64 = 5 * 60; // 5 minutes
@@ -60,7 +59,12 @@ const MAX_WINDOW_SECS: i64 = 5 * 60; // 5 minutes
 ///
 /// Called from the trace middleware after each completed request.
 /// `server` must be a `'static` str ("search" or "upload").
-pub fn record_http_request(latency_ms: f64, is_error: bool, status_class: &str, server: &'static str) {
+pub fn record_http_request(
+    latency_ms: f64,
+    is_error: bool,
+    status_class: &str,
+    server: &'static str,
+) {
     let mut buf = REQUEST_SAMPLES.lock().unwrap();
     let now = Utc::now();
 
@@ -103,7 +107,7 @@ pub fn get_requests_snapshot_for_server(server_filter: Option<&str>) -> Requests
 
     let samples: Vec<&RequestSample> = buf
         .iter()
-        .filter(|s| server_filter.map_or(true, |f| s.server == f))
+        .filter(|s| server_filter.is_none_or(|f| s.server == f))
         .collect();
 
     if samples.is_empty() {

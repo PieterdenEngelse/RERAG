@@ -113,10 +113,19 @@ where
         let span_name = format!("{} {}", method, route_label);
         let mut otel_span = tracer.start(span_name);
         otel_span.set_attribute(opentelemetry::KeyValue::new("http.method", method.clone()));
-        otel_span.set_attribute(opentelemetry::KeyValue::new("http.url", route_label.clone()));
-        otel_span.set_attribute(opentelemetry::KeyValue::new("http.client_ip", client_ip.clone()));
+        otel_span.set_attribute(opentelemetry::KeyValue::new(
+            "http.url",
+            route_label.clone(),
+        ));
+        otel_span.set_attribute(opentelemetry::KeyValue::new(
+            "http.client_ip",
+            client_ip.clone(),
+        ));
         otel_span.set_attribute(opentelemetry::KeyValue::new("trace.id", request_id.clone()));
-        otel_span.set_attribute(opentelemetry::KeyValue::new("http.user_agent", user_agent.clone()));
+        otel_span.set_attribute(opentelemetry::KeyValue::new(
+            "http.user_agent",
+            user_agent.clone(),
+        ));
         otel_span.set_attribute(opentelemetry::KeyValue::new("server.name", server));
 
         let start = Instant::now();

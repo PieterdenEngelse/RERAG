@@ -36,8 +36,7 @@ pub use docu_index::DocuIndex;
 pub use docu_index::{
     DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
     DocuEmbeddings, DocuEntitiesProduction, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport,
-    DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads,
-    DocuTokenizersGeneral,
+    DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads, DocuTokenizersGeneral,
 };
 pub use falkordb::ConfigFalkorDb;
 pub use hardware::ConfigHardware;

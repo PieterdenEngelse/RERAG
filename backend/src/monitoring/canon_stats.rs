@@ -109,7 +109,8 @@ pub fn record_store(file: &str, chars_in: usize, chars_out: usize, corpus: &str)
         s.stats.store_ingestion.chars_in += chars_in as u64;
         s.stats.store_ingestion.chars_out += chars_out as u64;
         // Remove any existing entry for this file so re-indexes don't duplicate rows.
-        s.store_records.retain(|r| !(r.file == file && r.corpus == corpus));
+        s.store_records
+            .retain(|r| !(r.file == file && r.corpus == corpus));
         if s.store_records.len() == STORE_RECORD_CAP {
             s.store_records.pop_back();
         }

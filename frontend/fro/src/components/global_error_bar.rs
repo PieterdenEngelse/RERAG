@@ -38,8 +38,8 @@ pub fn GlobalErrorBar() -> Element {
 
     // Poll health APIs every 10 seconds
     {
-        let mut errors = errors.clone();
-        let mut dismissed = dismissed.clone();
+        let mut errors = errors;
+        let mut dismissed = dismissed;
         use_future(move || async move {
             loop {
                 let mut new_errors = GlobalHealthErrors::default();

@@ -2,7 +2,9 @@ use crate::{
     api,
     app::{PageErrors, PendingChatQuery, Route},
     components::monitor::*,
-    pages::hardware::constants::{INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE},
+    pages::hardware::constants::{
+        INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+    },
 };
 use dioxus::prelude::*;
 use dioxus_router::hooks::use_navigator;
@@ -49,10 +51,10 @@ pub fn MonitorRateLimits() -> Element {
     });
     let limiter_info_open = use_signal(|| false);
     let mut show_edit_thresholds = use_signal(|| false);
-    let mut edit_search_qps = use_signal(|| String::new());
-    let mut edit_search_burst = use_signal(|| String::new());
-    let mut edit_upload_qps = use_signal(|| String::new());
-    let mut edit_upload_burst = use_signal(|| String::new());
+    let mut edit_search_qps = use_signal(String::new);
+    let mut edit_search_burst = use_signal(String::new);
+    let mut edit_upload_qps = use_signal(String::new);
+    let mut edit_upload_burst = use_signal(String::new);
     let mut thresholds_saving = use_signal(|| false);
     let mut thresholds_error = use_signal(|| Option::<String>::None);
     let mut show_thresholds_info = use_signal(|| false);
@@ -60,7 +62,7 @@ pub fn MonitorRateLimits() -> Element {
     let navigator = use_navigator();
 
     {
-        let mut state = state.clone();
+        let mut state = state;
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
@@ -97,8 +99,14 @@ pub fn MonitorRateLimits() -> Element {
     let server_filter = use_signal(|| ServerFilter::All);
 
     let snapshot = state.read().clone();
-    let drop_rows = snapshot.data.as_ref().map(|d| build_drop_rows(d, server_filter.read().key()));
-    let drop_counts = snapshot.data.as_ref().map(|d| build_drop_counts(d, server_filter.read().key()));
+    let drop_rows = snapshot
+        .data
+        .as_ref()
+        .map(|d| build_drop_rows(d, server_filter.read().key()));
+    let drop_counts = snapshot
+        .data
+        .as_ref()
+        .map(|d| build_drop_counts(d, server_filter.read().key()));
 
     rsx! {
         div { class: "space-y-6",
@@ -118,7 +126,7 @@ pub fn MonitorRateLimits() -> Element {
                     {
                         let is_active = *server_filter.read() == filter;
                         let label = filter.label();
-                        let mut sf = server_filter.clone();
+                        let mut sf = server_filter;
                         let color = if is_active {
                             "bg-teal-700 text-white border-teal-500"
                         } else {
@@ -153,9 +161,8 @@ pub fn MonitorRateLimits() -> Element {
                                         checked: state.read().data.as_ref().map(|d| d.config.enabled).unwrap_or(false),
                                         disabled: state.read().toggling,
                                         onchange: {
-                                            let state = state.clone();
                                             move |_| {
-                                                let mut state = state.clone();
+                                                let mut state = state;
                                                 let current_enabled = state.read().data.as_ref().map(|d| d.config.enabled).unwrap_or(false);
                                                 let new_enabled = !current_enabled;
 
@@ -205,7 +212,7 @@ pub fn MonitorRateLimits() -> Element {
                                 button {
                                     class: "text-[11px] px-2 py-1 rounded border border-slate-500 text-slate-200 hover:bg-slate-600/20 ml-2",
                                     onclick: {
-                                        let mut limiter_info_open = limiter_info_open.clone();
+                                        let mut limiter_info_open = limiter_info_open;
                                         move |_| limiter_info_open.set(!limiter_info_open())
                                     },
                                     if limiter_info_open() { "Close" } else { "More info" }
@@ -551,17 +558,17 @@ token bucket. When full, the least recent IP is removed.".into()),
                                         headers: vec!["Parameter".into(), "Value".into()],
                                         rows: vec![
                                             vec!["Trust Proxy".into(), yes_no(data.config.trust_proxy)],
-                                            vec!["Search QPS".into(), format_float(data.config.search_qps).into()],
-                                            vec!["Search Burst".into(), format_float(data.config.search_burst).into()],
-                                            vec!["Upload QPS".into(), format_float(data.config.upload_qps).into()],
-                                            vec!["Upload Burst".into(), format_float(data.config.upload_burst).into()],
+                                            vec!["Search QPS".into(), format_float(data.config.search_qps)],
+                                            vec!["Search Burst".into(), format_float(data.config.search_burst)],
+                                            vec!["Upload QPS".into(), format_float(data.config.upload_qps)],
+                                            vec!["Upload Burst".into(), format_float(data.config.upload_burst)],
                                         ],
                                     }
                                 }
                             }
                             DataTable {
                                 headers: vec!["Exempt Prefixes".into()],
-                                rows: data.config.exempt_prefixes.iter().map(|p| vec![p.clone().into()]).collect(),
+                                rows: data.config.exempt_prefixes.iter().map(|p| vec![p.clone()]).collect(),
                             }
                         }
 
@@ -584,8 +591,8 @@ token bucket. When full, the least recent IP is removed.".into()),
                                         vec![
                                             pattern.into(),
                                             match_kind.into(),
-                                            format_float(qps).into(),
-                                            format_float(burst).into(),
+                                            format_float(qps),
+                                            format_float(burst),
                                             label.into(),
                                         ]
                                     }).collect(),
@@ -613,40 +620,52 @@ fn format_float(value: f64) -> String {
     format!("{:.2}", value)
 }
 
-fn build_drop_rows(data: &api::RateLimitInfoResponse, server_filter: Option<&'static str>) -> Vec<Vec<String>> {
+fn build_drop_rows(
+    data: &api::RateLimitInfoResponse,
+    server_filter: Option<&'static str>,
+) -> Vec<Vec<String>> {
     if let Some(server) = server_filter {
-        let mut entries: Vec<_> = data.drops_by_server_route
+        let mut entries: Vec<_> = data
+            .drops_by_server_route
             .iter()
             .filter(|e| e.server == server)
             .collect();
         entries.sort_by(|a, b| b.drops.cmp(&a.drops));
-        entries.into_iter()
+        entries
+            .into_iter()
             .map(|e| vec![e.route.clone(), e.drops.to_string()])
             .collect()
     } else {
         let mut entries = data.drops_by_route.clone();
         entries.sort_by(|a, b| b.drops.cmp(&a.drops));
-        entries.into_iter()
+        entries
+            .into_iter()
             .map(|entry| vec![entry.route, entry.drops.to_string()])
             .collect()
     }
 }
 
-fn build_drop_counts(data: &api::RateLimitInfoResponse, server_filter: Option<&'static str>) -> Vec<f64> {
+fn build_drop_counts(
+    data: &api::RateLimitInfoResponse,
+    server_filter: Option<&'static str>,
+) -> Vec<f64> {
     if let Some(server) = server_filter {
-        let mut entries: Vec<_> = data.drops_by_server_route
+        let mut entries: Vec<_> = data
+            .drops_by_server_route
             .iter()
             .filter(|e| e.server == server)
             .collect();
         entries.sort_by(|a, b| b.drops.cmp(&a.drops));
-        entries.into_iter()
+        entries
+            .into_iter()
             .take(5)
             .map(|e| e.drops as f64)
             .collect()
     } else {
         let mut entries = data.drops_by_route.clone();
         entries.sort_by(|a, b| b.drops.cmp(&a.drops));
-        entries.into_iter()
+        entries
+            .into_iter()
             .take(5)
             .map(|entry| entry.drops as f64)
             .collect()

@@ -28,7 +28,6 @@ pub mod performance_analysis;
 pub mod pprof;
 pub mod preprocess_stats;
 pub mod rate_limit_middleware;
-pub mod upload_concurrency_middleware;
 pub mod resource_attribution;
 pub mod rig_stats;
 pub mod tool_alerts;
@@ -41,6 +40,7 @@ pub mod trace_context;
 pub mod trace_middleware;
 pub mod tracing_config;
 pub mod ui_metrics;
+pub mod upload_concurrency_middleware;
 
 pub use crate::monitoring::metrics::{
     export_prometheus, observe_reindex_duration_ms, observe_search_latency_ms,

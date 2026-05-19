@@ -76,12 +76,13 @@ pub fn MonitorRequests() -> Element {
     let server_filter = use_signal(|| ServerFilter::All);
 
     {
-        let mut state = state.clone();
-        let server_filter = server_filter.clone();
+        let mut state = state;
         let mut page_errors = use_context::<Signal<PageErrors>>();
         use_future(move || async move {
             loop {
-                let snapshot = match server_filter.read().api_key() {
+                // Resolve the key before the await so the signal read guard is released.
+                let api_key = server_filter.read().api_key();
+                let snapshot = match api_key {
                     None => api::fetch_requests_snapshot().await,
                     Some(key) => api::fetch_requests_snapshot_for(key).await,
                 };
@@ -123,12 +124,11 @@ pub fn MonitorRequests() -> Element {
     let mut troubleshooting_open = use_signal(|| false);
 
     let trigger_sample_traffic = {
-        let state = state.clone();
         move |_| {
             if state.read().busy {
                 return;
             }
-            let mut state = state.clone();
+            let mut state = state;
             state.write().busy = true;
             spawn(async move {
                 if let Err(err) = run_sample_traffic().await {
@@ -157,7 +157,7 @@ pub fn MonitorRequests() -> Element {
                     {
                         let is_active = *server_filter.read() == filter;
                         let label = filter.label();
-                        let mut sf = server_filter.clone();
+                        let mut sf = server_filter;
                         let color = if is_active {
                             "bg-teal-700 text-white border-teal-500"
                         } else {
@@ -329,7 +329,7 @@ pub fn MonitorRequests() -> Element {
                         button {
                             class: "px-3 py-1 rounded bg-teal-600 text-white disabled:opacity-40",
                             disabled: snapshot.busy,
-                            onclick: trigger_sample_traffic.clone(),
+                            onclick: trigger_sample_traffic,
                             if snapshot.busy {
                                 "Running sample traffic…"
                             } else {

@@ -49,7 +49,7 @@ pub fn MonitorRag() -> Element {
     let mut show_strategies_info = use_signal(|| false); // Strategies info modal
 
     {
-        let mut state = state.clone();
+        let mut state = state;
         use_future(move || async move {
             state.set(RagState {
                 loading: true,

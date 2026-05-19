@@ -407,7 +407,7 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
     let version = container
         .image
         .split(':')
-        .last()
+        .next_back()
         .map(|v| {
             if v.starts_with('v') {
                 v.to_string()

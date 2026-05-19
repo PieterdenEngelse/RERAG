@@ -408,8 +408,8 @@ pub fn ConfigMemories() -> Element {
     let mut refresh_counter = use_signal(|| 0u32);
 
     // Agent memory vector store settings
-    let mut mem_metric = use_signal(|| String::new());
-    let mut mem_top_k_str = use_signal(|| String::new());
+    let mut mem_metric = use_signal(String::new);
+    let mut mem_top_k_str = use_signal(String::new);
     let mut mem_saving = use_signal(|| false);
     let mut mem_save_msg = use_signal(|| Option::<String>::None);
     let mut show_mem_metric_info = use_signal(|| false);
@@ -426,7 +426,7 @@ pub fn ConfigMemories() -> Element {
     let counter_val = refresh_counter();
     let mut page_errors = use_context::<Signal<PageErrors>>();
     use_future(move || {
-        let mut state = state.clone();
+        let mut state = state;
         let _counter = counter_val; // Capture to create dependency
         async move {
             state.set(MemoriesState {

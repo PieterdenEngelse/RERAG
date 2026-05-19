@@ -1019,16 +1019,22 @@ pub fn init_stats(path: PathBuf) {
             stats.reads.store(snap.reads, Ordering::Relaxed);
             stats.writes.store(snap.writes, Ordering::Relaxed);
             stats.bytes_read.store(snap.bytes_read, Ordering::Relaxed);
-            stats.bytes_written.store(snap.bytes_written, Ordering::Relaxed);
+            stats
+                .bytes_written
+                .store(snap.bytes_written, Ordering::Relaxed);
             stats.read_errors.store(snap.read_errors, Ordering::Relaxed);
-            stats.write_errors.store(snap.write_errors, Ordering::Relaxed);
+            stats
+                .write_errors
+                .store(snap.write_errors, Ordering::Relaxed);
         }
     }
 }
 
 /// Flush current stats to disk. Call periodically and on shutdown.
 pub fn flush_stats() {
-    let Some(path) = IO_STATS_PATH.get() else { return };
+    let Some(path) = IO_STATS_PATH.get() else {
+        return;
+    };
     let s = get_stats();
     let snap = IoStatsSnapshot {
         reads: s.get_reads(),

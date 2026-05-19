@@ -49,7 +49,7 @@ async fn rate_limit_per_ip_token_bucket() {
         let config = ag::config::ApiConfig::from_env();
         let pm = &config.path_manager;
         let retriever =
-            ag::Retriever::new_with_paths(pm.index_path("tantivy"), pm.vector_store_path())
+            ag::Retriever::new_with_paths(pm.index_path("tantivy"), pm.vector_store_path(), false)
                 .expect("retriever init");
         let retriever = std::sync::Arc::new(std::sync::Mutex::new(retriever));
         ag::api::set_retriever_handle(std::sync::Arc::clone(&retriever));

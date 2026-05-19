@@ -345,7 +345,8 @@ pub(crate) async fn corpus_upload_handler(
                     .unwrap_or_default();
                 crate::db::corpora::effective_chunker_config(&global, &settings)
             };
-            let effective_chunker_mode = effective_cfg.mode
+            let effective_chunker_mode = effective_cfg
+                .mode
                 .parse::<crate::config::ChunkerMode>()
                 .unwrap_or(config.chunker_mode);
             let chunker = crate::memory::chunker_factory::create_chunker(
@@ -489,7 +490,8 @@ pub async fn corpus_reindex_handler(
             .unwrap_or_default();
         crate::db::corpora::effective_chunker_config(&global, &settings)
     };
-    let effective_chunker_mode = effective_cfg.mode
+    let effective_chunker_mode = effective_cfg
+        .mode
         .parse::<crate::config::ChunkerMode>()
         .unwrap_or(config.chunker_mode);
     let chunker = crate::memory::chunker_factory::create_chunker(
