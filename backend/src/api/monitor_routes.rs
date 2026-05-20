@@ -339,12 +339,11 @@ pub async fn health_check() -> Result<HttpResponse, Error> {
                 // FalkorDB is ingestion-only — not running is normal.
                 // Still report its status in the response, but never downgrade health.
 
-                // Check if Redis is enabled but backend not connected
-                // We check the env config directly because if connection failed at startup,
-                // l3_cache is None and summary() returns enabled=false, masking the issue.
-                let redis_configured = std::env::var("REDIS_ENABLED")
-                    .map(|v| v == "true" || v == "1")
-                    .unwrap_or(false);
+                // Check if Redis is enabled but backend not connected.
+                // We check effective config because if connection failed at
+                // startup, l3_cache is None and summary() returns
+                // enabled=false, masking the issue.
+                let redis_configured = crate::settings::effective_bool("REDIS_ENABLED", false);
                 let redis_summary = retriever.get_l3_cache_summary();
                 let redis_issue = redis_configured && !redis_summary.connected;
 
@@ -1140,19 +1139,11 @@ async fn falkordb_service_state() -> String {
 pub(crate) async fn get_datastores_info() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    // L3 cache (Redis) — optional, controlled by REDIS_* env vars.
-    let cache_enabled = std::env::var("REDIS_ENABLED")
-        .map(|v| {
-            let v = v.trim().to_lowercase();
-            v == "true" || v == "1"
-        })
-        .unwrap_or(false);
-    let cache_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-    let cache_ttl = std::env::var("REDIS_TTL")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(3600);
+    // L3 cache (Redis) — optional, read through the settings layer so a
+    // UI override takes precedence over the env file.
+    let cache_enabled = crate::settings::effective_bool("REDIS_ENABLED", false);
+    let cache_url = crate::settings::effective_or("REDIS_URL", "redis://127.0.0.1:6379/");
+    let cache_ttl = crate::settings::effective_u64("REDIS_TTL", 3600);
     let cache_health = if cache_enabled {
         probe_redis_server(&cache_url).await
     } else {
@@ -1208,147 +1199,103 @@ pub(crate) struct ToggleL3Body {
     pub stop_container: bool,
 }
 
-/// Path of the env file systemd reads for ag.service. Override with `AG_ENV_FILE`.
-fn ag_env_file_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("AG_ENV_FILE") {
-        return std::path::PathBuf::from(p);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    std::path::PathBuf::from(home).join(".config/ag/ag.env")
-}
-
-/// Path of the docker-compose file ag's WorkingDirectory points to. Override with `AG_COMPOSE_FILE`.
-fn ag_compose_file_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("AG_COMPOSE_FILE") {
-        return std::path::PathBuf::from(p);
-    }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/home/pde/ag"));
-    cwd.join("docker-compose.yml")
-}
-
-/// Replace (or append) the `REDIS_ENABLED=` line in the env file. Atomic write.
-fn set_redis_enabled_in_env_file(
-    path: &std::path::Path,
-    enabled: bool,
-) -> std::io::Result<()> {
-    let target = if enabled { "true" } else { "false" };
-    let new_line = format!("REDIS_ENABLED={target}");
-
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let mut found = false;
-    let mut out = String::with_capacity(existing.len() + new_line.len());
-    for line in existing.lines() {
-        let trimmed = line.trim_start();
-        if !found && trimmed.starts_with("REDIS_ENABLED=") {
-            out.push_str(&new_line);
-            out.push('\n');
-            found = true;
-        } else {
-            out.push_str(line);
-            out.push('\n');
+/// Optional container manager — only effective if docker compose is
+/// reachable and the bundled compose file is on disk. In a bin/exe
+/// deployment that ships without docker the call is a logged no-op.
+async fn try_compose_action(action: &str) {
+    let compose = match std::env::var("AG_COMPOSE_FILE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("/home/pde/ag"));
+            cwd.join("docker-compose.yml")
         }
-    }
-    if !found {
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&new_line);
-        out.push('\n');
-    }
-
-    let mut tmp = path.to_path_buf();
-    let mut name = path
-        .file_name()
-        .map(|s| s.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("ag.env"));
-    name.push(".tmp");
-    tmp.set_file_name(name);
-    std::fs::write(&tmp, out)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
-/// Spawn a detached transient systemd-user unit that runs the L3 toggle
-/// orchestration so it survives ag.service being restarted.
-fn spawn_l3_toggle_orchestration(enabled: bool, stop_container: bool, compose_file: &std::path::Path) {
-    let compose = compose_file.display().to_string();
-    let script = if enabled {
-        // Going on: make sure the container is up (if requested), then restart ag.
-        format!(
-            "if [ \"{sc}\" = \"true\" ]; then \
-                docker compose -f '{compose}' up -d redis >/dev/null 2>&1 || true; \
-                for _ in $(seq 1 30); do \
-                    s=$(docker inspect -f '{{{{.State.Health.Status}}}}' ag-redis 2>/dev/null || echo missing); \
-                    [ \"$s\" = healthy ] && break; sleep 1; \
-                done; \
-            fi; \
-            sleep 1; systemctl --user restart ag.service",
-            sc = stop_container,
-            compose = compose
-        )
-    } else {
-        // Going off: restart ag first so it drops connections, then stop the container.
-        format!(
-            "sleep 1; systemctl --user restart ag.service; \
-             if [ \"{sc}\" = \"true\" ]; then \
-                 sleep 3; \
-                 docker compose -f '{compose}' stop redis >/dev/null 2>&1 || true; \
-             fi",
-            sc = stop_container,
-            compose = compose
-        )
     };
-
-    let unit_name = format!(
-        "ag-l3-toggle-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    );
-
-    let _ = std::process::Command::new("systemd-run")
-        .args([
-            "--user",
-            "--quiet",
-            "--unit",
-            &unit_name,
-            "/bin/sh",
-            "-c",
-            &script,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .spawn();
+    if !compose.exists() {
+        tracing::info!(
+            "l3 toggle: compose file {} not found — skipping container {action}",
+            compose.display()
+        );
+        return;
+    }
+    let args: Vec<&str> = match action {
+        "up" => vec!["compose", "-f", "_", "up", "-d", "redis"],
+        "stop" => vec!["compose", "-f", "_", "stop", "redis"],
+        _ => return,
+    };
+    let compose_arg = compose.display().to_string();
+    let mut final_args = args;
+    if let Some(slot) = final_args.iter_mut().find(|s| **s == "_") {
+        *slot = compose_arg.as_str();
+    }
+    let out = tokio::process::Command::new("docker")
+        .args(&final_args)
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => {
+            tracing::info!("l3 toggle: docker compose {action} redis ok");
+        }
+        Ok(o) => tracing::warn!(
+            "l3 toggle: docker compose {action} redis failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        ),
+        Err(e) => {
+            tracing::warn!("l3 toggle: docker not available ({e}) — skipping container {action}")
+        }
+    }
 }
 
 /// POST /monitor/datastores/l3-toggle
 /// Body: `{ "enabled": bool, "stop_container": bool }`
+///
+/// Saves the override via the settings store. The retriever's REDIS_*
+/// subscriber swaps the cache handle in-process — no restart, no
+/// self re-exec. If `stop_container` is set, ag also tries to start or
+/// stop the redis container via docker compose (best-effort; silently
+/// skipped when docker or the compose file aren't available, which is
+/// the normal case for a bin/exe deployment).
 pub(crate) async fn post_datastores_l3_toggle(
     body: web::Json<ToggleL3Body>,
 ) -> Result<HttpResponse, Error> {
     let enabled = body.enabled;
     let stop_container = body.stop_container;
 
-    let env_file = ag_env_file_path();
-    let compose_file = ag_compose_file_path();
+    let settings = match crate::settings::global() {
+        Some(s) => s,
+        None => {
+            return Ok(HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "ok": false,
+                "error": "settings store not initialized",
+            })));
+        }
+    };
 
-    if let Err(e) = set_redis_enabled_in_env_file(&env_file, enabled) {
+    // For the "enable" path, bring the container up *before* persisting the
+    // setting so the cache rebuild that fires from the subscriber sees a
+    // reachable redis. For the "disable" path, persist first, then stop the
+    // container (the subscriber will drop the cache handle right away).
+    if stop_container && enabled {
+        try_compose_action("up").await;
+    }
+
+    let value = if enabled { "true" } else { "false" };
+    if let Err(e) = settings.set("REDIS_ENABLED", Some(value.to_string())) {
         return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
             "ok": false,
-            "error": format!("failed to update {}: {e}", env_file.display()),
+            "error": format!("failed to save override: {e}"),
         })));
     }
 
-    spawn_l3_toggle_orchestration(enabled, stop_container, &compose_file);
+    if stop_container && !enabled {
+        try_compose_action("stop").await;
+    }
 
-    Ok(HttpResponse::Accepted().json(serde_json::json!({
+    Ok(HttpResponse::Ok().json(serde_json::json!({
         "ok": true,
         "enabled": enabled,
         "stop_container": stop_container,
-        "env_file": env_file.display().to_string(),
-        "message": "ag.service is restarting; the page will refresh shortly",
+        "message": "L3 setting updated; the cache was swapped in-place — no restart needed.",
     })))
 }
 

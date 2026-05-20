@@ -99,6 +99,28 @@ async fn main() -> std::io::Result<()> {
     let _config_start = Instant::now();
     debug!("Loading configuration with PathManager...");
 
+    // ── Settings + boot-failure recovery ──────────────────────────────
+    // Initialize before ApiConfig so any reader that goes through
+    // settings::effective_*() sees the right values from the first call.
+    {
+        let early_pm = ag::path_manager::PathManager::new()
+            .expect("Failed to initialize PathManager for settings bootstrap");
+        let base_dir = early_pm.base_dir().to_path_buf();
+        let overrides_path = base_dir.join("overrides.json");
+        let (overrides_path, recovery) =
+            ag::settings::Recovery::boot_check(&base_dir, &overrides_path);
+        let settings = ag::settings::Settings::load(overrides_path);
+        ag::settings::install_global(settings, std::sync::Arc::new(recovery));
+
+        // Mark the boot "known good" after a short window of uptime — enough
+        // to clear startup hazards while remaining well within the user's
+        // patience window if they're staring at a broken page.
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            ag::settings::mark_healthy();
+        });
+    }
+
     let config = ApiConfig::from_env();
     ag::monitoring::set_chunking_logging_enabled(config.chunking_log_enabled);
 
@@ -502,6 +524,46 @@ async fn main() -> std::io::Result<()> {
 
     let retriever = Arc::new(Mutex::new(retriever));
     ag::api::set_retriever_handle(Arc::clone(&retriever));
+
+    // ── L3 hot-reload: rebuild the RedisCache when any REDIS_* setting
+    //    override changes. The subscriber runs synchronously; the rebuild
+    //    happens in a tokio task that locks the retriever briefly to swap
+    //    the handle.
+    if let Some(s) = ag::settings::global() {
+        let retriever_for_l3 = Arc::clone(&retriever);
+        let rebuild = std::sync::Arc::new(move || {
+            let retriever = Arc::clone(&retriever_for_l3);
+            tokio::spawn(async move {
+                let enabled = ag::settings::effective_bool("REDIS_ENABLED", false);
+                let new_cache = if enabled {
+                    let url = ag::settings::effective_or(
+                        "REDIS_URL",
+                        "redis://127.0.0.1:6379/",
+                    );
+                    let ttl = ag::settings::effective_u64("REDIS_TTL", 3600);
+                    match ag::cache::redis_cache::RedisCache::new(&url, ttl).await {
+                        Ok(c) => Some(c),
+                        Err(e) => {
+                            warn!("L3 rebuild failed: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                if let Ok(mut ret) = retriever.lock() {
+                    ret.swap_l3_cache(new_cache);
+                }
+            });
+        });
+        let rebuild_a = std::sync::Arc::clone(&rebuild);
+        let rebuild_b = std::sync::Arc::clone(&rebuild);
+        let rebuild_c = std::sync::Arc::clone(&rebuild);
+        s.subscribe("REDIS_ENABLED", move |_| rebuild_a());
+        s.subscribe("REDIS_URL", move |_| rebuild_b());
+        s.subscribe("REDIS_TTL", move |_| rebuild_c());
+        info!("✓ L3 hot-reload subscribers registered (REDIS_ENABLED / URL / TTL)");
+    }
 
     // Periodically persist the L1 search cache so it survives a crash or
     // SIGKILL, not just a graceful shutdown.

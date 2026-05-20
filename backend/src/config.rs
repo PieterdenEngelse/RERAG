@@ -244,17 +244,17 @@ impl ApiConfig {
         // Path Management
         let path_manager = PathManager::new().expect("Failed to initialize PathManager");
 
-        // Redis L3 Cache
-        let redis_enabled = env::var("REDIS_ENABLED")
-            .map(|v| v.to_lowercase() == "true" || v == "1")
-            .unwrap_or(false);
+        // Redis L3 Cache — read through the settings layer so a runtime
+        // override in <base_dir>/overrides.json takes precedence over the
+        // env file. Falls back to env::var when the global isn't installed
+        // yet (e.g. unit tests that bypass main).
+        let redis_enabled = crate::settings::effective_bool("REDIS_ENABLED", false);
 
-        let redis_url = env::var("REDIS_URL").ok();
+        let redis_url = crate::settings::global()
+            .and_then(|s| s.effective("REDIS_URL"))
+            .or_else(|| env::var("REDIS_URL").ok());
 
-        let redis_ttl = env::var("REDIS_TTL")
-            .unwrap_or_else(|_| "3600".to_string())
-            .parse()
-            .unwrap_or(3600);
+        let redis_ttl = crate::settings::effective_u64("REDIS_TTL", 3600);
 
         let search_top_k = env::var("SEARCH_TOP_K")
             .unwrap_or_else(|_| "10".to_string())

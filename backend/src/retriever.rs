@@ -2352,6 +2352,18 @@ impl Retriever {
         self.l3_cache = Some(cache);
         info!("L3 Redis cache set");
     }
+
+    /// Swap the L3 cache handle at runtime — called by the REDIS_* settings
+    /// subscribers when an override changes. Pass `None` to disable L3 in
+    /// place; pass `Some(cache)` to enable/reconnect with the new config.
+    pub fn swap_l3_cache(&mut self, cache: Option<RedisCache>) {
+        match (cache.is_some(), self.l3_cache.is_some()) {
+            (true, _) => info!("L3 Redis cache swapped"),
+            (false, true) => info!("L3 Redis cache dropped"),
+            (false, false) => {}
+        }
+        self.l3_cache = cache;
+    }
 }
 
 impl Drop for Retriever {

@@ -2176,6 +2176,143 @@ where
 }
 
 // ============================================================================
+// RUNTIME SETTINGS API
+// ============================================================================
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(tag = "type", content = "values")]
+pub enum SettingKind {
+    Bool,
+    U64,
+    F64,
+    String,
+    Path,
+    Url,
+    Enum(Vec<String>),
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingSource {
+    Override,
+    Env,
+    Default,
+    Unset,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct RuntimeSettingEntry {
+    pub key: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub kind: Option<SettingKind>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub env_value: Option<String>,
+    #[serde(default)]
+    pub override_value: Option<String>,
+    #[serde(default)]
+    pub effective: Option<String>,
+    pub source: SettingSource,
+    pub restart_required: bool,
+    pub registered: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RuntimeRollback {
+    pub rolled_back_at: String,
+    pub last_bad_file: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RuntimeSettingsResponse {
+    pub entries: Vec<RuntimeSettingEntry>,
+    #[serde(default)]
+    pub last_rollback: Option<RuntimeRollback>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SetOverrideBody {
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct PutSettingResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub restart_required: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct RestartResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
+pub async fn fetch_runtime_settings() -> Result<RuntimeSettingsResponse, String> {
+    fetch_json("/runtime/settings").await
+}
+
+/// PUT /runtime/settings/{key}. `None` clears the override.
+pub async fn put_runtime_setting(
+    key: &str,
+    value: Option<String>,
+) -> Result<PutSettingResponse, String> {
+    let url = api_url(&format!("/runtime/settings/{key}"));
+    let body = SetOverrideBody { value };
+    let response = gloo_net::http::Request::put(&url)
+        .json(&body)
+        .map_err(|e| format!("encode: {e}"))?
+        .send()
+        .await
+        .map_err(|e| format!("request: {e}"))?;
+    let status = response.status();
+    let parsed: PutSettingResponse = response.json().await.unwrap_or_default();
+    if !(200..=299).contains(&status) {
+        return Err(parsed
+            .error
+            .clone()
+            .unwrap_or_else(|| format!("HTTP {status}")));
+    }
+    Ok(parsed)
+}
+
+pub async fn delete_runtime_setting(key: &str) -> Result<(), String> {
+    let url = api_url(&format!("/runtime/settings/{key}"));
+    let response = gloo_net::http::Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("request: {e}"))?;
+    let status = response.status();
+    if !(200..=299).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {body}"));
+    }
+    Ok(())
+}
+
+pub async fn post_restart_self() -> Result<RestartResponse, String> {
+    let url = api_url("/runtime/actions/restart-self");
+    let response = gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("request: {e}"))?;
+    response
+        .json::<RestartResponse>()
+        .await
+        .map_err(|e| format!("parse: {e}"))
+}
+
+// ============================================================================
 // AGENTIC MONITORING API
 // ============================================================================
 

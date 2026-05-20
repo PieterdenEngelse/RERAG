@@ -4,14 +4,14 @@ use crate::components::ActiveDropdown;
 use crate::pages::{
     About, Config, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigFalkorDb, ConfigHardware,
     ConfigIoUring, ConfigMemories, ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigRedis,
-    ConfigSampling, ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25,
-    DocuBpeUnigram, DocuCanonicalization, DocuEmbeddings, DocuEntitiesProduction, DocuIndex,
-    DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv,
-    DocuTantivy, DocuThreads, DocuTokenizersGeneral, Home, MonitorAgSystemd, MonitorAgentic,
-    MonitorCache, MonitorChunks, MonitorDatastores, MonitorDocker, MonitorGrafanaServices,
-    MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations, MonitorOnnx,
-    MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip,
-    MonitorTools, PageNotFound, Parameters, Train,
+    ConfigRuntime, ConfigSampling, ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias,
+    DocuBm25, DocuBpeUnigram, DocuCanonicalization, DocuEmbeddings, DocuEntitiesProduction,
+    DocuIndex, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig,
+    DocuRkyv, DocuTantivy, DocuThreads, DocuTokenizersGeneral, Home, MonitorAgSystemd,
+    MonitorAgentic, MonitorCache, MonitorChunks, MonitorDatastores, MonitorDocker,
+    MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
+    MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits,
+    MonitorRequests, MonitorTip, MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 
@@ -81,6 +81,8 @@ pub enum Route {
         ConfigRedis {},
         #[route("/config/terms")]
         ConfigTerms {},
+        #[route("/config/runtime")]
+        ConfigRuntime {},
         #[route("/monitor/requests")]
         MonitorRequests {},
         #[route("/monitor/cache")]

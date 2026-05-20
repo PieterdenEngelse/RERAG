@@ -739,6 +739,7 @@ const VALID_MEMORY_TYPES: &[&str] = &[
 
 pub mod agentic_monitor_routes;
 pub mod graph_routes;
+pub mod runtime_routes;
 pub mod sys_routes;
 pub mod tool_routes;
 
@@ -1120,6 +1121,22 @@ pub fn start_api_server(
             .route(
                 "/monitor/datastores/l3-toggle",
                 web::post().to(post_datastores_l3_toggle),
+            )
+            .route(
+                "/runtime/settings",
+                web::get().to(runtime_routes::get_settings),
+            )
+            .route(
+                "/runtime/settings/{key}",
+                web::put().to(runtime_routes::put_setting),
+            )
+            .route(
+                "/runtime/settings/{key}",
+                web::delete().to(runtime_routes::delete_setting),
+            )
+            .route(
+                "/runtime/actions/restart-self",
+                web::post().to(runtime_routes::post_restart_self),
             )
             .route("/cache/clear", web::post().to(clear_cache))
             .route(

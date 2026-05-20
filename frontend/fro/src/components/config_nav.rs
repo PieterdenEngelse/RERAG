@@ -19,6 +19,7 @@ pub enum ConfigTab {
     Terms,
     Other,
     Corpus,
+    Runtime,
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -48,6 +49,7 @@ pub fn ConfigNav(props: ConfigNavProps) -> Element {
         ("Terms", Route::ConfigTerms {}, ConfigTab::Terms),
         ("Actix", Route::ConfigOther {}, ConfigTab::Other),
         ("Corpus", Route::ConfigCorpus {}, ConfigTab::Corpus),
+        ("Runtime", Route::ConfigRuntime {}, ConfigTab::Runtime),
     ];
 
     rsx! {

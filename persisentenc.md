@@ -353,6 +353,150 @@ adopt it incrementally. There is no big-bang migration.
 
 ---
 
+## Making it complete for binary distributions
+
+The three layers above give bin/exe users the same setting-mutation API as
+systemd users — settings persist, hot-reload, and apply across deployments.
+*Settings themselves* are already universally settable. But two practical
+gaps remain that bite specifically in a binary-app context, and a third is
+worth listing as a soft follow-up. These are part of the core design, not
+optional polish.
+
+### 1. Discoverability — a minimal known-keys registry
+
+A binary user does not have `.env.example` open in another window and may not
+have read the docs. The UI has to show *what* is tunable, not just accept
+arbitrary keys.
+
+The previously-described `GET /runtime/settings` returns only keys read by
+some code path so far. That misses cold paths — graph settings if FalkorDB is
+disabled, OCR settings if no PDF has triggered OCR yet, etc. The fix is a
+minimal registry of known keys: one line per key, just enough metadata to
+render a sensible UI control.
+
+```rust
+// backend/src/settings/registry.rs
+pub struct KnownKey {
+    pub key: &'static str,
+    pub description: &'static str,
+    pub kind: Kind,                // Bool | U64 | F64 | String | Enum(&[&str]) | Path | Url
+    pub default: Option<&'static str>,
+    pub category: &'static str,    // for UI grouping: "cache" | "graph" | "chunker" | …
+    pub restart_required: bool,
+}
+
+pub static KNOWN_KEYS: &[KnownKey] = &[
+    KnownKey {
+        key: "REDIS_ENABLED",
+        description: "Enable the persistent L3 cache.",
+        kind: Kind::Bool, default: Some("false"),
+        category: "cache", restart_required: false,
+    },
+    KnownKey {
+        key: "CHUNK_TARGET_SIZE",
+        description: "Target chunk size in tokens.",
+        kind: Kind::U64, default: Some("512"),
+        category: "chunker", restart_required: false,
+    },
+    // … one line per known key
+];
+```
+
+This is the *minimal* form of the typed registry listed in "Future
+extensions" — no validators, no parsers, no unit metadata, just the bare
+minimum the UI needs. Filling out all 182 known keys is mechanical work, not
+a design problem.
+
+`GET /runtime/settings` then returns:
+
+- All registry entries with their env value, current override, effective
+  value, source, category, kind, and `restart_required` flag.
+- Plus any *unregistered* keys that already have an override or have been
+  read at runtime, marked `registered: false` — so the registry can be
+  completed incrementally without losing visibility into stragglers.
+
+The UI groups by category and renders kind-appropriate controls (checkbox
+for `Bool`, number input for `U64`, drop-down for `Enum`, file picker for
+`Path`). For a binary user this turns "what can I configure?" from "go read
+.env.example" into a browsable, grouped page.
+
+### 2. Boot-failure recovery — last-known-good overrides
+
+This is the gap that bites hardest in bin/exe.
+
+In a systemd deployment, a bad override (`BACKEND_PORT=80` for a non-root
+user, `AG_DATA_DIR=/root/unwritable`, an `ONNX_MODEL_PATH` that no longer
+exists, …) breaks startup, but the user can `journalctl`, edit the env file
+by hand, and restart. A binary user has no UI to revert from — ag isn't up
+— and probably less terminal expertise. They need an automatic safety net.
+
+The pattern is "last known good overrides," modelled on Windows' boot
+recovery: a single marker file records that startup is in progress and is
+cleared once the new process has proven healthy. If the marker is found at
+the next startup, the previous boot crashed before reaching healthy and the
+overrides are rolled back automatically.
+
+```text
+On startup:
+  1. If <base_dir>/overrides.boot.marker exists:
+       — Previous boot did not reach "healthy".
+       — Rename overrides.json → overrides.json.bad-<timestamp>.
+       — Boot with no overrides applied. Log the rollback.
+       — Record the rollback so /runtime/settings returns:
+            { rolled_back_at: <ts>, last_bad_file: "overrides.json.bad-…" }
+         and the UI shows a banner: "previous overrides caused a boot
+         failure and were rolled back — review them here." The UI can open
+         the .bad file and let the user re-apply individual keys after
+         inspection.
+  2. Write the boot marker (atomic create).
+  3. Apply overrides and continue startup.
+
+After serving the first /healthz response successfully (or after N seconds
+of uptime, configurable):
+  4. Delete the marker. From this point the boot is "known good".
+```
+
+Properties:
+
+- **No daemon, no supervisor.** Just a file marker.
+- **Survives self re-exec.** The new process runs the same startup path and
+  the same check, so the safety net covers every restart pathway.
+- **Detects the case the binary user actually hits.** "I changed a setting
+  and now nothing starts" becomes "you changed a setting, that boot failed,
+  here's the bad set ready to review."
+- **Bad overrides are preserved**, not deleted. The user (or the UI) can
+  cherry-pick the safe ones back.
+- **Cheap.** ~30 lines plus one HTTP-state field.
+
+A future refinement is per-key rollback via a small change journal
+(`overrides.log` records each `set` with timestamp + old + new; recovery
+undoes just the last change instead of clearing everything). Listed in
+"Future extensions"; not required for v1.
+
+### 3. Per-key validation feedback (soft follow-up)
+
+Bad values currently fail at the call site with whatever error the consumer
+happens to throw. A binary user would benefit from "expected u64, got
+'fast'" at submit time. The `Kind` enum in the known-keys registry is
+enough to do a parse check before persisting — one match arm per kind. Not
+required for v1 (boot-failure recovery handles the worst case), but cheap
+once the registry exists.
+
+### What these add to the migration plan
+
+Slot in between current steps 1 and 2:
+
+- **1a.** Land the known-keys registry skeleton (a handful of entries to
+  prove the shape; the rest can be filled in incrementally as subsystems
+  migrate).
+- **1b.** Add the boot-marker recovery to startup. ~30 lines and a small
+  field on the settings snapshot.
+
+Steps 2–4 stay as written. The validation hook (3 above) lands whenever the
+registry is fleshed out enough to be useful.
+
+---
+
 ## Trade-offs
 
 The exclusions below are not a uniform list — they fall into three honest
@@ -453,3 +597,326 @@ just larger.
   the user can promote a runtime-tuned configuration into an install default.
 - **SIGHUP support.** Re-detect capabilities and re-read `overrides.json` on
   signal — useful when the user installs the systemd unit *after* first run.
+
+---
+
+## Related design: bringing containers inside ag
+
+The persistence/restart layers above let the UI flip settings cleanly in any
+deployment, but they still have to *manage* external resources (start/stop a
+docker container, watch a system service) in deployments where those exist.
+A complementary design question is whether any of those external resources
+should stop being external at all — i.e. brought *inside* the ag binary.
+
+### Which of ag's containers are candidates?
+
+ag's bundled stack ships several containers; they're not equivalent.
+
+| Container | Role | Embed in ag? | Why |
+|---|---|---|---|
+| `redis` (L3 cache) | Persistent KV with TTL | **Yes — recommended.** | Single-box use case, no external readers, no multi-instance sharing — exactly what a pure-Rust embedded KV is for. |
+| `prometheus`, `loki`, `tempo`, `otel-collector` | Telemetry storage + transport | **Yes — recommended for the common case.** | All four solve problems ag doesn't have at its scale (multi-source aggregation, long retention, transport between services). In-process ring buffers cover ag's actual use: "recent metrics / logs / traces for the one service that's emitting them." Heavy external stack stays opt-in for users who need long retention or multi-service aggregation. |
+| `grafana` | Generic visualization UI | **No — its role is already filled.** | ag's Dioxus monitor pages already render charts. The thing missing today is the data behind the panels, not the panels themselves. With the in-process buffers above, the existing monitor UI grows to cover what users went to Grafana for. |
+| `falkordb` | Graph database (Cypher, AOF, multi-graph) | No | A full graph server isn't a library you embed. `petgraph_runtime` already exists as the in-process fallback for read-only paths; full FalkorDB stays external. |
+
+### L3 as an embedded persistent KV — the headline move
+
+The L3 cache's design goal is "survive ag restarts." Today that's achieved by
+running it in a separate process (the redis container). But L3 in ag is
+strictly per-instance — nothing else reads that cache, no other ag node shares
+it. So the separate process buys persistence at the cost of:
+
+- a docker dependency,
+- a compose file,
+- a port (or socket),
+- connection pooling and health probing,
+- a "start/stop container" UI control that's deployment-gated,
+- ~10–30 MB of resident memory for `redis-server`.
+
+A pure-Rust embedded KV — **`redb`** is the obvious choice (MIT, single-file,
+ACID, actively maintained; `sled` is the older option but is no longer
+recommended for new code) — gives the same persistence with none of the above.
+
+```rust
+// backend/src/cache/embedded_kv.rs
+pub struct EmbeddedKv {
+    db: redb::Database,                    // <base_dir>/cache.redb
+    sweeper: tokio::task::JoinHandle<()>,  // background TTL eviction
+}
+
+impl EmbeddedKv {
+    pub fn open(path: &Path, default_ttl: Duration) -> Result<Self>;
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>>;
+    pub fn set(&self, key: &[u8], value: &[u8], ttl: Option<Duration>);
+    pub fn delete(&self, key: &[u8]);
+    pub fn stats(&self) -> CacheStats;
+}
+```
+
+TTL is handled in-process: each value stores its expiry alongside the bytes,
+the sweeper runs every N seconds and deletes anything past expiry. Reads stay
+sub-millisecond (no socket, no serialisation round-trip).
+
+### What goes away
+
+- The `redis` service in `docker-compose.yml` (and the host-port override).
+- All the L3 URL/password/pool plumbing in `RedisCache`, the `redis://` parsing
+  in `monitor_routes.rs::sanitize_redis_url`, the connection-manager timeouts.
+- The "Also start/stop the redis container" checkbox and its info modal —
+  there is no container to manage.
+- The container-management half of `lifecycle.rs` for the L3 path. `lifecycle`
+  keeps `start/stop_managed_container` for the optional observability stack
+  but the common case no longer touches it.
+- The `redis` Cargo dependency *for the cache role*. It stays for the
+  FalkorDB protocol client.
+
+### What stays
+
+- The settings + hot-reload layers from this doc — still the right way to flip
+  L3 on/off at runtime. The subscriber action becomes "open or drop the
+  `EmbeddedKv` handle," same shape as today's "build or drop the
+  `RedisCache`."
+- The capabilities layer — still needed for the observability stack and any
+  other genuinely external resources that remain optional.
+- FalkorDB as an external service (or system unit) — it's not a candidate for
+  embedding.
+- The L1 / L2 / L3 tiering. L3 is still the persistent tier; only its
+  *implementation* changes from out-of-process redis to in-process `redb`.
+
+### Net effect on deployment
+
+The bin/exe distribution becomes one binary plus its data directory. No
+docker required for core retrieval. Observability is a documented opt-in for
+users who want it; FalkorDB is a documented dependency for users who want the
+knowledge graph. Combined with the universal self re-exec from Layer 3, every
+runtime-tunable setting can be set, persisted, and applied without any
+deployment-specific machinery — settings stay universal, and the only
+genuinely external pieces left are the optional ones.
+
+### Trade-offs of the L3 move
+
+- **No Redis compatibility.** If anything outside ag ever needs to read the
+  L3 cache, this closes that door. Today nothing does, but it's a constraint
+  worth naming.
+- **No "shared cache across multiple ag instances."** ag is single-box, so
+  this never mattered — but if a future multi-node deployment shape appears,
+  it would have to bring redis (or memcached, or a remote KV) back as an
+  opt-in alternative backend behind the same `L3Cache` trait.
+- **One more on-disk file format to maintain compatibility for.** `redb` has
+  a stable on-disk format; migrations between major versions are documented.
+  Same posture as Tantivy index versions.
+- **Binary size grows slightly.** `redb` is small (~200 KB); negligible
+  against ag's current binary size.
+
+### Migration sketch
+
+1. Introduce `cache::EmbeddedKv` next to the existing `RedisCache`. Both
+   implement the same `L3CacheBackend` trait.
+2. Add a `L3_BACKEND` setting with values `embedded` (default for new
+   deployments) and `redis` (back-compat for existing setups). Use the
+   runtime-settings layer to switch backends without restart.
+3. Default new deployments to `embedded`. Existing deployments keep `redis`
+   until explicitly migrated.
+4. After a quiet period: drop the `redis` backend and the container from the
+   default compose file. The `redis` Cargo dep stays for FalkorDB only.
+
+This is a separate landing from the persistence/runtime-settings PR — it
+benefits from that infrastructure being in place but doesn't block on it.
+
+### Observability as in-process buffers — the second move
+
+Today ag emits OTLP to the bundled otel-collector → tempo/loki/prometheus → grafana
+stack. Five containers, a config file each, and a separate UI to learn. For
+ag's actual scale (one service, recent data, learning-platform UX), the same
+information can live in process.
+
+The shape of each piece:
+
+| Today (external) | In-process replacement |
+|---|---|
+| **Prometheus** scrapes `/metrics` and stores TSDB on disk | An in-process ring buffer of the last N hours (default 24h, configurable), sampled at the existing emit cadence. ~bytes per metric per sample × number of metrics × samples — easily under 10 MB for ag's metric volume. Backed optionally by `redb` for persistence across restarts. |
+| **Loki** receives log lines and indexes labels for filtering | A custom `tracing_subscriber::Layer` writes recent events into a ring buffer keyed by level + target. The existing structured-log machinery already produces the right shape; we just route a copy in-process instead of (or in addition to) stdout. |
+| **Tempo** receives OTLP spans and stores them for trace queries | A custom span exporter writes into an in-process trace store. Smart sampling: keep all slow / errored traces, sample fast ones. Last N minutes by default, configurable. |
+| **otel-collector** receives + fans out telemetry between services | Disappears. With one source (ag) and one destination (the in-process buffers), there is nothing to collect. |
+| **Grafana** renders all of the above | ag's existing Dioxus monitor pages grow new panels backed by the buffers above. No external UI to learn. |
+
+What this looks like in code:
+
+```rust
+// backend/src/observability/mod.rs
+
+pub struct InProcessTelemetry {
+    pub metrics: MetricsHistory,    // ring buffer + optional redb persistence
+    pub logs: LogRing,              // tracing Layer feeds this
+    pub traces: TraceStore,         // span exporter feeds this
+}
+
+// HTTP surface (in addition to the existing /metrics Prometheus endpoint):
+//   GET /telemetry/metrics?name=…&from=…&to=…&step=…  → samples
+//   GET /telemetry/logs?level=…&target=…&from=…&limit=…
+//   GET /telemetry/traces?slow_than_ms=…&from=…&limit=…
+//   GET /telemetry/traces/:trace_id                   → full span tree
+```
+
+The monitor pages already know how to call ag's backend; they grow new panels
+(rate, p50/p95/p99 latency, log tail, slow-trace list) that read from these
+endpoints. The look-and-feel matches the rest of the app instead of being a
+foreign embedded Grafana iframe.
+
+#### What goes away
+
+- All five observability containers from `docker-compose.yml`.
+- The OTLP exporter plumbing for the common case (kept behind a config flag
+  for users who still want to ship telemetry out).
+- A whole class of "Grafana isn't running" / "OTel collector port conflict" /
+  "Tempo retention misconfigured" support issues.
+- Five sets of credentials / config files / port mappings to think about.
+
+#### What stays
+
+- `/metrics` in Prometheus format. External Prometheus can still scrape ag
+  directly if a user wants the data outside.
+- The OTLP exporter as opt-in. Users with an existing observability platform
+  flip a setting; ag exports OTLP to their stack the same as today.
+- The current emit cadence and metric names. The in-process buffers consume
+  the same data the OTel exporter does today — no duplication of measurement
+  code.
+
+#### Trade-offs of embedding observability
+
+- **No long-term history out of the box.** External Prometheus retains weeks;
+  in-process is bounded by RAM (and optionally `redb` for slightly longer
+  windows). Users who care about week-over-week comparisons keep the
+  external stack.
+- **No mature alerting platform.** Grafana / Prometheus alerting are
+  battle-tested; an in-process equivalent would either be a simple rules
+  engine (alerts fire to log + UI banner + optional webhook) or simply
+  absent in v1. Worth deciding explicitly.
+- **No multi-service aggregation.** If ag ever runs alongside other
+  services and someone wants one pane of glass, external Grafana is the
+  answer. Currently ag is single-service.
+- **Real implementation effort.** Larger than L3 — three buffer
+  implementations, frontend panels for each, a small query API per buffer.
+  Not a weekend, but each piece is bounded and incremental.
+- **Loses interoperability with the broader OTel ecosystem for the default
+  path.** Mitigated by keeping the OTLP exporter as an opt-in.
+
+#### Migration sketch
+
+1. Build the three in-process buffers (`MetricsHistory`, `LogRing`,
+   `TraceStore`) as standalone modules with HTTP endpoints. The OTLP
+   exporter still ships data to the bundled stack — buffers run alongside.
+2. Add monitor-page panels that read from the new endpoints. Users can
+   compare side-by-side with Grafana to validate they show the same numbers.
+3. Add a setting `OBSERVABILITY_BACKEND` with values `embedded` (default for
+   new installs), `external` (keep emitting OTLP, hide in-process panels),
+   `both` (transitional). Runtime-tunable via the settings layer.
+4. After validation: default new installs to `embedded`, leave existing
+   deployments on whatever they had. Remove the observability containers
+   from the default compose file but keep `ops/observability/` available for
+   users who set `OBSERVABILITY_BACKEND=external`.
+
+This is independent from the L3 move and from the runtime-settings landing.
+The three pieces compose well — settings + restart give the toggle UX, L3
+removes one container, observability removes five — but each can land on its
+own schedule.
+
+### Costs across all the embeddings together
+
+The per-piece estimates above (small build-time bump, ~200 KB for `redb`,
+"a few hundred lines" of buffer code, etc.) are individually accurate but
+*cumulatively misleading*. Reading them piece by piece makes the project look
+like a free lunch. It isn't. Sized as a whole, the costs are non-trivial —
+and they're concentrated in places (engineering surface area, ongoing
+maintenance) that per-piece estimates don't surface.
+
+This subsection exists so the next person reading this doc gets the
+cumulative picture, not just the per-piece optimism.
+
+#### What grows
+
+- **Net code volume.** The deletions on the way out (compose blocks, the
+  `redis://` URL plumbing, the OTLP exporter, port healthchecks, container
+  orchestration) are mostly *plumbing*. The additions are *implementations*
+  of things that today live in separate mature projects — a persistent KV
+  with TTL eviction, a time-series ring buffer with query, a log ring with
+  label indexing, a trace store with smart sampling, plus the Dioxus panels
+  for each. Even simplified, five new implementations add up. Realistic net
+  is more code in ag, not less.
+
+- **Frontend compile time.** Backend stays close to flat if we discipline
+  dependencies (no PromQL parser, no time-series compression library, no
+  generic query engine — just custom Rust on existing crates). But Dioxus +
+  Tailwind compile is already the slow part of the build, and every new
+  monitor panel is a new Dioxus component. Cumulative impact: a single-build
+  minute or two added, landing in the frontend cycle developers iterate on
+  most.
+
+- **Binary size.** Summed: ~1–2 MB across `redb`, the buffer code, and the
+  expanded frontend bundle. Not catastrophic against ag's current size, but
+  visible.
+
+- **Idle memory.** Ring buffers exist whether or not anyone is looking at
+  them. At sensible defaults: ~30–50 MB cumulative for L3 + metrics + logs +
+  traces. Configurable, but it's always paid.
+
+- **Conceptual surface area.** ag becomes responsible for code paths in
+  domains it doesn't own today: persistent key/value, time-series storage,
+  log aggregation, distributed-trace storage, observability UI. New
+  contributors have to learn "where do metrics live?", "how is the log ring
+  evicted?", "what's the trace sampling rule?" The cost scales with the
+  number of new domains, not the number of bytes.
+
+- **Feature-parity drift.** Prometheus, Grafana, Loki, Tempo, and Redis all
+  keep evolving. ag's embedded versions diverge from upstream over time.
+  Users who got a new histogram type or a new chart variant for free from a
+  Grafana upgrade now wait for an ag PR.
+
+- **Test surface.** Each embedded piece needs unit tests, frontend tests,
+  and at least one realistic integration scenario. The test suite grows
+  proportionally to the number of new domains absorbed.
+
+- **Ongoing maintenance.** Bugs in our ring buffer become *our* bugs, not
+  Prometheus's. Security advisories in our embedded code become *our*
+  on-call problem. This burden is small per piece (the implementations are
+  small) but cumulative across five domains it's a real ongoing cost.
+
+#### What the value side actually is, at the cumulative scale
+
+Per-piece, the wins look modest — "one less container." That framing
+under-sells the cumulative effect. Across all the embeddings together, the
+change is *qualitative*:
+
+- ag becomes a **single-binary application** that needs zero infrastructure
+  setup for its full feature set.
+- The default deployment story collapses from "install ag + docker + run
+  docker-compose with 6 services + configure 5 telemetry sinks" to "run the
+  binary."
+- `ops/observability/` and most of `docker-compose.yml` disappear from the
+  default path.
+- The learning-platform goal — *make the invisible visible, no setup
+  friction* — is genuinely better served by in-process observability than by
+  asking users to learn Grafana to see what ag is doing.
+- New-user onboarding goes from "you need Docker Desktop and 6 GB of RAM
+  for the stack" to "download a binary and run it."
+
+This is a different product than ag-today, not just a smaller deployment of
+the same product. Whether it's a *better* product depends on whether
+"single-binary, zero-setup ag" is a stated goal or a nice-to-have.
+
+#### Honest summary
+
+The dominant cost is not compile time, not binary size, not runtime memory —
+it's **engineering surface area**. Cumulatively, "absorb every external
+container" roughly *doubles* ag's effective scope: ag is no longer "a Rust
+RAG backend with a Dioxus monitoring UI" but also "an embedded persistent
+KV + an embedded metrics TSDB + an embedded log aggregator + an embedded
+trace store + an embedded observability UI."
+
+That's a real expansion. It's worth taking on if and only if the
+"single-binary zero-setup" deployment story is genuinely a project goal — in
+which case the cumulative move is more valuable than any of the individual
+pieces and the doubling of scope is the cost of getting there. If the
+single-binary story isn't a goal, do the L3 move (small, contained, clear
+win) and leave the observability stack external (where it already works and
+is maintained by people who care about it full-time).
