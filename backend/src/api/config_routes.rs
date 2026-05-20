@@ -635,8 +635,7 @@ fn embedding_model_hf_id(model: &str) -> &'static str {
 pub(crate) async fn get_embedding_config() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    let model =
-        std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    let model = crate::settings::effective_or("EMBEDDING_MODEL", "bge-small-en-v1.5");
     let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
         .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
 
@@ -730,8 +729,7 @@ pub(crate) async fn set_embedding_model(
 pub(crate) async fn download_tokenizer() -> Result<HttpResponse, Error> {
     let request_id = generate_request_id();
 
-    let model =
-        std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    let model = crate::settings::effective_or("EMBEDDING_MODEL", "bge-small-en-v1.5");
     let onnx_model_path = std::env::var("ONNX_MODEL_PATH")
         .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
 
@@ -1406,10 +1404,8 @@ pub(crate) fn get_onnx_config_storage() -> &'static std::sync::RwLock<OnnxConfig
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
 
-        let embedding_batch_size = std::env::var("EMBEDDING_BATCH_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(32);
+        let embedding_batch_size =
+            crate::settings::effective_u64("EMBEDDING_BATCH_SIZE", 32) as usize;
         std::sync::RwLock::new(OnnxConfig {
             model_path,
             num_threads,

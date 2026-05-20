@@ -6,7 +6,6 @@
 
 use crate::perf::CacheAligned;
 use once_cell::sync::OnceCell;
-use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -36,20 +35,14 @@ impl Default for InferenceGatewayConfig {
 impl InferenceGatewayConfig {
     /// Load configuration from environment variables
     pub fn from_env() -> Self {
-        let max_concurrent_embeddings = env::var("INFERENCE_MAX_CONCURRENT_EMBEDDINGS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(4);
+        let max_concurrent_embeddings =
+            crate::settings::effective_u64("INFERENCE_MAX_CONCURRENT_EMBEDDINGS", 4) as usize;
 
-        let max_concurrent_llm = env::var("INFERENCE_MAX_CONCURRENT_LLM")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2);
+        let max_concurrent_llm =
+            crate::settings::effective_u64("INFERENCE_MAX_CONCURRENT_LLM", 2) as usize;
 
-        let acquire_timeout_ms = env::var("INFERENCE_ACQUIRE_TIMEOUT_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(30_000);
+        let acquire_timeout_ms =
+            crate::settings::effective_u64("INFERENCE_ACQUIRE_TIMEOUT_MS", 30_000);
 
         Self {
             max_concurrent_embeddings: max_concurrent_embeddings.max(1),

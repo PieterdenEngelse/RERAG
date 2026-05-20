@@ -70,8 +70,7 @@ pub enum EmbeddingModelConfig {
 
 impl EmbeddingModelConfig {
     pub fn from_env() -> Self {
-        match env::var("EMBEDDING_MODEL")
-            .unwrap_or_else(|_| "bge-small-en-v1.5".to_string())
+        match crate::settings::effective_or("EMBEDDING_MODEL", "bge-small-en-v1.5")
             .to_lowercase()
             .as_str()
         {
@@ -124,15 +123,9 @@ pub struct EmbeddingConfig {
 
 impl EmbeddingConfig {
     pub fn from_env() -> Self {
-        let batch_size = env::var("EMBEDDING_BATCH_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(32);
+        let batch_size = crate::settings::effective_u64("EMBEDDING_BATCH_SIZE", 32) as usize;
 
-        let cache_size = env::var("EMBEDDING_CACHE_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10_000);
+        let cache_size = crate::settings::effective_u64("EMBEDDING_CACHE_SIZE", 10_000) as usize;
 
         let model = EmbeddingModelConfig::from_env();
 

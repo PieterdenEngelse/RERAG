@@ -88,7 +88,7 @@ impl MonitoringConfig {
             config.enabled = enabled.to_lowercase() == "true";
         }
 
-        if let Ok(log_level) = std::env::var("RUST_LOG") {
+        if let Some(log_level) = crate::settings::global().and_then(|s| s.effective("RUST_LOG")) {
             config.log_level = log_level;
         }
 

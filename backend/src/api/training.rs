@@ -412,9 +412,7 @@ pub(crate) fn env_auto_export_enabled() -> bool {
             return value;
         }
     }
-    std::env::var("AUTO_EXPORT_ON_UPLOAD")
-        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
-        .unwrap_or(true)
+    crate::settings::effective_bool("AUTO_EXPORT_ON_UPLOAD", true)
 }
 
 pub(crate) fn env_auto_export_debounce_ms() -> u64 {

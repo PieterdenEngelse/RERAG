@@ -147,11 +147,9 @@ impl GraphConfig {
         // UI-saved overrides (.env.graph) win over inherited env vars.
         load_env_graph_file();
         Self {
-            enabled: env::var("FALKOR_ENABLED")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(false),
+            enabled: crate::settings::effective_bool("FALKOR_ENABLED", false),
 
-            uri: env::var("FALKOR_URI").unwrap_or_else(|_| "redis://localhost:6380".to_string()),
+            uri: crate::settings::effective_or("FALKOR_URI", "redis://localhost:6380"),
 
             password: env::var("FALKOR_PASSWORD").unwrap_or_else(|_| "password".to_string()),
 
@@ -194,19 +192,11 @@ impl GraphConfig {
 impl GraphExpansionSettings {
     pub fn from_env() -> Self {
         Self {
-            enabled: env::var("GRAPH_EXPANSION_ENABLED")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(true),
+            enabled: crate::settings::effective_bool("GRAPH_EXPANSION_ENABLED", true),
 
-            max_hops: env::var("GRAPH_EXPANSION_MAX_HOPS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2),
+            max_hops: crate::settings::effective_u64("GRAPH_EXPANSION_MAX_HOPS", 2) as usize,
 
-            max_chunks: env::var("GRAPH_EXPANSION_MAX_CHUNKS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
+            max_chunks: crate::settings::effective_u64("GRAPH_EXPANSION_MAX_CHUNKS", 10) as usize,
 
             entity_weight: env::var("GRAPH_ENTITY_WEIGHT")
                 .ok()

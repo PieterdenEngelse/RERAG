@@ -107,8 +107,8 @@ impl DistributedTracingConfig {
         tracing::debug!(%agent_host, agent_port, "Jaeger agent target parsed");
 
         // Build OTLP exporter (grpc) to env-specified endpoint or default
-        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:4317".into());
+        let endpoint =
+            crate::settings::effective_or("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317");
         let exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_endpoint(endpoint);

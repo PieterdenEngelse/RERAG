@@ -29,8 +29,10 @@ impl OtelConfig {
                 .unwrap_or_else(|_| "false".to_string())
                 .parse::<bool>()
                 .unwrap_or(false),
-            otlp_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-                .unwrap_or_else(|_| "http://127.0.0.1:4318".to_string()),
+            otlp_endpoint: crate::settings::effective_or(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4318",
+            ),
             batch_queue_size: 512,
             batch_scheduled_delay_ms: 5000,
         }

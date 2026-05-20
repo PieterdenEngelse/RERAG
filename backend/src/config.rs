@@ -12,7 +12,7 @@ pub enum ChunkerMode {
 
 impl ChunkerMode {
     pub fn from_env() -> Self {
-        let raw = env::var("CHUNKER_MODE").unwrap_or_else(|_| "fixed".to_string());
+        let raw = crate::settings::effective_or("CHUNKER_MODE", "fixed");
         raw.parse().unwrap_or(ChunkerMode::Fixed)
     }
 }
@@ -129,10 +129,9 @@ impl ApiConfig {
         // Network configuration
         let host = env::var("BACKEND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-        let port = env::var("BACKEND_PORT")
-            .unwrap_or_else(|_| "3010".to_string())
-            .parse()
-            .expect("BACKEND_PORT must be a valid u16");
+        let port: u16 = crate::settings::effective_u64("BACKEND_PORT", 3010)
+            .try_into()
+            .expect("BACKEND_PORT must fit in u16");
 
         let upload_host = env::var("UPLOAD_HOST").unwrap_or_else(|_| host.clone());
 
@@ -208,9 +207,7 @@ impl ApiConfig {
             .unwrap_or_else(|_| "5".to_string())
             .parse()
             .unwrap_or(5);
-        let trust_proxy = env::var("TRUST_PROXY")
-            .map(|v| v.to_lowercase() == "true" || v == "1")
-            .unwrap_or(false);
+        let trust_proxy = crate::settings::effective_bool("TRUST_PROXY", false);
         let trust_proxy_search = env::var("TRUST_PROXY_SEARCH")
             .map(|v| v.to_lowercase() == "true" || v == "1")
             .unwrap_or(trust_proxy);
@@ -256,13 +253,12 @@ impl ApiConfig {
 
         let redis_ttl = crate::settings::effective_u64("REDIS_TTL", 3600);
 
-        let search_top_k = env::var("SEARCH_TOP_K")
-            .unwrap_or_else(|_| "10".to_string())
-            .parse()
-            .map(|v: usize| v.max(1))
-            .unwrap_or(10);
+        let search_top_k = (crate::settings::effective_u64("SEARCH_TOP_K", 10) as usize).max(1);
 
-        let chunking_log_enabled = env::var("CHUNKING_SNAPSHOT_LOGGING")
+        // Permissive parse — preserves original "anything but false/0 is on"
+        // behavior; only goes off for explicit "false"/"0".
+        let chunking_log_enabled = crate::settings::global()
+            .and_then(|s| s.effective("CHUNKING_SNAPSHOT_LOGGING"))
             .map(|v| v.to_lowercase() != "false" && v != "0")
             .unwrap_or(true);
 

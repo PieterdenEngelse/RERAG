@@ -142,25 +142,20 @@ impl ChunkerConfig {
     /// - CHUNK_OVERLAP: Overlap tokens between chunks (default: 50)
     /// - SEMANTIC_SIMILARITY_THRESHOLD: Threshold for semantic chunking (default: 0.78)
     pub fn from_env() -> Self {
-        let target_size = env::var("CHUNK_TARGET_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_TARGET_SIZE);
+        let target_size =
+            crate::settings::effective_u64("CHUNK_TARGET_SIZE", DEFAULT_TARGET_SIZE as u64)
+                as usize;
 
         let min_size = env::var("CHUNK_MIN_SIZE")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_MIN_SIZE);
 
-        let max_size = env::var("CHUNK_MAX_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_MAX_SIZE);
+        let max_size =
+            crate::settings::effective_u64("CHUNK_MAX_SIZE", DEFAULT_MAX_SIZE as u64) as usize;
 
-        let overlap = env::var("CHUNK_OVERLAP")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_OVERLAP);
+        let overlap =
+            crate::settings::effective_u64("CHUNK_OVERLAP", DEFAULT_OVERLAP as u64) as usize;
 
         let semantic_similarity_threshold = env::var("SEMANTIC_SIMILARITY_THRESHOLD")
             .ok()
@@ -168,9 +163,7 @@ impl ChunkerConfig {
             .map(|v: f32| v.clamp(0.0, 1.0))
             .unwrap_or(DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD);
 
-        let mode = env::var("CHUNKER_MODE")
-            .unwrap_or_else(|_| "lightweight".to_string())
-            .to_lowercase();
+        let mode = crate::settings::effective_or("CHUNKER_MODE", "lightweight").to_lowercase();
 
         let clean_html = env::var("CHUNK_CLEAN_HTML")
             .map(|v| v.to_lowercase() == "true" || v == "1")
