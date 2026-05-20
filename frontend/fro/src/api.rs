@@ -985,6 +985,89 @@ pub struct CacheInfoResponse {
     pub counters: CacheCountersSnapshot,
 }
 
+// ── Datastores monitor (L3 cache + FalkorDB) ────────────────────────────────
+
+/// Health of a Redis-protocol server — shared by the L3 cache and FalkorDB.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RedisServerHealth {
+    pub reachable: bool,
+    pub error: Option<String>,
+    pub redis_version: String,
+    pub redis_mode: String,
+    pub uptime_seconds: u64,
+    pub connected_clients: u64,
+    pub used_memory_bytes: u64,
+    pub used_memory_human: String,
+    pub maxmemory_bytes: u64,
+    pub maxmemory_policy: String,
+    pub db_keys: u64,
+    pub keyspace_hits: u64,
+    pub keyspace_misses: u64,
+    pub evicted_keys: u64,
+    pub instantaneous_ops_per_sec: u64,
+    pub total_commands_processed: u64,
+    pub aof_enabled: bool,
+    pub rdb_changes_since_last_save: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CacheDatastore {
+    pub enabled: bool,
+    pub url: String,
+    pub ttl_seconds: u64,
+    pub health: RedisServerHealth,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FalkorGraphInfo {
+    pub name: String,
+    pub nodes: i64,
+    pub edges: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FalkorDatastore {
+    pub url: String,
+    pub service_state: String,
+    pub health: RedisServerHealth,
+    pub graphs: Vec<FalkorGraphInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatastoresResponse {
+    pub request_id: String,
+    pub cache: CacheDatastore,
+    pub falkordb: FalkorDatastore,
+}
+
+/// Fetch L3-cache + FalkorDB health for the Datastores monitor page.
+pub async fn fetch_datastores() -> Result<DatastoresResponse, String> {
+    fetch_json("/monitor/datastores").await
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct L3ToggleRequest {
+    pub enabled: bool,
+    pub stop_container: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct L3ToggleResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub stop_container: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// Flip REDIS_ENABLED in ag.env (and optionally stop/start the redis container).
+/// The server returns 202 and restarts ag.service in the background.
+pub async fn post_l3_toggle(req: &L3ToggleRequest) -> Result<L3ToggleResponse, String> {
+    post_json("/monitor/datastores/l3-toggle", req).await
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RouteDropStat {
     pub route: String,

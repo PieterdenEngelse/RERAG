@@ -1,0 +1,674 @@
+//! Monitor — Datastores page.
+//!
+//! ag keeps two datastores, and both speak the Redis protocol:
+//!   - the L3 cache  — optional, ephemeral search-result cache
+//!   - FalkorDB      — the persistent knowledge-graph store (a Redis module)
+//!
+//! Because both answer the same `INFO` command, they share one health panel;
+//! each section then adds what is specific to its role.
+
+use crate::{
+    api,
+    app::{PageErrors, Route},
+    components::monitor::*,
+    pages::hardware::constants::{
+        INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+    },
+};
+use dioxus::prelude::*;
+use dioxus_router::Link;
+use gloo_timers::future::TimeoutFuture;
+
+#[derive(Clone, Default)]
+struct DatastoresState {
+    loading: bool,
+    error: Option<String>,
+    data: Option<api::DatastoresResponse>,
+}
+
+#[component]
+pub fn MonitorDatastores() -> Element {
+    let state = use_signal(|| DatastoresState {
+        loading: true,
+        ..Default::default()
+    });
+    let mut show_info = use_signal(|| false);
+    let mut show_l3_optional = use_signal(|| false);
+    let show_container_info = use_signal(|| false);
+    let also_container = use_signal(|| false);
+    let submitting = use_signal(|| false);
+    let show_restarting = use_signal(|| false);
+
+    {
+        let mut state = state;
+        let mut page_errors = use_context::<Signal<PageErrors>>();
+        use_future(move || async move {
+            loop {
+                match api::fetch_datastores().await {
+                    Ok(resp) => {
+                        state.set(DatastoresState {
+                            loading: false,
+                            error: None,
+                            data: Some(resp),
+                        });
+                        page_errors.with_mut(|e| e.clear_error("datastores"));
+                    }
+                    Err(err) => {
+                        let previous = state.read().data.clone();
+                        state.set(DatastoresState {
+                            loading: false,
+                            error: Some(err.clone()),
+                            data: previous,
+                        });
+                        page_errors.with_mut(|e| e.set_error("datastores", &err));
+                    }
+                }
+                TimeoutFuture::new(10_000).await;
+            }
+        });
+    }
+
+    let snapshot = state.read().clone();
+
+    rsx! {
+        div { class: "space-y-6",
+            Breadcrumb {
+                items: vec![
+                    BreadcrumbItem::new("Home", Some(Route::Home {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Datastores", None),
+                ],
+            }
+            NavTabs { active: Route::MonitorDatastores {} }
+
+            div { class: "flex items-center gap-2",
+                h1 { class: "text-xl font-semibold text-gray-100", "Datastores" }
+                button {
+                    class: PARAM_ICON_BUTTON_CLASS,
+                    style: PARAM_ICON_BUTTON_STYLE,
+                    onclick: move |_| show_info.set(!show_info()),
+                    title: "Show info",
+                    svg {
+                        class: INFO_ICON_SVG_CLASS,
+                        view_box: "0 0 20 20",
+                        fill: "none",
+                        stroke: "currentColor",
+                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                        circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                    }
+                }
+            }
+            p { class: "text-sm text-gray-300",
+                "ag keeps two Redis-protocol datastores: an "
+                span {
+                    class: "text-blue-400 hover:text-blue-300 underline cursor-pointer",
+                    onclick: move |_| show_l3_optional.set(true),
+                    title: "Why you might turn off L3",
+                    "optional"
+                }
+                " L3 cache and FalkorDB, the knowledge-graph store. Both answer the same INFO command, so they share one health view."
+            }
+
+            if show_info() {
+                {info_modal(show_info)}
+            }
+            if show_l3_optional() {
+                {l3_optional_modal(show_l3_optional)}
+            }
+            if show_container_info() {
+                {stop_container_modal(show_container_info)}
+            }
+
+            if let Some(err) = &snapshot.error {
+                div { class: "text-sm text-red-400", "Failed to load: {err}" }
+            }
+
+            if show_restarting() {
+                {restarting_overlay()}
+            }
+
+            if let Some(data) = &snapshot.data {
+                Panel {
+                    title: Some("L3 Cache — Redis".to_string()),
+                    subtitle: Some("Optional · ephemeral · search-result cache".to_string()),
+                    refresh: Some("10s".to_string()),
+                    {cache_section(&data.cache, also_container, submitting, show_restarting, show_container_info)}
+                }
+                Panel {
+                    title: Some("FalkorDB — Knowledge-graph store".to_string()),
+                    subtitle: Some("Persistent · Redis module · falkordb.service".to_string()),
+                    refresh: Some("10s".to_string()),
+                    {falkor_section(&data.falkordb)}
+                }
+                div { class: "text-[10px] text-gray-400",
+                    "Tune these stores on the "
+                    Link {
+                        to: Route::ConfigFalkorDb {},
+                        class: "text-blue-400 hover:text-blue-300",
+                        "FalkorDB"
+                    }
+                    " and "
+                    Link {
+                        to: Route::ConfigRedis {},
+                        class: "text-blue-400 hover:text-blue-300",
+                        "Redis parameters"
+                    }
+                    " config pages."
+                }
+            } else if snapshot.loading {
+                div { class: "text-sm text-gray-400", "Loading…" }
+            }
+        }
+    }
+}
+
+/// L3 cache section: connection state, optional health panel, and the toggle controls.
+fn cache_section(
+    c: &api::CacheDatastore,
+    mut also_container: Signal<bool>,
+    mut submitting: Signal<bool>,
+    mut show_restarting: Signal<bool>,
+    mut show_container_info: Signal<bool>,
+) -> Element {
+    let enabled_now = c.enabled;
+    let new_enabled = !enabled_now;
+    let action_label = if enabled_now {
+        "Disable L3 cache"
+    } else {
+        "Enable L3 cache"
+    };
+    let checkbox_label = if enabled_now {
+        "Also stop the redis container"
+    } else {
+        "Also start the redis container if it isn't running"
+    };
+
+    let on_click = move |_| {
+        let stop_container = *also_container.read();
+        spawn(async move {
+            submitting.set(true);
+            let res = api::post_l3_toggle(&api::L3ToggleRequest {
+                enabled: new_enabled,
+                stop_container,
+            })
+            .await;
+            match res {
+                Ok(_) => {
+                    show_restarting.set(true);
+                    // ag.service restarts; let the auto-refetch loop catch up. Hide overlay after ~8s.
+                    TimeoutFuture::new(8_000).await;
+                    show_restarting.set(false);
+                    submitting.set(false);
+                }
+                Err(_) => {
+                    submitting.set(false);
+                }
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "space-y-3",
+            div { class: "flex flex-wrap items-center gap-3 text-xs",
+                if !c.enabled {
+                    span { class: "px-2 py-0.5 rounded bg-gray-700 text-gray-300 font-semibold",
+                        "Disabled"
+                    }
+                } else if c.health.reachable {
+                    span { class: "px-2 py-0.5 rounded bg-green-900/40 text-green-400 font-semibold",
+                        "Connected"
+                    }
+                } else {
+                    span { class: "px-2 py-0.5 rounded bg-red-900/40 text-red-400 font-semibold",
+                        "Disconnected"
+                    }
+                }
+                span { class: "text-gray-400",
+                    "URL: "
+                    span { class: "font-mono text-gray-200", "{c.url}" }
+                }
+                span { class: "text-gray-400",
+                    "TTL: "
+                    span { class: "font-mono text-gray-200", "{c.ttl_seconds}s" }
+                }
+            }
+            if c.enabled {
+                {health_panel(&c.health)}
+            } else {
+                div { class: "text-xs text-gray-400",
+                    "L3 cache disabled — flip the toggle below to set REDIS_ENABLED=true and restart ag."
+                }
+            }
+
+            div { class: "border-t border-gray-700 pt-3 mt-2 space-y-2",
+                div { class: "flex items-center gap-2",
+                    label { class: "flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none",
+                        input {
+                            r#type: "checkbox",
+                            class: "cursor-pointer",
+                            checked: also_container(),
+                            oninput: move |evt| {
+                                also_container.set(evt.value() == "true" || evt.value() == "on");
+                            },
+                        }
+                        "{checkbox_label}"
+                    }
+                    button {
+                        class: PARAM_ICON_BUTTON_CLASS,
+                        style: PARAM_ICON_BUTTON_STYLE,
+                        onclick: move |_| show_container_info.set(true),
+                        title: "When (not) to tick this",
+                        svg {
+                            class: INFO_ICON_SVG_CLASS,
+                            view_box: "0 0 20 20",
+                            fill: "none",
+                            stroke: "currentColor",
+                            circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                        }
+                    }
+                }
+                div { class: "flex items-center gap-3",
+                    button {
+                        class: "btn btn-sm",
+                        style: "background-color:#7C2A02;color:white;border:1px solid #7C2A02;",
+                        disabled: submitting(),
+                        onclick: on_click,
+                        if submitting() { "Submitting…" } else { "{action_label}" }
+                    }
+                    span { class: "text-[10px] text-gray-400",
+                        "Writes REDIS_ENABLED to ~/.config/ag/ag.env and restarts ag.service."
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Overlay shown while ag.service is being restarted by the orchestration script.
+fn restarting_overlay() -> Element {
+    rsx! {
+        div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 pointer-events-auto",
+            div { class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-md text-center shadow-xl",
+                div { class: "text-base font-semibold text-gray-100 mb-2",
+                    "Restarting ag.service…"
+                }
+                p { class: "text-sm text-gray-300",
+                    "The L3 setting has been written to ag.env and ag is being restarted. This page will refresh on its own once ag is back up."
+                }
+            }
+        }
+    }
+}
+
+/// FalkorDB section: service + connection state, health panel, graph table.
+fn falkor_section(f: &api::FalkorDatastore) -> Element {
+    let svc_color = match f.service_state.as_str() {
+        "active" => "text-green-400",
+        "unknown" => "text-gray-400",
+        _ => "text-red-400",
+    };
+    rsx! {
+        div { class: "space-y-3",
+            div { class: "flex flex-wrap items-center gap-3 text-xs",
+                if f.health.reachable {
+                    span { class: "px-2 py-0.5 rounded bg-green-900/40 text-green-400 font-semibold",
+                        "Connected"
+                    }
+                } else {
+                    span { class: "px-2 py-0.5 rounded bg-red-900/40 text-red-400 font-semibold",
+                        "Disconnected"
+                    }
+                }
+                span { class: "text-gray-400",
+                    "falkordb.service: "
+                    span { class: "font-mono {svc_color}", "{f.service_state}" }
+                }
+                span { class: "text-gray-400",
+                    "URL: "
+                    span { class: "font-mono text-gray-200", "{f.url}" }
+                }
+            }
+            {health_panel(&f.health)}
+            if !f.graphs.is_empty() {
+                div {
+                    div { class: "text-xs font-semibold text-gray-300 mb-1", "Graphs" }
+                    table { class: "w-full text-xs",
+                        thead {
+                            tr { class: "text-gray-400 text-left",
+                                th { class: "py-1 pr-4", "Name" }
+                                th { class: "py-1 pr-4", "Nodes" }
+                                th { class: "py-1", "Edges" }
+                            }
+                        }
+                        tbody {
+                            for g in f.graphs.iter() {
+                                tr { class: "border-t border-gray-700",
+                                    td { class: "py-1 pr-4 font-mono text-gray-200", "{g.name}" }
+                                    td { class: "py-1 pr-4 text-gray-100", "{g.nodes}" }
+                                    td { class: "py-1 text-gray-100", "{g.edges}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            p { class: "text-[10px] text-gray-400",
+                "Graph contents and visualisation live on the "
+                Link {
+                    to: Route::MonitorKnowledgeGraph {},
+                    class: "text-blue-400 hover:text-blue-300",
+                    "Knowledge Graph"
+                }
+                " page."
+            }
+        }
+    }
+}
+
+/// The shared Redis-protocol health grid (`INFO` + `DBSIZE`).
+fn health_panel(h: &api::RedisServerHealth) -> Element {
+    if !h.reachable {
+        let err = h
+            .error
+            .clone()
+            .unwrap_or_else(|| "server unreachable".to_string());
+        return rsx! {
+            div { class: "text-xs text-red-400", "Not reachable — {err}" }
+        };
+    }
+
+    let hits = h.keyspace_hits;
+    let misses = h.keyspace_misses;
+    let hit_rate = if hits + misses > 0 {
+        format!("{:.1}%", hits as f64 / (hits + misses) as f64 * 100.0)
+    } else {
+        "—".to_string()
+    };
+    let maxmem = if h.maxmemory_bytes == 0 {
+        "unlimited".to_string()
+    } else {
+        fmt_bytes(h.maxmemory_bytes)
+    };
+
+    rsx! {
+        div { class: "grid grid-cols-1 sm:grid-cols-2 gap-x-8",
+            {stat("Version", h.redis_version.clone())}
+            {stat("Mode", h.redis_mode.clone())}
+            {stat("Uptime", fmt_uptime(h.uptime_seconds))}
+            {stat("Connected clients", h.connected_clients.to_string())}
+            {stat("Memory used", h.used_memory_human.clone())}
+            {stat("Memory limit", maxmem)}
+            {stat("Eviction policy", h.maxmemory_policy.clone())}
+            {stat("Keys (DBSIZE)", h.db_keys.to_string())}
+            {stat("Keyspace hit rate", hit_rate)}
+            {stat("Hits / misses", format!("{hits} / {misses}"))}
+            {stat("Evicted keys", h.evicted_keys.to_string())}
+            {stat("Ops / sec", h.instantaneous_ops_per_sec.to_string())}
+            {stat("Commands processed", h.total_commands_processed.to_string())}
+            {stat("Persistence (AOF)", if h.aof_enabled { "on".to_string() } else { "off".to_string() })}
+            {stat("Unsaved changes", h.rdb_changes_since_last_save.to_string())}
+        }
+    }
+}
+
+/// One label/value row inside the health grid.
+fn stat(label: &str, value: String) -> Element {
+    rsx! {
+        div { class: "flex justify-between gap-4 py-1 border-b border-gray-700",
+            span { class: "text-gray-400", "{label}" }
+            span { class: "text-gray-100 font-mono", "{value}" }
+        }
+    }
+}
+
+/// Page-level info modal — written in the app's end-user voice.
+fn info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100", "About Datastores" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "ag relies on two datastores, and both speak the Redis protocol — which is why this page shows them side by side with the same health panel."
+                    }
+                    p {
+                        strong { "L3 Cache. " }
+                        "An optional in-memory cache for search results. It is ephemeral: if it goes away, ag simply recomputes results and keeps working. Controlled by REDIS_ENABLED, REDIS_URL and REDIS_TTL."
+                    }
+                    p {
+                        strong { "FalkorDB. " }
+                        "The persistent knowledge-graph store. It is a Redis module, so it answers INFO just like the cache, but it also holds graphs. Losing it loses graph data, so it runs as the falkordb.service system service."
+                    }
+                    p {
+                        strong { "Reading the panel. " }
+                        "Memory used versus limit shows headroom; the eviction policy decides what happens once the limit is hit. Keyspace hit rate is how often lookups find a value. Persistence (AOF) and unsaved changes show how much data an abrupt stop would lose."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Why the L3 cache is called "optional" — concrete reasons to turn it off.
+fn l3_optional_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "Why the L3 cache is optional"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "ag runs fine without the L3 cache. It is shipped on by default (REDIS_ENABLED=true in the example env), but here are concrete reasons to set REDIS_ENABLED=false."
+                    }
+                    ol { class: "list-decimal pl-5 space-y-2",
+                        li {
+                            strong { "You are tuning retrieval. " }
+                            "L3 survives restarts, so results computed against an old embedder or chunker stay cached until each key's TTL expires. The in-process tiers vanish on restart and stop showing you stale answers; L3 does not."
+                        }
+                        li {
+                            strong { "You re-index more often than REDIS_TTL (default 3600s). " }
+                            "Cached results outlive the documents they were computed from. Either shorten the TTL or turn L3 off."
+                        }
+                        li {
+                            strong { "One less container. " }
+                            "The redis container is small, but it adds a process, a port, a healthcheck, and another security feed to track. On a single-box deployment the \"shared across instances\" benefit is zero — the only remaining win is surviving restarts."
+                        }
+                        li {
+                            strong { "Low cache hit rate. " }
+                            "If your queries are mostly unique, L3 makes a localhost round-trip just to miss. The in-process tiers already absorb the queries that actually repeat, at much lower cost. Check the hit-rate counter on this page before deciding."
+                        }
+                        li {
+                            strong { "You want clean restarts. " }
+                            "Restarting ag clears the in-process tiers but not L3 — confusing when you want everything fresh. Disabling makes \"restart to clear caches\" actually true."
+                        }
+                        li {
+                            strong { "Data hygiene. " }
+                            "L3 writes serialised search results to its disk volume; the in-process tiers never persist. If your queries or documents are sensitive, that is a footprint to consider."
+                        }
+                        li {
+                            strong { "Memory pressure. " }
+                            "Cached results can pile up (hundreds of bytes to a few KB each, no memory limit by default). If RAM is tight and the hit rate is low, drop L3."
+                        }
+                    }
+                    p {
+                        strong { "Not a reason: " }
+                        "to save memory in ag itself. L3 runs in its own container — disabling it does not shrink ag."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// When (and when not) to tick the "Also start/stop the redis container" box.
+fn stop_container_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "Also start / stop the redis container"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "By default the toggle only writes "
+                        span { class: "font-mono", "REDIS_ENABLED" }
+                        " to "
+                        span { class: "font-mono", "ag.env" }
+                        " and restarts ag — it does not touch the redis container at all. Ticking this box also runs "
+                        span { class: "font-mono", "docker compose up -d redis" }
+                        " (when enabling) or "
+                        span { class: "font-mono", "docker compose stop redis" }
+                        " (when disabling). Two separate decisions, one click."
+                    }
+
+                    p {
+                        strong { "Enabling L3 — tick this if:" }
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            "The redis container is currently stopped. Without ticking, ag will come back up and silently retry the connection forever."
+                        }
+                        li {
+                            "You only manage the redis container through ag — \"one click, everything ready\" is the simplest path."
+                        }
+                    }
+                    p {
+                        strong { "Enabling L3 — leave it unticked if:" }
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            "The container is already running (the L3 panel shows "
+                            span { class: "text-green-400 font-semibold", "Connected" }
+                            " above). The extra "
+                            span { class: "font-mono", "up -d" }
+                            " is a no-op but still triggers a compose round-trip."
+                        }
+                        li {
+                            "Another tool or systemd unit on this box manages the redis container and you don't want ag racing it."
+                        }
+                    }
+
+                    p {
+                        strong { "Disabling L3 — tick this if:" }
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            "You're done with L3 for a while and want to reclaim the container's RAM/CPU (small, but non-zero)."
+                        }
+                        li {
+                            "You're cleaning up before a reboot or before sharing the machine."
+                        }
+                    }
+                    p {
+                        strong { "Disabling L3 — leave it unticked if:" }
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            "You expect to flip L3 back on soon. Keep the container warm and avoid AOF stop/start churn."
+                        }
+                        li {
+                            "Another tool on this box uses the same redis instance (rare on a single-box dev setup, but possible)."
+                        }
+                        li {
+                            "You're disabling L3 just to A/B-compare retrieval with and without it — the container being up costs nothing while ag isn't talking to it."
+                        }
+                    }
+
+                    p {
+                        strong { "Is it safe? " }
+                        "Yes. Stop is graceful ("
+                        span { class: "font-mono", "docker compose stop" }
+                        " sends SIGTERM), so AOF flushes before exit and data on the "
+                        span { class: "font-mono", "redis-data" }
+                        " volume persists. Restarting later picks up where it left off."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Human-readable byte size.
+fn fmt_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} {}", UNITS[0])
+    } else {
+        format!("{v:.1} {}", UNITS[i])
+    }
+}
+
+/// Human-readable uptime from a seconds count.
+fn fmt_uptime(secs: u64) -> String {
+    let d = secs / 86_400;
+    let h = (secs % 86_400) / 3_600;
+    let m = (secs % 3_600) / 60;
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{m}m")
+    }
+}

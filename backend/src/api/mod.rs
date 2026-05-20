@@ -1116,6 +1116,11 @@ pub fn start_api_server(
             .route("/rerank", web::post().to(rerank))
             .route("/summarize", web::post().to(summarize))
             .route("/monitor/cache/info", web::get().to(get_cache_monitor_info))
+            .route("/monitor/datastores", web::get().to(get_datastores_info))
+            .route(
+                "/monitor/datastores/l3-toggle",
+                web::post().to(post_datastores_l3_toggle),
+            )
             .route("/cache/clear", web::post().to(clear_cache))
             .route(
                 "/monitor/rate_limits/info",

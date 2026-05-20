@@ -917,6 +917,441 @@ pub(crate) async fn get_cache_monitor_info() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(response))
 }
 
+// ── Datastores monitor: L3 cache + FalkorDB (both Redis-protocol servers) ────
+
+/// Health snapshot of a Redis-protocol server. The L3 cache and FalkorDB (a
+/// Redis module) both answer `INFO`, so this one shape serves both.
+#[derive(Serialize, Default)]
+pub(crate) struct RedisServerHealth {
+    pub reachable: bool,
+    pub error: Option<String>,
+    pub redis_version: String,
+    pub redis_mode: String,
+    pub uptime_seconds: u64,
+    pub connected_clients: u64,
+    pub used_memory_bytes: u64,
+    pub used_memory_human: String,
+    pub maxmemory_bytes: u64,
+    pub maxmemory_policy: String,
+    pub db_keys: u64,
+    pub keyspace_hits: u64,
+    pub keyspace_misses: u64,
+    pub evicted_keys: u64,
+    pub instantaneous_ops_per_sec: u64,
+    pub total_commands_processed: u64,
+    pub aof_enabled: bool,
+    pub rdb_changes_since_last_save: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CacheDatastore {
+    pub enabled: bool,
+    pub url: String,
+    pub ttl_seconds: u64,
+    pub health: RedisServerHealth,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FalkorGraphInfo {
+    pub name: String,
+    pub nodes: i64,
+    pub edges: i64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FalkorDatastore {
+    pub url: String,
+    pub service_state: String,
+    pub health: RedisServerHealth,
+    pub graphs: Vec<FalkorGraphInfo>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DatastoresResponse {
+    pub request_id: String,
+    pub cache: CacheDatastore,
+    pub falkordb: FalkorDatastore,
+}
+
+/// Parse the body of a Redis `INFO` reply into key→value pairs.
+fn parse_redis_info(info: &str) -> std::collections::HashMap<String, String> {
+    info.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (k, v) = line.split_once(':')?;
+            Some((k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Mask any password in a `redis://user:pass@host` URL before returning it.
+fn sanitize_redis_url(url: &str) -> String {
+    match (url.find("://"), url.rfind('@')) {
+        (Some(scheme_end), Some(at)) if at > scheme_end + 3 => {
+            format!("{}***@{}", &url[..scheme_end + 3], &url[at + 1..])
+        }
+        _ => url.to_string(),
+    }
+}
+
+/// Probe a Redis-protocol server: connect (3s timeout), run `INFO` + `DBSIZE`.
+async fn probe_redis_server(url: &str) -> RedisServerHealth {
+    let mut health = RedisServerHealth::default();
+
+    let client = match redis::Client::open(url) {
+        Ok(c) => c,
+        Err(e) => {
+            health.error = Some(e.to_string());
+            return health;
+        }
+    };
+
+    let mut conn = match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        redis::aio::ConnectionManager::new(client),
+    )
+    .await
+    {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            health.error = Some(e.to_string());
+            return health;
+        }
+        Err(_) => {
+            health.error = Some("connection timed out".to_string());
+            return health;
+        }
+    };
+
+    let info = match redis::cmd("INFO").query_async::<String>(&mut conn).await {
+        Ok(s) => s,
+        Err(e) => {
+            health.error = Some(e.to_string());
+            return health;
+        }
+    };
+
+    health.reachable = true;
+    let map = parse_redis_info(&info);
+    let get_u64 = |k: &str| map.get(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+
+    health.redis_version = map.get("redis_version").cloned().unwrap_or_default();
+    health.redis_mode = map.get("redis_mode").cloned().unwrap_or_default();
+    health.uptime_seconds = get_u64("uptime_in_seconds");
+    health.connected_clients = get_u64("connected_clients");
+    health.used_memory_bytes = get_u64("used_memory");
+    health.used_memory_human = map.get("used_memory_human").cloned().unwrap_or_default();
+    health.maxmemory_bytes = get_u64("maxmemory");
+    health.maxmemory_policy = map.get("maxmemory_policy").cloned().unwrap_or_default();
+    health.keyspace_hits = get_u64("keyspace_hits");
+    health.keyspace_misses = get_u64("keyspace_misses");
+    health.evicted_keys = get_u64("evicted_keys");
+    health.instantaneous_ops_per_sec = get_u64("instantaneous_ops_per_sec");
+    health.total_commands_processed = get_u64("total_commands_processed");
+    health.aof_enabled = map.get("aof_enabled").map(|v| v == "1").unwrap_or(false);
+    health.rdb_changes_since_last_save = get_u64("rdb_changes_since_last_save");
+
+    health.db_keys = redis::cmd("DBSIZE")
+        .query_async::<u64>(&mut conn)
+        .await
+        .unwrap_or(0);
+
+    health
+}
+
+/// Depth-first search for the first integer in a Redis reply value.
+fn deep_first_int(v: &redis::Value) -> Option<i64> {
+    match v {
+        redis::Value::Int(i) => Some(*i),
+        redis::Value::Array(items) => items.iter().find_map(deep_first_int),
+        _ => None,
+    }
+}
+
+/// List FalkorDB graphs with best-effort node/edge counts.
+async fn probe_falkor_graphs(url: &str) -> Vec<FalkorGraphInfo> {
+    let client = match redis::Client::open(url) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut conn = match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        redis::aio::ConnectionManager::new(client),
+    )
+    .await
+    {
+        Ok(Ok(c)) => c,
+        _ => return Vec::new(),
+    };
+
+    let names = redis::cmd("GRAPH.LIST")
+        .query_async::<Vec<String>>(&mut conn)
+        .await
+        .unwrap_or_default();
+
+    let mut graphs = Vec::new();
+    for name in names {
+        let nodes = redis::cmd("GRAPH.QUERY")
+            .arg(&name)
+            .arg("MATCH (n) RETURN count(n)")
+            .query_async::<redis::Value>(&mut conn)
+            .await
+            .ok()
+            .as_ref()
+            .and_then(deep_first_int)
+            .unwrap_or(0);
+        let edges = redis::cmd("GRAPH.QUERY")
+            .arg(&name)
+            .arg("MATCH ()-[r]->() RETURN count(r)")
+            .query_async::<redis::Value>(&mut conn)
+            .await
+            .ok()
+            .as_ref()
+            .and_then(deep_first_int)
+            .unwrap_or(0);
+        graphs.push(FalkorGraphInfo { name, nodes, edges });
+    }
+    graphs
+}
+
+/// `systemctl --user is-active falkordb.service` → "active" / "inactive" / …
+async fn falkordb_service_state() -> String {
+    match tokio::process::Command::new("systemctl")
+        .args(["--user", "is-active", "falkordb.service"])
+        .output()
+        .await
+    {
+        Ok(out) => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() {
+                "unknown".to_string()
+            } else {
+                s
+            }
+        }
+        Err(_) => "unknown".to_string(),
+    }
+}
+
+/// GET /monitor/datastores — health of the L3 cache and the FalkorDB store.
+pub(crate) async fn get_datastores_info() -> Result<HttpResponse, Error> {
+    let request_id = generate_request_id();
+
+    // L3 cache (Redis) — optional, controlled by REDIS_* env vars.
+    let cache_enabled = std::env::var("REDIS_ENABLED")
+        .map(|v| {
+            let v = v.trim().to_lowercase();
+            v == "true" || v == "1"
+        })
+        .unwrap_or(false);
+    let cache_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+    let cache_ttl = std::env::var("REDIS_TTL")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3600);
+    let cache_health = if cache_enabled {
+        probe_redis_server(&cache_url).await
+    } else {
+        RedisServerHealth::default()
+    };
+
+    // FalkorDB — a Redis module; inject the password into the URL like the
+    // graph client does.
+    let gcfg = crate::graph::config::GraphConfig::from_env();
+    let falkor_url = if gcfg.password.is_empty() {
+        gcfg.uri.clone()
+    } else if let Some(idx) = gcfg.uri.find("://") {
+        let (scheme, rest) = gcfg.uri.split_at(idx + 3);
+        format!("{scheme}:{}@{rest}", gcfg.password)
+    } else {
+        gcfg.uri.clone()
+    };
+    let falkor_health = probe_redis_server(&falkor_url).await;
+    let falkor_graphs = if falkor_health.reachable {
+        probe_falkor_graphs(&falkor_url).await
+    } else {
+        Vec::new()
+    };
+    let service_state = falkordb_service_state().await;
+
+    let response = DatastoresResponse {
+        request_id,
+        cache: CacheDatastore {
+            enabled: cache_enabled,
+            url: sanitize_redis_url(&cache_url),
+            ttl_seconds: cache_ttl,
+            health: cache_health,
+        },
+        falkordb: FalkorDatastore {
+            url: gcfg.uri.clone(),
+            service_state,
+            health: falkor_health,
+            graphs: falkor_graphs,
+        },
+    };
+
+    Ok(HttpResponse::Ok().json(response))
+}
+
+// ── L3 toggle: flip REDIS_ENABLED in ag.env and (optionally) start/stop the
+//    redis container, then restart ag.service. The orchestration runs in a
+//    detached systemd-run scope so it survives our own restart. ─────────────
+
+#[derive(Deserialize)]
+pub(crate) struct ToggleL3Body {
+    pub enabled: bool,
+    #[serde(default)]
+    pub stop_container: bool,
+}
+
+/// Path of the env file systemd reads for ag.service. Override with `AG_ENV_FILE`.
+fn ag_env_file_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("AG_ENV_FILE") {
+        return std::path::PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    std::path::PathBuf::from(home).join(".config/ag/ag.env")
+}
+
+/// Path of the docker-compose file ag's WorkingDirectory points to. Override with `AG_COMPOSE_FILE`.
+fn ag_compose_file_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("AG_COMPOSE_FILE") {
+        return std::path::PathBuf::from(p);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/home/pde/ag"));
+    cwd.join("docker-compose.yml")
+}
+
+/// Replace (or append) the `REDIS_ENABLED=` line in the env file. Atomic write.
+fn set_redis_enabled_in_env_file(
+    path: &std::path::Path,
+    enabled: bool,
+) -> std::io::Result<()> {
+    let target = if enabled { "true" } else { "false" };
+    let new_line = format!("REDIS_ENABLED={target}");
+
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut found = false;
+    let mut out = String::with_capacity(existing.len() + new_line.len());
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        if !found && trimmed.starts_with("REDIS_ENABLED=") {
+            out.push_str(&new_line);
+            out.push('\n');
+            found = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !found {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&new_line);
+        out.push('\n');
+    }
+
+    let mut tmp = path.to_path_buf();
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("ag.env"));
+    name.push(".tmp");
+    tmp.set_file_name(name);
+    std::fs::write(&tmp, out)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Spawn a detached transient systemd-user unit that runs the L3 toggle
+/// orchestration so it survives ag.service being restarted.
+fn spawn_l3_toggle_orchestration(enabled: bool, stop_container: bool, compose_file: &std::path::Path) {
+    let compose = compose_file.display().to_string();
+    let script = if enabled {
+        // Going on: make sure the container is up (if requested), then restart ag.
+        format!(
+            "if [ \"{sc}\" = \"true\" ]; then \
+                docker compose -f '{compose}' up -d redis >/dev/null 2>&1 || true; \
+                for _ in $(seq 1 30); do \
+                    s=$(docker inspect -f '{{{{.State.Health.Status}}}}' ag-redis 2>/dev/null || echo missing); \
+                    [ \"$s\" = healthy ] && break; sleep 1; \
+                done; \
+            fi; \
+            sleep 1; systemctl --user restart ag.service",
+            sc = stop_container,
+            compose = compose
+        )
+    } else {
+        // Going off: restart ag first so it drops connections, then stop the container.
+        format!(
+            "sleep 1; systemctl --user restart ag.service; \
+             if [ \"{sc}\" = \"true\" ]; then \
+                 sleep 3; \
+                 docker compose -f '{compose}' stop redis >/dev/null 2>&1 || true; \
+             fi",
+            sc = stop_container,
+            compose = compose
+        )
+    };
+
+    let unit_name = format!(
+        "ag-l3-toggle-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    );
+
+    let _ = std::process::Command::new("systemd-run")
+        .args([
+            "--user",
+            "--quiet",
+            "--unit",
+            &unit_name,
+            "/bin/sh",
+            "-c",
+            &script,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn();
+}
+
+/// POST /monitor/datastores/l3-toggle
+/// Body: `{ "enabled": bool, "stop_container": bool }`
+pub(crate) async fn post_datastores_l3_toggle(
+    body: web::Json<ToggleL3Body>,
+) -> Result<HttpResponse, Error> {
+    let enabled = body.enabled;
+    let stop_container = body.stop_container;
+
+    let env_file = ag_env_file_path();
+    let compose_file = ag_compose_file_path();
+
+    if let Err(e) = set_redis_enabled_in_env_file(&env_file, enabled) {
+        return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+            "ok": false,
+            "error": format!("failed to update {}: {e}", env_file.display()),
+        })));
+    }
+
+    spawn_l3_toggle_orchestration(enabled, stop_container, &compose_file);
+
+    Ok(HttpResponse::Accepted().json(serde_json::json!({
+        "ok": true,
+        "enabled": enabled,
+        "stop_container": stop_container,
+        "env_file": env_file.display().to_string(),
+        "message": "ag.service is restarting; the page will refresh shortly",
+    })))
+}
+
 /// POST /cache/clear
 /// Clear all caches (L1, L2, and optionally L3/Redis)
 pub(crate) async fn clear_cache() -> Result<HttpResponse, Error> {

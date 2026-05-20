@@ -27,6 +27,19 @@
 #   docker compose --profile core up -d         # Just Redis + Ollama
 #   docker compose --profile observability up -d # Just observability stack
 #   docker compose --profile docling up -d      # Docling extractor sidecar
+#
+# Host-port overrides (when the default ports clash with something on the host):
+#   Put any of these in the project's `.env` file next to this compose file
+#   (Docker Compose reads it automatically). Container-internal ports never change.
+#
+#     REDIS_HOST_PORT=16379
+#     PROMETHEUS_HOST_PORT=19090
+#     GRAFANA_HOST_PORT=13001
+#     LOKI_HOST_PORT=13100
+#     TEMPO_HOST_PORT=13200
+#     TEMPO_OTLP_HOST_PORT=14317
+#     OTEL_HTTP_HOST_PORT=14318
+#     OTEL_METRICS_HOST_PORT=18888
 
 services:
   # ═══════════════════════════════════════════════════════════════
@@ -42,7 +55,7 @@ services:
     restart: unless-stopped
     profiles: ["", "core"]
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -62,7 +75,7 @@ services:
     restart: unless-stopped
     profiles: ["", "observability"]
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:
       - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -84,7 +97,7 @@ services:
     restart: unless-stopped
     profiles: ["", "observability"]
     ports:
-      - "3001:3002"  # 3001 external (Qodo uses 3000)
+      - "${GRAFANA_HOST_PORT:-3001}:3002"  # 3001 external (Qodo uses 3000)
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -114,7 +127,7 @@ services:
     restart: unless-stopped
     profiles: ["", "observability"]
     ports:
-      - "3100:3100"
+      - "${LOKI_HOST_PORT:-3100}:3100"
     volumes:
       - ./ops/observability/loki/config.yml:/etc/loki/config.yml:ro
       - loki-data:/loki
@@ -131,8 +144,8 @@ services:
     restart: unless-stopped
     profiles: ["", "observability"]
     ports:
-      - "3200:3200"  # Tempo API
-      - "4317:4317"  # OTLP gRPC
+      - "${TEMPO_HOST_PORT:-3200}:3200"  # Tempo API
+      - "${TEMPO_OTLP_HOST_PORT:-4317}:4317"  # OTLP gRPC
     volumes:
       - ./ops/observability/tempo/config.yml:/etc/tempo/config.yml:ro
       - tempo-data:/tmp/tempo
@@ -153,8 +166,8 @@ services:
     restart: unless-stopped
     profiles: ["", "observability"]
     ports:
-      - "4318:4318"  # OTLP HTTP
-      - "8888:8888"  # Metrics
+      - "${OTEL_HTTP_HOST_PORT:-4318}:4318"  # OTLP HTTP
+      - "${OTEL_METRICS_HOST_PORT:-8888}:8888"  # Metrics
       - "13133:13133"  # Health check
     volumes:
       - ./ops/observability/otel-collector.yml:/etc/otelcol/config.yaml:ro

@@ -471,6 +471,7 @@ pub fn Header() -> Element {
                             | Route::MonitorAgentic {}
                             | Route::MonitorRequests {}
                             | Route::MonitorCache {}
+                            | Route::MonitorDatastores {}
                             | Route::MonitorIndex {}
                             | Route::MonitorRateLimits {}
                             | Route::MonitorLogs {}

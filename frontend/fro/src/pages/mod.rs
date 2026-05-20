@@ -43,10 +43,10 @@ pub use hardware::ConfigHardware;
 pub use home::Home;
 pub use memories::ConfigMemories;
 pub use monitor::{
-    MonitorAgSystemd, MonitorAgentic, MonitorCache, MonitorChunks, MonitorDocker,
-    MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
-    MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits,
-    MonitorRequests, MonitorTip, MonitorTools,
+    MonitorAgSystemd, MonitorAgentic, MonitorCache, MonitorChunks, MonitorDatastores,
+    MonitorDocker, MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs,
+    MonitorObservations, MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag,
+    MonitorRateLimits, MonitorRequests, MonitorTip, MonitorTools,
 };
 pub use ner::ConfigNer;
 pub use not_found::PageNotFound;

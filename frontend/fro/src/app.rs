@@ -8,10 +8,10 @@ use crate::pages::{
     DocuBpeUnigram, DocuCanonicalization, DocuEmbeddings, DocuEntitiesProduction, DocuIndex,
     DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv,
     DocuTantivy, DocuThreads, DocuTokenizersGeneral, Home, MonitorAgSystemd, MonitorAgentic,
-    MonitorCache, MonitorChunks, MonitorDocker, MonitorGrafanaServices, MonitorIndex,
-    MonitorKnowledgeGraph, MonitorLogs, MonitorObservations, MonitorOnnx, MonitorOnnxStatus,
-    MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip, MonitorTools,
-    PageNotFound, Parameters, Train,
+    MonitorCache, MonitorChunks, MonitorDatastores, MonitorDocker, MonitorGrafanaServices,
+    MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations, MonitorOnnx,
+    MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip,
+    MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 
@@ -85,6 +85,8 @@ pub enum Route {
         MonitorRequests {},
         #[route("/monitor/cache")]
         MonitorCache {},
+        #[route("/monitor/datastores")]
+        MonitorDatastores {},
         #[route("/monitor/chunks")]
         MonitorChunks {},
         #[route("/monitor/index")]
