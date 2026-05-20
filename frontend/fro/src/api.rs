@@ -2176,6 +2176,33 @@ where
 }
 
 // ============================================================================
+// RUNTIME CAPABILITIES API
+// ============================================================================
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentMode {
+    Systemd,
+    DockerCompose,
+    Container,
+    Bin,
+    Unknown,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct RuntimeCapabilities {
+    pub deployment_mode: DeploymentMode,
+    pub can_manage_compose: bool,
+    pub can_view_journal: bool,
+    #[serde(default)]
+    pub managed_compose_file: Option<String>,
+}
+
+pub async fn fetch_capabilities() -> Result<RuntimeCapabilities, String> {
+    fetch_json("/runtime/capabilities").await
+}
+
+// ============================================================================
 // RUNTIME SETTINGS API
 // ============================================================================
 

@@ -38,6 +38,13 @@ pub fn MonitorDatastores() -> Element {
     let also_container = use_signal(|| false);
     let submitting = use_signal(|| false);
     let show_restarting = use_signal(|| false);
+    let mut can_manage_compose = use_signal(|| false);
+
+    use_future(move || async move {
+        if let Ok(caps) = api::fetch_capabilities().await {
+            can_manage_compose.set(caps.can_manage_compose);
+        }
+    });
 
     {
         let mut state = state;
@@ -133,7 +140,7 @@ pub fn MonitorDatastores() -> Element {
                     title: Some("L3 Cache — Redis".to_string()),
                     subtitle: Some("Optional · ephemeral · search-result cache".to_string()),
                     refresh: Some("10s".to_string()),
-                    {cache_section(&data.cache, also_container, submitting, show_restarting, show_container_info)}
+                    {cache_section(&data.cache, also_container, submitting, show_restarting, show_container_info, can_manage_compose())}
                 }
                 Panel {
                     title: Some("FalkorDB — Knowledge-graph store".to_string()),
@@ -170,6 +177,7 @@ fn cache_section(
     mut submitting: Signal<bool>,
     mut show_restarting: Signal<bool>,
     mut show_container_info: Signal<bool>,
+    can_manage_compose: bool,
 ) -> Element {
     let enabled_now = c.enabled;
     let new_enabled = !enabled_now;
@@ -196,8 +204,9 @@ fn cache_section(
             match res {
                 Ok(_) => {
                     show_restarting.set(true);
-                    // ag.service restarts; let the auto-refetch loop catch up. Hide overlay after ~8s.
-                    TimeoutFuture::new(8_000).await;
+                    // The L3 cache is swapped in-process; give the auto-refetch
+                    // loop a moment to pick up the new health state.
+                    TimeoutFuture::new(2_500).await;
                     show_restarting.set(false);
                     submitting.set(false);
                 }
@@ -237,36 +246,38 @@ fn cache_section(
                 {health_panel(&c.health)}
             } else {
                 div { class: "text-xs text-gray-400",
-                    "L3 cache disabled — flip the toggle below to set REDIS_ENABLED=true and restart ag."
+                    "L3 cache disabled — flip the toggle below to enable it. Takes effect immediately, no restart."
                 }
             }
 
             div { class: "border-t border-gray-700 pt-3 mt-2 space-y-2",
-                div { class: "flex items-center gap-2",
-                    label { class: "flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none",
-                        input {
-                            r#type: "checkbox",
-                            class: "cursor-pointer",
-                            checked: also_container(),
-                            oninput: move |evt| {
-                                also_container.set(evt.value() == "true" || evt.value() == "on");
-                            },
+                if can_manage_compose {
+                    div { class: "flex items-center gap-2",
+                        label { class: "flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none",
+                            input {
+                                r#type: "checkbox",
+                                class: "cursor-pointer",
+                                checked: also_container(),
+                                oninput: move |evt| {
+                                    also_container.set(evt.value() == "true" || evt.value() == "on");
+                                },
+                            }
+                            "{checkbox_label}"
                         }
-                        "{checkbox_label}"
-                    }
-                    button {
-                        class: PARAM_ICON_BUTTON_CLASS,
-                        style: PARAM_ICON_BUTTON_STYLE,
-                        onclick: move |_| show_container_info.set(true),
-                        title: "When (not) to tick this",
-                        svg {
-                            class: INFO_ICON_SVG_CLASS,
-                            view_box: "0 0 20 20",
-                            fill: "none",
-                            stroke: "currentColor",
-                            circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
-                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                        button {
+                            class: PARAM_ICON_BUTTON_CLASS,
+                            style: PARAM_ICON_BUTTON_STYLE,
+                            onclick: move |_| show_container_info.set(true),
+                            title: "When (not) to tick this",
+                            svg {
+                                class: INFO_ICON_SVG_CLASS,
+                                view_box: "0 0 20 20",
+                                fill: "none",
+                                stroke: "currentColor",
+                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                            }
                         }
                     }
                 }
@@ -279,7 +290,7 @@ fn cache_section(
                         if submitting() { "Submitting…" } else { "{action_label}" }
                     }
                     span { class: "text-[10px] text-gray-400",
-                        "Writes REDIS_ENABLED to ~/.config/ag/ag.env and restarts ag.service."
+                        "Saves REDIS_ENABLED to overrides.json and hot-swaps the cache in place. No restart."
                     }
                 }
             }
@@ -287,16 +298,16 @@ fn cache_section(
     }
 }
 
-/// Overlay shown while ag.service is being restarted by the orchestration script.
+/// Brief overlay shown while the L3 cache is being swapped in-process.
 fn restarting_overlay() -> Element {
     rsx! {
         div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 pointer-events-auto",
             div { class: "bg-gray-800 border border-gray-600 rounded-lg p-6 max-w-md text-center shadow-xl",
                 div { class: "text-base font-semibold text-gray-100 mb-2",
-                    "Restarting ag.service…"
+                    "Applying L3 change…"
                 }
                 p { class: "text-sm text-gray-300",
-                    "The L3 setting has been written to ag.env and ag is being restarted. This page will refresh on its own once ag is back up."
+                    "The setting has been saved. The cache is being swapped in place; this panel will refresh momentarily."
                 }
             }
         }

@@ -38,6 +38,7 @@ pub mod monitoring;
 pub mod tools;
 pub use monitoring::performance_analysis;
 pub use monitoring::trace_middleware;
+pub mod capabilities;
 pub mod file_watcher;
 pub mod graph;
 pub mod lifecycle;

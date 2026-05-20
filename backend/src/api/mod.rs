@@ -1135,6 +1135,10 @@ pub fn start_api_server(
                 web::delete().to(runtime_routes::delete_setting),
             )
             .route(
+                "/runtime/capabilities",
+                web::get().to(runtime_routes::get_capabilities),
+            )
+            .route(
                 "/runtime/actions/restart-self",
                 web::post().to(runtime_routes::post_restart_self),
             )

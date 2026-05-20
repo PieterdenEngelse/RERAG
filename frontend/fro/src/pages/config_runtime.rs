@@ -14,6 +14,9 @@ use crate::{
         config_nav::{ConfigNav, ConfigTab},
         monitor::*,
     },
+    pages::hardware::constants::{
+        INFO_ICON_SVG_CLASS, PARAM_ICON_BUTTON_CLASS, PARAM_ICON_BUTTON_STYLE,
+    },
 };
 use dioxus::prelude::*;
 use std::collections::BTreeMap;
@@ -36,6 +39,7 @@ pub fn ConfigRuntime() -> Element {
     let mut reload_tick = use_signal(|| 0u32);
     let mut restart_pending = use_signal(|| false);
     let mut restarting = use_signal(|| false);
+    let mut show_info = use_signal(|| false);
 
     use_future(move || async move {
         let _ = reload_tick();
@@ -88,11 +92,32 @@ pub fn ConfigRuntime() -> Element {
             }
             ConfigNav { active: ConfigTab::Runtime }
 
-            h1 { class: "text-xl font-semibold text-gray-100", "Runtime settings" }
+            div { class: "flex items-center gap-2",
+                h1 { class: "text-xl font-semibold text-gray-100", "Runtime settings" }
+                button {
+                    class: PARAM_ICON_BUTTON_CLASS,
+                    style: PARAM_ICON_BUTTON_STYLE,
+                    onclick: move |_| show_info.set(!show_info()),
+                    title: "About runtime settings",
+                    svg {
+                        class: INFO_ICON_SVG_CLASS,
+                        view_box: "0 0 20 20",
+                        fill: "none",
+                        stroke: "currentColor",
+                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                        circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                    }
+                }
+            }
             p { class: "text-sm text-gray-300",
                 "Every setting ag knows about. Overrides save to "
                 span { class: "font-mono", "<base_dir>/overrides.json" }
                 " and take effect immediately for hot-reloadable keys, or after a restart for boot-bound ones."
+            }
+
+            if show_info() {
+                {info_modal(show_info)}
             }
 
             if let Some(rb) = &snap.rollback {
@@ -432,5 +457,88 @@ fn format_category(cat: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+/// About-this-page modal — written in the app's end-user voice.
+fn info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100", "About runtime settings" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "Every setting ag knows about appears here, grouped by category. Changes you make are saved as runtime overrides; they sit on top of the install-time env values without replacing them."
+                    }
+                    p {
+                        strong { "Precedence. " }
+                        "When ag needs a setting it consults, in order: your "
+                        span { class: "font-mono", "override" }
+                        " (if set on this page), then the "
+                        span { class: "font-mono", "env" }
+                        " value (from the env file used at startup), then the hard-coded "
+                        span { class: "font-mono", "default" }
+                        ". The "
+                        span { class: "px-1 rounded bg-amber-900/40 text-amber-300", "override" }
+                        " / "
+                        span { class: "px-1 rounded bg-blue-900/40 text-blue-300", "env" }
+                        " / "
+                        span { class: "px-1 rounded bg-gray-700 text-gray-300", "default" }
+                        " / "
+                        span { class: "px-1 rounded bg-gray-800 text-gray-400", "unset" }
+                        " badge on each row tells you which one is winning."
+                    }
+                    p {
+                        strong { "Hot vs restart-required. " }
+                        "Some settings take effect immediately — the relevant subsystem is rebuilt in place. Others are read once at startup and can only change after a restart. The "
+                        span { class: "px-1 rounded bg-orange-900/40 text-orange-300", "restart" }
+                        " badge marks the boot-bound keys; saving one of those triggers a banner with a "
+                        em { "Restart now" }
+                        " button. The restart is a "
+                        em { "self re-exec" }
+                        " — ag replaces its own process in place, no systemd or docker required."
+                    }
+                    p {
+                        strong { "Where overrides are saved. " }
+                        "All overrides live in a single JSON file at "
+                        span { class: "font-mono", "<base_dir>/overrides.json" }
+                        ". The install-time env file is never modified by the running app."
+                    }
+                    p {
+                        strong { "Safety net. " }
+                        "If a saved override prevents ag from starting on the next boot, ag detects the failure, sets the bad file aside, and starts with no overrides. You'll see a banner at the top of this page pointing to the rolled-back file so you can review and re-apply the good keys one at a time."
+                    }
+                    p {
+                        strong { "Unregistered overrides. " }
+                        "If you set a key ag doesn't currently know about (older version, custom name, …) it still saves and is shown in the "
+                        em { "Unregistered overrides" }
+                        " panel at the bottom — without validation, but visible so nothing hides."
+                    }
+                    p {
+                        strong { "Chunker keys. " }
+                        "The CHUNK_* keys hot-swap in process, but the dedicated "
+                        em { "Chunker" }
+                        " config page persists its values to the database — and DB-saved values win at next startup. For permanent chunker changes use the Chunker page."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
     }
 }

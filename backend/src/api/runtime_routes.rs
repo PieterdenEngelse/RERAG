@@ -90,6 +90,16 @@ pub async fn delete_setting(path: web::Path<String>) -> Result<HttpResponse> {
     }
 }
 
+/// GET /runtime/capabilities — what this deployment can do.
+pub async fn get_capabilities() -> Result<HttpResponse> {
+    match crate::capabilities::global() {
+        Some(caps) => Ok(HttpResponse::Ok().json(&*caps)),
+        None => Ok(HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "capabilities not detected yet",
+        }))),
+    }
+}
+
 /// POST /runtime/actions/restart-self — drain briefly, then re-exec.
 /// Universal: works in bin, systemd, container, anywhere.
 pub async fn post_restart_self() -> Result<HttpResponse> {
