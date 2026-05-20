@@ -7,14 +7,32 @@
 //! - Configurable log levels
 
 use super::config::MonitoringConfig;
+use std::sync::OnceLock;
 use tracing_appender::non_blocking;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
+    reload,
     util::SubscriberInitExt,
     EnvFilter,
 };
+
+/// Type-erased reload hook for the global `EnvFilter`. Installed by
+/// `init_tracing`; consulted by [`reload_filter`].
+type ReloadFn = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+static FILTER_RELOAD: OnceLock<ReloadFn> = OnceLock::new();
+
+/// Apply a new tracing-filter directive at runtime — same syntax as
+/// `RUST_LOG` (e.g. `"info"`, `"debug,ag=trace"`). Returns an error if the
+/// directive cannot be parsed, or if `init_tracing` did not install a
+/// reload hook (i.e. monitoring was disabled).
+pub fn reload_filter(new_directive: &str) -> Result<(), String> {
+    let hook = FILTER_RELOAD
+        .get()
+        .ok_or_else(|| "tracing filter reload not installed".to_string())?;
+    hook(new_directive)
+}
 
 /// Initialize tracing subscriber
 ///
@@ -36,11 +54,20 @@ pub fn init_tracing(
     // Ensure log directory exists
     config.ensure_log_dir()?;
 
-    // Build env filter from RUST_LOG
+    // Build env filter from RUST_LOG, wrapped in a reload layer so the live
+    // log level can be changed via `reload_filter(...)` (driven by the
+    // settings subscriber for `RUST_LOG`).
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let (env_filter_layer, reload_handle) = reload::Layer::new(env_filter);
+    let _ = FILTER_RELOAD.set(Box::new(move |new: &str| {
+        let new_filter = EnvFilter::try_new(new).map_err(|e| format!("invalid filter: {e}"))?;
+        reload_handle
+            .reload(new_filter)
+            .map_err(|e| format!("reload failed: {e}"))
+    }));
 
-    let registry = tracing_subscriber::registry().with(env_filter);
+    let registry = tracing_subscriber::registry().with(env_filter_layer);
 
     // Console layer (always enabled)
     if config.enable_console_logging {

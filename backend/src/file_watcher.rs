@@ -4,15 +4,102 @@
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::config::ChunkerMode;
 use crate::index;
 use crate::monitoring::metrics;
 use crate::retriever::Retriever;
+
+/// Specification needed to (re-)spawn a watcher. Kept in the registry so the
+/// settings subscriber can rebuild every watcher with current `FILE_WATCHER_*`
+/// values without re-collecting the corpus list.
+#[derive(Clone)]
+struct WatcherSpec {
+    watch_dir: String,
+    retriever: Arc<Mutex<Retriever>>,
+    corpus_slug: String,
+    db_path: String,
+}
+
+/// Spec + the currently-running task (if any). When the subscriber fires we
+/// `abort()` the task, drop the handle, then spawn fresh from the spec.
+struct WatcherEntry {
+    spec: WatcherSpec,
+    handle: Option<JoinHandle<()>>,
+}
+
+static WATCHER_REGISTRY: OnceLock<Mutex<Vec<WatcherEntry>>> = OnceLock::new();
+
+fn registry() -> &'static Mutex<Vec<WatcherEntry>> {
+    WATCHER_REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Abort every running watcher task and spawn fresh ones using the current
+/// effective `FileWatcherConfig` (which itself reads through the settings
+/// layer). Called by the `FILE_WATCHER_ENABLED` / `FILE_WATCHER_DEBOUNCE_MS`
+/// subscribers.
+pub fn reload_all_watchers() {
+    let mut reg = registry().lock().unwrap();
+    for entry in reg.iter_mut() {
+        if let Some(h) = entry.handle.take() {
+            h.abort();
+        }
+    }
+
+    let base_config = FileWatcherConfig::from_env();
+    if !base_config.enabled {
+        info!(
+            "file_watcher: FILE_WATCHER_ENABLED=false — {} watcher(s) aborted, not respawning",
+            reg.len()
+        );
+        return;
+    }
+
+    for entry in reg.iter_mut() {
+        let mut cfg = base_config.clone();
+        cfg.corpus_slug = entry.spec.corpus_slug.clone();
+        cfg.db_path = entry.spec.db_path.clone();
+        if let Some(handle) = spawn_watcher_task(
+            &entry.spec.watch_dir,
+            Arc::clone(&entry.spec.retriever),
+            cfg,
+        ) {
+            entry.handle = Some(handle);
+        }
+    }
+    info!(
+        "file_watcher: reloaded {} watcher(s) with debounce_ms={}",
+        reg.len(),
+        base_config.debounce_ms
+    );
+}
+
+/// Internal spawn primitive — does the directory-prep + `actix_web::rt::spawn`,
+/// returns the task handle. Does NOT touch the registry. Used by the public
+/// entry points so they can share the actual task body.
+fn spawn_watcher_task(
+    watch_dir: &str,
+    retriever: Arc<Mutex<Retriever>>,
+    config: FileWatcherConfig,
+) -> Option<JoinHandle<()>> {
+    let watch_path = watch_dir.to_string();
+    if let Err(e) = std::fs::create_dir_all(&watch_path) {
+        error!("Failed to create watch directory {}: {}", watch_path, e);
+        return None;
+    }
+    info!("👁️ Starting file watcher on: {}", watch_path);
+    let handle = actix_web::rt::spawn(async move {
+        if let Err(e) = run_watcher(&watch_path, retriever, config).await {
+            error!("File watcher error: {}", e);
+        }
+    });
+    Some(handle)
+}
 
 /// Configuration for the file watcher
 #[derive(Debug, Clone)]
@@ -32,13 +119,8 @@ pub struct FileWatcherConfig {
 impl FileWatcherConfig {
     pub fn from_env() -> Self {
         Self {
-            enabled: std::env::var("FILE_WATCHER_ENABLED")
-                .map(|v| v.to_lowercase() == "true" || v == "1")
-                .unwrap_or(true),
-            debounce_ms: std::env::var("FILE_WATCHER_DEBOUNCE_MS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(500),
+            enabled: crate::settings::effective_bool("FILE_WATCHER_ENABLED", true),
+            debounce_ms: crate::settings::effective_u64("FILE_WATCHER_DEBOUNCE_MS", 500),
             chunker_mode: ChunkerMode::from_env(),
             corpus_slug: "default".to_string(),
             db_path: String::new(),
@@ -46,34 +128,39 @@ impl FileWatcherConfig {
     }
 }
 
-/// Start the file watcher in a background task
+/// Start a file watcher and register it for hot-reload.
+///
+/// The returned handle is `None` even on success — the task is owned by the
+/// internal registry so that the `FILE_WATCHER_*` settings subscribers can
+/// abort + respawn it. Callers should ignore the return value.
 pub fn start_file_watcher(
     watch_dir: &str,
     retriever: Arc<Mutex<Retriever>>,
     config: FileWatcherConfig,
-) -> Option<tokio::task::JoinHandle<()>> {
+) -> Option<JoinHandle<()>> {
+    let spec = WatcherSpec {
+        watch_dir: watch_dir.to_string(),
+        retriever: Arc::clone(&retriever),
+        corpus_slug: config.corpus_slug.clone(),
+        db_path: config.db_path.clone(),
+    };
+
     if !config.enabled {
         info!("📁 File watcher disabled (set FILE_WATCHER_ENABLED=true to enable)");
+        // Register the spec anyway so a later enable + reload can spawn it.
+        registry()
+            .lock()
+            .unwrap()
+            .push(WatcherEntry { spec, handle: None });
         return None;
     }
 
-    let watch_path = watch_dir.to_string();
-
-    // Ensure the directory exists
-    if let Err(e) = std::fs::create_dir_all(&watch_path) {
-        error!("Failed to create watch directory {}: {}", watch_path, e);
-        return None;
-    }
-
-    info!("👁️ Starting file watcher on: {}", watch_path);
-
-    let handle = actix_web::rt::spawn(async move {
-        if let Err(e) = run_watcher(&watch_path, retriever, config).await {
-            error!("File watcher error: {}", e);
-        }
+    let handle = spawn_watcher_task(watch_dir, retriever, config)?;
+    registry().lock().unwrap().push(WatcherEntry {
+        spec,
+        handle: Some(handle),
     });
-
-    Some(handle)
+    None
 }
 
 async fn run_watcher(

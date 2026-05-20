@@ -112,6 +112,15 @@ async fn main() -> std::io::Result<()> {
         let settings = ag::settings::Settings::load(overrides_path);
         ag::settings::install_global(settings, std::sync::Arc::new(recovery));
 
+        // Capabilities — one-shot detection of what this deployment can do.
+        // Used by the UI to hide controls that would silently no-op here.
+        let caps = ag::capabilities::Capabilities::detect();
+        info!(
+            "deployment: mode={:?} can_manage_compose={} can_view_journal={}",
+            caps.deployment_mode, caps.can_manage_compose, caps.can_view_journal
+        );
+        ag::capabilities::install_global(std::sync::Arc::new(caps));
+
         // Mark the boot "known good" after a short window of uptime — enough
         // to clear startup hazards while remaining well within the user's
         // patience window if they're staring at a broken page.
@@ -536,10 +545,7 @@ async fn main() -> std::io::Result<()> {
             tokio::spawn(async move {
                 let enabled = ag::settings::effective_bool("REDIS_ENABLED", false);
                 let new_cache = if enabled {
-                    let url = ag::settings::effective_or(
-                        "REDIS_URL",
-                        "redis://127.0.0.1:6379/",
-                    );
+                    let url = ag::settings::effective_or("REDIS_URL", "redis://127.0.0.1:6379/");
                     let ttl = ag::settings::effective_u64("REDIS_TTL", 3600);
                     match ag::cache::redis_cache::RedisCache::new(&url, ttl).await {
                         Ok(c) => Some(c),
@@ -563,6 +569,62 @@ async fn main() -> std::io::Result<()> {
         s.subscribe("REDIS_URL", move |_| rebuild_b());
         s.subscribe("REDIS_TTL", move |_| rebuild_c());
         info!("✓ L3 hot-reload subscribers registered (REDIS_ENABLED / URL / TTL)");
+
+        // RUST_LOG → live tracing-filter reload via the handle installed in
+        // `init_tracing`. The directive accepts the same syntax as the env
+        // var (e.g. "info", "debug,ag=trace").
+        s.subscribe(
+            "RUST_LOG",
+            move |new| match ag::monitoring::tracing_config::reload_filter(new) {
+                Ok(()) => info!("RUST_LOG reloaded: {new}"),
+                Err(e) => warn!("RUST_LOG reload failed: {e}"),
+            },
+        );
+        info!("✓ RUST_LOG hot-reload subscriber registered");
+
+        // CHUNKER_MODE / CHUNK_TARGET_SIZE / CHUNK_MAX_SIZE / CHUNK_OVERLAP →
+        // rebuild the in-memory chunker config from env + overrides. DB-saved
+        // values from the Chunker config page still win at next startup.
+        let reload_chunker = std::sync::Arc::new(|| {
+            ag::db::chunk_settings::reload_global_from_env_and_overrides();
+            info!("chunker config reloaded from env + overrides");
+        });
+        let rc_a = std::sync::Arc::clone(&reload_chunker);
+        let rc_b = std::sync::Arc::clone(&reload_chunker);
+        let rc_c = std::sync::Arc::clone(&reload_chunker);
+        let rc_d = std::sync::Arc::clone(&reload_chunker);
+        s.subscribe("CHUNKER_MODE", move |_| rc_a());
+        s.subscribe("CHUNK_TARGET_SIZE", move |_| rc_b());
+        s.subscribe("CHUNK_MAX_SIZE", move |_| rc_c());
+        s.subscribe("CHUNK_OVERLAP", move |_| rc_d());
+        info!("✓ Chunker hot-reload subscribers registered (mode + sizes)");
+
+        // OTEL_TRACES_ENABLED / OTEL_EXPORTER_OTLP_ENDPOINT → tear down the
+        // current OTel tracer provider, build a new one from the current
+        // effective config, install it globally.
+        let reload_otel = std::sync::Arc::new(|| {
+            let cfg = ag::monitoring::otel_config::OtelConfig::from_env();
+            if let Err(e) = ag::monitoring::otel_config::reload_otel(&cfg) {
+                warn!("OTel reload failed: {e}");
+            }
+        });
+        let ot_a = std::sync::Arc::clone(&reload_otel);
+        let ot_b = std::sync::Arc::clone(&reload_otel);
+        s.subscribe("OTEL_TRACES_ENABLED", move |_| ot_a());
+        s.subscribe("OTEL_EXPORTER_OTLP_ENDPOINT", move |_| ot_b());
+        info!("✓ OTel hot-reload subscribers registered (enabled + endpoint)");
+
+        // FILE_WATCHER_ENABLED / FILE_WATCHER_DEBOUNCE_MS → abort every
+        // registered watcher task and re-spawn from the saved specs using
+        // the new config.
+        let reload_watchers = std::sync::Arc::new(|| {
+            ag::file_watcher::reload_all_watchers();
+        });
+        let fw_a = std::sync::Arc::clone(&reload_watchers);
+        let fw_b = std::sync::Arc::clone(&reload_watchers);
+        s.subscribe("FILE_WATCHER_ENABLED", move |_| fw_a());
+        s.subscribe("FILE_WATCHER_DEBOUNCE_MS", move |_| fw_b());
+        info!("✓ File-watcher hot-reload subscribers registered (enabled + debounce)");
     }
 
     // Periodically persist the L1 search cache so it survives a crash or

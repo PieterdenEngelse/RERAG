@@ -65,6 +65,18 @@ pub fn global_config() -> ChunkerConfig {
     config_lock().read().unwrap().clone()
 }
 
+/// Rebuild the in-memory chunker config from environment + runtime overrides
+/// (`ChunkerConfig::from_env`) and overwrite the global cached value.
+///
+/// Used by the `CHUNKER_MODE` / `CHUNK_*` settings subscribers. Does NOT
+/// write back to the SQLite-saved config — DB values still win at the
+/// next startup. The runtime override is therefore an *in-process* tweak;
+/// persistent changes belong on the Chunker config page.
+pub fn reload_global_from_env_and_overrides() {
+    let new_cfg = ChunkerConfig::from_env();
+    *config_lock().write().unwrap() = new_cfg;
+}
+
 /// Returns the active chunker mode from SQLite-backed config.
 pub fn global_chunker_mode() -> crate::config::ChunkerMode {
     config_lock()

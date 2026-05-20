@@ -3,7 +3,7 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::runtime::Tokio as OtelTokioRuntime;
 use opentelemetry_sdk::trace::TracerProvider;
 use std::env;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
 pub struct OtelConfig {
@@ -21,10 +21,7 @@ impl OtelConfig {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
 
-        let enabled = env::var("OTEL_TRACES_ENABLED")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse::<bool>()
-            .unwrap_or(false);
+        let enabled = crate::settings::effective_bool("OTEL_TRACES_ENABLED", false);
 
         OtelConfig {
             service_name: env::var("OTEL_SERVICE_NAME")
@@ -37,8 +34,10 @@ impl OtelConfig {
                 .unwrap_or_else(|_| "false".to_string())
                 .parse::<bool>()
                 .unwrap_or(false),
-            otlp_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-                .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string()),
+            otlp_endpoint: crate::settings::effective_or(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4317",
+            ),
             insecure: env::var("OTEL_EXPORTER_OTLP_INSECURE")
                 .unwrap_or_else(|_| "true".to_string()) // Default true for localhost dev
                 .parse::<bool>()
@@ -131,4 +130,81 @@ impl Drop for OtelGuard {
             global::shutdown_tracer_provider();
         }
     }
+}
+
+/// Reload the global OpenTelemetry tracer provider in place.
+///
+/// Shuts down the currently-installed provider (flushing pending batches),
+/// then builds a new one from `config` and installs it globally. Used by the
+/// settings subscribers for `OTEL_TRACES_ENABLED` and
+/// `OTEL_EXPORTER_OTLP_ENDPOINT`.
+pub fn reload_otel(config: &OtelConfig) -> Result<(), Box<dyn std::error::Error>> {
+    // Flush + tear down the currently-installed provider before replacing it.
+    info!("Reloading OpenTelemetry tracer provider…");
+    global::shutdown_tracer_provider();
+
+    if !config.enabled {
+        // Install an empty provider so the global handle remains valid and
+        // subsequent spans become no-ops.
+        let empty = TracerProvider::builder().build();
+        global::set_tracer_provider(empty);
+        info!("OpenTelemetry reload: disabled (no-op provider installed)");
+        return Ok(());
+    }
+
+    let mut provider_builder = TracerProvider::builder();
+
+    if config.otlp_export {
+        match opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_endpoint(&config.otlp_endpoint)
+            .build_span_exporter()
+        {
+            Ok(otlp_exporter) => {
+                let batch_processor = opentelemetry_sdk::trace::BatchSpanProcessor::builder(
+                    otlp_exporter,
+                    OtelTokioRuntime,
+                )
+                .with_max_export_batch_size(512)
+                .with_max_queue_size(2048)
+                .build();
+                provider_builder = provider_builder.with_span_processor(batch_processor);
+                info!("OTLP exporter reconfigured: {}", config.otlp_endpoint);
+            }
+            Err(e) => warn!("OTel reload: OTLP exporter build failed: {e}"),
+        }
+    }
+
+    if config.console_export {
+        let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
+        let batch_processor = opentelemetry_sdk::trace::BatchSpanProcessor::builder(
+            stdout_exporter,
+            OtelTokioRuntime,
+        )
+        .build();
+        provider_builder = provider_builder.with_span_processor(batch_processor);
+    }
+
+    let resource = opentelemetry_sdk::Resource::new(vec![
+        opentelemetry::KeyValue::new("service.name", config.service_name.clone()),
+        opentelemetry::KeyValue::new(
+            "service.version",
+            env::var("OTEL_SERVICE_VERSION")
+                .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
+        ),
+        opentelemetry::KeyValue::new(
+            "deployment.environment",
+            env::var("OTEL_ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
+        ),
+    ]);
+
+    let trace_config = opentelemetry_sdk::trace::Config::default().with_resource(resource);
+    let provider = provider_builder.with_config(trace_config).build();
+    global::set_tracer_provider(provider);
+
+    info!(
+        "OpenTelemetry reloaded: enabled=true endpoint={} otlp_export={} console_export={}",
+        config.otlp_endpoint, config.otlp_export, config.console_export
+    );
+    Ok(())
 }
