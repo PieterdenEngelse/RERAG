@@ -2339,6 +2339,33 @@ pub async fn post_restart_self() -> Result<RestartResponse, String> {
         .map_err(|e| format!("parse: {e}"))
 }
 
+/// Wait for ag to come back up after a self-restart. Polls
+/// `/monitoring/health` every `interval_ms` until we observe the server
+/// become unreachable (the restart in progress) and then reachable again
+/// (the restart completed). Bounded by `timeout_ms` overall.
+///
+/// Returns `Err` if the timeout fires before the up→down→up transition is
+/// observed.
+pub async fn wait_for_restart(timeout_ms: u64, interval_ms: u64) -> Result<(), String> {
+    let url = api_url("/monitoring/health");
+    let max_iters = (timeout_ms / interval_ms).max(1);
+    let mut saw_unreachable = false;
+
+    for _ in 0..max_iters {
+        gloo_timers::future::TimeoutFuture::new(interval_ms as u32).await;
+        let reachable = matches!(
+            gloo_net::http::Request::get(&url).send().await,
+            Ok(r) if (200..=299).contains(&r.status())
+        );
+        if !reachable {
+            saw_unreachable = true;
+        } else if saw_unreachable {
+            return Ok(());
+        }
+    }
+    Err(format!("restart timed out after {timeout_ms} ms"))
+}
+
 // ============================================================================
 // AGENTIC MONITORING API
 // ============================================================================

@@ -51,7 +51,7 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
     // ── Chunker ────────────────────────────────────────────────────────────
     KnownKey {
         key: "CHUNKER_MODE",
-        description: "Chunking strategy: fixed, lightweight, or semantic. Hot-reloaded in-process; values saved on the Chunker config page (DB) win at next startup.",
+        description: "Chunking strategy: fixed, lightweight, or semantic. Hot-reloaded in-process. Precedence: a value saved on the Chunker config page (DB) wins; otherwise this override applies, both live and across restarts.",
         kind: Kind::Enum(&["fixed", "lightweight", "semantic"]),
         default: Some("fixed"),
         category: "chunker",
@@ -59,7 +59,7 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
     },
     KnownKey {
         key: "CHUNK_TARGET_SIZE",
-        description: "Target chunk size in tokens. Hot-reloaded in-process; the Chunker config page DB value wins at next startup.",
+        description: "Target chunk size in tokens. Hot-reloaded in-process. Precedence: a value saved on the Chunker config page (DB) wins; otherwise this override applies, both live and across restarts.",
         kind: Kind::U64,
         default: Some("256"),
         category: "chunker",
@@ -67,7 +67,7 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
     },
     KnownKey {
         key: "CHUNK_MAX_SIZE",
-        description: "Maximum chunk size in tokens. Hot-reloaded in-process; the Chunker config page DB value wins at next startup.",
+        description: "Maximum chunk size in tokens. Hot-reloaded in-process. Precedence: a value saved on the Chunker config page (DB) wins; otherwise this override applies, both live and across restarts.",
         kind: Kind::U64,
         default: Some("384"),
         category: "chunker",
@@ -75,7 +75,7 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
     },
     KnownKey {
         key: "CHUNK_OVERLAP",
-        description: "Token overlap between adjacent chunks. Hot-reloaded in-process; the Chunker config page DB value wins at next startup.",
+        description: "Token overlap between adjacent chunks. Hot-reloaded in-process. Precedence: a value saved on the Chunker config page (DB) wins; otherwise this override applies, both live and across restarts.",
         kind: Kind::U64,
         default: Some("32"),
         category: "chunker",

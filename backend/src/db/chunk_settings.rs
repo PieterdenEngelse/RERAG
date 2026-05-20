@@ -65,15 +65,15 @@ pub fn global_config() -> ChunkerConfig {
     config_lock().read().unwrap().clone()
 }
 
-/// Rebuild the in-memory chunker config from environment + runtime overrides
-/// (`ChunkerConfig::from_env`) and overwrite the global cached value.
-///
-/// Used by the `CHUNKER_MODE` / `CHUNK_*` settings subscribers. Does NOT
-/// write back to the SQLite-saved config — DB values still win at the
-/// next startup. The runtime override is therefore an *in-process* tweak;
-/// persistent changes belong on the Chunker config page.
+/// Rebuild the in-memory chunker config in place when a CHUNK_* / CHUNKER_MODE
+/// override changes. Goes through the same precedence as boot
+/// (`load_active_config`): DB save → runtime override → env → default. If no
+/// DB is configured (tests, headless start), falls back to `from_env`.
 pub fn reload_global_from_env_and_overrides() {
-    let new_cfg = ChunkerConfig::from_env();
+    let new_cfg = match DB_PATH.get().and_then(|p| Connection::open(p).ok()) {
+        Some(conn) => load_chunker_config(&conn).unwrap_or_else(|_| ChunkerConfig::from_env()),
+        None => ChunkerConfig::from_env(),
+    };
     *config_lock().write().unwrap() = new_cfg;
 }
 
@@ -101,13 +101,24 @@ pub fn load_active_config(conn: &Connection) {
 }
 
 pub fn load_chunker_config(conn: &Connection) -> Result<ChunkerConfig> {
-    let target = read_int(conn, CONFIG_KEYS.target)?.unwrap_or(DEFAULT_TARGET_SIZE as i64);
+    // Precedence: DB save → runtime override (via settings::effective_*)
+    // → env → hardcoded default. The DB save is the user's deliberate
+    // persisted value; the runtime override is the in-process tweak.
+    let target = read_int(conn, CONFIG_KEYS.target)?.unwrap_or_else(|| {
+        crate::settings::effective_u64("CHUNK_TARGET_SIZE", DEFAULT_TARGET_SIZE as u64) as i64
+    });
     let min = read_int(conn, CONFIG_KEYS.min)?.unwrap_or(DEFAULT_MIN_SIZE as i64);
-    let max = read_int(conn, CONFIG_KEYS.max)?.unwrap_or(DEFAULT_MAX_SIZE as i64);
-    let overlap = read_int(conn, CONFIG_KEYS.overlap)?.unwrap_or(DEFAULT_OVERLAP as i64);
+    let max = read_int(conn, CONFIG_KEYS.max)?.unwrap_or_else(|| {
+        crate::settings::effective_u64("CHUNK_MAX_SIZE", DEFAULT_MAX_SIZE as u64) as i64
+    });
+    let overlap = read_int(conn, CONFIG_KEYS.overlap)?.unwrap_or_else(|| {
+        crate::settings::effective_u64("CHUNK_OVERLAP", DEFAULT_OVERLAP as u64) as i64
+    });
     let semantic = read_float(conn, CONFIG_KEYS.semantic_threshold)?
         .unwrap_or(DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD as f64);
-    let mode = read_value(conn, CONFIG_KEYS.mode)?.unwrap_or_else(|| DEFAULT_MODE.to_string());
+    let mode = read_value(conn, CONFIG_KEYS.mode)?
+        .or_else(|| crate::settings::global().and_then(|s| s.effective("CHUNKER_MODE")))
+        .unwrap_or_else(|| DEFAULT_MODE.to_string());
     let clean_html = read_bool(conn, CONFIG_KEYS.clean_html)?.unwrap_or(DEFAULT_CLEAN_HTML);
     let clean_unicode =
         read_bool(conn, CONFIG_KEYS.clean_unicode)?.unwrap_or(DEFAULT_CLEAN_UNICODE);

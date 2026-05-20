@@ -73,8 +73,10 @@ pub fn ConfigRuntime() -> Element {
         restarting.set(true);
         spawn(async move {
             let _ = api::post_restart_self().await;
-            // Surface for ~10 s while ag re-execs and the page reloads.
-            gloo_timers::future::TimeoutFuture::new(10_000).await;
+            // Poll /monitoring/health until ag has gone down and come back
+            // up — clears the overlay as soon as the new process is ready,
+            // up to a 60 s ceiling.
+            let _ = api::wait_for_restart(60_000, 750).await;
             restarting.set(false);
             restart_pending.set(false);
             reload_tick.with_mut(|t| *t += 1);
