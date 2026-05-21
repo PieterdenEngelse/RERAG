@@ -72,7 +72,7 @@ docker compose --profile observability up -d
 |------|---------|
 | `backend/src/main.rs` | Startup: env parsing, tracing init, Redis/graph feature wiring, background workers |
 | `backend/src/api/mod.rs` | Central route registry (upload, search, memory, monitoring, rate-limits) |
-| `backend/src/retriever.rs` | Tantivy/LanceDB orchestration, HNSW/PQ builds, cache management |
+| `backend/src/retriever.rs` | Tantivy orchestration, HNSW/PQ builds, cache management |
 | `backend/src/chunker.rs` | Configurable chunkers with semantic thresholds and telemetry |
 | `backend/src/monitoring/mod.rs` | Prometheus metrics, histogram buckets, OTel exporters, health trackers |
 | `backend/tests/rate_limit.rs` | Integration coverage for middleware, proxy trust, bucket refill |
@@ -116,6 +116,34 @@ OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=phi:latest
 SKIP_INITIAL_INDEXING=false
 ```
+
+Env vars are the **install-time defaults**. Any of the 27 registered keys
+(REDIS_*, CHUNK_*, OTEL_*, FILE_WATCHER_*, INFERENCE_*, BACKEND_PORT,
+RUST_LOG, …) can be overridden at runtime from **Config → Runtime**
+(`/config/runtime`) without editing the env file.
+
+## Runtime settings layer
+
+There's a second configuration path that sits on top of env vars: runtime
+overrides saved to `<base_dir>/overrides.json` (default
+`~/.local/share/ag/overrides.json`). Read these via
+`crate::settings::effective_*(key, default)` instead of `env::var(key)` when
+you want a setting to be tunable from the UI.
+
+- **Precedence**: override (UI) → env (install-time) → hard-coded default.
+- **Persistence**: written atomically to one JSON file ag owns; the env
+  file is never modified by the running app.
+- **Hot vs restart-required**: 13 keys hot-reload in place via dedicated
+  subscribers in `main.rs` (REDIS_*, RUST_LOG, CHUNK_*, OTEL_*,
+  FILE_WATCHER_*, AUTO_EXPORT_ON_UPLOAD); the rest surface a banner that
+  drives `/runtime/actions/restart-self` (universal `execve`-based
+  self-restart — works on bin/exe, systemd, or container).
+- **Boot-failure recovery**: if a bad override prevents ag from reaching
+  healthy, on the next start ag moves it aside as
+  `overrides.json.bad-<ts>` and boots with no overrides.
+
+Full reference: `docs/runtime-config.md`. Design rationale and the broader
+"what's planned" picture: `persisentenc.md`.
 
 Histogram bucket shapes are tunable without rebuilds: `SEARCH_HISTO_BUCKETS` and `REINDEX_HISTO_BUCKETS` feed `monitoring/histogram_config.rs`.
 
