@@ -34,6 +34,8 @@ pub fn MonitorDatastores() -> Element {
     });
     let mut show_info = use_signal(|| false);
     let mut show_l3_optional = use_signal(|| false);
+    let mut field_help =
+        use_context_provider(|| Signal::new(None::<&'static str>));
     let show_container_info = use_signal(|| false);
     let also_container = use_signal(|| false);
     let submitting = use_signal(|| false);
@@ -123,6 +125,9 @@ pub fn MonitorDatastores() -> Element {
             if show_l3_optional() {
                 {l3_optional_modal(show_l3_optional)}
             }
+            if field_help().is_some() {
+                {field_reference_modal(field_help)}
+            }
             if show_container_info() {
                 {stop_container_modal(show_container_info)}
             }
@@ -136,19 +141,28 @@ pub fn MonitorDatastores() -> Element {
             }
 
             if let Some(data) = &snapshot.data {
-                Panel {
-                    title: Some("L3 Cache — Redis".to_string()),
-                    subtitle: Some("Optional · ephemeral · search-result cache".to_string()),
-                    refresh: Some("10s".to_string()),
-                    {cache_section(&data.cache, also_container, submitting, show_restarting, show_container_info, can_manage_compose())}
+                div { class: "flex flex-row gap-3 items-start w-full",
+                    div { class: "flex-1 min-w-0",
+                        {aligned_panel(
+                            "L3 Cache — Redis",
+                            "Optional · ephemeral · search-result cache",
+                            "10s",
+                            cache_section(&data.cache, also_container, submitting, show_restarting, show_container_info, can_manage_compose()),
+                        )}
+                    }
+                    div { class: "shrink-0",
+                        {field_button_column()}
+                    }
+                    div { class: "flex-1 min-w-0",
+                        {aligned_panel(
+                            "FalkorDB — Knowledge-graph store",
+                            "Persistent · Redis module · falkordb.service",
+                            "10s",
+                            falkor_section(&data.falkordb),
+                        )}
+                    }
                 }
-                Panel {
-                    title: Some("FalkorDB — Knowledge-graph store".to_string()),
-                    subtitle: Some("Persistent · Redis module · falkordb.service".to_string()),
-                    refresh: Some("10s".to_string()),
-                    {falkor_section(&data.falkordb)}
-                }
-                div { class: "text-[10px] text-gray-400",
+                div { class: "text-sm text-gray-400",
                     "Tune these stores on the "
                     Link {
                         to: Route::ConfigFalkorDb {},
@@ -219,7 +233,7 @@ fn cache_section(
 
     rsx! {
         div { class: "space-y-3",
-            div { class: "flex flex-wrap items-center gap-3 text-xs",
+            div { class: "flex items-center gap-x-2 text-xs h-5 overflow-hidden whitespace-nowrap",
                 if !c.enabled {
                     span { class: "px-2 py-0.5 rounded bg-gray-700 text-gray-300 font-semibold",
                         "Disabled"
@@ -233,10 +247,12 @@ fn cache_section(
                         "Disconnected"
                     }
                 }
+                span { class: "text-gray-500", "·" }
                 span { class: "text-gray-400",
                     "URL: "
                     span { class: "font-mono text-gray-200", "{c.url}" }
                 }
+                span { class: "text-gray-500", "·" }
                 span { class: "text-gray-400",
                     "TTL: "
                     span { class: "font-mono text-gray-200", "{c.ttl_seconds}s" }
@@ -323,7 +339,7 @@ fn falkor_section(f: &api::FalkorDatastore) -> Element {
     };
     rsx! {
         div { class: "space-y-3",
-            div { class: "flex flex-wrap items-center gap-3 text-xs",
+            div { class: "flex items-center gap-x-2 text-xs h-5 overflow-hidden whitespace-nowrap",
                 if f.health.reachable {
                     span { class: "px-2 py-0.5 rounded bg-green-900/40 text-green-400 font-semibold",
                         "Connected"
@@ -333,10 +349,12 @@ fn falkor_section(f: &api::FalkorDatastore) -> Element {
                         "Disconnected"
                     }
                 }
+                span { class: "text-gray-500", "·" }
                 span { class: "text-gray-400",
                     "falkordb.service: "
                     span { class: "font-mono {svc_color}", "{f.service_state}" }
                 }
+                span { class: "text-gray-500", "·" }
                 span { class: "text-gray-400",
                     "URL: "
                     span { class: "font-mono text-gray-200", "{f.url}" }
@@ -405,32 +423,33 @@ fn health_panel(h: &api::RedisServerHealth) -> Element {
     };
 
     rsx! {
-        div { class: "grid grid-cols-1 sm:grid-cols-2 gap-x-8",
-            {stat("Version", h.redis_version.clone())}
-            {stat("Mode", h.redis_mode.clone())}
-            {stat("Uptime", fmt_uptime(h.uptime_seconds))}
-            {stat("Connected clients", h.connected_clients.to_string())}
-            {stat("Memory used", h.used_memory_human.clone())}
-            {stat("Memory limit", maxmem)}
-            {stat("Eviction policy", h.maxmemory_policy.clone())}
-            {stat("Keys (DBSIZE)", h.db_keys.to_string())}
-            {stat("Keyspace hit rate", hit_rate)}
-            {stat("Hits / misses", format!("{hits} / {misses}"))}
-            {stat("Evicted keys", h.evicted_keys.to_string())}
-            {stat("Ops / sec", h.instantaneous_ops_per_sec.to_string())}
-            {stat("Commands processed", h.total_commands_processed.to_string())}
-            {stat("Persistence (AOF)", if h.aof_enabled { "on".to_string() } else { "off".to_string() })}
-            {stat("Unsaved changes", h.rdb_changes_since_last_save.to_string())}
+        div { class: "grid grid-cols-1",
+            {stat("Version", h.redis_version.clone(), "Version")}
+            {stat("Mode", h.redis_mode.clone(), "Mode")}
+            {stat("Uptime", fmt_uptime(h.uptime_seconds), "Uptime")}
+            {stat("Connected clients", h.connected_clients.to_string(), "Connected clients")}
+            {stat("Memory used", h.used_memory_human.clone(), "Memory used")}
+            {stat("Memory limit", maxmem, "Memory limit")}
+            {stat("Eviction policy", h.maxmemory_policy.clone(), "Eviction policy")}
+            {stat("Keys (DBSIZE)", h.db_keys.to_string(), "Keys (DBSIZE)")}
+            {stat("Keyspace hit rate", hit_rate, "Keyspace hit rate")}
+            {stat("Hits / misses", format!("{hits} / {misses}"), "Hits / misses")}
+            {stat("Evicted keys", h.evicted_keys.to_string(), "Evicted keys")}
+            {stat("Ops / sec", h.instantaneous_ops_per_sec.to_string(), "Ops / sec")}
+            {stat("Commands processed", h.total_commands_processed.to_string(), "Commands processed")}
+            {stat("Persistence (AOF)", if h.aof_enabled { "on".to_string() } else { "off".to_string() }, "Persistence (AOF)")}
+            {stat("Unsaved changes", h.rdb_changes_since_last_save.to_string(), "Unsaved changes")}
         }
     }
 }
 
-/// One label/value row inside the health grid.
-fn stat(label: &str, value: String) -> Element {
+/// One label/value row inside the health grid. Height locked to `h-8` (32px)
+/// so the middle-column info buttons stay aligned with these rows.
+fn stat(label: &str, value: String, _key: &'static str) -> Element {
     rsx! {
-        div { class: "flex justify-between gap-4 py-1 border-b border-gray-700",
-            span { class: "text-gray-400", "{label}" }
-            span { class: "text-gray-100 font-mono", "{value}" }
+        div { class: "flex items-center justify-between gap-2 h-8 border-b border-gray-700 min-w-0",
+            span { class: "text-gray-400 shrink-0", "{label}" }
+            span { class: "text-gray-100 font-mono truncate", title: "{value}", "{value}" }
         }
     }
 }
@@ -463,6 +482,14 @@ fn info_modal(mut show: Signal<bool>) -> Element {
                     p {
                         strong { "FalkorDB. " }
                         "The persistent knowledge-graph store. It is a Redis module, so it answers INFO just like the cache, but it also holds graphs. Losing it loses graph data, so it runs as the falkordb.service system service."
+                    }
+                    p {
+                        strong { "FalkorDB does not store vectors. " }
+                        "Two of the URLs on this page start with "
+                        code { class: "text-gray-200", "redis://" }
+                        " but only the L3 cache is actually a Redis cache — FalkorDB just speaks the same wire protocol. The knowledge graph holds entities, relations, and an "
+                        code { class: "text-gray-200", "embedding_id" }
+                        " pointer on each chunk. The vectors themselves live elsewhere: document embeddings are kept by Tantivy on disk (with optional HNSW/PQ indexes), and agent-memory embeddings live in process memory and are persisted as a single binary file when ag shuts down."
                     }
                     p {
                         strong { "Reading the panel. " }
@@ -647,6 +674,129 @@ fn stop_container_modal(mut show: Signal<bool>) -> Element {
                     class: "btn btn-sm w-full mt-4",
                     style: "background-color:#7C2A02;",
                     onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Panel-equivalent with a fixed-height header so the two boards line up
+/// regardless of how long the title or subtitle is. Used in place of the shared
+/// `Panel` component on this page because the side-by-side layout demands
+/// pixel-equal headers — wrapping titles would push one board's field rows
+/// below the other's and break the middle-column button alignment.
+fn aligned_panel(title: &str, subtitle: &str, refresh: &str, children: Element) -> Element {
+    rsx! {
+        div { class: "bg-gray-800 border border-gray-700 rounded-lg p-4 shadow",
+            div { class: "h-6 mb-3 flex items-center justify-between gap-3 overflow-hidden",
+                div { class: "flex items-center gap-3 min-w-0",
+                    h3 { class: "text-sm font-semibold text-gray-200 truncate", "{title}" }
+                    span { class: "text-[10px] text-gray-400 truncate", "{subtitle}" }
+                }
+                span { class: "text-xs text-white shrink-0", "{refresh}" }
+            }
+            div { class: "text-gray-100 text-xs space-y-2", {children} }
+        }
+    }
+}
+
+/// Vertical column of standard rust-color info buttons, one per health field,
+/// rendered between the two boards. Each button has the same row height as a
+/// `stat()` row so it visually aligns with the corresponding field across both panels.
+fn field_button_column() -> Element {
+    const FIELDS: [&str; 15] = [
+        "Version",
+        "Mode",
+        "Uptime",
+        "Connected clients",
+        "Memory used",
+        "Memory limit",
+        "Eviction policy",
+        "Keys (DBSIZE)",
+        "Keyspace hit rate",
+        "Hits / misses",
+        "Evicted keys",
+        "Ops / sec",
+        "Commands processed",
+        "Persistence (AOF)",
+        "Unsaved changes",
+    ];
+    let mut field_help = use_context::<Signal<Option<&'static str>>>();
+    rsx! {
+        // Offset matches: border (1) + p-4 top (16) + fixed header h-6 (24)
+        // + mb-3 (12) + connection-status row h-5 (20) + space-y-3 gap (12) = 85px.
+        // Each row is `h-8` to match the `stat()` row height exactly.
+        div { class: "flex flex-col items-center pt-[85px]",
+            for key in FIELDS.iter() {
+                div { class: "h-8 flex items-center",
+                    button {
+                        class: PARAM_ICON_BUTTON_CLASS,
+                        style: PARAM_ICON_BUTTON_STYLE,
+                        onclick: move |_| field_help.set(Some(*key)),
+                        title: "{key}",
+                        svg {
+                            class: INFO_ICON_SVG_CLASS,
+                            view_box: "0 0 20 20",
+                            fill: "none",
+                            stroke: "currentColor",
+                            circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Plain-text explanation for a single field key, shown by the per-field modal.
+fn field_description(key: &str) -> &'static str {
+    match key {
+        "Version" => "Redis server version reported by INFO server. Tells you what feature set and bug-fix level the store is running.",
+        "Mode" => "Standalone, cluster, or sentinel. ag uses standalone for both stores; cluster or sentinel only show up if you've deliberately deployed those.",
+        "Uptime" => "Time since the server process started. A short uptime after a recent change is normal; an unexpected reset means something restarted the container.",
+        "Connected clients" => "Open TCP connections. ag itself accounts for a handful — the search server, the upload server, hot-reload subscribers. Spikes can indicate a runaway caller.",
+        "Memory used" => "Current resident memory of the store process. Watch this against the limit to gauge pressure.",
+        "Memory limit" => "Configured maxmemory, or 'unlimited' if unset. Without a limit the store can grow until the host runs out of RAM. For the L3 cache a limit + LRU eviction is the safe default.",
+        "Eviction policy" => "What happens when memory hits the limit. 'noeviction' refuses writes; 'allkeys-lru' drops the least-recently-used key; 'volatile-ttl' drops the soonest-to-expire key. L3 typically uses LRU; FalkorDB typically uses noeviction so the graph never loses data silently.",
+        "Keys (DBSIZE)" => "Total keys in the default DB. For FalkorDB this counts graph nodes, edges, and metadata keys; for L3 it counts cached search results.",
+        "Keyspace hit rate" => "Percentage of GETs that found a value: hits / (hits + misses). A low rate on L3 means the cache isn't earning its keep — your queries are mostly unique.",
+        "Hits / misses" => "Raw counters underneath the hit rate. Useful when the percentage rounds to 0% or 100% and you want absolute numbers.",
+        "Evicted keys" => "Lifetime count of keys removed by the eviction policy. A growing number means you're hitting the memory limit regularly — consider raising maxmemory or shortening TTL.",
+        "Ops / sec" => "Instantaneous operations per second (instantaneous_ops_per_sec). Snapshot rate, not an average — refresh to see how it moves.",
+        "Commands processed" => "Lifetime total commands the server has handled. Useful as a sanity check: is this store actually being talked to?",
+        "Persistence (AOF)" => "Whether the append-only-file is enabled. AOF writes every change to disk so an abrupt stop loses little data. AOF off means you only have periodic snapshots — restart-time data loss can be larger.",
+        "Unsaved changes" => "Writes since the last RDB snapshot (rdb_changes_since_last_save). High values mean a crash right now would lose that many writes, unless AOF is on.",
+        _ => "No description available for this field.",
+    }
+}
+
+/// Per-field info modal — content is selected by the active field key in `field_help`.
+fn field_reference_modal(mut field_help: Signal<Option<&'static str>>) -> Element {
+    let key = field_help().unwrap_or("");
+    let description = field_description(key);
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| field_help.set(None),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-md shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-lg font-semibold text-gray-100", "{key}" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| field_help.set(None),
+                        "×"
+                    }
+                }
+                p { class: "text-sm text-gray-300 leading-relaxed", "{description}" }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| field_help.set(None),
                     "Got it"
                 }
             }
