@@ -87,6 +87,44 @@ pub struct MemorySearchResult {
     pub score: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum GoalStatus {
+    Active,
+    Completed,
+    Failed,
+    Paused,
+    Abandoned,
+}
+
+impl GoalStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GoalStatus::Active => "active",
+            GoalStatus::Completed => "completed",
+            GoalStatus::Failed => "failed",
+            GoalStatus::Paused => "paused",
+            GoalStatus::Abandoned => "abandoned",
+        }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "completed" => GoalStatus::Completed,
+            "failed" => GoalStatus::Failed,
+            "paused" => GoalStatus::Paused,
+            "abandoned" => GoalStatus::Abandoned,
+            _ => GoalStatus::Active,
+        }
+    }
+}
+
+impl std::fmt::Display for GoalStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 impl AgentMemory {
     pub fn new(db_path: &str) -> Result<Self> {
         let conn = Connection::open(db_path)?;

@@ -1,11 +1,10 @@
 use crate::agent::{Agent, AgentResponse, AgentStep};
-use crate::agent_memory::{AgentMemory, MemoryItem, MemorySearchResult};
+use crate::agent_memory::{AgentMemory, GoalStatus, MemoryItem, MemorySearchResult};
 use crate::config::ApiConfig;
 use crate::db::chunk_settings;
 use crate::db::llm_settings::{self, LlmConfig};
 use crate::db::path_resolver;
 use crate::index;
-use crate::memory::agent::GoalStatus;
 use crate::memory::chunker::ChunkerConfig;
 use crate::monitoring::config::MonitoringConfig;
 use crate::monitoring::metrics;

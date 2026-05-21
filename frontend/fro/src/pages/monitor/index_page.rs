@@ -834,7 +834,7 @@ pub fn MonitorIndex() -> Element {
             if reindex_control_info_open() {
                 InfoModal {
                     title: "Reindex Control",
-                    content: "This board lets you manage the full Tantivy/LanceDB reindex pipeline.\n\nButtons:\n• Now – Run a synchronous reindex, blocking until the job finishes. Useful when you want to watch progress in this page or CLI.\n• Background – Submit an async job so the server keeps working while you monitor the queue below.\n• Upload – Feed additional documents; each upload automatically reuses the status/progress UI in this panel.\n\nTips:\n• Use 'Now' during maintenance windows; it locks the writer until completion.\n• Use 'Background' during normal operations so the system stays responsive.\n• Refresh cadence is 5s; you can also hit /monitor/index via curl for JSON stats.\n• The Async Jobs table below stores history so you can correlate job IDs with logs.\n\nSee the Runbook section for ready-to-copy curl commands when you need to trigger jobs from the CLI.",
+                    content: "This board lets you manage the full Tantivy reindex pipeline.\n\nButtons:\n• Now – Run a synchronous reindex, blocking until the job finishes. Useful when you want to watch progress in this page or CLI.\n• Background – Submit an async job so the server keeps working while you monitor the queue below.\n• Upload – Feed additional documents; each upload automatically reuses the status/progress UI in this panel.\n\nTips:\n• Use 'Now' during maintenance windows; it locks the writer until completion.\n• Use 'Background' during normal operations so the system stays responsive.\n• Refresh cadence is 5s; you can also hit /monitor/index via curl for JSON stats.\n• The Async Jobs table below stores history so you can correlate job IDs with logs.\n\nSee the Runbook section for ready-to-copy curl commands when you need to trigger jobs from the CLI.",
                     on_close: move || reindex_control_info_open.set(false),
                 }
             }
@@ -1469,7 +1469,7 @@ pub fn MonitorIndex() -> Element {
                                 div { class: "space-y-1",
                                     strong { "How it differs from the Reindex board" }
                                     p {
-                                        "Reindex rebuilds the Tantivy/LanceDB search indexes so the RAG engine stays accurate. The LoRA board only curates datasets for model fine-tuning. It's normal to run LoRA exports more frequently than full reindexes when you are training adapters."
+                                        "Reindex rebuilds the Tantivy search indexes so the RAG engine stays accurate. The LoRA board only curates datasets for model fine-tuning. It's normal to run LoRA exports more frequently than full reindexes when you are training adapters."
                                     }
                                 }
                                 div { class: "space-y-1 text-xs text-slate-400",

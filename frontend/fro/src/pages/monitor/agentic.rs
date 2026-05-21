@@ -197,7 +197,8 @@ failures, and improvements. Appears in "Recent Reflections" below.
 
 STORAGE
 All memory is local to agent.db (SQLite). No external service required.
-LanceDB handles the vector embeddings for RAG Memories separately."#;
+Document embeddings live in the Tantivy index; chunk metadata is referenced
+from the knowledge graph via embedding_id pointers."#;
 
 #[allow(dead_code)]
 const REFLECTIONS_INFO_TOOLTIP: &str = r#"RECENT REFLECTIONS
@@ -247,7 +248,7 @@ Classic mode (RAG / Hybrid / RagStrict)
 
 Rig Agentic mode (/agent/stream with mode=agentic)
   Tools are JSON-schema definitions handed to the LLM:
-  • search_documents        — Tantivy + LanceDB search
+  • search_documents        — Tantivy search
   • recall_memory           — retrieve conversation memories
   • store_memory            — persist facts for later sessions
   • search_knowledge_graph  — entity relationship lookup
