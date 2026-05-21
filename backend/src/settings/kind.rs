@@ -58,3 +58,73 @@ impl Kind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bool_accepts_truthy_and_falsy_synonyms() {
+        for v in ["true", "1", "yes", "on", "TRUE", " on "] {
+            assert_eq!(Kind::Bool.parse(v).unwrap(), "true", "input: {v:?}");
+        }
+        for v in ["false", "0", "no", "off", "FALSE"] {
+            assert_eq!(Kind::Bool.parse(v).unwrap(), "false", "input: {v:?}");
+        }
+    }
+
+    #[test]
+    fn bool_rejects_garbage_and_quotes_input_in_error() {
+        let err = Kind::Bool.parse("maybe").unwrap_err();
+        assert!(err.contains("'maybe'"), "got: {err}");
+        assert!(err.to_lowercase().contains("bool"));
+    }
+
+    #[test]
+    fn u64_parses_and_rejects() {
+        assert_eq!(Kind::U64.parse("0").unwrap(), "0");
+        assert_eq!(Kind::U64.parse("18446744073709551615").unwrap(), "18446744073709551615");
+        let err = Kind::U64.parse("fast").unwrap_err();
+        assert!(err.contains("u64") && err.contains("'fast'"), "got: {err}");
+        // Negative number is invalid for u64.
+        assert!(Kind::U64.parse("-1").is_err());
+    }
+
+    #[test]
+    fn f64_parses_and_rejects() {
+        assert!(Kind::F64.parse("3.14").is_ok());
+        assert!(Kind::F64.parse("0").is_ok());
+        let err = Kind::F64.parse("pi").unwrap_err();
+        assert!(err.contains("f64"), "got: {err}");
+    }
+
+    #[test]
+    fn enum_allows_only_listed_values() {
+        let kind = Kind::Enum(&["fixed", "lightweight", "semantic"]);
+        assert_eq!(kind.parse("semantic").unwrap(), "semantic");
+        let err = kind.parse("banana").unwrap_err();
+        assert!(err.contains("'banana'") && err.contains("fixed"), "got: {err}");
+    }
+
+    #[test]
+    fn url_requires_scheme() {
+        assert!(Kind::Url.parse("redis://localhost").is_ok());
+        assert!(Kind::Url.parse("http://example.com").is_ok());
+        let err = Kind::Url.parse("localhost").unwrap_err();
+        assert!(err.contains("URL") || err.contains("scheme"), "got: {err}");
+    }
+
+    #[test]
+    fn path_rejects_empty_but_not_relative() {
+        assert!(Kind::Path.parse("/tmp/x").is_ok());
+        assert!(Kind::Path.parse("relative/path").is_ok());
+        assert!(Kind::Path.parse("").is_err());
+        assert!(Kind::Path.parse("   ").is_err()); // trimmed empty
+    }
+
+    #[test]
+    fn string_trims_and_passes_through() {
+        assert_eq!(Kind::String.parse("  hello  ").unwrap(), "hello");
+        assert_eq!(Kind::String.parse("anything goes").unwrap(), "anything goes");
+    }
+}

@@ -236,3 +236,109 @@ pub struct SettingEntry {
 pub struct SettingsSnapshot {
     pub entries: Vec<SettingEntry>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh(td: &TempDir) -> Arc<Settings> {
+        Settings::load(td.path().join("overrides.json"))
+    }
+
+    /// A key that's not in the registry and (presumably) not in the host env —
+    /// gives the tests a clean override path.
+    const UNREG: &str = "AG_TEST_UNREGISTERED_OVERRIDE_X";
+
+    #[test]
+    fn load_missing_file_yields_empty() {
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        assert!(s.effective(UNREG).is_none() || std::env::var(UNREG).is_ok());
+    }
+
+    #[test]
+    fn set_persists_to_disk_and_snapshot_reflects_it() {
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        s.set(UNREG, Some("hello".into())).unwrap();
+
+        // On disk.
+        let raw = std::fs::read_to_string(td.path().join("overrides.json")).unwrap();
+        assert!(raw.contains(UNREG) && raw.contains("hello"));
+
+        // In snapshot, as an unregistered entry.
+        let snap = s.snapshot();
+        let entry = snap.entries.iter().find(|e| e.key == UNREG).unwrap();
+        assert!(!entry.registered);
+        assert_eq!(entry.override_value.as_deref(), Some("hello"));
+        assert!(matches!(entry.source, Source::Override));
+    }
+
+    #[test]
+    fn clearing_override_removes_it_from_disk() {
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        s.set(UNREG, Some("x".into())).unwrap();
+        s.set(UNREG, None).unwrap();
+        let raw = std::fs::read_to_string(td.path().join("overrides.json")).unwrap();
+        assert!(!raw.contains(UNREG), "still present: {raw}");
+    }
+
+    #[test]
+    fn known_key_rejects_bad_value() {
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        // REDIS_ENABLED is Bool in the registry — "maybe" should fail.
+        let err = s.set("REDIS_ENABLED", Some("maybe".into())).unwrap_err();
+        assert!(err.contains("'maybe'"), "{err}");
+        // And nothing got written.
+        let raw = std::fs::read_to_string(td.path().join("overrides.json"))
+            .unwrap_or_default();
+        assert!(!raw.contains("REDIS_ENABLED"));
+    }
+
+    #[test]
+    fn unregistered_key_skips_validation() {
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        s.set(UNREG, Some("anything goes".into())).unwrap();
+        assert_eq!(s.effective(UNREG).as_deref(), Some("anything goes"));
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_tmp() {
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        s.set(UNREG, Some("v".into())).unwrap();
+        let tmp = td.path().join("overrides.json.tmp");
+        assert!(!tmp.exists(), "tmp file leaked: {}", tmp.display());
+    }
+
+    #[test]
+    fn round_trip_across_load() {
+        let td = TempDir::new().unwrap();
+        {
+            let s = fresh(&td);
+            s.set(UNREG, Some("persisted".into())).unwrap();
+        } // drop instance
+        let s2 = fresh(&td);
+        assert_eq!(s2.effective(UNREG).as_deref(), Some("persisted"));
+    }
+
+    #[test]
+    fn subscriber_fires_on_change() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let td = TempDir::new().unwrap();
+        let s = fresh(&td);
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let c2 = count.clone();
+        s.subscribe(UNREG, move |_| {
+            c2.fetch_add(1, Ordering::SeqCst);
+        });
+        s.set(UNREG, Some("a".into())).unwrap();
+        s.set(UNREG, Some("b".into())).unwrap();
+        s.set(UNREG, None).unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+}

@@ -108,3 +108,89 @@ fn timestamp_now() -> String {
     let s = rem % 60;
     format!("{days}d{h:02}{m:02}{s:02}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn paths(td: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+        (
+            td.path().to_path_buf(),
+            td.path().join("overrides.json"),
+        )
+    }
+
+    #[test]
+    fn clean_boot_creates_marker_and_keeps_overrides() {
+        let td = TempDir::new().unwrap();
+        let (base, overrides) = paths(&td);
+        std::fs::write(&overrides, r#"{"FOO":"bar"}"#).unwrap();
+
+        let (returned_path, recovery) = Recovery::boot_check(&base, &overrides);
+        assert_eq!(returned_path, overrides);
+        assert!(base.join("overrides.boot.marker").exists());
+        assert!(overrides.exists(), "overrides should not have been moved");
+        assert!(recovery.last_rollback.read().is_none());
+    }
+
+    #[test]
+    fn surviving_marker_triggers_rollback() {
+        let td = TempDir::new().unwrap();
+        let (base, overrides) = paths(&td);
+        let marker = base.join("overrides.boot.marker");
+
+        // Simulate: previous boot wrote a marker, wrote overrides, then
+        // crashed before mark_healthy.
+        std::fs::write(&marker, b"").unwrap();
+        std::fs::write(&overrides, r#"{"BAD":"setting"}"#).unwrap();
+
+        let (returned_path, recovery) = Recovery::boot_check(&base, &overrides);
+        assert_eq!(returned_path, overrides);
+        assert!(!overrides.exists(), "overrides should have been moved aside");
+
+        let rollback = recovery
+            .last_rollback
+            .read()
+            .clone()
+            .expect("rollback should be recorded");
+        assert!(rollback.last_bad_file.contains("overrides.json.bad-"));
+
+        // The .bad-<ts> file actually exists on disk.
+        let bad_path = std::path::Path::new(&rollback.last_bad_file);
+        assert!(bad_path.exists(), "bad file: {}", rollback.last_bad_file);
+        let preserved = std::fs::read_to_string(bad_path).unwrap();
+        assert!(preserved.contains("BAD"));
+
+        // A fresh marker was written for this new boot.
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn mark_healthy_clears_marker_and_is_idempotent() {
+        let td = TempDir::new().unwrap();
+        let (base, overrides) = paths(&td);
+        let (_, recovery) = Recovery::boot_check(&base, &overrides);
+        let marker = base.join("overrides.boot.marker");
+        assert!(marker.exists());
+
+        recovery.mark_healthy();
+        assert!(!marker.exists());
+
+        // Second call is a no-op (no panic, no error).
+        recovery.mark_healthy();
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn marker_without_overrides_is_treated_as_clean() {
+        // Edge case: marker present but no overrides.json — nothing to roll
+        // back, just proceed.
+        let td = TempDir::new().unwrap();
+        let (base, overrides) = paths(&td);
+        std::fs::write(base.join("overrides.boot.marker"), b"").unwrap();
+
+        let (_, recovery) = Recovery::boot_check(&base, &overrides);
+        assert!(recovery.last_rollback.read().is_none());
+    }
+}
