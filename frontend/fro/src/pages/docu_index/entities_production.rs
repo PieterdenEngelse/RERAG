@@ -34,7 +34,7 @@ pub fn DocuEntitiesProduction() -> Element {
                             li { "Source code: .rs .py .js .ts .go .java .cs .cpp .c .rb .php .sh .sql .yaml .toml" }
                             li { "Special files: Dockerfile, Makefile, .gitignore, README" }
                         }
-                        p { class: "text-xs text-gray-500 mt-1",
+                        p { class: "text-xs text-gray-300 mt-1",
                             "No separate dataset needed — your documents are the input."
                         }
                     }
@@ -54,7 +54,7 @@ pub fn DocuEntitiesProduction() -> Element {
                             li { span { class: "text-blue-300", "GitHub" } " → ORG" }
                             li { span { class: "text-blue-300", "2018" } " → MISC" }
                         }
-                        p { class: "text-xs text-gray-500 mt-1", "Labels: PERSON, ORG, LOC, MISC" }
+                        p { class: "text-xs text-gray-300 mt-1", "Labels: PERSON, ORG, LOC, MISC" }
                     }
 
                     // Col 3: pipeline summary

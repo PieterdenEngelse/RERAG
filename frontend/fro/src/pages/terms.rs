@@ -304,7 +304,7 @@ pub fn ConfigTerms() -> Element {
                             option { value: code, "{label}" }
                         }
                     }
-                    span { class: "text-xs text-gray-500",
+                    span { class: "text-xs text-gray-300",
                         "{filtered.len()} of {terms().len()} terms"
                     }
                     div { class: "ml-auto",
@@ -321,7 +321,7 @@ pub fn ConfigTerms() -> Element {
                 if loading() {
                     p { class: "text-gray-400 text-sm", "Loading terms..." }
                 } else if filtered.is_empty() {
-                    p { class: "text-gray-500 text-sm italic",
+                    p { class: "text-gray-300 text-sm italic",
                         "No terms yet. Add your first term above."
                     }
                 } else {
@@ -450,7 +450,7 @@ pub fn ConfigTerms() -> Element {
                     // Test results
                     if let Some(results) = test_results() {
                         if results.is_empty() {
-                            p { class: "text-xs text-gray-500 mt-2 italic",
+                            p { class: "text-xs text-gray-300 mt-2 italic",
                                 "No entities found. Try adding more terms above and saving first."
                             }
                         } else {

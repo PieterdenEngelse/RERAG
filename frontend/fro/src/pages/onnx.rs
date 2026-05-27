@@ -10,6 +10,7 @@ use crate::{
     pages::onnx_help::OnnxHelpTopic,
 };
 use dioxus::prelude::*;
+use dioxus_router::Link;
 
 /// Returns ONNX config with default values matching the backend defaults
 fn onnx_defaults() -> api::OnnxConfigInfo {
@@ -48,6 +49,9 @@ fn onnx_defaults() -> api::OnnxConfigInfo {
         layout_ml_compiled: false,
         layout_ml_enabled: false,
         layout_model_ready: false,
+        layout_model_tier: String::new(),
+        layout_ml_model_id: String::new(),
+        chunker_mode: String::new(),
     }
 }
 
@@ -104,6 +108,22 @@ pub fn ConfigOnnx() -> Element {
     let mut _show_max_length_info = use_signal(|| false);
     let mut show_embed_batch_size_info = use_signal(|| false);
     let mut show_layout_ml_info = use_signal(|| false);
+    let mut show_lopdf_info = use_signal(|| false);
+    let mut show_extractous_info = use_signal(|| false);
+    let mut show_feature_compiled_info = use_signal(|| false);
+    let mut show_enabled_info = use_signal(|| false);
+    let mut show_layout_model_info = use_signal(|| false);
+    let mut show_layout_enabled_toggle_info = use_signal(|| false);
+    let mut layout_toggle_saving = use_signal(|| false);
+    let mut layout_restart_pending = use_signal(|| false);
+    let mut layout_restarting = use_signal(|| false);
+    let mut layout_toggle_message = use_signal::<Option<String>>(|| None);
+    // LAYOUT_ML_MODEL_ID editor — Tier 0 HF Hub spec (e.g. "cmarkea/detr-layout-detection")
+    let mut model_id_draft = use_signal::<String>(String::new);
+    let mut model_id_saving = use_signal(|| false);
+    let mut model_id_message = use_signal::<Option<String>>(|| None);
+    let mut show_model_id_info = use_signal(|| false);
+    let mut show_chunker_mode_info = use_signal(|| false);
     // Session Options (read-only / advanced)
     let mut show_exec_order_info = use_signal(|| false);
     let mut show_create_thread_info = use_signal(|| false);
@@ -145,6 +165,7 @@ pub fn ConfigOnnx() -> Element {
             page_errors.with_mut(|e| e.clear_error("onnx"));
             match api::fetch_onnx_config().await {
                 Ok(resp) => {
+                    model_id_draft.set(resp.config.layout_ml_model_id.clone());
                     config.set(resp.config);
                     loading.set(false);
                     page_errors.with_mut(|e| e.clear_error("onnx"));
@@ -225,6 +246,11 @@ pub fn ConfigOnnx() -> Element {
 
             ConfigNav { active: ConfigTab::Onnx }
 
+            // ONNX vs ort framing — every knob on this page is an ort/ONNX
+            // Runtime setting. The .onnx file format itself has no execution
+            // settings; see /docu/index/onnx for the three-layer write-up.
+            {onnx_vs_ort_page_banner()}
+
             if loading() {
                 Panel { title: None, refresh: None,
                     div { class: "text-xs text-blue-300", "Loading ONNX config…" }
@@ -250,36 +276,375 @@ pub fn ConfigOnnx() -> Element {
                 // ═══════════════════════════════════════════════════════════════
                 Panel { title: None, refresh: None,
                     div { class: "flex flex-col gap-2",
-                        div { class: "flex items-center gap-2 mb-1",
+                        div { class: "flex items-center gap-2 mb-1 flex-wrap",
                             span { class: "text-base text-gray-100 font-semibold", "Native PDF Extraction" }
+                            {layer_badge("ag-level")}
                             button {
                                 class: PARAM_ICON_BUTTON_CLASS,
                                 style: PARAM_ICON_BUTTON_STYLE,
                                 onclick: move |_| show_layout_ml_info.set(true),
                                 crate::pages::hardware::components::InfoIcon {}
                             }
-                        }
-                        div { class: "grid grid-cols-3 gap-2 text-xs",
-                            div { class: "bg-gray-800 rounded p-2",
-                                div { class: "text-gray-400 mb-1", "Feature compiled" }
+
+                            // Match the `enable_profiling` control under
+                            // Profiling & Logging — `.onnx-checkbox` with the
+                            // brand-color fill when checked. Avoids the
+                            // currentColor / half-alpha trap daisyUI's toggle
+                            // hits in non-canonical placements. Disabled when
+                            // the Cargo feature isn't compiled in.
+                            {
+                                let compiled = config().layout_ml_compiled;
+                                let enabled_now = config().layout_ml_enabled;
+                                let saving = layout_toggle_saving();
+                                rsx! {
+                                    // Always render full-colour. The
+                                    // "Feature compiled" tile next to this
+                                    // already tells the user whether the
+                                    // Cargo feature is in the binary; we
+                                    // don't double up by graying the
+                                    // checkbox (opacity dims the brand blue
+                                    // + white checkmark too). The HTML
+                                    // `disabled` attribute is avoided for
+                                    // the same reason — it forces browsers
+                                    // back to native UA rendering and kills
+                                    // `.onnx-checkbox` styling. If the
+                                    // feature isn't compiled the click
+                                    // still saves the override harmlessly;
+                                    // it'll take effect after a rebuild.
+                                    div {
+                                        // Chip-style container matching the
+                                        // sibling status chips (Feature
+                                        // compiled / Enabled / Layout model /
+                                        // Chunker mode). Same vertical padding
+                                        // (`py-1`), same background, same flex
+                                        // alignment — so this row's info
+                                        // button lands on the same baseline /
+                                        // visual lane as the chips' info
+                                        // buttons.
+                                        // `basis-full` forces this chip onto its
+                                        // own row inside the parent flex-wrap,
+                                        // so its right edge = panel right edge.
+                                        // Combined with `ml-auto` on the trailing
+                                        // info button, the button lands at the
+                                        // same X as the Layout model chip's info
+                                        // button (which has the same treatment).
+                                        class: "bg-gray-800 rounded px-2 py-1 text-xs flex items-center gap-2 basis-full",
+                                        title: if compiled {
+                                            "Toggle LAYOUT_ML_ENABLED (restart required)"
+                                        } else {
+                                            "Feature not compiled — override will save but takes effect only after `cargo build --features layout_ml`"
+                                        },
+                                        input {
+                                            r#type: "checkbox",
+                                            class: PARAM_CHECKBOX_CLASS,
+                                            checked: enabled_now,
+                                            onchange: move |evt| {
+                                                if saving {
+                                                    return;
+                                                }
+                                                let want = evt.checked();
+                                                spawn(async move {
+                                                    layout_toggle_saving.set(true);
+                                                    layout_toggle_message.set(None);
+                                                    match api::put_runtime_setting(
+                                                        "LAYOUT_ML_ENABLED",
+                                                        Some(if want { "true".into() } else { "false".into() }),
+                                                    ).await {
+                                                        Ok(_) => {
+                                                            layout_restart_pending.set(true);
+                                                            layout_toggle_message.set(Some(format!(
+                                                                "Saved LAYOUT_ML_ENABLED={want}. Restart required."
+                                                            )));
+                                                            // Optimistic local update so the readback tiles
+                                                            // reflect the saved override immediately; the real
+                                                            // value lands after restart.
+                                                            config.with_mut(|c| c.layout_ml_enabled = want);
+                                                        }
+                                                        Err(e) => {
+                                                            layout_toggle_message.set(Some(format!(
+                                                                "Failed to save: {e}"
+                                                            )));
+                                                        }
+                                                    }
+                                                    layout_toggle_saving.set(false);
+                                                });
+                                            },
+                                        }
+                                        label { class: PARAM_LABEL_CLASS, "LAYOUT_ML_ENABLED" }
+                                        button {
+                                            // `ml-auto` pushes this info button
+                                            // to the right edge of the chip
+                                            // (which is the panel right edge
+                                            // because the chip is `basis-full`).
+                                            // Pairs with the Layout model chip's
+                                            // info button for horizontal X
+                                            // alignment between the two rows.
+                                            class: format!("{PARAM_ICON_BUTTON_CLASS} ml-auto"),
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_layout_enabled_toggle_info.set(true),
+                                            title: "What this toggle does",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                            }
+
+                            // LAYOUT_ML_MODEL_ID input — Tier 0 HuggingFace Hub
+                            // spec. Format: `owner/repo` (defaults to model.onnx
+                            // inside the repo) or `owner/repo:filename.onnx`.
+                            // When set, ag auto-downloads via hf-hub into
+                            // ~/.cache/huggingface/hub/ on first use and
+                            // reuses it on subsequent boots. Empty string =
+                            // skip Tier 0, fall through to LAYOUT_DETR_MODEL_PATH.
+                            div { class: "flex items-center gap-2 ml-3 flex-wrap",
+                                label { class: PARAM_LABEL_CLASS, "LAYOUT_ML_MODEL_ID:" }
+                                input {
+                                    r#type: "text",
+                                    class: "bg-gray-700 text-gray-100 text-xs rounded px-2 py-1 w-72 font-mono border border-gray-600 focus:border-blue-400 focus:outline-none",
+                                    placeholder: "owner/repo[:filename] — e.g. cmarkea/detr-layout-detection",
+                                    value: "{model_id_draft}",
+                                    oninput: move |evt| model_id_draft.set(evt.value()),
+                                }
+                                button {
+                                    class: "btn btn-xs bg-blue-700 hover:bg-blue-600 text-white border-none disabled:bg-gray-700 disabled:text-gray-500",
+                                    disabled: model_id_saving(),
+                                    onclick: move |_| {
+                                        let val = model_id_draft.read().clone();
+                                        spawn(async move {
+                                            model_id_saving.set(true);
+                                            model_id_message.set(None);
+                                            let trimmed = val.trim().to_string();
+                                            let payload = if trimmed.is_empty() { None } else { Some(trimmed.clone()) };
+                                            match api::put_runtime_setting("LAYOUT_ML_MODEL_ID", payload).await {
+                                                Ok(_) => {
+                                                    layout_restart_pending.set(true);
+                                                    model_id_message.set(Some(if trimmed.is_empty() {
+                                                        "Cleared LAYOUT_ML_MODEL_ID. Restart required.".to_string()
+                                                    } else {
+                                                        format!("Saved LAYOUT_ML_MODEL_ID={trimmed}. Restart required.")
+                                                    }));
+                                                }
+                                                Err(e) => model_id_message.set(Some(format!("Failed to save: {e}"))),
+                                            }
+                                            model_id_saving.set(false);
+                                        });
+                                    },
+                                    if model_id_saving() { "Saving…" } else { "Save" }
+                                }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_model_id_info.set(true),
+                                    title: "What LAYOUT_ML_MODEL_ID does",
+                                    InfoIcon {}
+                                }
+                                if let Some(msg) = model_id_message() {
+                                    span {
+                                        class: if msg.starts_with("Failed") { "text-xs text-red-400" } else { "text-xs text-green-400" },
+                                        "{msg}"
+                                    }
+                                }
+                            }
+
+                            // Compact status chips, on the same row as the
+                            // title/toggle. `flex-wrap` on the parent row
+                            // lets them spill to a second line on narrow
+                            // viewports.
+                            div { class: "bg-gray-800 rounded px-2 py-1 text-xs flex items-center gap-2 ml-3",
+                                // Read-only checkbox — reflects
+                                // layout_ml_compiled, which is set at
+                                // compile time via cfg!(feature =
+                                // "layout_ml") and cannot change at
+                                // runtime. `pointer-events-none` on the
+                                // input stops the browser from briefly
+                                // toggling it on click; the wrapping div
+                                // catches the click and opens the
+                                // explainer modal.
                                 div {
-                                    class: if config().layout_ml_compiled { "text-green-400 font-semibold" } else { "text-gray-500" },
+                                    class: "cursor-pointer flex items-center",
+                                    title: "Build-time flag — click for details",
+                                    onclick: move |_| show_feature_compiled_info.set(true),
+                                    input {
+                                        r#type: "checkbox",
+                                        class: format!("{PARAM_CHECKBOX_CLASS} pointer-events-none"),
+                                        checked: config().layout_ml_compiled,
+                                    }
+                                }
+                                span { class: "text-gray-400", "Feature compiled:" }
+                                span {
+                                    class: if config().layout_ml_compiled { "text-green-400 font-semibold" } else { "text-gray-300" },
                                     if config().layout_ml_compiled { "yes" } else { "no (build without layout_ml)" }
                                 }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_feature_compiled_info.set(true),
+                                    title: "What \"feature compiled\" means",
+                                    InfoIcon {}
+                                }
                             }
-                            div { class: "bg-gray-800 rounded p-2",
-                                div { class: "text-gray-400 mb-1", "Enabled" }
-                                div {
-                                    class: if config().layout_ml_enabled { "text-green-400 font-semibold" } else { "text-gray-500" },
+                            div { class: "bg-gray-800 rounded px-2 py-1 text-xs flex items-center gap-2",
+                                span { class: "text-gray-400", "Enabled:" }
+                                span {
+                                    class: if config().layout_ml_enabled { "text-green-400 font-semibold" } else { "text-gray-300" },
                                     if config().layout_ml_enabled { "yes (LAYOUT_ML_ENABLED=true)" } else { "no (set LAYOUT_ML_ENABLED=true)" }
                                 }
-                            }
-                            div { class: "bg-gray-800 rounded p-2",
-                                div { class: "text-gray-400 mb-1", "Layout model" }
-                                div {
-                                    class: if config().layout_model_ready { "text-green-400 font-semibold" } else { "text-yellow-400" },
-                                    if config().layout_model_ready { "ORT (PubLayNet)" } else { "heuristic only" }
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_enabled_info.set(true),
+                                    title: "What LAYOUT_ML_ENABLED controls",
+                                    InfoIcon {}
                                 }
+                            }
+                            // `basis-full` puts this chip on its own row so
+                            // its right edge = panel right edge; `ml-auto` on
+                            // the info button pushes it to that right edge.
+                            // Together with the LAYOUT_ML_ENABLED chip above
+                            // (same treatment), the two info buttons sit at
+                            // the same horizontal X coordinate.
+                            div { class: "bg-gray-800 rounded px-2 py-1 text-xs flex items-center gap-2 basis-full",
+                                span { class: "text-gray-400", "Layout model:" }
+                                span {
+                                    class: if config().layout_model_ready { "text-green-400 font-semibold" } else { "text-yellow-400" },
+                                    {
+                                        let tier = config().layout_model_tier.clone();
+                                        if tier.is_empty() {
+                                            if config().layout_model_ready { "ORT (PubLayNet)".to_string() } else { "heuristic only".to_string() }
+                                        } else {
+                                            tier
+                                        }
+                                    }
+                                }
+                                button {
+                                    class: format!("{PARAM_ICON_BUTTON_CLASS} ml-auto"),
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| show_layout_model_info.set(true),
+                                    title: "Layout model: ORT vs heuristic",
+                                    InfoIcon {}
+                                }
+                            }
+                            // Chunker mode chip — surfaces the Layer-2 chunking
+                            // strategy that will run on the DocIR this pipeline
+                            // produces. Info modal explains when each mode is a
+                            // good fit for PDFs and links to /config/chunker.
+                            // Recommended modes for PDF output: lightweight (default),
+                            // semantic, sentence, pipeline. `fixed` is flagged as
+                            // suboptimal — pure size-based splitting that doesn't
+                            // benefit from the heading/paragraph structure the
+                            // native pipeline reveals. Warning, when applicable,
+                            // is rendered as a separate row below the chips so
+                            // this chip stays one tight inline unit aligned with
+                            // its siblings.
+                            {
+                                let mode_raw = config().chunker_mode.clone();
+                                let mode = if mode_raw.is_empty() { "fixed".to_string() } else { mode_raw };
+                                let is_recommended = matches!(
+                                    mode.as_str(),
+                                    "lightweight" | "semantic" | "sentence" | "pipeline"
+                                );
+                                // Match sibling chips exactly: same font-family
+                                // (no font-mono — that has a different x-height
+                                // and shifts the baseline), same color-only
+                                // emphasis. The `edit` link uses leading-none
+                                // so its underline doesn't pad the line-box
+                                // taller than the sibling text spans, which
+                                // would push the baseline down inside
+                                // `flex items-center`.
+                                let value_class = if is_recommended {
+                                    "text-green-400 font-semibold"
+                                } else {
+                                    "text-yellow-400 font-semibold"
+                                };
+                                rsx! {
+                                    div { class: "bg-gray-800 rounded px-2 py-1 text-xs flex items-center gap-2",
+                                        span { class: "text-gray-400", "Chunker mode:" }
+                                        span { class: value_class, "{mode}" }
+                                        Link {
+                                            to: Route::ConfigChunker {},
+                                            class: "text-blue-400 hover:text-blue-300 underline leading-none",
+                                            "edit"
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_chunker_mode_info.set(true),
+                                            title: "When to pick which chunker mode for PDFs",
+                                            InfoIcon {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Suboptimal-chunker-mode warning. Sits on its own row
+                        // below the chip strip so it never disturbs chip
+                        // alignment. Only renders when the mode is `fixed` (or
+                        // any future non-recommended value).
+                        {
+                            let mode_raw = config().chunker_mode.clone();
+                            let mode = if mode_raw.is_empty() { "fixed".to_string() } else { mode_raw };
+                            let is_recommended = matches!(
+                                mode.as_str(),
+                                "lightweight" | "semantic" | "sentence" | "pipeline"
+                            );
+                            if !is_recommended {
+                                rsx! {
+                                    div { class: "text-xs text-yellow-300 mt-1",
+                                        "⚠ "
+                                        span { class: "font-mono", "{mode}" }
+                                        " is suboptimal for native PDF output — prefer "
+                                        span { class: "font-mono", "lightweight" }
+                                        " or "
+                                        span { class: "font-mono", "semantic" }
+                                        ". "
+                                        Link {
+                                            to: Route::ConfigChunker {},
+                                            class: "text-blue-400 hover:text-blue-300 underline",
+                                            "Change on /config/chunker"
+                                        }
+                                    }
+                                }
+                            } else {
+                                rsx! {}
+                            }
+                        }
+
+                        // Restart-required banner — shown after the toggle is
+                        // saved, drives /runtime/actions/restart-self.
+                        if layout_restart_pending() {
+                            div {
+                                class: "rounded border border-orange-700 bg-orange-900/30 p-2 flex items-center justify-between gap-2 mb-1",
+                                div { class: "text-xs text-orange-100",
+                                    "Native PDF Extraction toggle is restart-required. ag will re-exec in place — no systemd or docker needed."
+                                }
+                                button {
+                                    class: "btn btn-xs",
+                                    style: "background-color:#7C2A02;color:white;border:1px solid #7C2A02;",
+                                    disabled: layout_restarting(),
+                                    onclick: move |_| {
+                                        layout_restarting.set(true);
+                                        spawn(async move {
+                                            let _ = api::post_restart_self().await;
+                                            let _ = api::wait_for_restart(60_000, 750).await;
+                                            layout_restarting.set(false);
+                                            layout_restart_pending.set(false);
+                                        });
+                                    },
+                                    if layout_restarting() { "Restarting…" } else { "Restart now" }
+                                }
+                            }
+                        }
+
+                        // Toast for save success/failure.
+                        if let Some(msg) = layout_toggle_message() {
+                            div {
+                                class: if msg.starts_with("Failed") {
+                                    "text-xs text-red-400 mb-1"
+                                } else {
+                                    "text-xs text-green-400 mb-1"
+                                },
+                                "{msg}"
                             }
                         }
                     }
@@ -292,9 +657,13 @@ pub fn ConfigOnnx() -> Element {
                     div { class: "flex flex-col gap-2",
                         // Header row with title and save button
                         div { class: "flex items-center justify-between",
-                            div { class: "flex flex-col",
-                                span { class: "text-base text-gray-100 font-semibold", "General" }
-                                span { class: "text-xs text-gray-500 italic", "ONNX Runtime Parameters (50 total) - restart required to apply changes" }
+                            div { class: "flex flex-col gap-1",
+                                div { class: "flex items-center gap-2",
+                                    span { class: "text-base text-gray-100 font-semibold", "General" }
+                                    {layer_badge("ort-session-option")}
+                                    {layer_badge("ort-session-config")}
+                                }
+                                span { class: "text-xs text-gray-300 italic", "ONNX Runtime Parameters (50 total) - restart required to apply changes" }
                             }
                             div { class: "flex items-center gap-2",
                                 button {
@@ -327,7 +696,10 @@ pub fn ConfigOnnx() -> Element {
                 // BOARD 1: Session Options (21 parameters)
                 // ═══════════════════════════════════════════════════════════════
                 div { class: "rounded border border-gray-600 p-4 w-full",
-                    span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Session Options (21)" }
+                    div { class: "flex items-center gap-2 mb-3",
+                        span { class: "text-sm text-gray-300 font-semibold", "Session Options (21)" }
+                        {layer_badge("ort-session-option")}
+                    }
                     div { class: "flex flex-wrap gap-28 justify-start",
 
                         // Column 1: Optimization & Execution
@@ -660,7 +1032,7 @@ pub fn ConfigOnnx() -> Element {
                                         InfoIcon {}
                                     }
                                 }
-                                span { class: "text-gray-500 text-xs italic", "live — no restart needed" }
+                                span { class: "text-gray-300 text-xs italic", "live — no restart needed" }
                             }
                         }
 
@@ -810,7 +1182,10 @@ pub fn ConfigOnnx() -> Element {
                 Panel { title: None, refresh: None,
                 div { class: "rounded border border-gray-600 p-4 w-full",
                     div { class: "flex items-center justify-between mb-3",
-                        span { class: "text-sm text-gray-300 font-semibold", "Session Config Keys (15)" }
+                        div { class: "flex items-center gap-2",
+                            span { class: "text-sm text-gray-300 font-semibold", "Session Config Keys (15)" }
+                            {layer_badge("ort-session-config")}
+                        }
                     }
                     div { class: "flex flex-wrap gap-28 justify-start",
                         div { class: PARAM_COLUMN_CLASS,
@@ -1621,18 +1996,1461 @@ pub fn ConfigOnnx() -> Element {
                 "Lower values (8–16) protect against OOM when indexing large or image-heavy PDFs. Higher values (32–128) give better GPU/CPU utilisation once you have enough RAM.",
                 "This setting takes effect immediately — no restart required. The default is 32, which is safe for most laptops and desktop machines.",
             ]) }
+        }
 
         if show_layout_ml_info() {
-            { info_modal("Native PDF Extraction", show_layout_ml_info, vec![
-                "The native PDF extraction pipeline runs entirely in-process — no Python sidecar required.",
-                "Stage 1 uses lopdf to walk the PDF content stream and extract word tokens with bounding boxes (x0, y0, x1, y1 normalised to 0–1000). A fallback to extractous handles malformed PDFs where lopdf cannot parse the content stream.",
-                "Stage 2 classifies regions using LayoutXLM (via candle). When the LayoutXLM model is not downloaded, a pure-Rust heuristic classifier takes over: it groups words into lines by y-proximity, then scores each line for title capitalisation, footer position, table pipe characters, and list bullet markers.",
-                "Stage 3 detects table structure. The ORT TableFormer model (microsoft/table-transformer-structure-recognition) is the primary path; text-mode clustering fills in until page image rendering is available.",
-                "Stage 4 assembles DocIR: Titles, SectionHeaders, Tables, Figures, Captions, and Lists are mapped to typed DocBlocks. Footer and noise regions are dropped.",
-                "To activate: set LAYOUT_ML_ENABLED=true. The heuristic classifier works immediately with no download. To use the candle LayoutXLM path: find a fine-tuned checkpoint on huggingface.co (search 'layoutxlm document layout') that has config.json, tokenizer.json, and model.safetensors with a 13-class document-layout classifier head. Set LAYOUT_ML_MODEL_ID=owner/repo-name — the server downloads the weights automatically on first startup and caches them to ~/.cache/huggingface/hub/. Any load failure falls back to heuristic automatically.",
-                "Priority: Docling sidecar (if running) > NativePdfExtractor > built-in pdftotext.",
-            ]) }
+            {native_pdf_extraction_modal(show_layout_ml_info, show_lopdf_info, show_extractous_info)}
         }
+
+        if show_lopdf_info() {
+            {lopdf_info_modal(show_lopdf_info)}
+        }
+
+        if show_extractous_info() {
+            {extractous_info_modal(show_extractous_info)}
+        }
+
+        if show_feature_compiled_info() {
+            {feature_compiled_info_modal(show_feature_compiled_info)}
+        }
+
+        if show_enabled_info() {
+            {enabled_info_modal(show_enabled_info)}
+        }
+
+        if show_layout_model_info() {
+            {layout_model_info_modal(show_layout_model_info)}
+        }
+
+        if show_layout_enabled_toggle_info() {
+            {layout_enabled_toggle_info_modal(show_layout_enabled_toggle_info)}
+        }
+
+        if show_model_id_info() {
+            {layout_ml_model_id_info_modal(show_model_id_info)}
+        }
+
+        if show_chunker_mode_info() {
+            {chunker_mode_for_native_pdf_modal(show_chunker_mode_info)}
+        }
+    }
+}
+
+/// Framing banner — top of /config/onnx. Mirrors the explainer on
+/// /config/runtime and /docu/index/onnx so the reader can map each knob on
+/// this page to the layer it actually configures.
+fn onnx_vs_ort_page_banner() -> Element {
+    rsx! {
+        div { class: "border border-blue-700 bg-blue-900/20 rounded-lg p-3 text-xs space-y-1",
+            div { class: "font-semibold text-blue-200 text-sm",
+                "Every knob below is an ort / ONNX Runtime setting — not a .onnx file setting"
+            }
+            div { class: "text-gray-300 space-y-1",
+                p {
+                    span { class: "text-gray-400", "ONNX = file format. " }
+                    "A .onnx file declares "
+                    em { "what" }
+                    " to compute (graph + weights). It has no threading, no optimization level, no hardware selection."
+                }
+                p {
+                    span { class: "text-gray-400", "ONNX Runtime = the C++ engine. " }
+                    "All the execution knobs on this page — graph_optimization_level, num_threads, mem_pattern, etc. — are ONNX Runtime SessionOptions, accessed via the "
+                    span { class: "font-mono text-gray-100", "ort" }
+                    " Rust crate (a thin typed wrapper, no extra knobs of its own)."
+                }
+                p { class: "text-gray-400",
+                    "Each board below carries a layer tag so it's visible at the parameter level which layer owns the knob. Longer write-up at "
+                    a { href: "/docu/index/onnx", class: "text-blue-400 hover:text-blue-300 underline",
+                        "/docu/index/onnx"
+                    }
+                    "."
+                }
+            }
+        }
+    }
+}
+
+/// Small layer-source badge for board titles.
+fn layer_badge(layer: &str) -> Element {
+    let (label, color) = match layer {
+        "ort-session-option" => ("ort · SessionOption", "bg-blue-900/40 text-blue-300 border-blue-700"),
+        "ort-session-config" => ("ort · SessionConfig K/V", "bg-cyan-900/40 text-cyan-300 border-cyan-700"),
+        "ag-level" => ("ag-level", "bg-amber-900/40 text-amber-300 border-amber-700"),
+        "onnx-file" => ("ONNX file", "bg-purple-900/40 text-purple-300 border-purple-700"),
+        other => (other, "bg-gray-700 text-gray-300 border-gray-600"),
+    };
+    let class = format!("px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide {color}");
+    rsx! {
+        span { class: "{class}", "{label}" }
+    }
+}
+
+/// Custom Native PDF Extraction info modal — same content as the previous
+/// info_modal call, but with `lopdf` and `extractous` rendered as clickable
+/// spans that open nested explainer modals.
+fn native_pdf_extraction_modal(
+    mut show: Signal<bool>,
+    mut show_lopdf: Signal<bool>,
+    mut show_extractous: Signal<bool>,
+) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-900 border border-gray-700 rounded-lg p-4 w-[98vw] max-h-[92vh] flex flex-col shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3 shrink-0",
+                    h2 { class: "text-xl font-bold text-gray-100", "Native PDF Extraction" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-xs text-gray-300 leading-relaxed flex-1 min-h-0 overflow-y-auto space-y-4",
+                    div { class: "pb-3 border-b border-gray-700 space-y-2",
+                        h3 { class: "text-sm font-semibold text-gray-100", "Why native extraction matters" }
+                        p {
+                            "Without native extraction ag treats a PDF like one big text file — pdftotext concatenates every page into one undifferentiated blob, and that blob is what gets chunked, embedded, and indexed. Page numbers, table boundaries, headings, captions, code blocks: all gone before the retriever ever sees them. "
+                            strong { "Native extraction reads the same PDF and produces a typed document tree" }
+                            " (titles, section headers, tables, code, captions, lists, page breaks, images), which then flows into every downstream stage with its structure intact."
+                        }
+                        p { class: "text-gray-200", "What you actually get from that:" }
+                        ul { class: "list-disc pl-5 space-y-1",
+                            li {
+                                strong { "Tables stay whole. " }
+                                "A table is treated as one atomic unit — the chunker never slices it mid-row. A query like \"GPU utilisation 84%\" returns the full row context instead of a torn fragment that lost which column the number belonged to."
+                            }
+                            li {
+                                strong { "Code blocks and formulas stay whole. " }
+                                "Same atomic rule. A chunk never splits a function definition between an opening brace and its body."
+                            }
+                            li {
+                                strong { "Sections become chunk boundaries. " }
+                                "Headers flush the current chunk. A single chunk never straddles the end of \"Methods\" and the start of \"Results\" — search hits stay scoped to the section they came from, so the relevance signal isn't diluted by half-foreign context."
+                            }
+                            li {
+                                strong { "Block type rides into the index. " }
+                                "Every chunk carries its kind (Text, Header, Table, Caption, Code, …) as metadata. The retriever can reweight by structural role — boost section headers, demote footers — and search results expose the block type so the UI can label \"this hit came from a Table\" instead of treating every match as anonymous body text."
+                            }
+                            li {
+                                strong { "Page numbers and bounding boxes survive. " }
+                                "DocBlock keeps the source position, so \"from page 14\" links and figure-region highlights work. The plain-text path strips this — you only get \"somewhere in the file\"."
+                            }
+                            li {
+                                strong { "Corpus health becomes visible. " }
+                                "The Datastores page shows real per-corpus distribution (\"62% Text · 14% Table · 8% Header · …\") instead of a uniform 100% Text. Useful for spotting PDFs that came in mis-classified or weren't extracted natively at all."
+                            }
+                        }
+                        p { class: "text-gray-400",
+                            "Cost: ingest time goes up — pdfium renders each page and the layout model runs on each one. Query latency is unchanged (the work is already in the index). Every failure mode degrades gracefully: missing model → next tier; all tiers fail → heuristic classifier; everything fails → plain-text fallback. The pipeline never refuses to run."
+                        }
+                    }
+                    div { class: "grid grid-cols-2 gap-4 divide-x divide-gray-700",
+                    div { class: "space-y-2 pr-4",
+                        h3 { class: "text-sm font-semibold text-gray-100", "How it works (the four stages)" }
+                        p { "Runs entirely in-process — no Python sidecar required." }
+                        p {
+                            "Stage 1 uses "
+                            span {
+                                class: "text-blue-400 hover:text-blue-300 underline cursor-pointer font-mono",
+                                onclick: move |_| show_lopdf.set(true),
+                                title: "What is lopdf?",
+                                "lopdf"
+                            }
+                            " to walk the PDF content stream and extract word tokens with bounding boxes (x0, y0, x1, y1 normalised to 0–1000). A fallback to "
+                            span {
+                                class: "text-blue-400 hover:text-blue-300 underline cursor-pointer font-mono",
+                                onclick: move |_| show_extractous.set(true),
+                                title: "What is extractous?",
+                                "extractous"
+                            }
+                            " handles malformed PDFs where lopdf cannot parse the content stream."
+                        }
+                        p { "Stage 2 classifies regions using a DETR-style image model or word-feature ONNX classifier (loaded via the ort runtime). When no neural model is configured or available, a pure-Rust heuristic classifier takes over: it groups words into lines by y-proximity, then scores each line for title capitalisation, footer position, table pipe characters, and list bullet markers." }
+                        p { "Stage 3 detects table structure. The ORT TableFormer model (microsoft/table-transformer-structure-recognition) is the primary path; text-mode clustering fills in until page image rendering is available." }
+                        p { "Stage 4 assembles DocIR: Titles, SectionHeaders, Tables, Figures, Captions, and Lists are mapped to typed DocBlocks. Footer and noise regions are dropped." }
+                        p { "Priority: Docling sidecar (if running) > NativePdfExtractor > built-in pdftotext." }
+                    }
+                    div { class: "space-y-2 pl-4",
+                        h3 { class: "text-sm font-semibold text-gray-100", "Activation" }
+                        p {
+                            "To activate: set "
+                            span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED=true" }
+                            ". The heuristic classifier works immediately with no download. For a neural layout model, three tiers are tried in order:"
+                        }
+                        ul { class: "list-disc pl-5 space-y-1",
+                            li {
+                                span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID=owner/repo" }
+                                " — Tier 0, auto-download via HuggingFace Hub. On first boot ag fetches the file into "
+                                span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
+                                " and reuses it thereafter. Default filename is "
+                                span { class: "font-mono text-gray-100", "model.onnx" }
+                                "; override with "
+                                span { class: "font-mono text-gray-100", "owner/repo:other-file.onnx" }
+                                ". DETR-shape only (pixel_values input)."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
+                                " — Tier 1, local DETR file (used if Tier 0 isn't set or its download failed)."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "LAYOUT_ORT_MODEL_PATH" }
+                                " — Tier 2, word-feature ONNX classifier (used if Tier 0 and Tier 1 are unavailable)."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "TABLE_FORMER_MODEL_PATH" }
+                                " — TableFormer for Stage 3 table structure (huggingface.co/microsoft/table-transformer-structure-recognition)."
+                            }
+                        }
+                        p { "Any load failure falls back to the next tier, ending at the heuristic / text-mode classifier — the pipeline never refuses to run because of a model problem." }
+                        p { class: "pt-2 border-t border-gray-700 text-gray-400",
+                            "Where this fits in the bigger picture: Native PDF Extraction is "
+                            em { "Stage 0" }
+                            " — it produces the DocIR that the "
+                            a {
+                                href: "/monitor/tip",
+                                class: "text-blue-400 hover:text-blue-300 underline",
+                                "Text Ingestion Pipeline (/monitor/tip)"
+                            }
+                            " then runs through Parser → Canonicalization → Typography → Chunker → Embedder. The block-type tags assigned here (Title, SectionHeader, Table, Figure, Caption, List) survive all the way into the chunk metadata and let the retriever reweight by structural role at query time."
+                        }
+                    }
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-3 shrink-0",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal for the "Feature compiled" tile inside Native PDF Extraction.
+fn feature_compiled_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-4 w-[98vw] max-h-[92vh] flex flex-col shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3 shrink-0",
+                    h2 { class: "text-lg font-semibold text-gray-100", "Feature compiled" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-xs text-gray-300 leading-relaxed flex-1 min-h-0 overflow-y-auto grid grid-cols-3 gap-4 divide-x divide-gray-700",
+                    div { class: "space-y-2 pr-4",
+                        h3 { class: "text-gray-100 font-semibold", "Why this checkbox doesn't toggle when you click it" }
+                        p {
+                            "It's a "
+                            strong { "read-only status indicator" }
+                            ", not a control. It shows whether the running binary includes the "
+                            span { class: "font-mono text-gray-100", "layout_ml" }
+                            " Cargo feature — set at compile time by "
+                            span { class: "font-mono text-gray-100", "cfg!(feature = \"layout_ml\")" }
+                            ". The app cannot flip this at runtime because the relevant code is either in the binary or it isn't."
+                        }
+                        p {
+                            "Compare to the "
+                            em { "Enabled" }
+                            " toggle next to it: "
+                            span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" }
+                            " is a runtime env var the app reads at startup, so the app can save an override, restart itself, and read the new value. That whole loop is self-contained. Feature-compiled isn't — flipping it requires:"
+                        }
+                        ul { class: "list-disc pl-5 space-y-1",
+                            li { "Shell access on the host machine" }
+                            li { "The Rust toolchain installed" }
+                            li {
+                                "A "
+                                span { class: "font-mono text-gray-100", "cargo build --release --features layout_ml" }
+                                " (5–15 minutes the first time)"
+                            }
+                            li {
+                                "A restart: "
+                                span { class: "font-mono text-gray-100", "systemctl --user restart ag.service" }
+                            }
+                        }
+                        p { "None of that is something a button in this UI can do for itself. A clickable toggle here would lie — appearing to enable the feature while the actual code wasn't in the binary to call." }
+                    }
+                    div { class: "space-y-2 px-4",
+                        h3 { class: "text-gray-100 font-semibold", "What \"feature compiled\" actually gates" }
+                        p {
+                            "The "
+                            span { class: "font-mono text-gray-100", "layout_ml" }
+                            " feature is the build-time gate on the whole Native PDF Extraction pipeline. It pulls in six Cargo dependencies (all optional, all non-Windows):"
+                        }
+                        ul { class: "list-disc pl-5 space-y-1",
+                            li {
+                                span { class: "font-mono text-gray-100", "lopdf" }
+                                " — parses the PDF content stream to extract per-word bounding boxes (Stage 1)."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "extractous" }
+                                " — fallback text extractor used when lopdf can't parse a malformed PDF."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "ort" }
+                                " — ONNX Runtime; loads the DETR / word-feature layout model (Stage 2) and TableFormer (Stage 3). Also pulled in by the default "
+                                span { class: "font-mono text-gray-100", "onnx" }
+                                " feature for embeddings."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "pdfium-render" }
+                                " — renders PDF pages to bitmaps so the DETR layout model can run on them. Requires the PDFium native library on the host ("
+                                span { class: "font-mono text-gray-100", "PDFIUM_LIBRARY_PATH" }
+                                " or a system install)."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "image" }
+                                " — bitmap manipulation for the rendered pages before they're handed to ort."
+                            }
+                            li {
+                                span { class: "font-mono text-gray-100", "hf-hub" }
+                                " — auto-downloads layout models from HuggingFace Hub when "
+                                span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID" }
+                                " is set, caching under "
+                                span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
+                                "."
+                            }
+                        }
+                        p { class: "text-gray-400",
+                            "All six are declared in "
+                            span { class: "font-mono text-gray-100", "backend/Cargo.toml" }
+                            " behind "
+                            span { class: "font-mono text-gray-100", "[features] layout_ml = […]" }
+                            " and "
+                            span { class: "font-mono text-gray-100", "[target.'cfg(not(target_os = \"windows\"))'.dependencies.*]" }
+                            ". Running "
+                            span { class: "font-mono text-gray-100", "cargo build --release --features layout_ml" }
+                            " resolves and compiles them on first build (5–15 min cold)."
+                        }
+                        h3 { class: "text-gray-100 font-semibold pt-1", "Why a build-time gate?" }
+                        p { "Those crates add ~50 MB to the binary and noticeable compile time. Deployments that don't process PDFs (or are happy with the plain-text path) can skip them entirely. Making the choice runtime would mean shipping the cost in every build, including ones that never use it." }
+                    }
+                    div { class: "space-y-2 pl-4",
+                        h3 { class: "text-gray-100 font-semibold", "yes" }
+                        p { "The binary has the pipeline compiled in. The runtime flag (the Enabled toggle next to this) decides whether it actually executes." }
+                        h3 { class: "text-gray-100 font-semibold pt-1", "no (build without layout_ml)" }
+                        p {
+                            "The binary was built without the feature. ag falls back to plain text extraction — no per-word bounding boxes, no layout classification. To get to "
+                            em { "yes" }
+                            ": rebuild with "
+                            span { class: "font-mono text-gray-100", "cargo build --release --features layout_ml" }
+                            " and restart ag."
+                        }
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-3 shrink-0",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal for the "Enabled" tile inside Native PDF Extraction.
+fn enabled_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "Enabled — "
+                        span { class: "font-mono", "LAYOUT_ML_ENABLED" }
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 leading-relaxed space-y-3",
+                    p {
+                        "Runtime switch for the Native PDF pipeline. Set "
+                        span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED=true" }
+                        " in your env file (or override on the Runtime config page) to turn the pipeline on. Independent of the build-time feature flag — both must be true for the pipeline to run."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Why two switches?" }
+                    p {
+                        "The "
+                        span { class: "font-mono text-gray-100", "layout_ml" }
+                        " Cargo feature decides whether the code is "
+                        em { "available" }
+                        " in the binary. "
+                        span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" }
+                        " decides whether it "
+                        em { "runs" }
+                        ". You might compile it in (e.g. for a release build that ships to multiple deployments) but disable it per-host to skip the extra CPU/RAM cost on machines that don't need layout analysis."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "What turning it on changes" }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li { "Uploaded PDFs go through Stage 1–4 of the layout pipeline instead of plain-text extraction." }
+                        li { "Chunks gain block-type metadata (Title, SectionHeader, Table, Figure, Caption, List) that the retriever can later weight differently." }
+                        li { "Per-document indexing latency increases — more CPU, more RAM during ingestion. Steady-state query latency is unchanged." }
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "If you flip it on" }
+                    p {
+                        "Existing chunks keep whatever block tags they had at upload time; only newly-ingested PDFs benefit. To re-process the whole corpus, trigger a reindex."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal for the inline LAYOUT_ML_ENABLED toggle in the Native PDF
+/// Extraction header.
+fn layout_enabled_toggle_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "Native PDF Extraction toggle — "
+                        span { class: "font-mono", "LAYOUT_ML_ENABLED" }
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 leading-relaxed space-y-3",
+                    p {
+                        "Saves a runtime override for "
+                        span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" }
+                        " and surfaces a Restart-now button. Same plumbing as the Runtime config page — the override goes into "
+                        span { class: "font-mono text-gray-100", "<base_dir>/overrides.json" }
+                        " and is consulted at the next startup."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Two switches, both must be on" }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            strong { "Feature compiled" }
+                            " (tile to the left) — build-time gate via the "
+                            span { class: "font-mono text-gray-100", "layout_ml" }
+                            " Cargo feature. If this is "
+                            em { "no" }
+                            ", the toggle here is disabled — there's no code in the binary to enable."
+                        }
+                        li {
+                            strong { "Enabled" }
+                            " — runtime gate (this toggle). Flips "
+                            span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" }
+                            ". Both must be true for the Stage 0 pipeline to run."
+                        }
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Why restart-required" }
+                    p {
+                        "ag reads "
+                        span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" }
+                        " once at boot to decide whether to register "
+                        span { class: "font-mono text-gray-100", "NativePdfExtractor" }
+                        " into the extractor registry. The registry can't be swapped live without confusing in-flight uploads, so the change only takes effect after a self re-exec."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "What changes when you flip it on" }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li { "New PDF uploads go through Stage 0 → DocIR → Stage 1 (Parser on /monitor/tip)." }
+                        li { "Chunks gain block-type tags (Title, SectionHeader, Table, Figure, Caption, List) that downstream reranking can weight." }
+                        li { "Existing chunks are NOT re-tagged — they keep whatever they had at upload time. Trigger a reindex if you want the whole corpus enriched." }
+                        li { "Per-document ingestion latency goes up; query latency is unaffected." }
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Same row on /config/runtime" }
+                    p {
+                        "This toggle is a convenience surface. The same setting also appears as a row under "
+                        em { "Pdf" }
+                        " on "
+                        a {
+                            href: "/config/runtime",
+                            class: "text-blue-400 hover:text-blue-300 underline",
+                            "/config/runtime"
+                        }
+                        " — useful if you also want to set "
+                        span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID" }
+                        " (the neural-classifier checkpoint) in the same place."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal for the "Layout model" tile inside Native PDF Extraction.
+fn layout_model_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-4 w-[98vw] max-h-[92vh] flex flex-col shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3 shrink-0",
+                    h2 { class: "text-lg font-semibold text-gray-100", "Layout model — ORT vs heuristic" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-xs text-gray-300 leading-relaxed flex-1 min-h-0 overflow-y-auto grid grid-cols-2 gap-4 divide-x divide-gray-700",
+                    div { class: "space-y-2 pr-4",
+                        p {
+                            "Stage 2 of the Native PDF pipeline classifies each region as Title, SectionHeader, Body, Footer, Table, Figure, Caption, or List. Two paths exist, and this tile shows which one is currently active."
+                        }
+                        h3 { class: "text-gray-100 font-semibold pt-1", "ORT (PubLayNet)" }
+                        p {
+                            "A neural classifier (DETR-style image model or word-feature ONNX) loaded via the "
+                            span { class: "font-mono text-gray-100", "ort" }
+                            " runtime. Trained on PubLayNet — a ~360 k page dataset of scientific papers labelled with layout regions. Significantly more accurate on dense, multi-column documents than the heuristic, especially for figures and captions."
+                        }
+                        p {
+                            "Three activation paths, tried in order. All appear on the "
+                            a { href: "/config/runtime", class: "text-blue-400 hover:text-blue-300 underline", "Runtime config page" }
+                            " under "
+                            em { "Pdf" }
+                            " — set, save, restart."
+                        }
+                        ul { class: "list-disc pl-5 space-y-1",
+                            li {
+                                strong { "Tier 0 — auto-download. " }
+                                "Set "
+                                span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID=owner/repo" }
+                                " and ag fetches the file via hf-hub on first boot, caching to "
+                                span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
+                                ". No further network calls. Default filename is "
+                                span { class: "font-mono text-gray-100", "model.onnx" }
+                                "; use "
+                                span { class: "font-mono text-gray-100", "owner/repo:filename.onnx" }
+                                " if the repo names it differently. DETR-shape only — pointing this at a word-feature ONNX will fail at classify time."
+                            }
+                            li {
+                                strong { "Tier 1 — local DETR. " }
+                                "Set "
+                                span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
+                                " to a local DETR file. Useful when you want to pin a specific checkpoint or run offline. Falls back here if Tier 0 isn't set or its download/load failed."
+                            }
+                            li {
+                                strong { "Tier 2 — local word-feature ONNX. " }
+                                "Set "
+                                span { class: "font-mono text-gray-100", "LAYOUT_ORT_MODEL_PATH" }
+                                ". No auto-download path for this shape (Tier 0 is DETR-only)."
+                            }
+                        }
+                    }
+                    div { class: "space-y-2 pl-4",
+                        p {
+                            "Manual download example (only needed for Tier 1 / Tier 2):"
+                        }
+                        ul { class: "list-disc pl-5 space-y-1",
+                            li {
+                                span { class: "font-mono text-gray-100", "huggingface-cli download <owner/repo> --local-dir ~/models/layout" }
+                            }
+                            li { "Then point e.g. LAYOUT_DETR_MODEL_PATH=~/models/layout/model.onnx" }
+                        }
+                        h3 { class: "text-gray-100 font-semibold pt-1", "heuristic only" }
+                        p {
+                            "Pure-Rust fallback. Groups words into lines by y-proximity, then scores each line for title capitalisation, footer position, table pipe characters, and list bullet markers. No model download required, no GPU, deterministic. Accuracy is good for clean single-column reports; degrades on dense layouts and scientific papers."
+                        }
+                        h3 { class: "text-gray-100 font-semibold pt-1", "Failure mode" }
+                        p {
+                            "If the ORT model is configured but fails to load (missing files, bad checkpoint, version mismatch), ag logs a warning and falls back to heuristic automatically — the pipeline never refuses to run because of a layout-model problem."
+                        }
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-3 shrink-0",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Nested explainer for the `extractous` crate — opens from the Native PDF
+/// Extraction modal.
+fn extractous_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        span { class: "font-mono", "extractous" }
+                        " — multi-format text extractor"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 leading-relaxed space-y-3",
+                    p {
+                        span { class: "font-mono text-gray-100", "extractous" }
+                        " is a Rust crate that pulls plain text out of many document formats — PDF, DOCX, HTML, RTF, EPUB, plus images via OCR ("
+                        a {
+                            href: "https://github.com/yobix-ai/extractous",
+                            target: "_blank",
+                            class: "text-blue-400 hover:text-blue-300 underline",
+                            "github.com/yobix-ai/extractous"
+                        }
+                        "). Under the hood it bundles a native-compiled extractor toolkit so ag stays a single-binary deploy — no Java runtime, no Python sidecar."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Why ag uses it here" }
+                    p {
+                        "It is the "
+                        em { "rescue path" }
+                        " for Stage 1. When "
+                        span { class: "font-mono text-gray-100", "lopdf" }
+                        " cannot parse a PDF's content stream — corrupted xref tables, unusual font encodings, malformed streams — ag falls back to extractous so the document is not lost. The chunker still gets useful text to embed; only the layout-ML downstream loses its richer input."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1",
+                        "Trade-off vs "
+                        span { class: "font-mono" }
+                        "lopdf"
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            span { class: "font-mono text-gray-100", "lopdf" }
+                            " returns per-word coordinates (x0, y0, x1, y1) — enough for the layout-ML stage to detect titles, tables, footers."
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "extractous" }
+                            " returns plain text only. The layout-ML stage downstream collapses to its heuristic classifier because there are no bounding boxes to feed it."
+                        }
+                        li { "Net effect: a malformed PDF still ends up indexed and retrievable; it just doesn't get the same structural tagging a well-formed PDF would." }
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Beyond PDFs" }
+                    p {
+                        "extractous handles many other formats out of the box. ag could route DOCX, HTML, EPUB through it directly today, but currently the upload pipeline only invokes it as a PDF fallback. Widening that surface is on the roadmap."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Nested explainer for the `lopdf` crate — opens from the Native PDF
+/// Extraction modal.
+fn lopdf_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        span { class: "font-mono", "lopdf" }
+                        " — a pure-Rust PDF library"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 leading-relaxed space-y-3",
+                    p {
+                        span { class: "font-mono text-gray-100", "lopdf" }
+                        " is a low-level PDF reader / writer crate for Rust ("
+                        a {
+                            href: "https://github.com/J-F-Liu/lopdf",
+                            target: "_blank",
+                            class: "text-blue-400 hover:text-blue-300 underline",
+                            "github.com/J-F-Liu/lopdf"
+                        }
+                        "). It parses the PDF file format directly — objects, streams, cross-reference tables — and exposes the structures as typed Rust values."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "What \"low-level\" means here" }
+                    p {
+                        "A PDF is not a text file. It is a binary container of "
+                        em { "objects" }
+                        ": dictionaries, arrays, streams, references. The visible text lives inside "
+                        em { "content streams" }
+                        " — sequences of drawing operators like "
+                        span { class: "font-mono text-gray-100", "Tj" }
+                        " (show text) and "
+                        span { class: "font-mono text-gray-100", "Tm" }
+                        " (set text matrix). lopdf gives ag direct access to these operators so it can recover not just the text but the (x, y) position of each glyph."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Why ag picks it over a higher-level extractor" }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            "Per-word bounding boxes. Tools like "
+                            span { class: "font-mono text-gray-100", "pdftotext" }
+                            " or extractous return plain strings — they discard layout information that the downstream layout-ML stage needs."
+                        }
+                        li { "Pure Rust. No C/C++ dependency, no Poppler, no MuPDF — ag stays a single-binary deployment." }
+                        li { "Predictable failure mode. When lopdf cannot parse a malformed content stream it fails cleanly, and ag falls back to extractous for plain-text rescue." }
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "Trade-offs" }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li { "Encrypted PDFs and some rare encodings need extra work that the higher-level tools handle implicitly." }
+                        li { "lopdf does not render pages to pixels. For image-based PDFs (scanned documents) ag still needs an OCR path — that lives outside this stage." }
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal for the LAYOUT_ML_MODEL_ID input on /config/onnx.
+fn layout_ml_model_id_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-3xl max-h-[90vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-lg font-semibold text-gray-100", "LAYOUT_ML_MODEL_ID — Tier 0 auto-download" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-4",
+                    // ── What it is ──
+                    p {
+                        "HuggingFace Hub spec for a DETR-style image-based layout model. When set, ag downloads the file via "
+                        span { class: "font-mono text-gray-100", "hf-hub" }
+                        " into "
+                        span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
+                        " on first boot and reuses it on subsequent restarts — no network call once cached."
+                    }
+                    p {
+                        "Format: "
+                        span { class: "font-mono text-gray-100", "owner/repo" }
+                        " (defaults to "
+                        span { class: "font-mono text-gray-100", "model.onnx" }
+                        " inside the repo) or "
+                        span { class: "font-mono text-gray-100", "owner/repo:filename.onnx" }
+                        " if the model file is named something else."
+                    }
+                    p {
+                        "Example: "
+                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                        " — 11-class PubLayNet model. Pair with "
+                        span { class: "font-mono text-gray-100", "LAYOUT_DETR_NUM_CLASSES=11" }
+                        " (the default)."
+                    }
+
+                    // ── Hard constraints ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Hard constraints (the loader will reject mismatches)" }
+                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
+                        li {
+                            strong { class: "text-gray-100", "DETR-style architecture with "}
+                            span { class: "font-mono text-gray-100", "pixel_values" }
+                            strong { class: "text-gray-100", " input." }
+                            " The Tier 0 loader expects an ONNX file that takes a rendered page image and outputs bounding boxes + class logits. A word-feature ONNX (Tier 2 style) or a transformer-encoder-only checkpoint compiles fine but produces garbage at classify time."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "ONNX export must exist in the repo." }
+                            " Many HF layout models ship only PyTorch weights. Either pick a repo with "
+                            span { class: "font-mono text-gray-100", "model.onnx" }
+                            " already published, or one where the converted variant is uploaded as a separate file (then use "
+                            span { class: "font-mono text-gray-100", "owner/repo:filename.onnx" }
+                            ")."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Class count must match " }
+                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_NUM_CLASSES" }
+                            strong { class: "text-gray-100", "." }
+                            " Default is 11 (matches the current Tier 1 cmarkea model). Switching to a 5-class PubLayNet or 13-class DocLayNet variant requires updating num_classes too — otherwise the argmax over class scores points at the wrong column and every region gets the wrong tag."
+                        }
+                    }
+
+                    // ── Soft considerations ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Soft considerations" }
+                    div { class: "overflow-x-auto",
+                        table { class: "w-full text-xs border-collapse",
+                            thead {
+                                tr { class: "border-b border-gray-600",
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Factor" }
+                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Trade-off" }
+                                }
+                            }
+                            tbody {
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Training corpus" }
+                                    td { class: "py-1 text-gray-300",
+                                        "PubLayNet ≈ scientific papers (text-heavy, tables, figures, captions). DocLayNet ≈ broader business documents (forms, slides, financial, patents). Pick whichever matches your PDF mix."
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Backbone size" }
+                                    td { class: "py-1 text-gray-300",
+                                        "DETR-Lite / nano variants run faster but classify worse on small regions. Full DETR / Deformable-DETR are slower but more accurate on complex layouts. Inference runs per-page during upload, so this matters at scale."
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "License" }
+                                    td { class: "py-1 text-gray-300",
+                                        "DocLayNet is CC-BY (commercial OK). Some PubLayNet derivatives inherit IBM's research license. Check the repo before deploying."
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Filename convention" }
+                                    td { class: "py-1 text-gray-300",
+                                        "If the repo's ONNX file is "
+                                        span { class: "font-mono text-gray-100", "model.onnx" }
+                                        ", use "
+                                        span { class: "font-mono text-gray-100", "owner/repo" }
+                                        ". If named "
+                                        span { class: "font-mono text-gray-100", "detr.onnx" }
+                                        ", "
+                                        span { class: "font-mono text-gray-100", "quantized.onnx" }
+                                        ", etc., use "
+                                        span { class: "font-mono text-gray-100", "owner/repo:filename.onnx" }
+                                        "."
+                                    }
+                                }
+                                tr {
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Quantization" }
+                                    td { class: "py-1 text-gray-300",
+                                        "Some repos ship "
+                                        span { class: "font-mono text-gray-100", "model_quantized.onnx" }
+                                        " alongside "
+                                        span { class: "font-mono text-gray-100", "model.onnx" }
+                                        " — smaller and ~2-3× faster but with measurable accuracy loss. Worth trying for high-volume ingestion."
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Document types and matching candidates ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Document types and matching candidates" }
+                    p {
+                        "Layout models are trained on a specific corpus and inherit its biases. Match the model to the documents you actually ingest — a PubLayNet model on business reports underperforms in a recoverable but visible way (figures misread as text, sidebars merged with body)."
+                    }
+                    div { class: "overflow-x-auto",
+                        table { class: "w-full text-xs border-collapse",
+                            thead {
+                                tr { class: "border-b border-gray-600",
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Document type" }
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Defining characteristics" }
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Best-fit training corpus" }
+                                    th { class: "text-left py-1 text-gray-400 font-semibold", "HF Hub search keywords" }
+                                }
+                            }
+                            tbody {
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Scientific / academic papers" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Multi-column, figures with captions, dense tables, formulas, references" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "PubLayNet" }
+                                        " (5 or 11 classes, ~360 k pages, arXiv-style)"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "publaynet detr onnx, layout-detection publaynet"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Business reports / annual reports" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Mixed prose + tables, headers/footers, charts, page numbers" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "DocLayNet" }
+                                        " (11 classes, ~80 k pages, broader doc types, CC-BY)"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "doclaynet detr, doclaynet layout-analysis"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Forms (tax, application, intake)" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Labeled fields, checkboxes, signature boxes, fixed templates" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "FUNSD" }
+                                        " / "
+                                        strong { class: "text-gray-100", "CORD" }
+                                        " / "
+                                        strong { class: "text-gray-100", "DocBank" }
+                                        " — better served by LayoutLM-family models (text+vision)"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "funsd detr, form-understanding"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Legal documents / contracts" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Dense single-column, numbered sections, citations, footnotes" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "DocLayNet" }
+                                        " works well; pure-prose corpora like Books also viable"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "doclaynet, legal document layout"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Technical manuals / docs" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Code blocks, diagrams, multi-step procedures, callouts" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "DocLayNet" }
+                                        " (covers manuals) or mixed-corpus models"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "doclaynet, document-layout-detection"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Slides exported to PDF" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Large titles, bullet hierarchy, visual emphasis, sparse text" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        "Vanilla layout models struggle here; "
+                                        strong { class: "text-gray-100", "DocLayNet" }
+                                        " is the least-bad general choice"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "slide layout, presentation layout-detection"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Books / long-form prose" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Single column, chapter headers, sparse figures, page numbers" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        "Any general model — even basic "
+                                        strong { class: "text-gray-100", "PubLayNet" }
+                                        " 5-class works"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "publaynet, book layout"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Financial filings / 10-K / prospectuses" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Heavy tables, KPI grids, footnotes, multi-column" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "DocLayNet" }
+                                        " + a dedicated "
+                                        strong { class: "text-gray-100", "Table Transformer" }
+                                        " for table structure (Tier 2 of a separate pipeline)"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "table-transformer, microsoft/table-transformer-detection"
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Scanned / OCR'd PDFs" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Variable quality, skew, noise, may need preprocessing" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "DocBank" }
+                                        " or DocLayNet-on-scans variants; OCR cleanup matters more than layout choice"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "scanned document layout, ocr layout detection"
+                                    }
+                                }
+                                tr {
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Mixed / general corpus" }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Variable per document — no dominant type" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top",
+                                        strong { class: "text-gray-100", "DocLayNet" }
+                                        " — broadest coverage; safer than PubLayNet for non-paper content"
+                                    }
+                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
+                                        "document-layout-analysis, doclaynet"
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "Architecture family — speed vs accuracy" }
+                    div { class: "overflow-x-auto",
+                        table { class: "w-full text-xs border-collapse",
+                            thead {
+                                tr { class: "border-b border-gray-600",
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Family" }
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Speed (CPU)" }
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Accuracy" }
+                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Notes" }
+                                }
+                            }
+                            tbody {
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        strong { class: "text-gray-100", "DETR" }
+                                        " (original)"
+                                    }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Slower" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Solid baseline" }
+                                    td { class: "py-1 text-gray-400 align-top",
+                                        "Transformer + ResNet-50. What "
+                                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                                        " uses today."
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        strong { class: "text-gray-100", "Deformable-DETR" }
+                                    }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Medium" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Better small-object detection" }
+                                    td { class: "py-1 text-gray-400 align-top", "Most modern PubLayNet / DocLayNet exports use this. Faster convergence in training, better recall on captions and footnotes." }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        strong { class: "text-gray-100", "DINO / DETR-v2" }
+                                    }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Medium" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Higher accuracy" }
+                                    td { class: "py-1 text-gray-400 align-top", "Improved query initialization and denoising. ONNX exports are less common — search carefully." }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        strong { class: "text-gray-100", "RT-DETR" }
+                                    }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Fast" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Comparable to DETR" }
+                                    td { class: "py-1 text-gray-400 align-top", "Designed for real-time inference. Good fit for CPU-only ingestion if you can find a layout-finetuned export." }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        strong { class: "text-gray-100", "YOLOS" }
+                                    }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Fast" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Solid for objects" }
+                                    td { class: "py-1 text-gray-400 align-top", "Vision transformer adapted for detection. Less common for layout, but lightweight." }
+                                }
+                                tr {
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        strong { class: "text-gray-100", "LayoutLMv3 / Donut" }
+                                    }
+                                    td { class: "py-1 pr-3 text-gray-400 align-top", "—" }
+                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Highest for forms" }
+                                    td { class: "py-1 text-gray-400 align-top",
+                                        "Not pure detection — combine text + vision + position embeddings. "
+                                        strong { class: "text-yellow-400", "Won't work with this pipeline as-is" }
+                                        " — they require a different inference contract than DETR. Future expansion."
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    p { class: "text-gray-400",
+                        "On a CPU-only box (no GPU), prefer "
+                        strong { class: "text-gray-100", "Deformable-DETR" }
+                        " or "
+                        strong { class: "text-gray-100", "RT-DETR" }
+                        " over original DETR — better speed/accuracy ratio. If ingestion latency matters more than ceiling accuracy, also try INT8-quantized variants ("
+                        span { class: "font-mono text-gray-100", "model_quantized.onnx" }
+                        " in the repo's file list)."
+                    }
+
+                    // ── Combining corpus + architecture ──
+                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "Combining corpus and architecture" }
+                    p {
+                        "The two tables above describe "
+                        strong { class: "text-gray-100", "orthogonal axes" }
+                        ". A model on HF Hub is the cross-product: "
+                        em { "an architecture fine-tuned on a corpus." }
+                        " Pick one row from each table and search for repos that combine them. HF Hub repo names usually encode both: "
+                        span { class: "font-mono text-gray-100", "<owner>/<arch>-<corpus>-<task>" }
+                        " — e.g., your current "
+                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                        " is "
+                        strong { class: "text-gray-100", "DETR" }
+                        " + "
+                        strong { class: "text-gray-100", "PubLayNet" }
+                        " (11 classes) + layout-detection task."
+                    }
+                    p { "Common combinations to look for, ordered roughly by how often you'll find ONNX exports on HF Hub:" }
+                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
+                        li {
+                            strong { class: "text-gray-100", "DETR + PubLayNet" }
+                            " — vanilla baseline. Best documented, most exports. Fits scientific papers. "
+                            em { "Many repos." }
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Deformable-DETR + DocLayNet" }
+                            " — the modern default. Broader doc coverage, better small-object recall (captions, footnotes). Fits business reports, legal, manuals, mixed corpora. "
+                            em { "Several repos; search for "}
+                            span { class: "font-mono text-gray-100 text-[10px]", "deformable-detr doclaynet onnx" }
+                            "."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Deformable-DETR + PubLayNet" }
+                            " — papers with better accuracy than vanilla DETR. "
+                            em { "A few repos." }
+                        }
+                        li {
+                            strong { class: "text-gray-100", "DETR + DocLayNet" }
+                            " — older option if you want DocLayNet coverage but a DINO/Deformable export isn't available. "
+                            em { "Several repos." }
+                        }
+                        li {
+                            strong { class: "text-gray-100", "RT-DETR + (PubLayNet or DocLayNet)" }
+                            " — faster inference, ideal for high-volume ingestion on weak hardware. "
+                            em { "Fewer repos; check carefully before committing." }
+                        }
+                        li {
+                            strong { class: "text-gray-100", "DINO / DETR-v2 + DocLayNet" }
+                            " — research-quality accuracy. "
+                            em { "Rare in ONNX form; you may need to convert from PyTorch yourself." }
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Table Transformer + PubTables-1M" }
+                            " — table structure recognition specifically. Not a general layout model — used "
+                            em { "in addition to" }
+                            " a layout model on table regions. "
+                            span { class: "font-mono text-gray-100", "microsoft/table-transformer-structure-recognition" }
+                            " is the canonical pick."
+                        }
+                    }
+
+                    p { class: "text-gray-400",
+                        "Decision pattern: "
+                        strong { class: "text-gray-100", "(1)" }
+                        " pick the corpus row that matches your document mix from the first table, "
+                        strong { class: "text-gray-100", "(2)" }
+                        " pick an architecture from the second table based on speed/accuracy preference, "
+                        strong { class: "text-gray-100", "(3)" }
+                        " search HF Hub for "
+                        span { class: "font-mono text-gray-100", "<arch> <corpus> onnx" }
+                        " and verify a "
+                        span { class: "font-mono text-gray-100", "model.onnx" }
+                        " file exists in the repo. If only PyTorch weights are published, you can convert with "
+                        span { class: "font-mono text-gray-100", "optimum-cli export onnx" }
+                        " — but that's its own workflow beyond Tier 0's auto-download path."
+                    }
+
+                    // ── Verification workflow ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Verification workflow" }
+                    ol { class: "list-decimal pl-5 space-y-1 text-gray-300",
+                        li {
+                            "Pick a candidate — search HF Hub for layout-detection models that have ONNX in the "
+                            em { "Files and versions" }
+                            " tab. Filter by task = Object Detection or browse the "
+                            span { class: "font-mono text-gray-100", "layout-analysis" }
+                            " tag."
+                        }
+                        li {
+                            "Set "
+                            span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID = owner/repo[:file]" }
+                            " in the input above. Save. Restart."
+                        }
+                        li {
+                            "Watch the journal for "
+                            span { class: "font-mono text-gray-100", "Layout model loaded from HF Hub (via LAYOUT_ML_MODEL_ID)" }
+                            " vs the warn fallthrough "
+                            span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID set but download failed" }
+                            " or "
+                            span { class: "font-mono text-gray-100", "HF Hub model downloaded but failed to load" }
+                            ". If either warns, the Layout model chip on /config/onnx will flip back to Tier 1 / heuristic."
+                        }
+                        li {
+                            "Upload a representative PDF, then check "
+                            a { href: "/monitor/tip", class: "text-blue-400 hover:text-blue-300 underline", "/monitor/tip" }
+                            " — block-type tags should distribute reasonably across Title / Body / Table / Figure rather than collapsing everything to one class."
+                        }
+                        li {
+                            "If quality is worse than Tier 1, fall back: clear the override (Save with the input empty), restart — you're back to "
+                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
+                            "."
+                        }
+                    }
+
+                    // ── Default recommendation ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Default recommendation" }
+                    p {
+                        "If you don't have specific requirements, "
+                        strong { class: "text-gray-100", "keep this empty" }
+                        " and rely on Tier 1 ("
+                        span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
+                        ") which is already working. Tier 0 is most useful when:"
+                    }
+                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
+                        li { "Deploying to a fresh machine and you don't want to pre-stage the model file." }
+                        li { "Comparing different layout models without managing local files manually." }
+                        li { "Tracking upstream model updates — hf-hub respects revision pins; without one you get the latest commit." }
+                    }
+
+                    // ── Tier 0 vs Tier 1: same mechanism, different file source ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Tier 0 vs Tier 1 — same mechanism, different file source" }
+                    p {
+                        strong { class: "text-gray-100", "Tier 0 and Tier 1 are the same mechanism with different file sources." }
+                        " Both load a DETR-style ONNX model into an "
+                        span { class: "font-mono text-gray-100", "ort" }
+                        " session and run it on rendered page images. "
+                        strong { class: "text-gray-100", "Accuracy is determined by which model file is loaded, not by which tier loaded it." }
+                    }
+                    p { "Reframing it correctly:" }
+                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
+                        li {
+                            strong { class: "text-gray-100", "Tier 0 (" }
+                            span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID" }
+                            strong { class: "text-gray-100", "):" }
+                            " \"fetch a DETR ONNX from HuggingFace Hub, cache it under "
+                            span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
+                            "\""
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Tier 1 (" }
+                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
+                            strong { class: "text-gray-100", "):" }
+                            " \"load a DETR ONNX from a path you specified\""
+                        }
+                    }
+                    p {
+                        "If both point at the "
+                        strong { class: "text-gray-100", "same" }
+                        " model (e.g., your current "
+                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                        "), accuracy is "
+                        strong { class: "text-gray-100", "bit-identical" }
+                        " — same weights, same inference graph, same outputs. The tier label is purely about provenance / operations."
+                    }
+
+                    // ── Where accuracy would differ ──
+                    h4 { class: "text-gray-200 font-semibold text-xs pt-1", "Where accuracy would differ" }
+                    div { class: "overflow-x-auto",
+                        table { class: "w-full text-xs border-collapse",
+                            thead {
+                                tr { class: "border-b border-gray-600",
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Scenario" }
+                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Effect" }
+                                }
+                            }
+                            tbody {
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        "Tier 0 points at "
+                                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                                        ", Tier 1 points at the same model on disk"
+                                    }
+                                    td { class: "py-1 text-green-400 align-top",
+                                        strong { "Identical accuracy." }
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        "Tier 0 points at "
+                                        span { class: "font-mono text-gray-100", "someone/docbank-detr-v2" }
+                                        ", Tier 1 has the older cmarkea model"
+                                    }
+                                    td { class: "py-1 text-gray-300 align-top",
+                                        strong { class: "text-yellow-400", "Different — depends on the model. " }
+                                        "Newer / better-trained models will be more accurate; older / smaller ones less. The tier tells you nothing about this."
+                                    }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        "Tier 0 and Tier 1 point at "
+                                        em { "differently quantized" }
+                                        " files of the same model — e.g. Tier 0 at "
+                                        span { class: "font-mono text-gray-100", "model_quantized.onnx" }
+                                        " (INT8), Tier 1 at "
+                                        span { class: "font-mono text-gray-100", "model.onnx" }
+                                        " (FP32)"
+                                    }
+                                    td { class: "py-1 text-gray-300 align-top",
+                                        strong { class: "text-yellow-400", "Different — the INT8 file runs ~2-3× faster with measurably less accuracy. " }
+                                        "Quantization is a property of the "
+                                        em { "file" }
+                                        ", not the tier — both tiers run whatever ONNX bytes they're given, as-is. Swap which file goes where and the difference flips with them."
+                                    }
+                                }
+                                tr {
+                                    td { class: "py-1 pr-3 text-gray-200 align-top",
+                                        "Tier 0 set, model fails to download → fallthrough to Tier 1"
+                                    }
+                                    td { class: "py-1 text-gray-300 align-top",
+                                        "Whatever Tier 1's local model is, that's the accuracy."
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Resilience vs quality ──
+                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "The hierarchy is about resilience, not quality" }
+                    p { class: "text-gray-300",
+                        "It's there so that if Tier 0 can't reach HF Hub (offline machine, network blip) or the downloaded file is corrupted, ag automatically falls through to whatever local file you've staged — and from there to the word-feature ORT classifier ("
+                        strong { class: "text-yellow-400", "genuinely less accurate" }
+                        ", sees only geometry), and finally to the pure-Rust heuristic ("
+                        strong { class: "text-yellow-400", "least accurate" }
+                        ", font-size rules only)."
+                    }
+                    p { class: "text-gray-300",
+                        "So the right question isn't "
+                        em { "\"is Tier 0 more accurate?\"" }
+                        " but "
+                        strong { class: "text-gray-100", "\"which model file do I want loaded?\"" }
+                        " — then pick the tier (= delivery mechanism) that's most convenient. On a single dev box, Tier 1 with the locally-staged "
+                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                        " and Tier 0 set to the same HF repo would behave identically; the only difference is whether ag re-downloads on a fresh machine."
+                    }
+                    p { class: "text-gray-400",
+                        "The "
+                        em { "Layout model:" }
+                        " chip on this page tells you which tier is currently active — as long as it shows "
+                        span { class: "font-mono text-gray-100", "DETR (local: …)" }
+                        " or "
+                        span { class: "font-mono text-gray-100", "DETR (HF Hub: …)" }
+                        ", classification quality is identical between the two."
+                    }
+
+                    // ── Fallthrough behaviour ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Fallthrough behaviour" }
+                    p { class: "text-gray-400",
+                        "Tier 0 expects a DETR-style ONNX with a "
+                        span { class: "font-mono text-gray-100", "pixel_values" }
+                        " input. Pointing this at a word-feature checkpoint will fail at classify time. On download or load failure, ag warns and falls through to Tier 1 ("
+                        span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
+                        ") and Tier 2 ("
+                        span { class: "font-mono text-gray-100", "LAYOUT_ORT_MODEL_PATH" }
+                        ")."
+                    }
+                    p { class: "text-gray-400",
+                        "Save is restart-required — the override is written immediately, but the model loads at boot."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal: which chunker mode to pick for Native PDF Extraction output.
+/// Mirrors guidance on /config/chunker but framed specifically around the
+/// block-tagged DocIR that the native pipeline produces.
+fn chunker_mode_for_native_pdf_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-3xl max-h-[90vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-lg font-semibold text-gray-100", "Chunker mode — picking one for Native PDF output" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3",
+                    p {
+                        "The Native PDF pipeline produces a "
+                        span { class: "font-mono text-gray-100", "DocIR" }
+                        " with block-type tags (Title, SectionHeader, Body, Table, Figure, Caption, List, …). The chunker walks those blocks via "
+                        span { class: "font-mono text-gray-100", "chunk_ir" }
+                        " — atomic blocks (Table, Code, Formula) become single chunks regardless of mode, and section headers always flush the pending accumulation."
+                    }
+                    p {
+                        "The chunker mode only controls "
+                        em { "how body-text accumulations between those boundaries are further sliced when they exceed the size limit." }
+                        " That's the lever the modes below adjust."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-2", "When to pick which" }
+                    ul { class: "list-disc pl-5 space-y-2",
+                        li {
+                            strong { class: "text-gray-100", "Lightweight — recommended default. " }
+                            "Most PDFs have headings. The in-text heading detector (lines starting "
+                            span { class: "font-mono text-gray-100", "#" }
+                            ", ALL-CAPS, "
+                            span { class: "font-mono text-gray-100", ":" }
+                            "-suffixed) flushes on natural breaks inside long sections, on top of the DocIR header flushes the IR walker already provides. No embeddings — cheap."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Semantic — for long narrative PDFs. " }
+                            "Research papers, books, manuals, dossiers. Topic-shift detection inside long body sections produces more coherent chunks where headings are sparse. One embedding call per segment — slower indexing, better retrieval."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Sentence — narrative-heavy without strong headings. " }
+                            "Essays, articles, conversational prose. Sentence-first split with overlap improves recall when the document is one long flow of text."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Fixed — only for very table/list-heavy PDFs. " }
+                            "Since tables and code blocks are already atomic regardless of mode, Fixed is a reasonable choice when body text is short and you want minimal compute. Splits body text purely by size with sentence-boundary snap."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "Pipeline — highest quality on long, complex PDFs. " }
+                            "Composes Lightweight pre-split with Semantic refinement (or another combination). Most expensive but best retrieval quality on mixed-format documents (prose + tables + figures)."
+                        }
+                    }
+                    p { class: "text-gray-400 pt-1",
+                        "Switching the chunker mode is hot-reloaded — no restart required. The change takes effect on the next upload or reindex."
+                    }
+                    p {
+                        "Set it on the "
+                        Link {
+                            to: Route::ConfigChunker {},
+                            class: "text-blue-400 hover:text-blue-300 underline",
+                            "Chunker configuration page"
+                        }
+                        " — either as the global default or per-corpus."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
         }
     }
 }

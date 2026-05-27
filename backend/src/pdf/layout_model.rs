@@ -67,6 +67,10 @@ impl RegionTag {
 
 pub struct LayoutModel {
     inner: LayoutModelInner,
+    /// Human-readable description of which tier loaded and from where.
+    /// Surfaced to the UI on /config/onnx so the user can tell Tier 0 (HF Hub)
+    /// from Tier 1 (local DETR) from Tier 2 (word-feature ORT) at a glance.
+    source_label: String,
 }
 
 enum LayoutModelInner {
@@ -77,29 +81,126 @@ enum LayoutModelInner {
 
 static MODEL: OnceLock<LayoutModel> = OnceLock::new();
 
+/// Resolve an `owner/repo[:filename]` spec to a local cached path. Triggers a
+/// one-time HuggingFace Hub download into `~/.cache/huggingface/hub/` if the
+/// file isn't already cached. Default filename when none is specified:
+/// `model.onnx` (matches what the DETR / word-ORT loaders below expect via
+/// `Session::commit_from_file`).
+///
+/// Returns `Ok(path)` on success; `Err(...)` on network failure, missing repo,
+/// or missing file — the caller is expected to log a warning and fall through.
+fn resolve_hf_model(spec: &str) -> anyhow::Result<std::path::PathBuf> {
+    let (repo_id, filename) = match spec.split_once(':') {
+        Some((r, f)) => (r.to_string(), f.to_string()),
+        None => (spec.to_string(), "model.onnx".to_string()),
+    };
+
+    info!(
+        repo = %repo_id,
+        file = %filename,
+        "Resolving HF Hub model (will download to ~/.cache/huggingface/hub/ if not cached)"
+    );
+
+    let api = hf_hub::api::sync::Api::new()
+        .map_err(|e| anyhow::anyhow!("hf-hub Api::new failed: {e}"))?;
+    let repo = api.model(repo_id.clone());
+    let path = repo
+        .get(&filename)
+        .map_err(|e| anyhow::anyhow!("hf-hub download {repo_id}/{filename} failed: {e}"))?;
+
+    info!(
+        repo = %repo_id,
+        file = %filename,
+        local_path = %path.display(),
+        "HF Hub model ready"
+    );
+    Ok(path)
+}
+
 impl LayoutModel {
     pub fn load_or_heuristic() -> &'static LayoutModel {
         MODEL.get_or_init(|| {
-            // Tier 1: DETR
-            if std::env::var("LAYOUT_DETR_MODEL_PATH").is_ok() {
+            // Tier 0: HuggingFace Hub auto-download via LAYOUT_ML_MODEL_ID.
+            // Highest priority because it's the "just works" UX path. Spec
+            // is `owner/repo` (defaults to `model.onnx`) or
+            // `owner/repo:custom-filename.onnx` if the model file is named
+            // something else inside the repo. Resolved path is fed into the
+            // ORT session via the DETR loader — matches the format the rest
+            // of the pipeline expects.
+            let hf_spec = crate::settings::effective_or("LAYOUT_ML_MODEL_ID", "");
+            if !hf_spec.is_empty() {
+                match resolve_hf_model(&hf_spec) {
+                    Ok(local_path) => {
+                        // Build a DETR-style session from the downloaded file.
+                        // Threshold and num_classes are read from their own
+                        // env vars below (or sensible defaults).
+                        let path_str = local_path.display().to_string();
+                        match Session::builder()
+                            .map_err(|e| anyhow::anyhow!("{e}"))
+                            .and_then(|mut b| {
+                                b.commit_from_file(&local_path)
+                                    .map_err(|e| anyhow::anyhow!("{e}"))
+                            }) {
+                            Ok(session) => {
+                                let threshold =
+                                    crate::settings::effective_f64("LAYOUT_DETR_THRESHOLD", 0.7)
+                                        as f32;
+                                let num_classes = crate::settings::effective_u64(
+                                    "LAYOUT_DETR_NUM_CLASSES",
+                                    11,
+                                ) as usize;
+                                info!(
+                                    model = %path_str,
+                                    "Layout model loaded from HF Hub (via LAYOUT_ML_MODEL_ID)"
+                                );
+                                return LayoutModel {
+                                    inner: LayoutModelInner::Detr(std::sync::Mutex::new(
+                                        DetrLayoutModel {
+                                            session,
+                                            threshold,
+                                            num_classes,
+                                        },
+                                    )),
+                                    source_label: format!("DETR (HF Hub: {hf_spec})"),
+                                };
+                            }
+                            Err(e) => warn!(
+                                error = %e,
+                                "HF Hub model downloaded but failed to load — falling through"
+                            ),
+                        }
+                    }
+                    Err(e) => warn!(
+                        error = %e,
+                        "LAYOUT_ML_MODEL_ID set but download failed — falling through to local-path tiers"
+                    ),
+                }
+            }
+
+            // Tier 1: DETR (local path)
+            if !crate::settings::effective_or("LAYOUT_DETR_MODEL_PATH", "").is_empty() {
                 match DetrLayoutModel::load() {
                     Ok(m) => {
+                        let path = crate::settings::effective_or("LAYOUT_DETR_MODEL_PATH", "");
                         info!("DETR layout model loaded (image-based PubLayNet)");
                         return LayoutModel {
                             inner: LayoutModelInner::Detr(std::sync::Mutex::new(m)),
+                            source_label: format!("DETR (local: {path})"),
                         };
                     }
                     Err(e) => warn!(error = %e, "DETR layout model failed to load"),
                 }
             }
 
-            // Tier 2: word-feature ORT
-            if std::env::var("LAYOUT_ORT_MODEL_PATH").is_ok() {
+            // Tier 2: word-feature ORT (local path)
+            if !crate::settings::effective_or("LAYOUT_ORT_MODEL_PATH", "").is_empty() {
                 match OrtLayoutClassifier::load() {
                     Ok(m) => {
+                        let path = crate::settings::effective_or("LAYOUT_ORT_MODEL_PATH", "");
                         info!("Word-ORT layout classifier loaded");
                         return LayoutModel {
                             inner: LayoutModelInner::WordOrt(std::sync::Mutex::new(m)),
+                            source_label: format!("Word-ORT (local: {path})"),
                         };
                     }
                     Err(e) => warn!(error = %e, "Word-ORT layout model failed to load"),
@@ -109,8 +210,15 @@ impl LayoutModel {
             debug!("No layout model configured, using heuristic classifier");
             LayoutModel {
                 inner: LayoutModelInner::Heuristic,
+                source_label: "heuristic".to_string(),
             }
         })
+    }
+
+    /// Human-readable description of which layout-model tier is active and where
+    /// it came from. Surfaced to the UI on /config/onnx.
+    pub fn source_label(&self) -> &str {
+        &self.source_label
     }
 
     /// Returns true when an ORT-based model (DETR or word-ORT) is loaded.
@@ -157,8 +265,10 @@ struct DetrLayoutModel {
 
 impl DetrLayoutModel {
     fn load() -> anyhow::Result<Self> {
-        let model_path = std::env::var("LAYOUT_DETR_MODEL_PATH")
-            .map_err(|_| anyhow::anyhow!("LAYOUT_DETR_MODEL_PATH not set"))?;
+        let model_path = crate::settings::effective_or("LAYOUT_DETR_MODEL_PATH", "");
+        if model_path.is_empty() {
+            anyhow::bail!("LAYOUT_DETR_MODEL_PATH not set");
+        }
 
         if !std::path::Path::new(&model_path).exists() {
             anyhow::bail!("DETR model not found at {}", model_path);
@@ -169,15 +279,11 @@ impl DetrLayoutModel {
             .commit_from_file(&model_path)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let threshold = std::env::var("LAYOUT_DETR_THRESHOLD")
-            .ok()
-            .and_then(|s| s.parse::<f32>().ok())
-            .unwrap_or(0.7);
+        let threshold = crate::settings::effective_f64("LAYOUT_DETR_THRESHOLD", 0.7) as f32;
 
-        let num_classes = std::env::var("LAYOUT_DETR_NUM_CLASSES")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(11); // cmarkea/detr-layout-detection: 11 classes
+        // cmarkea/detr-layout-detection: 11 classes
+        let num_classes =
+            crate::settings::effective_u64("LAYOUT_DETR_NUM_CLASSES", 11) as usize;
 
         Ok(DetrLayoutModel {
             session,
@@ -443,8 +549,10 @@ struct OrtLayoutClassifier {
 
 impl OrtLayoutClassifier {
     fn load() -> anyhow::Result<Self> {
-        let model_path = std::env::var("LAYOUT_ORT_MODEL_PATH")
-            .map_err(|_| anyhow::anyhow!("LAYOUT_ORT_MODEL_PATH not set"))?;
+        let model_path = crate::settings::effective_or("LAYOUT_ORT_MODEL_PATH", "");
+        if model_path.is_empty() {
+            anyhow::bail!("LAYOUT_ORT_MODEL_PATH not set");
+        }
 
         if !std::path::Path::new(&model_path).exists() {
             anyhow::bail!("ORT layout model not found at {}", model_path);

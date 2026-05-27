@@ -73,12 +73,13 @@ struct OrtTableFormer {
 fn load_ort_model() -> anyhow::Result<OrtTableFormer> {
     use ort::session::builder::GraphOptimizationLevel;
 
-    let model_path = std::env::var("TABLE_FORMER_MODEL_PATH").map_err(|_| {
-        anyhow::anyhow!(
+    let model_path = crate::settings::effective_or("TABLE_FORMER_MODEL_PATH", "");
+    if model_path.is_empty() {
+        anyhow::bail!(
             "TABLE_FORMER_MODEL_PATH not set. Download from: \
              huggingface.co/microsoft/table-transformer-structure-recognition"
-        )
-    })?;
+        );
+    }
 
     if !std::path::Path::new(&model_path).exists() {
         anyhow::bail!("TableFormer model not found at {}", model_path);

@@ -74,6 +74,17 @@ pub fn effective_u64(key: &str, default: u64) -> u64 {
     }
 }
 
+pub fn effective_f64(key: &str, default: f64) -> f64 {
+    if let Some(s) = GLOBAL_SETTINGS.get() {
+        s.effective_f64(key, default)
+    } else {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(default)
+    }
+}
+
 /// Most recent rollback (if `Recovery::boot_check` moved a bad overrides
 /// file aside on this boot).
 pub fn last_rollback() -> Option<RollbackInfo> {

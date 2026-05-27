@@ -20,7 +20,7 @@ pub fn Home() -> Element {
                     }
                     
                     p { 
-                        class: "text-gray-600 dark:text-gray-400",
+                        class: "text-gray-300 dark:text-gray-400",
                         "Retrieval Augmented Generation powered by Rust"
                     }
                 }
@@ -46,7 +46,7 @@ pub fn Home() -> Element {
                         }
                         
                         p { 
-                            class: "text-sm text-gray-600 dark:text-gray-400",
+                            class: "text-sm text-gray-300 dark:text-gray-400",
                             "Search through your indexed documents using semantic similarity"
                         }
                     }
@@ -65,7 +65,7 @@ pub fn Home() -> Element {
                         }
                         
                         p { 
-                            class: "text-sm text-gray-600 dark:text-gray-400",
+                            class: "text-sm text-gray-300 dark:text-gray-400",
                             "Fast full-text search powered by Tantivy search engine"
                         }
                     }
@@ -84,7 +84,7 @@ pub fn Home() -> Element {
                         }
                         
                         p { 
-                            class: "text-sm text-gray-600 dark:text-gray-400",
+                            class: "text-sm text-gray-300 dark:text-gray-400",
                             "Local language model for summarization and reranking"
                         }
                     }

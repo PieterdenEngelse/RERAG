@@ -551,27 +551,27 @@ pub fn ConfigNer() -> Element {
             Panel { title: None, refresh: None,
                 div { class: "flex flex-col gap-2",
                     span { class: "text-sm text-gray-300 font-semibold", "Current .env values" }
-                    span { class: "text-xs text-gray-500 italic mb-1",
+                    span { class: "text-xs text-gray-300 italic mb-1",
                         "Read-only — edit .env and restart the backend to apply."
                     }
                     div { class: "text-xs font-mono text-gray-400 space-y-1 bg-gray-900 rounded p-3 border border-gray-700",
-                        div { class: "text-gray-500", "# Control" }
+                        div { class: "text-gray-300", "# Control" }
                         div { "ENTITY_EXTRACTION_ENABLED={extraction_enabled()}" }
                         div { "ENTITY_CONTROL_TYPE_ALLOWLIST={type_allowlist()}" }
-                        div { class: "text-gray-500 mt-1", "# Quality" }
+                        div { class: "text-gray-300 mt-1", "# Quality" }
                         div { "ENTITY_QUALITY_CONFIDENCE_THRESHOLD={confidence_threshold()}" }
                         div { "ENTITY_QUALITY_TYPE_THRESHOLDS='{type_thresholds()}'" }
                         div { "ENTITY_QUALITY_FUZZY_THRESHOLD={fuzzy_threshold()}" }
-                        div { class: "text-gray-500 mt-1", "# Filtering" }
+                        div { class: "text-gray-300 mt-1", "# Filtering" }
                         div { "ENTITY_FILTER_MIN_LENGTH={min_length()}" }
                         div { "ENTITY_FILTER_MAX_LENGTH={max_length()}" }
                         div { "ENTITY_FILTER_DEDUPLICATE_CASE_INSENSITIVE={dedup_case_insensitive()}" }
                         div { "ENTITY_FILTER_NESTING_STRATEGY={nesting_strategy()}" }
-                        div { class: "text-gray-500 mt-1", "# Performance" }
+                        div { class: "text-gray-300 mt-1", "# Performance" }
                         div { "ENTITY_PERFORMANCE_BATCH_SIZE={batch_size()}" }
                         div { "ENTITY_PERFORMANCE_QUANTIZATION_ENABLED={quantization_enabled()}" }
                         div { "ENTITY_PERFORMANCE_MODEL_CACHE_ENABLED={model_cache_enabled()}" }
-                        div { class: "text-gray-500 mt-1", "# Integration" }
+                        div { class: "text-gray-300 mt-1", "# Integration" }
                         div { "ENTITY_INTEGRATION_GRAPH_STORAGE_ENABLED={graph_storage_enabled()}" }
                     }
                 }

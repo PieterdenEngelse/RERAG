@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 #[cfg(feature = "onnx")]
 use ort::logging::LogLevel as OrtLogLevel;
@@ -10,6 +10,16 @@ use ort::logging::LogLevel as OrtLogLevel;
 use ort::session::Session;
 #[cfg(feature = "onnx")]
 use ort::value::Tensor;
+
+/// Initialize the global ONNX Runtime. Must be called once at process startup,
+/// before any `OnnxEmbedder` is constructed. Idempotent.
+#[cfg(feature = "onnx")]
+pub fn init_runtime() {
+    let _ = ort::init().with_name("ag").commit();
+}
+
+#[cfg(not(feature = "onnx"))]
+pub fn init_runtime() {}
 
 pub type EmbeddingVector = Vec<f32>;
 
@@ -26,6 +36,46 @@ pub enum OnnxOptimizationLevel {
     /// All optimizations enabled (includes Extended + layout optimizations)
     #[default]
     All,
+}
+
+impl OnnxOptimizationLevel {
+    /// Parse a case-insensitive level name. Unknown values fall back to the
+    /// default (`All`) — matches how an operator typo on the runtime page
+    /// degrades to "max optimization" instead of crashing the boot.
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "disable" | "none" | "off" => OnnxOptimizationLevel::Disable,
+            "basic" | "level1" | "1" => OnnxOptimizationLevel::Basic,
+            "extended" | "level2" | "2" => OnnxOptimizationLevel::Extended,
+            _ => OnnxOptimizationLevel::All,
+        }
+    }
+}
+
+/// Strategy for collapsing a `[batch, seq, hidden]` ONNX output into one
+/// vector per input. Ignored when the model already returns `[batch, hidden]`
+/// (i.e. has its own pooling layer baked in).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolingStrategy {
+    /// Take the CLS token (position 0 of each sequence). Cheap, correct for
+    /// BERT-style classifiers, often the wrong choice for sentence
+    /// embeddings — kept as the default to preserve existing behavior.
+    #[default]
+    Cls,
+    /// Mean-pool over unmasked positions. Standard for sentence-transformers
+    /// and BGE-style models; produces noticeably better retrieval quality
+    /// when the model was trained with mean pooling.
+    Mean,
+}
+
+impl PoolingStrategy {
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "mean" | "avg" | "average" => PoolingStrategy::Mean,
+            _ => PoolingStrategy::Cls,
+        }
+    }
 }
 
 /// Execution mode for ONNX Runtime
@@ -131,6 +181,19 @@ pub struct OnnxConfig {
     /// Number of document chunks sent to ONNX per inference pass.
     /// Lower = less RAM (attention is O(batch×heads×seq²)); higher = faster throughput.
     pub embedding_batch_size: usize,
+    /// L2-normalize each output vector to unit length. Required for the
+    /// DotProduct HNSW metric to behave as cosine; standard practice for
+    /// BGE-style sentence embeddings.
+    pub normalize_output: bool,
+    /// How to collapse a `[batch, seq, hidden]` model output into one vector
+    /// per input. Only consulted for 3-D outputs.
+    pub pooling: PoolingStrategy,
+    /// If `tokenizer.json` is missing, fall back to the seahash-based
+    /// `SimpleTokenizer` instead of returning an error. Defaults to `false`
+    /// because the fallback produces embeddings that do not match the model's
+    /// training — silent quality degradation. Set to `true` only for
+    /// experiments or tests where you accept hash-based encoding.
+    pub allow_simple_tokenizer: bool,
 }
 
 impl Default for OnnxConfig {
@@ -167,6 +230,9 @@ impl Default for OnnxConfig {
             independent_thread_pool: false,
             no_env_execution_providers: false,
             embedding_batch_size: 32,
+            normalize_output: true,
+            pooling: PoolingStrategy::Cls,
+            allow_simple_tokenizer: false,
         }
     }
 }
@@ -176,6 +242,7 @@ pub enum OnnxError {
     ModelNotFound(String),
     SessionCreationFailed(String),
     InferenceFailed(String),
+    TokenizerMissing(String),
 }
 
 impl std::fmt::Display for OnnxError {
@@ -184,6 +251,10 @@ impl std::fmt::Display for OnnxError {
             Self::ModelNotFound(p) => write!(f, "Model not found: {}", p),
             Self::SessionCreationFailed(e) => write!(f, "Session failed: {}", e),
             Self::InferenceFailed(e) => write!(f, "Inference failed: {}", e),
+            Self::TokenizerMissing(p) => write!(
+                f,
+                "tokenizer.json not found at {p}; place the model's tokenizer next to the ONNX file, or set allow_simple_tokenizer=true to accept degraded hash-based encoding"
+            ),
         }
     }
 }
@@ -280,55 +351,58 @@ use ort::session::builder::GraphOptimizationLevel;
 #[cfg(feature = "onnx")]
 impl OnnxEmbedder {
     pub fn new(config: OnnxConfig) -> Result<Self, OnnxError> {
-        eprintln!("[ONNX] OnnxEmbedder::new called");
+        debug!("OnnxEmbedder::new called");
 
         if !Path::new(&config.model_path).exists() {
-            eprintln!("[ONNX] Model not found: {}", config.model_path);
             return Err(OnnxError::ModelNotFound(config.model_path.clone()));
         }
 
-        eprintln!("[ONNX] Model file exists, initializing...");
-
         // ── Tokenizer ───────────────────────────────────────────────────────
         // Look for tokenizer.json in the same directory as the ONNX model.
+        // If it's missing (or fails to load) and the operator hasn't opted into
+        // the hash fallback via `allow_simple_tokenizer`, fail loudly instead
+        // of silently producing embeddings that don't match the model.
         let tokenizer = {
             let model_dir = Path::new(&config.model_path)
                 .parent()
                 .unwrap_or_else(|| Path::new("."));
             let tok_path = model_dir.join("tokenizer.json");
-            if tok_path.exists() {
+            let display_path = tok_path.display().to_string();
+
+            let real: Option<OnnxTokenizer> = if tok_path.exists() {
                 match tokenizers::Tokenizer::from_file(&tok_path) {
                     Ok(t) => {
-                        eprintln!(
-                            "[ONNX] Loaded real HuggingFace tokenizer from {:?}",
-                            tok_path
-                        );
-                        OnnxTokenizer::Real(Box::new(t))
+                        info!(path = %display_path, "Loaded HuggingFace tokenizer");
+                        Some(OnnxTokenizer::Real(Box::new(t)))
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[ONNX] tokenizer.json found but failed to load ({e}); \
-                             falling back to SimpleTokenizer"
-                        );
-                        OnnxTokenizer::Simple(SimpleTokenizer::new(config.max_length))
+                        warn!(error = %e, path = %display_path,
+                            "tokenizer.json found but failed to load");
+                        None
                     }
                 }
             } else {
-                eprintln!(
-                    "[ONNX] No tokenizer.json at {:?} — using SimpleTokenizer \
-                     (degraded quality). Place tokenizer.json next to the ONNX \
-                     model for proper sub-word encoding.",
-                    tok_path
-                );
-                OnnxTokenizer::Simple(SimpleTokenizer::new(config.max_length))
+                None
+            };
+
+            match real {
+                Some(t) => t,
+                None if config.allow_simple_tokenizer => {
+                    warn!(
+                        path = %display_path,
+                        "No usable tokenizer.json — falling back to SimpleTokenizer. \
+                         Embeddings will NOT match the model's training; recall will degrade silently."
+                    );
+                    crate::monitoring::onnx_metrics::record_simple_tokenizer_fallback();
+                    OnnxTokenizer::Simple(SimpleTokenizer::new(config.max_length))
+                }
+                None => {
+                    return Err(OnnxError::TokenizerMissing(display_path));
+                }
             }
         };
 
         info!(model = %config.model_path, "Initializing ONNX embedder");
-
-        eprintln!("[ONNX] Calling ort::init()...");
-        let _ = ort::init().with_name("ag").commit();
-        eprintln!("[ONNX] ort::init() complete");
 
         // Convert our optimization level to ort's GraphOptimizationLevel
         let opt_level = match config.optimization_level {
@@ -338,10 +412,14 @@ impl OnnxEmbedder {
             OnnxOptimizationLevel::All => GraphOptimizationLevel::Level3,
         };
 
-        eprintln!("[ONNX] Creating Session::builder()...");
-        eprintln!("[ONNX] SessionOptions: intra_threads={}, inter_threads={}, opt_level={:?}, mem_pattern={}, cpu_arena={}",
-            config.num_threads, config.inter_op_num_threads, config.optimization_level,
-            config.enable_mem_pattern, config.enable_cpu_mem_arena);
+        debug!(
+            intra_threads = config.num_threads,
+            inter_threads = config.inter_op_num_threads,
+            opt_level = ?config.optimization_level,
+            mem_pattern = config.enable_mem_pattern,
+            cpu_arena = config.enable_cpu_mem_arena,
+            "Creating ONNX Session"
+        );
 
         let mut builder =
             Session::builder().map_err(|e| OnnxError::SessionCreationFailed(e.to_string()))?;
@@ -462,16 +540,22 @@ impl OnnxEmbedder {
             .iter()
             .any(|inp| inp.name() == "token_type_ids");
 
-        eprintln!(
-            "[ONNX] Session created (token_type_ids: {})",
-            needs_token_type_ids
-        );
+        // No execution providers are registered on the SessionBuilder, so the
+        // CPU EP is used. If ag ever grows GPU support, log the resolved EP
+        // here (ort 2.0.0-rc.12 doesn't expose Session::providers, so we log
+        // what we configured rather than what ort resolved).
         info!(
+            execution_provider = "CPU",
             optimization_level = ?config.optimization_level,
+            execution_mode = ?config.execution_mode,
             intra_threads = config.num_threads,
             inter_threads = config.inter_op_num_threads,
+            mem_pattern = config.enable_mem_pattern,
+            cpu_arena = config.enable_cpu_mem_arena,
             token_type_ids = needs_token_type_ids,
-            "ONNX session created"
+            embedding_batch_size = config.embedding_batch_size,
+            normalize_output = config.normalize_output,
+            "ONNX session ready"
         );
 
         Ok(Self {
@@ -501,6 +585,14 @@ impl OnnxEmbedder {
         }
 
         let shape = vec![batch_size as i64, seq_len as i64];
+
+        // Keep the mask around for mean pooling — Tensor::from_array consumes
+        // the Vec, and the mask isn't recoverable from the output tensors.
+        let mask_for_pool = if matches!(self.config.pooling, PoolingStrategy::Mean) {
+            Some(all_attention_mask.clone())
+        } else {
+            None
+        };
 
         // Create tensors using Tensor::from_array
         let input_ids_tensor = Tensor::from_array((shape.clone(), all_input_ids))
@@ -539,18 +631,30 @@ impl OnnxEmbedder {
         let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
 
         // Extract embeddings
-        let embeddings = match dims.as_slice() {
-            [b, _s, h] => {
-                // [batch, seq, hidden] - take CLS token
-                (0..*b)
-                    .map(|i| {
-                        let start = i * dims[1] * dims[2];
-                        data[start..start + *h].to_vec()
-                    })
-                    .collect()
+        let mut embeddings: Vec<EmbeddingVector> = match dims.as_slice() {
+            [b, s, h] => {
+                // [batch, seq, hidden] — dispatch on configured pooling.
+                match self.config.pooling {
+                    PoolingStrategy::Cls => (0..*b)
+                        .map(|i| {
+                            let start = i * *s * *h;
+                            data[start..start + *h].to_vec()
+                        })
+                        .collect(),
+                    PoolingStrategy::Mean => {
+                        let mask = mask_for_pool.as_deref().ok_or_else(|| {
+                            OnnxError::InferenceFailed(
+                                "mean pooling requested but attention mask was not preserved"
+                                    .to_string(),
+                            )
+                        })?;
+                        mean_pool(data, mask, *b, *s, *h)
+                    }
+                }
             }
             [b, h] => {
-                // [batch, hidden]
+                // [batch, hidden] — model already pools internally; pooling
+                // config is moot here.
                 (0..*b)
                     .map(|i| {
                         let start = i * *h;
@@ -560,6 +664,12 @@ impl OnnxEmbedder {
             }
             _ => return Err(OnnxError::InferenceFailed(format!("Bad shape: {:?}", dims))),
         };
+
+        if self.config.normalize_output {
+            for v in embeddings.iter_mut() {
+                l2_normalize(v);
+            }
+        }
 
         Ok(embeddings)
     }
@@ -625,4 +735,103 @@ impl OnnxEmbedder {
 
 pub fn is_onnx_enabled() -> bool {
     cfg!(feature = "onnx")
+}
+
+/// L2-normalize a vector to unit length in place. Zero vectors are left untouched.
+fn l2_normalize(v: &mut EmbeddingVector) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
+/// Mask-aware mean pool over a `[batch, seq, hidden]` tensor laid out in
+/// row-major order. Padded positions (`mask[i] == 0`) are excluded from both
+/// the sum and the divisor — using `seq` as the divisor would dilute the mean
+/// with padding zeros. A fully-masked sequence yields a zero vector.
+fn mean_pool(data: &[f32], mask: &[i64], batch: usize, seq: usize, hidden: usize) -> Vec<EmbeddingVector> {
+    let mut out = Vec::with_capacity(batch);
+    for b in 0..batch {
+        let mut acc = vec![0.0_f32; hidden];
+        let mut count: u32 = 0;
+        for s in 0..seq {
+            if mask[b * seq + s] == 0 {
+                continue;
+            }
+            let row = &data[(b * seq + s) * hidden..(b * seq + s + 1) * hidden];
+            for (a, v) in acc.iter_mut().zip(row) {
+                *a += *v;
+            }
+            count += 1;
+        }
+        if count > 0 {
+            let denom = count as f32;
+            for a in acc.iter_mut() {
+                *a /= denom;
+            }
+        }
+        out.push(acc);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn l2_normalize_unit_norm() {
+        let mut v = vec![3.0_f32, 4.0];
+        l2_normalize(&mut v);
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6, "norm was {norm}");
+        assert!((v[0] - 0.6).abs() < 1e-6);
+        assert!((v[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn l2_normalize_zero_vector_is_noop() {
+        let mut v = vec![0.0_f32; 4];
+        l2_normalize(&mut v);
+        assert!(v.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn mean_pool_all_unmasked_matches_naive_mean() {
+        // batch=1, seq=3, hidden=2; values = [[1,2],[3,4],[5,6]]
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mask = vec![1i64, 1, 1];
+        let out = mean_pool(&data, &mask, 1, 3, 2);
+        assert_eq!(out, vec![vec![3.0, 4.0]]); // (1+3+5)/3, (2+4+6)/3
+    }
+
+    #[test]
+    fn mean_pool_excludes_padded_positions() {
+        // Same data, last position masked off → should average only the first two.
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mask = vec![1i64, 1, 0];
+        let out = mean_pool(&data, &mask, 1, 3, 2);
+        assert_eq!(out, vec![vec![2.0, 3.0]]); // (1+3)/2, (2+4)/2
+    }
+
+    #[test]
+    fn mean_pool_fully_masked_sequence_is_zero() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let mask = vec![0i64, 0];
+        let out = mean_pool(&data, &mask, 1, 2, 2);
+        assert_eq!(out, vec![vec![0.0, 0.0]]);
+    }
+
+    #[test]
+    fn mean_pool_handles_multi_batch() {
+        // batch=2, seq=2, hidden=2; row-major:
+        //   batch 0: [[1,1],[3,3]]   mask [1,1] → mean = [2,2]
+        //   batch 1: [[2,2],[4,4]]   mask [1,0] → mean = [2,2]
+        let data = vec![1.0, 1.0, 3.0, 3.0, 2.0, 2.0, 4.0, 4.0];
+        let mask = vec![1i64, 1, 1, 0];
+        let out = mean_pool(&data, &mask, 2, 2, 2);
+        assert_eq!(out, vec![vec![2.0, 2.0], vec![2.0, 2.0]]);
+    }
 }

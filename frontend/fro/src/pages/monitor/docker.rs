@@ -496,7 +496,7 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
                     }
                 }
 
-                p { class: "text-gray-500 text-xs",
+                p { class: "text-gray-300 text-xs",
                     "Docker image: "
                     span { "{version}" }
                 }
@@ -612,7 +612,7 @@ fn PortsRow(ports_simple: Vec<String>, ports_detail: String) -> Element {
                     pre { class: "bg-gray-900 text-green-400 p-3 rounded font-mono text-xs whitespace-pre-wrap",
                         "{ports_detail}"
                     }
-                    p { class: "text-xs text-gray-500 mt-2", "Format: host:port->container:port/protocol" }
+                    p { class: "text-xs text-gray-300 mt-2", "Format: host:port->container:port/protocol" }
                 }
             }
         }
@@ -734,7 +734,7 @@ fn ActionButton(label: &'static str, icon: &'static str, action: &'static str) -
                         p { class: "text-sm text-gray-400 mb-2", "This button executes:" }
                         code { class: "block bg-gray-900 text-green-400 p-3 rounded font-mono text-sm", "{command}" }
                     }
-                    p { class: "text-xs text-gray-500", "Runs in the ag project directory" }
+                    p { class: "text-xs text-gray-300", "Runs in the ag project directory" }
                 }
             }
         }
@@ -752,7 +752,7 @@ fn ServiceLink(name: &'static str, url: &'static str, port: &'static str) -> Ele
             class: "flex items-center justify-between p-3 bg-gray-700/50 hover:bg-gray-700 rounded transition-colors",
             div {
                 span { class: "text-gray-200", "{name}" }
-                span { class: "text-gray-500 text-xs ml-2", ":{port}" }
+                span { class: "text-gray-300 text-xs ml-2", ":{port}" }
             }
             span { class: "text-gray-400", "↗" }
         }

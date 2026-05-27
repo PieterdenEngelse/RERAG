@@ -54,7 +54,7 @@ pub fn HealthCard(props: HealthCardProps) -> Element {
             div { class: "text-xs text-gray-400", {props.name.as_ref()} }
             div { class: "text-xl font-semibold {status_class}", {props.status.as_ref()} }
             if let Some(detail) = &props.detail {
-                div { class: "text-xs text-gray-500", {detail.as_ref()} }
+                div { class: "text-xs text-gray-300", {detail.as_ref()} }
             }
 
             // Info modal

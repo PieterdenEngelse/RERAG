@@ -870,7 +870,7 @@ pub fn Header() -> Element {
                                         }
                                     }
                                 }
-                                div { class: "text-xs text-gray-500",
+                                div { class: "text-xs text-gray-300",
                                     "Backend health status: "
                                     span { class: "font-mono text-gray-300", "{health_status()}" }
                                 }
@@ -1108,7 +1108,7 @@ pub fn Header() -> Element {
                                         div { class: "text-white font-mono", "{load.queue_depth}" }
 
                                         div { class: "text-gray-400", "Indexing:" }
-                                        div { class: if load.indexing { "text-pink-400 font-semibold" } else { "text-gray-500" },
+                                        div { class: if load.indexing { "text-pink-400 font-semibold" } else { "text-gray-300" },
                                             if load.indexing {
                                                 "Yes ⚡"
                                             } else {
@@ -1117,7 +1117,7 @@ pub fn Header() -> Element {
                                         }
 
                                         div { class: "text-gray-400", "LLM Active:" }
-                                        div { class: if load.llm_active { "text-pink-400 font-semibold" } else { "text-gray-500" },
+                                        div { class: if load.llm_active { "text-pink-400 font-semibold" } else { "text-gray-300" },
                                             if load.llm_active {
                                                 "Yes 🤖"
                                             } else {
@@ -1391,7 +1391,7 @@ pub fn Header() -> Element {
                             }
                         }
                     }
-                    div { class: "mt-4 pt-3 border-t border-gray-700 text-xs text-gray-500 space-y-1",
+                    div { class: "mt-4 pt-3 border-t border-gray-700 text-xs text-gray-300 space-y-1",
                         div {
                             "Search (3010): "
                             span { class: "font-mono text-gray-300", "{health_status()}" }
@@ -1435,7 +1435,7 @@ pub fn Header() -> Element {
                             "×"
                         }
                     }
-                    div { class: "text-xs text-gray-500 mb-2",
+                    div { class: "text-xs text-gray-300 mb-2",
                         "Total entries: {log_total_lines()} (showing last 100)"
                     }
                     if log_loading() {
@@ -1448,7 +1448,7 @@ pub fn Header() -> Element {
                             "Error loading log: {err}"
                         }
                     } else if log_content().is_empty() {
-                        div { class: "text-gray-500 italic py-8 text-center",
+                        div { class: "text-gray-300 italic py-8 text-center",
                             "No log entries yet for this status."
                         }
                     } else {

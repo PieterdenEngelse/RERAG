@@ -891,7 +891,7 @@ pub fn MonitorIndex() -> Element {
                                         }
                                     }
                                 } else {
-                                    div { class: "text-lg font-bold text-gray-500", "Unknown" }
+                                    div { class: "text-lg font-bold text-gray-300", "Unknown" }
                                 }
                             }
                             button {
@@ -932,7 +932,7 @@ pub fn MonitorIndex() -> Element {
                                     class: if lora_last_error.is_some() {
                                         "text-red-400"
                                     } else {
-                                        "text-gray-500"
+                                        "text-gray-300"
                                     },
                                     if let Some(err) = lora_last_error.clone() {
                                         "{err}"
@@ -1232,7 +1232,7 @@ pub fn MonitorIndex() -> Element {
                                                         "#{examples.offset + idx + 1}"
                                                     }
                                                     if let Some(ref source) = example.source {
-                                                        div { class: "text-[10px] text-gray-500", "{source}" }
+                                                        div { class: "text-[10px] text-gray-300", "{source}" }
                                                     }
                                                 }
                                                 div { class: "mb-2",
@@ -1250,7 +1250,7 @@ pub fn MonitorIndex() -> Element {
                                                     }
                                                 }
                                                 details { class: "text-xs",
-                                                    summary { class: "text-gray-500 cursor-pointer hover:text-gray-300", "Show context" }
+                                                    summary { class: "text-gray-300 cursor-pointer hover:text-gray-300", "Show context" }
                                                     div { class: "mt-2 p-2 rounded bg-slate-800 text-gray-400 text-[11px] max-h-32 overflow-y-auto whitespace-pre-wrap",
                                                         {if example.context.len() > 1000 {
                                                             format!("{}...", &example.context[..1000])
@@ -1680,7 +1680,7 @@ pub fn MonitorIndex() -> Element {
                                         if let Some(job) = latest_job.clone() {
                                             div { class: "text-lg font-bold text-gray-100", "{job.status}" }
                                         } else {
-                                            div { class: "text-lg font-bold text-gray-500", "Ready" }
+                                            div { class: "text-lg font-bold text-gray-300", "Ready" }
                                         }
                                     }
                                     div { class: "flex items-center gap-2",
@@ -1882,7 +1882,7 @@ pub fn MonitorIndex() -> Element {
 
             Panel { title: Some("Async Jobs (Background)".into()), refresh: Some("5s".into()),
                 if job_table_rows.is_empty() {
-                    div { class: "text-sm text-gray-500", "No tracked jobs yet." }
+                    div { class: "text-sm text-gray-300", "No tracked jobs yet." }
                 } else {
                     DataTable {
                         headers: vec![
@@ -2018,7 +2018,7 @@ fn render_progress_monitor(job: &ReindexJobRow) -> Element {
                                 } else if i == phase {
                                     "w-4 h-4 rounded-full flex items-center justify-center bg-teal-500 text-white text-[8px]"
                                 } else {
-                                    "w-4 h-4 rounded-full flex items-center justify-center bg-gray-700 text-gray-500 text-[8px]"
+                                    "w-4 h-4 rounded-full flex items-center justify-center bg-gray-700 text-gray-300 text-[8px]"
                                 }
                             },
                             if i < phase || (i == phase && !is_running) {
@@ -2035,7 +2035,7 @@ fn render_progress_monitor(job: &ReindexJobRow) -> Element {
                                 if i <= phase {
                                     "text-gray-200"
                                 } else {
-                                    "text-gray-500"
+                                    "text-gray-300"
                                 }
                             },
                             "{label}"

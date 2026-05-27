@@ -342,7 +342,7 @@ pub fn MonitorRequests() -> Element {
 
             Panel { title: Some("Request Volume".into()), refresh: Some("5s".into()),
                 if request_counts.is_empty() {
-                    div { class: "text-gray-500 text-sm", "No recent samples yet." }
+                    div { class: "text-gray-300 text-sm", "No recent samples yet." }
                 } else {
                     ChartPlaceholder {
                         values: request_counts.clone(),

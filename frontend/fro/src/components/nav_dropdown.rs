@@ -63,7 +63,7 @@ pub fn DropdownItem(to: Route, children: Element) -> Element {
                 class: if is_dark() {
                     "block px-4 py-2 transition-colors text-gray-200 hover:bg-gray-600"
                 } else {
-                    "block px-4 py-2 transition-colors text-gray-700 hover:bg-gray-100"
+                    "block px-4 py-2 transition-colors text-gray-300 hover:bg-gray-100"
                 },
                 onclick: move |_| active_dropdown.set(ActiveDropdown(None)),  // Close dropdown
                 {children}
@@ -83,7 +83,7 @@ pub fn DropdownActionItem(onclick: EventHandler<MouseEvent>, children: Element) 
                 class: if is_dark() {
                     "block w-full text-left px-4 py-2 transition-colors text-gray-200 hover:bg-gray-600"
                 } else {
-                    "block w-full text-left px-4 py-2 transition-colors text-gray-700 hover:bg-gray-100"
+                    "block w-full text-left px-4 py-2 transition-colors text-gray-300 hover:bg-gray-100"
                 },
                 onclick: move |evt| {
                     active_dropdown.set(ActiveDropdown(None));  // Close dropdown

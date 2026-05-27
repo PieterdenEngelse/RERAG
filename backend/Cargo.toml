@@ -178,7 +178,7 @@ graph = ["falkordb"]
 # ORT-based layout model (PubLayNet DETR) is a planned upgrade — see layout_model.rs TODO.
 # Enable with: cargo build --features layout_ml
 # Activate at runtime with: LAYOUT_ML_ENABLED=true
-layout_ml = ["extractous", "lopdf", "ort", "pdfium-render", "image"]
+layout_ml = ["extractous", "lopdf", "ort", "pdfium-render", "image", "hf-hub"]
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -215,4 +215,12 @@ optional = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies.image]
 version = "0.25"
+optional = true
+
+# Auto-download for LAYOUT_ML_MODEL_ID — fetches from HuggingFace Hub on first
+# call and caches under ~/.cache/huggingface/hub/. Uses the sync API
+# (`ureq`-based) so no extra runtime is needed; matches the hf-hub version
+# fastembed already pulls in.
+[target.'cfg(not(target_os = "windows"))'.dependencies.hf-hub]
+version = "0.4"
 optional = true

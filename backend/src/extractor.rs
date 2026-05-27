@@ -296,6 +296,7 @@ impl DocExtractor for UnstructuredExtractor {
             ir.push(block);
         }
 
+        ir.tag_extractor("unstructured");
         Ok(ir)
     }
 }

@@ -149,7 +149,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                             }
                         }
                         // Separator
-                        div { class: "text-gray-600 text-2xl", "|" }
+                        div { class: "text-gray-300 text-2xl", "|" }
                         // Relations column
                         div {
                             h3 { class: "text-sm font-semibold text-gray-300 mb-2", "Relations:" }
@@ -338,7 +338,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                             // Nodes legend
                             div { class: "flex items-center gap-3",
                                 span {
-                                    class: if fullscreen() { "text-sm text-gray-400 font-medium" } else { "text-xs text-gray-500" },
+                                    class: if fullscreen() { "text-sm text-gray-400 font-medium" } else { "text-xs text-gray-300" },
                                     "Nodes:"
                                 }
                                 div { class: "flex items-center gap-1",
@@ -373,11 +373,11 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                 }
                             }
                             // Separator
-                            span { class: "text-gray-600", "|" }
+                            span { class: "text-gray-300", "|" }
                             // Relationships legend
                             div { class: "flex items-center gap-2",
                                 span {
-                                    class: if fullscreen() { "text-sm text-gray-400 font-medium" } else { "text-xs text-gray-500" },
+                                    class: if fullscreen() { "text-sm text-gray-400 font-medium" } else { "text-xs text-gray-300" },
                                     "Relations:"
                                 }
                                 div { class: "flex items-center gap-1",
@@ -549,7 +549,7 @@ pub fn MonitorKnowledgeGraph() -> Element {
                                             span { class: "text-gray-400", "Properties:" }
                                             for (key, value) in node.properties.iter() {
                                                 div { class: "ml-2 mt-1",
-                                                    span { class: "text-gray-500", "{key}: " }
+                                                    span { class: "text-gray-300", "{key}: " }
                                                     span { class: "text-gray-300", "{value}" }
                                                 }
                                             }

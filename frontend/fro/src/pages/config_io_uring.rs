@@ -784,7 +784,7 @@ pub fn ConfigIoUring() -> Element {
                         div { class: "rounded border border-gray-600 p-4 w-fit",
                             div { class: "flex items-center gap-2 mb-3",
                                 span { class: "text-sm text-gray-300 font-semibold", "4. Advanced" }
-                                span { class: "text-xs text-gray-500 italic", "(use with caution)" }
+                                span { class: "text-xs text-gray-300 italic", "(use with caution)" }
                             }
                             div { class: "flex flex-wrap gap-6 justify-start",
                                 // Setup column

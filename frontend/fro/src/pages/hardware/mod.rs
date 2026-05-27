@@ -935,12 +935,12 @@ pub fn ConfigHardware() -> Element {
                                 }
                                     } else if model_name.is_empty() {
                                         rsx! {
-                                            div { class: "text-xs text-gray-500", "Enter a model name above (e.g., llama3:7b, phi3:3.8b)" }
+                                            div { class: "text-xs text-gray-300", "Enter a model name above (e.g., llama3:7b, phi3:3.8b)" }
                                         }
                                     } else {
                                         rsx! {
                                             div { class: "text-xs text-yellow-400", "Could not detect model size from '{model_name}'." }
-                                            div { class: "text-xs text-gray-500", "Tip: Include size in name like 'model:7b' or 'model:3.8b'" }
+                                            div { class: "text-xs text-gray-300", "Tip: Include size in name like 'model:7b' or 'model:3.8b'" }
                                         }
                                     }
                                 }
@@ -1050,7 +1050,7 @@ pub fn ConfigHardware() -> Element {
                                 span { class: "text-sm text-gray-300 font-semibold",
                                     "1. Model Params"
                                 }
-                                span { class: "text-xs text-gray-500 italic", "(restart required)" }
+                                span { class: "text-xs text-gray-300 italic", "(restart required)" }
                             }
                             div { class: "flex flex-wrap gap-6 justify-start",
                                 // GPU offloading
@@ -1220,7 +1220,7 @@ pub fn ConfigHardware() -> Element {
                                 span { class: "text-sm text-gray-300 font-semibold",
                                     "2. Context Params"
                                 }
-                                span { class: "text-xs text-gray-500 italic", "(new context)" }
+                                span { class: "text-xs text-gray-300 italic", "(new context)" }
                             }
                             div { class: "flex flex-wrap gap-6 justify-start",
                                 // Context size
@@ -1534,7 +1534,7 @@ pub fn ConfigHardware() -> Element {
                                 span { class: "text-sm text-gray-300 font-semibold",
                                     "3. CPU Params"
                                 }
-                                span { class: "text-xs text-gray-500 italic", "(new context)" }
+                                span { class: "text-xs text-gray-300 italic", "(new context)" }
                             }
                             div { class: "flex flex-wrap gap-6 justify-start",
                                 div { class: PARAM_COLUMN_CLASS,
@@ -1704,7 +1704,7 @@ pub fn ConfigHardware() -> Element {
                                 span { class: "text-sm text-gray-300 font-semibold",
                                     "4. Sampling Params"
                                 }
-                                span { class: "text-xs text-gray-500 italic", "(per inference)" }
+                                span { class: "text-xs text-gray-300 italic", "(per inference)" }
                                 button {
                                     class: PARAM_ICON_BUTTON_CLASS,
                                     style: PARAM_ICON_BUTTON_STYLE,

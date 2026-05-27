@@ -24,7 +24,7 @@ pub fn RowHeader(props: RowHeaderProps) -> Element {
                     }
                 }
                 if let Some(ref desc) = props.description {
-                    p { class: "text-xs text-gray-500", {desc.as_ref()} }
+                    p { class: "text-xs text-gray-300", {desc.as_ref()} }
                 }
             }
             if let Some(ref trailing) = props.trailing {

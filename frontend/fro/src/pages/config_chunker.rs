@@ -342,7 +342,7 @@ pub fn ConfigChunker() -> Element {
                             // Semantic threshold — active in semantic / pipeline modes
                             div { class: PARAM_BLOCK_CLASS,
                                 label {
-                                    class: if is_semantic { PARAM_LABEL_CLASS } else { "text-gray-500 whitespace-nowrap" },
+                                    class: if is_semantic { PARAM_LABEL_CLASS } else { "text-gray-300 whitespace-nowrap" },
                                     "SEMANTIC_SIMILARITY_THRESHOLD"
                                 }
                                 div { class: "flex items-center gap-2",
@@ -354,7 +354,7 @@ pub fn ConfigChunker() -> Element {
                                         class: if is_semantic {
                                             PARAM_NUMBER_INPUT_CLASS
                                         } else {
-                                            "input input-xs input-bordered bg-gray-800 text-gray-600 !w-24 cursor-not-allowed"
+                                            "input input-xs input-bordered bg-gray-800 text-gray-300 !w-24 cursor-not-allowed"
                                         },
                                         disabled: !is_semantic,
                                         value: "{semantic_threshold()}",
@@ -681,9 +681,9 @@ pub fn ConfigChunker() -> Element {
                         div { class: "flex items-center gap-2 text-xs text-gray-400",
                             span { class: "text-gray-300", "{memory_label()}:" }
                             span { "{index_size_human()}" }
-                            span { class: "text-gray-600", "·" }
+                            span { class: "text-gray-300", "·" }
                             span { "{index_doc_count()} chunks" }
-                            span { class: "text-gray-600", "·" }
+                            span { class: "text-gray-300", "·" }
                             button {
                                 class: "text-yellow-400 hover:text-yellow-200 underline underline-offset-2 cursor-pointer",
                                 onclick: move |_| show_restart_confirm.set(true),
@@ -757,6 +757,15 @@ pub fn ConfigChunker() -> Element {
                     }
                     div { class: "text-sm text-gray-300 leading-relaxed space-y-5",
                         p { "Selects the chunking algorithm applied to every ingested document." }
+                        p { class: "text-xs text-gray-400",
+                            "Two layers apply in sequence. "
+                            strong { class: "text-gray-200", "Layer 1 (universal across all modes): " }
+                            "the IR walker (chunk_ir) respects DocIR block tags produced upstream — atomic blocks (Table, Code, Formula) emit as a single chunk each; section headers flush the pending accumulation. "
+                            strong { class: "text-gray-200", "Layer 2 (mode-specific): " }
+                            "how body-text accumulations between those boundaries get further sliced when they exceed the size limit. The "
+                            em { "Body-text strategy" }
+                            " line in each mode below shows the Layer-2 behaviour."
+                        }
 
                         // ── Fixed ──────────────────────────────────────────────────
                         div { class: "rounded border border-gray-700 p-4",
@@ -766,6 +775,18 @@ pub fn ConfigChunker() -> Element {
                             }
                             p { class: "text-gray-300 mb-2",
                                 "Splits strictly on line boundaries. No merging, no overlap, no size control. Every line becomes exactly one chunk."
+                            }
+                            p { class: "text-xs text-gray-400 mb-2",
+                                em { class: "text-gray-200", "Body-text strategy: " }
+                                "Recursive split "
+                                span { class: "font-mono text-gray-300", "\\n\\n" }
+                                " → "
+                                span { class: "font-mono text-gray-300", "\\n" }
+                                " → "
+                                span { class: "font-mono text-gray-300", ".!?" }
+                                " → space → char with a token budget; sentence-boundary snap on flush; the last "
+                                span { class: "font-mono text-gray-300", "overlap" }
+                                " tokens prepended to the next chunk. Layout-blind for body content — splits purely on size."
                             }
                             div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
@@ -852,6 +873,14 @@ pub fn ConfigChunker() -> Element {
                                 span { class: "font-mono text-gray-200", ":" }
                                 "). Then enforces min/target/max chunk sizes."
                             }
+                            p { class: "text-xs text-gray-400 mb-2",
+                                em { class: "text-gray-200", "Body-text strategy: " }
+                                "Segments the body, detects in-text headings ("
+                                span { class: "font-mono text-gray-300", "#" }
+                                "-prefixed, ALL-CAPS, "
+                                span { class: "font-mono text-gray-300", ":" }
+                                "-suffixed), and flushes on heading boundary OR size overflow. Adapts chunk size by content density — no embeddings."
+                            }
                             div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
                                     p { class: "text-green-400 font-semibold mb-1", "Strengths" }
@@ -933,6 +962,16 @@ pub fn ConfigChunker() -> Element {
                             }
                             p { class: "text-gray-300 mb-2",
                                 "Splits on sentence boundaries (. ! ?), accumulates until target_size, hard-flushes at max_size, then carries overlap sentences into the next chunk."
+                            }
+                            p { class: "text-xs text-gray-400 mb-2",
+                                em { class: "text-gray-200", "Body-text strategy: " }
+                                "Sentence-first split; accumulate until "
+                                span { class: "font-mono text-gray-300", "target_size" }
+                                "; hard flush at "
+                                span { class: "font-mono text-gray-300", "max_size" }
+                                "; carry "
+                                span { class: "font-mono text-gray-300", "overlap" }
+                                " sentences into the next chunk for retrieval continuity."
                             }
                             div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
@@ -1016,6 +1055,12 @@ pub fn ConfigChunker() -> Element {
                             p { class: "text-gray-300 mb-2",
                                 "Embeds text progressively and detects topic shifts via cosine similarity against the running chunk centroid. Splits when similarity drops below the threshold. Produces variable-length, topic-coherent chunks."
                             }
+                            p { class: "text-xs text-gray-400 mb-2",
+                                em { class: "text-gray-200", "Body-text strategy: " }
+                                "Computes embedding similarity between adjacent segments; flushes when running-centroid similarity drops below "
+                                span { class: "font-mono text-gray-300", "semantic_similarity_threshold" }
+                                ". Most expensive — one embedding call per segment."
+                            }
                             div { class: "grid grid-cols-2 gap-3 text-xs mt-2 mb-3",
                                 div {
                                     p { class: "text-green-400 font-semibold mb-1", "Strengths" }
@@ -1097,6 +1142,10 @@ pub fn ConfigChunker() -> Element {
                             }
                             p { class: "text-gray-300 mb-2",
                                 "Runs two or three stages in sequence (configurable below). Each stage refines the output of the previous one. Highest quality; most embedding calls."
+                            }
+                            p { class: "text-xs text-gray-400 mb-2",
+                                em { class: "text-gray-200", "Body-text strategy: " }
+                                "Composes two or three of the strategies above in sequence (e.g. Lightweight pre-split → Semantic refinement). Each stage operates on the previous stage's output."
                             }
                             div { class: "overflow-x-auto",
                                 table { class: "w-full text-xs border-collapse",

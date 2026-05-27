@@ -73,7 +73,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                         div { class: "flex items-center gap-2",
                             div { class: "text-2xl font-bold text-gray-100", {props.value.as_ref()} }
                             if let Some(unit) = &props.unit {
-                                span { class: "text-sm text-gray-500", {unit.as_ref()} }
+                                span { class: "text-sm text-gray-300", {unit.as_ref()} }
                             }
                             if has_tooltip {
                                 button {
@@ -107,7 +107,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                 div { class: "flex items-center gap-2",
                     span { class: "text-sm font-semibold text-gray-200", {props.value.as_ref()} }
                     if let Some(unit) = &props.unit {
-                        span { class: "text-sm text-gray-500", {unit.as_ref()} }
+                        span { class: "text-sm text-gray-300", {unit.as_ref()} }
                     }
                     if has_tooltip {
                         button {
@@ -132,7 +132,7 @@ pub fn StatCard(props: StatCardProps) -> Element {
                 div { class: "flex items-center gap-2",
                     div { class: "text-2xl font-bold text-gray-100", {props.value.as_ref()} }
                     if let Some(unit) = &props.unit {
-                        span { class: "text-sm text-gray-500", {unit.as_ref()} }
+                        span { class: "text-sm text-gray-300", {unit.as_ref()} }
                     }
                     if has_tooltip {
                         button {
@@ -154,10 +154,10 @@ pub fn StatCard(props: StatCardProps) -> Element {
                 }
             }
             if let Some(trend) = &props.trend {
-                div { class: "text-xs text-gray-500", {trend.as_ref()} }
+                div { class: "text-xs text-gray-300", {trend.as_ref()} }
             }
             if let Some(points) = &props.sparkline {
-                div { class: "text-[10px] text-gray-600", "sparkline: {points.len()} pts" }
+                div { class: "text-[10px] text-gray-300", "sparkline: {points.len()} pts" }
             }
             if let Some(footer) = &props.footer {
                 div { class: "mt-2", {footer.clone()} }

@@ -138,7 +138,7 @@ pub fn MonitorLogs() -> Element {
                     }
 
                     if filtered_entries.is_empty() {
-                        div { class: "text-gray-500 text-sm", "No log entries match filters." }
+                        div { class: "text-gray-300 text-sm", "No log entries match filters." }
                     } else {
                         div { class: "bg-black/50 p-3 rounded text-xs font-mono text-gray-200 space-y-1 max-h-[480px] overflow-y-auto",
                             {filtered_entries.iter().map(|entry| {
@@ -148,7 +148,7 @@ pub fn MonitorLogs() -> Element {
                                 let message = entry.message.clone().unwrap_or_else(|| entry.raw.clone());
                                 rsx! {
                                     div { class: format!("flex gap-2 {}", level_color(&level)),
-                                        span { class: "text-gray-500", "{ts}" }
+                                        span { class: "text-gray-300", "{ts}" }
                                         span { class: "font-semibold", "{level}" }
                                         span { class: "text-gray-400", "{target}" }
                                         span { class: "text-gray-200", "{message}" }

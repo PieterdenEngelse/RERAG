@@ -405,7 +405,7 @@ pub fn MonitorAgentic() -> Element {
                             div { class: "rounded p-3 bg-gray-800 border border-teal-700/50 flex items-center gap-2",
                                 div { class: "w-2 h-2 rounded-full bg-teal-400 shrink-0" }
                                 span { class: "text-sm font-mono text-teal-300", "{name}" }
-                                span { class: "text-xs text-gray-500", "agent" }
+                                span { class: "text-xs text-gray-300", "agent" }
                             }
                         }
                     }
@@ -520,19 +520,19 @@ pub fn MonitorAgentic() -> Element {
 
                     div { class: "grid grid-cols-3 gap-4 mt-2",
                         div { class: "text-center",
-                            div { class: "text-xs text-gray-500", "Avg tokens/session" }
+                            div { class: "text-xs text-gray-300", "Avg tokens/session" }
                             div { class: "text-sm font-medium text-gray-200",
                                 "{rig_stats.avg_tokens_in:.0}"
                             }
                         }
                         div { class: "text-center",
-                            div { class: "text-xs text-gray-500", "Max tokens seen" }
+                            div { class: "text-xs text-gray-300", "Max tokens seen" }
                             div { class: "text-sm font-medium text-gray-200",
                                 "{rig_stats.max_tokens_in}"
                             }
                         }
                         div { class: "text-center",
-                            div { class: "text-xs text-gray-500", "Avg session" }
+                            div { class: "text-xs text-gray-300", "Avg session" }
                             div { class: "text-sm font-medium text-gray-200",
                                 "{rig_stats.avg_session_ms:.0} ms"
                             }
@@ -540,11 +540,11 @@ pub fn MonitorAgentic() -> Element {
                     }
 
                     if rig_stats.token_sample_count == 0 {
-                        div { class: "text-xs text-gray-500 italic mt-2",
+                        div { class: "text-xs text-gray-300 italic mt-2",
                             "No agentic sessions recorded yet. Token stats appear after the first agentic query."
                         }
                     } else {
-                        div { class: "text-xs text-gray-600 mt-1",
+                        div { class: "text-xs text-gray-300 mt-1",
                             "Based on {rig_stats.token_sample_count} session(s)"
                         }
                     }
@@ -594,7 +594,7 @@ pub fn MonitorAgentic() -> Element {
                             }
                         }
                         if tool_stats.tool_distribution.is_empty() {
-                            div { class: "text-gray-500 text-sm italic", "No tool usage data yet" }
+                            div { class: "text-gray-300 text-sm italic", "No tool usage data yet" }
                         }
                     }
                 }
@@ -666,7 +666,7 @@ pub fn MonitorAgentic() -> Element {
                                         }
                                     }
                                     span { class: "text-sm text-gray-200 flex-1", "{goal.goal}" }
-                                    span { class: "text-xs text-gray-500", "{goal.status}" }
+                                    span { class: "text-xs text-gray-300", "{goal.status}" }
                                 }
                             }
                         }
@@ -677,7 +677,7 @@ pub fn MonitorAgentic() -> Element {
             // Recent Reflections Section
             Panel { title: Some("Recent Reflections".into()), refresh: Some("30s".into()),
                 if reflections.reflections.is_empty() {
-                    div { class: "text-gray-500 text-sm italic",
+                    div { class: "text-gray-300 text-sm italic",
                         "No reflections recorded yet. Reflections appear after agent interactions."
                     }
                 } else {
@@ -695,7 +695,7 @@ pub fn MonitorAgentic() -> Element {
                                         },
                                         "{reflection.reflection_type}"
                                     }
-                                    span { class: "text-xs text-gray-500", "{format_timestamp(reflection.created_at)}" }
+                                    span { class: "text-xs text-gray-300", "{format_timestamp(reflection.created_at)}" }
                                 }
                                 div { class: "text-sm text-gray-200", "{reflection.insight}" }
                             }
@@ -707,7 +707,7 @@ pub fn MonitorAgentic() -> Element {
             // Recent Episodes Section
             Panel { title: Some("Recent Episodes".into()), refresh: Some("5s".into()),
                 if episodes.episodes.is_empty() {
-                    div { class: "text-gray-500 text-sm italic",
+                    div { class: "text-gray-300 text-sm italic",
                         "No episodes recorded yet. Episodes appear after agent queries."
                     }
                 } else {
@@ -723,8 +723,8 @@ pub fn MonitorAgentic() -> Element {
                                         },
                                         if episode.success { "✓ success" } else { "✗ failed" }
                                     }
-                                    span { class: "text-xs text-gray-500", "{format_timestamp(episode.created_at)}" }
-                                    span { class: "text-xs text-gray-600", "• {episode.context_chunks_used} chunks" }
+                                    span { class: "text-xs text-gray-300", "{format_timestamp(episode.created_at)}" }
+                                    span { class: "text-xs text-gray-300", "• {episode.context_chunks_used} chunks" }
                                 }
                                 div { class: "text-sm text-gray-200 truncate", "Q: {episode.query}" }
                                 div { class: "text-xs text-gray-400 truncate mt-1", "A: {truncate_text(&episode.response, 100)}" }
@@ -732,7 +732,7 @@ pub fn MonitorAgentic() -> Element {
                         }
                     }
                     if episodes.total > 5 {
-                        div { class: "text-xs text-gray-500 mt-2 text-center",
+                        div { class: "text-xs text-gray-300 mt-2 text-center",
                             "Showing 5 of {episodes.total} episodes"
                         }
                     }

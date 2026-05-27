@@ -9,7 +9,7 @@ pub fn About() -> Element {
             h2 { class: "text-2xl font-semibold text-gray-800 dark:text-gray-200",
                 "About This App"
             }
-            p { class: "mt-2 text-gray-700 dark:text-gray-300",
+            p { class: "mt-2 text-gray-300 dark:text-gray-300",
                 "Built with Dioxus and Tailwind CSS."
             }
             Link {

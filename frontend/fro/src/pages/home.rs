@@ -2873,7 +2873,7 @@ pub fn Home() -> Element {
                     div { class: "px-4 text-sm text-red-300", "This only deletes the indexed copy. Original files remain wherever they were stored." }
                     div { class: "flex-1 overflow-y-auto p-4 space-y-2",
                         if documents().is_empty() {
-                            p { class: "text-gray-500 text-sm", "No documents indexed." }
+                            p { class: "text-gray-300 text-sm", "No documents indexed." }
                         } else {
                             for doc in documents() {
                                 label { class: "flex items-center gap-2 text-sm text-white cursor-pointer bg-gray-800/60 px-3 py-2 rounded border border-gray-700",
@@ -2958,7 +2958,7 @@ pub fn Home() -> Element {
                         if memories_loading() {
                             div { class: "text-center text-gray-400", "Loading memories…" }
                         } else if rag_memories().is_empty() {
-                            div { class: "text-gray-500 text-sm", "No memories found." }
+                            div { class: "text-gray-300 text-sm", "No memories found." }
                         } else {
                             for mem in rag_memories() {
                                 div { class: "bg-gray-800/60 rounded border border-gray-700 p-3 space-y-1",
@@ -2974,7 +2974,7 @@ pub fn Home() -> Element {
                         }
                                             span { class: "font-semibold", "#{mem.id} · {mem.memory_type}" }
                                         }
-                                        span { class: "text-xs text-gray-500", "{mem.timestamp}" }
+                                        span { class: "text-xs text-gray-300", "{mem.timestamp}" }
                                     }
                                     p { class: "text-sm text-gray-200 whitespace-pre-wrap", "{mem.content}" }
                                 }

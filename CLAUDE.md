@@ -168,6 +168,120 @@ graph    # GraphRAG via the falkordb crate
 
 Info modals are written from the perspective of the compiled app's end user. They do not know or care about "the frontend" or "the backend" — to them there is only **the app**. Use "the app" or "ag" instead of "the backend", "the frontend", or "the server" when those words would leak implementation structure. Technical terms that are user-visible (env files, config variables, ports) are fine; source-code architecture terms (Actix, Dioxus, HttpServer, handler) are not.
 
+## Toggles (boolean controls)
+
+Two acceptable patterns for boolean controls — pick by placement:
+
+| Placement | Use | Why |
+|-----------|-----|-----|
+| Inside a `PARAM_COLUMN_CLASS` / `PARAM_BLOCK_CLASS` column on a parameter page (e.g. Repetition Control on `/config/hardware`) | **daisyUI toggle** (recipe below) | Matches the visual rhythm of the surrounding number/select inputs in those columns. |
+| Inline next to a panel header, in a tile alongside non-parameter content, or anywhere the daisyUI toggle's `currentColor`-driven sub-elements look tinted | **`.onnx-checkbox`** (`enable_profiling` on `/config/onnx`) | Brand-color fill when checked, fixed gray border when unchecked — no `currentColor` traps, looks identical in every context. |
+
+### `.onnx-checkbox` form (preferred outside parameter columns)
+
+```rust
+div { class: "flex items-center gap-2",
+    input {
+        r#type: "checkbox",
+        class: PARAM_CHECKBOX_CLASS,          // "checkbox checkbox-xs onnx-checkbox"
+        checked: value,
+        onchange: move |evt| /* persist */,
+    }
+    label { class: PARAM_LABEL_CLASS, "PARAM_NAME" }
+    button {
+        class: PARAM_ICON_BUTTON_CLASS,
+        style: PARAM_ICON_BUTTON_STYLE,
+        onclick: move |_| info_signal.set(true),
+        title: "What this control does",
+        InfoIcon {}
+    }
+}
+```
+
+CSS lives in `assets/styling/index.css` under `.onnx-checkbox` — 2px gray-400
+border, brand `#1D6B9A` fill + white checkmark when checked.
+
+**Never use the HTML `disabled` attribute on `.onnx-checkbox` (or daisyUI
+toggles).** Browsers fall back to native user-agent rendering for disabled
+form controls, which silently overrides the `appearance: none` /
+`background-color` / `border` set by our CSS — the control reverts to a small
+gray-on-gray box with no border.
+
+**Also avoid `opacity-50` on the wrapper to "gray out" the checkbox.**
+Opacity multiplies through to children, so the brand blue and white checkmark
+both get dimmed and look "wrong" instead of "disabled". The user usually has
+no way to tell the difference between "broken" and "intentionally inactive".
+
+If you genuinely need to gate a checkbox:
+- Reject the click in the `onchange` handler.
+- Surface the reason in a sibling label, tile, or callout — not by dimming the
+  control itself. The Native PDF Extraction Feature-compiled tile is a good
+  example.
+- If you want a hover hint, put it as a `title=` on the wrapper.
+
+In most cases it's fine to just let the save fire — the override gets stored
+and either takes effect on next restart or sits inert until the underlying
+capability appears. The save is harmless.
+
+### daisyUI toggle form (for parameter-column placements)
+
+Canonical pattern that originally appeared on `/config/hardware` (Repetition
+Control, Memory blocks). Use this when the control sits inside a parameter
+column next to number/select inputs.
+
+**Layout:** `flex items-end gap-2 text-gray-200` row containing the toggle
+input followed immediately by an info button (matches the `[control] [info]`
+rhythm used elsewhere on the parameter pages).
+
+```rust
+div { class: "flex items-end gap-2 text-gray-200",
+    input {
+        r#type: "checkbox",
+        class: "toggle toggle-sm !border !border-white",
+        style: format!(
+            "border: 1px solid white; background-color: {}; --input-color: #fff;",
+            if value { "" } else { "#d1d5db" },
+        ),
+        checked: value,
+        onchange: move |_| /* persist */,
+    }
+    button {
+        class: PARAM_ICON_BUTTON_CLASS,
+        style: PARAM_ICON_BUTTON_STYLE,
+        onclick: move |_| info_signal.set(true),
+        title: "What this toggle does",
+        InfoIcon {}
+    }
+}
+```
+
+**Notes:**
+- daisyUI `toggle toggle-sm` + forced white border via `!border !border-white`.
+- Inline `background-color` style: empty string when on (default brand fill),
+  `#d1d5db` (Tailwind gray-300) when off — gives the off-state a clear neutral
+  look without depending on daisyUI theme variables.
+- **`--input-color: #fff` in the inline style is load-bearing**: daisyUI's
+  `.toggle` defaults `--input-color` to `color-mix(base-content 50%, transparent)`
+  for the off state. That half-transparent color is used for the thumb's
+  background and the ring's inset box-shadow, so without the override the
+  "white" parts mix with whatever bleeds through and read as tinted /
+  yellowish. Forcing it to `#fff` keeps the thumb and ring crisp white in
+  both on and off states.
+- **`text-gray-200` on the wrapper is load-bearing too**: daisyUI's toggle
+  uses `currentColor` for some sub-elements; the canonical hardware-page form
+  inherits it from `PARAM_BLOCK_CLASS`. In free-standing placements (e.g.
+  inline next to a panel header) set it explicitly on the wrapper.
+- When the toggle's underlying capability isn't available (e.g. a Cargo
+  feature isn't compiled in), set `disabled: true` on the input and pass a
+  `title=` that explains why.
+- The info button is mandatory — every toggle gets its own modal explaining
+  the trade-off, not just a tooltip. See **Info Buttons** below for the
+  button spec; reuse `PARAM_ICON_BUTTON_CLASS` / `PARAM_ICON_BUTTON_STYLE`
+  / `InfoIcon` rather than redeclaring.
+- When the underlying knob is `restart_required`, the toggle's save handler
+  should surface a Restart-now banner (same pattern as `/config/runtime`).
+  Don't silently save and leave the user wondering why nothing changed.
+
 ## Info Buttons
 
 Here's your info button canonical spec from memory:

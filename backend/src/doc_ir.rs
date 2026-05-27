@@ -169,12 +169,28 @@ impl DocIR {
 
     /// Stamp every block with an extractor label (e.g. "builtin/pdf", "docling").
     /// Called after IR construction so `chunk_ir` picks up the provenance.
+    /// Also records the label at the doc level so callers can recover it
+    /// without iterating blocks.
     pub fn tag_extractor(&mut self, label: &str) {
+        self.metadata
+            .insert("extractor".to_string(), label.to_string());
         for block in &mut self.blocks {
             block
                 .metadata
                 .insert("extractor".to_string(), label.to_string());
         }
+    }
+
+    /// Returns the extractor label set by `tag_extractor`, falling back to the
+    /// first block's metadata for older IRs, then to "external".
+    pub fn extractor_tag(&self) -> &str {
+        if let Some(t) = self.metadata.get("extractor") {
+            return t;
+        }
+        if let Some(t) = self.blocks.first().and_then(|b| b.metadata.get("extractor")) {
+            return t;
+        }
+        "external"
     }
 
     /// Flatten all blocks to plain text (for Store normalization / metrics).

@@ -353,7 +353,7 @@ fn MemoriesListModal(
                 }
                 // Content
                 if filtered.is_empty() {
-                    div { class: "text-gray-500 text-sm py-8 text-center",
+                    div { class: "text-gray-300 text-sm py-8 text-center",
                         "No memories of type '"
                         span { class: "font-semibold", "{memory_type}" }
                         "' stored yet."
@@ -364,11 +364,11 @@ fn MemoriesListModal(
                             for (i, mem) in filtered.iter().enumerate() {
                                 div { class: "bg-gray-900 rounded p-3 border border-gray-700",
                                     div { class: "flex justify-between items-start mb-2",
-                                        span { class: "text-xs text-gray-500", "#{i + 1}" }
-                                        span { class: "text-xs text-gray-500", "{mem.timestamp}" }
+                                        span { class: "text-xs text-gray-300", "#{i + 1}" }
+                                        span { class: "text-xs text-gray-300", "{mem.timestamp}" }
                                     }
                                     p { class: "text-white text-sm whitespace-pre-wrap", "{mem.content}" }
-                                    div { class: "text-xs text-gray-500 mt-2", "Agent: {mem.agent_id}" }
+                                    div { class: "text-xs text-gray-300 mt-2", "Agent: {mem.agent_id}" }
                                 }
                             }
                         }
@@ -685,7 +685,7 @@ pub fn ConfigMemories() -> Element {
                         " to add observations."
                     }
                     if snapshot.observations.is_empty() {
-                        div { class: "text-gray-500 text-sm py-4", "No observations stored." }
+                        div { class: "text-gray-300 text-sm py-4", "No observations stored." }
                     } else {
                         div { class: "max-h-64 overflow-y-auto",
                             table { class: "w-full text-sm text-left",
@@ -785,7 +785,7 @@ pub fn ConfigMemories() -> Element {
                     p { span { class: "text-gray-200 font-medium", "cosine — " } "angle between vectors, ignoring magnitude. Default and recommended." }
                     p { span { class: "text-gray-200 font-medium", "dot product — " } "raw inner product. Only meaningful if embeddings are pre-normalized." }
                     p { span { class: "text-gray-200 font-medium", "euclidean — " } "straight-line distance. Can underperform in high dimensions." }
-                    p { class: "text-gray-500", "Agent memory uses brute-force search, not HNSW — ef_construction, ef_search, and PQ do not apply here." }
+                    p { class: "text-gray-300", "Agent memory uses brute-force search, not HNSW — ef_construction, ef_search, and PQ do not apply here." }
                 }
             }
             if show_mem_top_k_info() {

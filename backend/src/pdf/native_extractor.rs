@@ -58,18 +58,8 @@ impl DocExtractor for NativePdfExtractor {
         let mut ir = build_ir(filename, &words, &tags, table_model);
         ir.tag_extractor("native_pdf");
 
-        // Record in extraction stats (parallel to flat_text_ir / record_extraction_format)
         let char_count: usize = ir.blocks.iter().map(|b| b.text.len()).sum();
-        if char_count > 0 {
-            crate::monitoring::record_extraction_format(
-                "native_pdf",
-                true,
-                char_count,
-                filename,
-                filename,
-            );
-        } else {
-            crate::monitoring::record_extraction_format("native_pdf", false, 0, filename, filename);
+        if char_count == 0 {
             anyhow::bail!("native_pdf: extracted zero chars from '{}'", filename);
         }
 

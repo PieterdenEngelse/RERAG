@@ -133,6 +133,8 @@ async fn main() -> std::io::Result<()> {
     let config = ApiConfig::from_env();
     ag::monitoring::set_chunking_logging_enabled(config.chunking_log_enabled);
 
+    ag::perf::onnx_embedder::init_runtime();
+
     ag::embedder::init_upload_blocking_pool(
         std::env::var("UPLOAD_ONNX_THREADS")
             .ok()
@@ -509,9 +511,7 @@ async fn main() -> std::io::Result<()> {
 
     #[cfg(feature = "layout_ml")]
     {
-        let enabled = std::env::var("LAYOUT_ML_ENABLED")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        let enabled = ag::settings::effective_bool("LAYOUT_ML_ENABLED", false);
 
         if enabled {
             // Pre-warm models on a blocking thread so they're ready before first upload.

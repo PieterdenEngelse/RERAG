@@ -142,6 +142,9 @@ pub fn ConfigRuntime() -> Element {
             }
 
             for (category, items) in groups {
+                if category == "embedder-ort" {
+                    {onnx_vs_ort_banner()}
+                }
                 Panel { title: Some(format_category(&category)), refresh: None,
                     div { class: "space-y-3",
                         for entry in items {
@@ -455,10 +458,43 @@ fn group_by_category(
 }
 
 fn format_category(cat: &str) -> String {
-    let mut chars = cat.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
+    match cat {
+        "embedder-ort" => "Embedder · ort runtime".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+/// Framing banner shown above the `embedder-ort` panel — makes it explicit
+/// that these knobs configure ONNX Runtime (the C++ engine), not the .onnx
+/// file format itself.
+fn onnx_vs_ort_banner() -> Element {
+    rsx! {
+        div { class: "border border-blue-700 bg-blue-900/20 rounded-lg p-4 text-sm space-y-2",
+            div { class: "font-semibold text-blue-200",
+                "These are ort settings, not ONNX-file settings"
+            }
+            div { class: "text-gray-300 space-y-1",
+                p {
+                    span { class: "text-gray-400", "ONNX = file format. " }
+                    "A .onnx file is a serialized graph (ops + weights). It declares what to compute. It has no threading, no optimization level, no hardware selection — those concepts don't exist in the format."
+                }
+                p {
+                    span { class: "text-gray-400", "ONNX Runtime = the C++ engine. " }
+                    "All execution knobs live here: thread counts, optimization passes, memory planning, pooling strategy. ag talks to it through the "
+                    span { class: "font-mono text-gray-100", "ort" }
+                    " Rust crate (a thin, typed binding — no extra knobs of its own)."
+                }
+                p { class: "text-gray-400",
+                    "Each setting below is restart-required: the Session is built once at startup and held in process. Save a value and ag will offer to self re-exec to apply it. For the longer write-up see /docu/index/onnx."
+                }
+            }
+        }
     }
 }
 

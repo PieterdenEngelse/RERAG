@@ -264,7 +264,7 @@ token bucket. When full, the least recent IP is removed.".into()),
                                 .map(|rows| rows.is_empty())
                                 .unwrap_or(true)
                             {
-                                div { class: "text-gray-500 text-sm", "No drops recorded yet." }
+                                div { class: "text-gray-300 text-sm", "No drops recorded yet." }
                             } else {
                                 DataTable {
                                     headers: vec!["Route".into(), "Drops".into()],
@@ -578,7 +578,7 @@ token bucket. When full, the least recent IP is removed.".into()),
                                 description: Some("As loaded from RATE_LIMIT_ROUTES".into()),
                             }
                             if data.config.rules.is_empty() {
-                                div { class: "text-gray-500 text-sm", "No custom rules configured." }
+                                div { class: "text-gray-300 text-sm", "No custom rules configured." }
                             } else {
                                 DataTable {
                                     headers: vec!["Pattern".into(), "Match".into(), "QPS".into(), "Burst".into(), "Label".into()],

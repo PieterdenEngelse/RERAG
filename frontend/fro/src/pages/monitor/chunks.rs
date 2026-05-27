@@ -619,7 +619,7 @@ pub fn MonitorChunks() -> Element {
                                                                     if has_ids {
                                                                         span { class: "text-green-400", "✓" }
                                                                     } else {
-                                                                        span { class: "text-gray-500", "—" }
+                                                                        span { class: "text-gray-300", "—" }
                                                                     }
                                                                 }
                                                                 td { class: "py-1 pr-3 text-gray-400 font-mono", "{captured}" }
@@ -712,7 +712,7 @@ pub fn MonitorChunks() -> Element {
                             }
 
                             // Runtime candidates
-                            p { class: "text-xs text-gray-500 uppercase tracking-wide mb-2", "Runtime" }
+                            p { class: "text-xs text-gray-300 uppercase tracking-wide mb-2", "Runtime" }
                             div { class: "flex flex-col gap-2 mb-4",
                                 // Ollama
                                 div { class: "flex items-stretch gap-2",
@@ -766,7 +766,7 @@ pub fn MonitorChunks() -> Element {
                                         }
                                         span { class: "text-sm text-gray-300", "llama.cpp" }
                                     }
-                                    span { class: "text-xs text-gray-500 flex-1", "Resolved from ~/.config/ag/llama-server.env" }
+                                    span { class: "text-xs text-gray-300 flex-1", "Resolved from ~/.config/ag/llama-server.env" }
                                     button {
                                         class: "btn btn-sm bg-blue-700 hover:bg-blue-600 text-white border-blue-600",
                                         disabled: is_loading || kind != "llama_cpp" || golden_size == 0,
@@ -787,7 +787,7 @@ pub fn MonitorChunks() -> Element {
                             }
 
                             // GGUF file — advanced
-                            p { class: "text-xs text-gray-500 uppercase tracking-wide mb-2", "GGUF file" }
+                            p { class: "text-xs text-gray-300 uppercase tracking-wide mb-2", "GGUF file" }
                             div { class: "flex items-stretch gap-2",
                                 label { class: "flex items-center gap-2 w-24 shrink-0",
                                     input {
@@ -858,13 +858,13 @@ pub fn MonitorChunks() -> Element {
                                                 span { class: "text-gray-200 font-medium", "{baseline_model}" }
                                             }
                                         }
-                                        div { class: "text-xs text-gray-500 font-mono mb-3 truncate", title: "{candidate_path_resolved}", "{candidate_path_resolved}" }
+                                        div { class: "text-xs text-gray-300 font-mono mb-3 truncate", title: "{candidate_path_resolved}", "{candidate_path_resolved}" }
                                         div { class: "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-sm",
                                             div { class: "flex flex-col gap-1",
                                                 span { class: "text-gray-400 text-xs", "Diffed" }
                                                 span { class: "text-gray-200 font-medium", "{s.entries_total}" }
                                                 if s.entries_skipped > 0 {
-                                                    span { class: "text-xs text-gray-500", "({s.entries_skipped} skipped)" }
+                                                    span { class: "text-xs text-gray-300", "({s.entries_skipped} skipped)" }
                                                 }
                                             }
                                             div { class: "flex flex-col gap-1",
@@ -882,15 +882,15 @@ pub fn MonitorChunks() -> Element {
                                             div { class: "flex flex-col gap-1",
                                                 span { class: "text-gray-400 text-xs", "Mean Δ tokens" }
                                                 span { class: "text-gray-200 font-medium", "{mean_signed}" }
-                                                span { class: "text-xs text-gray-500", "|Δ|: {mean_abs}" }
+                                                span { class: "text-xs text-gray-300", "|Δ|: {mean_abs}" }
                                             }
                                             div { class: "flex flex-col gap-1",
                                                 span { class: "text-gray-400 text-xs", "Total token Δ" }
                                                 span { class: "text-gray-200 font-medium", "{total_pct}" }
-                                                span { class: "text-xs text-gray-500", "{s.total_baseline_tokens} → {s.total_candidate_tokens}" }
+                                                span { class: "text-xs text-gray-300", "{s.total_baseline_tokens} → {s.total_candidate_tokens}" }
                                             }
                                         }
-                                        div { class: "text-xs text-gray-500 mt-2",
+                                        div { class: "text-xs text-gray-300 mt-2",
                                             "Max |Δ| in any single chunk: {s.max_count_delta_abs}"
                                         }
                                     }
@@ -1156,7 +1156,7 @@ pub fn MonitorChunks() -> Element {
                                                         let snap_tok = snap.tokenizer_model.as_deref().unwrap_or("unknown");
                                                         let matches_active = tok_model.is_empty() || snap_tok == tok_model;
                                                         let color_cls = if snap_tok == "unknown" {
-                                                            "text-gray-500 text-xs"
+                                                            "text-gray-300 text-xs"
                                                         } else if matches_active {
                                                             "text-green-400 text-xs"
                                                         } else {
@@ -1245,42 +1245,42 @@ pub fn MonitorChunks() -> Element {
                         if let Some(s) = &res.stats {
                             div { class: "flex flex-wrap gap-4 text-xs text-gray-300 bg-gray-900 rounded p-3 border border-gray-700",
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "avg tokens" }
+                                    span { class: "text-gray-300", "avg tokens" }
                                     span { "{s.avg_chunk_tokens}" }
                                 }
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "min tokens" }
+                                    span { class: "text-gray-300", "min tokens" }
                                     span { "{s.min_chunk_tokens}" }
                                 }
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "max tokens" }
+                                    span { class: "text-gray-300", "max tokens" }
                                     span { "{s.max_chunk_tokens}" }
                                 }
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "size flushes" }
+                                    span { class: "text-gray-300", "size flushes" }
                                     span { "{s.size_flushes}" }
                                 }
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "sentence flushes" }
+                                    span { class: "text-gray-300", "sentence flushes" }
                                     span { "{s.sentence_flushes}" }
                                 }
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "semantic flushes" }
+                                    span { class: "text-gray-300", "semantic flushes" }
                                     span { "{s.semantic_flushes}" }
                                 }
                                 div { class: "flex flex-col gap-1",
-                                    span { class: "text-gray-500", "heading flushes" }
+                                    span { class: "text-gray-300", "heading flushes" }
                                     span { "{s.heading_flushes}" }
                                 }
                                 if s.html_tags_stripped > 0 {
                                     div { class: "flex flex-col gap-1",
-                                        span { class: "text-gray-500", "html stripped" }
+                                        span { class: "text-gray-300", "html stripped" }
                                         span { class: "text-yellow-400", "{s.html_tags_stripped}" }
                                     }
                                 }
                                 if s.unicode_chars_normalized > 0 {
                                     div { class: "flex flex-col gap-1",
-                                        span { class: "text-gray-500", "unicode norm." }
+                                        span { class: "text-gray-300", "unicode norm." }
                                         span { class: "text-yellow-400", "{s.unicode_chars_normalized}" }
                                     }
                                 }
@@ -1304,7 +1304,7 @@ pub fn MonitorChunks() -> Element {
                                     rsx! {
                                         div {
                                             class: "rounded border p-2 text-xs text-gray-300 font-mono whitespace-pre-wrap {color}",
-                                            div { class: "text-gray-500 mb-1 text-[0.65rem]", "#{idx + 1} · ~{tok_approx} tokens" }
+                                            div { class: "text-gray-300 mb-1 text-[0.65rem]", "#{idx + 1} · ~{tok_approx} tokens" }
                                             "{chunk}"
                                         }
                                     }
@@ -1360,7 +1360,7 @@ pub fn MonitorChunks() -> Element {
                                                     None
                                                 };
                                                 let (delta_str, delta_cls) = match delta_pct {
-                                                    None => ("—".to_string(), "text-gray-500"),
+                                                    None => ("—".to_string(), "text-gray-300"),
                                                     Some(p) if p.abs() < 0.1 => (format!("{:+.1}%", p), "text-gray-400"),
                                                     Some(p) if p > 0.0 => (format!("{:+.1}%", p), "text-yellow-400"),
                                                     Some(p) => (format!("{:+.1}%", p), "text-green-400"),
@@ -1402,7 +1402,7 @@ pub fn MonitorChunks() -> Element {
                             rsx! {
                                 div { class: "mt-4",
                                     div { class: "flex items-center gap-2 mb-2",
-                                        p { class: "text-xs text-gray-500",
+                                        p { class: "text-xs text-gray-300",
                                             if show_detail { "Recent files — save / vectorise / keyword-search" }
                                             else { "Recent files" }
                                         }
@@ -1501,7 +1501,7 @@ pub fn MonitorChunks() -> Element {
                                 p { class: "font-semibold text-gray-200", "fixed" }
                                 p { class: "text-gray-400 text-xs", "Splits on a hard token count. Every chunk is exactly max_size tokens (default 384), with no awareness of sentences, paragraphs, or meaning. The last chunk of a document may be shorter." }
                                 p { class: "text-gray-400 text-xs", "Overlap (default 32 tokens) is carried forward from the tail of the previous chunk so that a sentence cut at a boundary can still be retrieved from either side." }
-                                p { class: "text-gray-500 text-xs", "Best for: structured, uniform corpora (logs, CSVs, code) where sentence coherence is irrelevant. Avoid for prose — a sentence will frequently be split mid-way, degrading retrieval quality." }
+                                p { class: "text-gray-300 text-xs", "Best for: structured, uniform corpora (logs, CSVs, code) where sentence coherence is irrelevant. Avoid for prose — a sentence will frequently be split mid-way, degrading retrieval quality." }
                             }
 
                             // lightweight
@@ -1509,7 +1509,7 @@ pub fn MonitorChunks() -> Element {
                                 p { class: "font-semibold text-gray-200", "lightweight" }
                                 p { class: "text-gray-400 text-xs", "Accumulates sentences until the chunk reaches a target token count (default 384), then flushes at the next sentence boundary. If a single sentence would overflow the hard max, it is flushed immediately regardless of boundary." }
                                 p { class: "text-gray-400 text-xs", "Sentence detection uses punctuation patterns (.!? followed by a capital letter), so it works without any NLP model. The sentence_flushes counter in the preview stats shows how many times the chunker waited for a boundary rather than cutting mid-sentence." }
-                                p { class: "text-gray-500 text-xs", "Best for: general prose — articles, PDFs, documentation. The default mode. Faster than semantic and produces readable, retrievable passages." }
+                                p { class: "text-gray-300 text-xs", "Best for: general prose — articles, PDFs, documentation. The default mode. Faster than semantic and produces readable, retrievable passages." }
                             }
 
                             // semantic
@@ -1518,16 +1518,16 @@ pub fn MonitorChunks() -> Element {
                                 p { class: "text-gray-400 text-xs", "First splits the document into natural units — paragraphs, headings, code blocks — then embeds each unit and compares consecutive embeddings. When the cosine similarity between two adjacent units falls below a threshold (default 0.78), it treats that gap as a topic shift and flushes a chunk." }
                                 p { class: "text-gray-400 text-xs", "The result: each chunk covers one coherent idea. A paragraph about database indexing won't share a chunk with one about UI styling, even if both fit within the token limit. The semantic_flushes counter shows how many times a topic-shift boundary was detected." }
                                 p { class: "text-gray-400 text-xs", "The similarity threshold is tunable via SEMANTIC_SIMILARITY_THRESHOLD. Lower values (e.g. 0.65) produce larger chunks spanning more related content; higher values (e.g. 0.90) produce smaller, tightly-scoped chunks." }
-                                p { class: "text-gray-500 text-xs", "Best for: long, mixed-topic documents where retrieval precision matters. Requires the embedding model to be running. Slowest mode — expect 2–5× the ingestion time of lightweight." }
+                                p { class: "text-gray-300 text-xs", "Best for: long, mixed-topic documents where retrieval precision matters. Requires the embedding model to be running. Slowest mode — expect 2–5× the ingestion time of lightweight." }
                             }
 
                             // shared mechanics
                             div { class: "p-3 rounded-lg space-y-1", style: "background-color: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);",
                                 p { class: "text-xs text-gray-400 font-medium mb-1", "Shared mechanics (all modes)" }
-                                p { class: "text-xs text-gray-500", "Min chunk size: 128 tokens — chunks smaller than this are merged with the next unit rather than indexed alone." }
-                                p { class: "text-xs text-gray-500", "Max chunk size: 384 tokens — hard ceiling; a chunk that would exceed this is always flushed regardless of boundaries." }
-                                p { class: "text-xs text-gray-500", "Overlap: 32 tokens by default — the tail of each chunk is prepended to the next, so context that straddles a boundary is retrievable from either chunk." }
-                                p { class: "text-xs text-gray-500", "All three values are tunable via CHUNK_MIN_SIZE, CHUNK_MAX_SIZE, and CHUNK_OVERLAP. The active mode is set via CHUNKER_MODE. Change any of these and re-index for them to take effect." }
+                                p { class: "text-xs text-gray-300", "Min chunk size: 128 tokens — chunks smaller than this are merged with the next unit rather than indexed alone." }
+                                p { class: "text-xs text-gray-300", "Max chunk size: 384 tokens — hard ceiling; a chunk that would exceed this is always flushed regardless of boundaries." }
+                                p { class: "text-xs text-gray-300", "Overlap: 32 tokens by default — the tail of each chunk is prepended to the next, so context that straddles a boundary is retrievable from either chunk." }
+                                p { class: "text-xs text-gray-300", "All three values are tunable via CHUNK_MIN_SIZE, CHUNK_MAX_SIZE, and CHUNK_OVERLAP. The active mode is set via CHUNKER_MODE. Change any of these and re-index for them to take effect." }
                             }
                         }
                     }
@@ -1555,52 +1555,52 @@ pub fn MonitorChunks() -> Element {
                         div { class: "grid grid-cols-2 gap-2 mb-3",
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "paragraph_split" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: blank lines between paragraphs. Plain text, .docx, .odt." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: blank lines between paragraphs. Plain text, .docx, .odt." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "character_split" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: character count. PDF — paragraph structure is lost after text extraction." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: character count. PDF — paragraph structure is lost after text extraction." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "header_aware" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: Markdown headings (#, ##, ###). Headings become strong-boundary blocks in DocIR and always flush the accumulation." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: Markdown headings (#, ##, ###). Headings become strong-boundary blocks in DocIR and always flush the accumulation." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "tag_aware" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: block-level HTML/XML tags. Markup is stripped before indexing; tag structure guides the IR block split." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: block-level HTML/XML tags. Markup is stripped before indexing; tag structure guides the IR block split." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "structure_aware" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: JSON keys / array elements. Objects are kept whole — partial records can't be meaningfully retrieved." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: JSON keys / array elements. Objects are kept whole — partial records can't be meaningfully retrieved." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "ast_based" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: top-level syntax units — functions, classes, declarations. Source code. Each unit becomes an atomic block in DocIR." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: top-level syntax units — functions, classes, declarations. Source code. Each unit becomes an atomic block in DocIR." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "row_split" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: rows. CSV, .xlsx, .ods. Rows group up to the token budget; column headers are preserved." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: rows. CSV, .xlsx, .ods. Rows group up to the token budget; column headers are preserved." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "slide_split" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: slide breaks. .pptx. Each slide is an atomic block — title, bullets, and notes stay together." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: slide breaks. .pptx. Each slide is an atomic block — title, bullets, and notes stay together." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "chapter_split" }
-                                p { class: "text-gray-500 text-xs", "Natural boundary: chapter/section markers. EPUB. Each chapter is a strong-boundary block." }
+                                p { class: "text-gray-300 text-xs", "Natural boundary: chapter/section markers. EPUB. Each chapter is a strong-boundary block." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "fallback_paragraph" }
-                                p { class: "text-gray-500 text-xs", "Best-effort paragraph split for unrecognised formats. Same as paragraph_split but signals format detection fell back to a heuristic." }
+                                p { class: "text-gray-300 text-xs", "Best-effort paragraph split for unrecognised formats. Same as paragraph_split but signals format detection fell back to a heuristic." }
                             }
                             div { class: "p-2 rounded space-y-0.5", style: "background-color: rgba(255,255,255,0.04); border-left: 2px solid #6b7280;",
                                 p { class: "font-semibold text-gray-200 text-xs", "skip" }
-                                p { class: "text-gray-500 text-xs", "Binary file — not indexed. No chunks produced." }
+                                p { class: "text-gray-300 text-xs", "Binary file — not indexed. No chunks produced." }
                             }
                         }
                         div { class: "p-2 rounded mb-3", style: "background-color: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);",
                             p { class: "text-xs text-gray-400 font-medium", "Not configurable" }
-                            p { class: "text-xs text-gray-500 mt-0.5", "Strategy is set by format detection — you can't change it. What you control is Mode (fixed / lightweight / semantic) via CHUNKER_MODE." }
+                            p { class: "text-xs text-gray-300 mt-0.5", "Strategy is set by format detection — you can't change it. What you control is Mode (fixed / lightweight / semantic) via CHUNKER_MODE." }
                         }
                         button {
                             class: "btn btn-sm w-full",
@@ -1651,7 +1651,7 @@ pub fn MonitorChunks() -> Element {
                                 span { class: "font-mono text-gray-100", "0.5%" }
                                 " difference between the save Δ% and the other two. For clean documents that threshold is never crossed — the extra columns would just be noise. For scanned PDFs, documents with typographic ligatures, or East Asian text, the difference is real and the columns expand automatically."
                             }
-                            p { class: "text-xs text-gray-500 mt-2",
+                            p { class: "text-xs text-gray-300 mt-2",
                                 "A positive Δ% means characters were collapsed (text got shorter). A negative Δ% means the text got longer — rare, but possible with some character forms."
                             }
                         }
@@ -1817,7 +1817,7 @@ pub fn MonitorChunks() -> Element {
                                 span { class: "text-gray-300", "in IDs — the full token ID sequence was saved (requires a GGUF-loaded tokenizer). The diff engine can do a deep sequence comparison." }
                             }
                             p { class: "ml-2",
-                                span { class: "text-gray-500", "— " }
+                                span { class: "text-gray-300", "— " }
                                 span { class: "text-gray-300", "in IDs — only the count was saved (heuristic fallback). The diff engine will skip per-token ID comparison for this entry." }
                             }
                             p { class: "ml-2",
@@ -1832,7 +1832,7 @@ pub fn MonitorChunks() -> Element {
                             p { class: "font-semibold text-gray-200 mt-1", "What to look for" }
                             p { "Scan a few rows and ask: does this look like a representative cross-section of my documents? You want a mix of topics, lengths, and formats — not 80 rows from the same PDF page." }
                             p { "Check the token counts. Chunks with very high counts (> 500) may be oversized and could cause embedding quality issues. Very low counts (< 20) may be headings or noise." }
-                            p { "If most IDs show " span { class: "text-gray-500 font-mono", "—" } " (no IDs stored), you were running on a heuristic tokenizer at capture time. Re-capture after loading a GGUF model to get exact ID sequences — the diff engine is much more informative with them." }
+                            p { "If most IDs show " span { class: "text-gray-300 font-mono", "—" } " (no IDs stored), you were running on a heuristic tokenizer at capture time. Re-capture after loading a GGUF model to get exact ID sequences — the diff engine is much more informative with them." }
 
                             p { class: "font-semibold text-gray-200 mt-1", "What to do next" }
                             p {

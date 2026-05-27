@@ -34,6 +34,9 @@ pub fn MonitorDatastores() -> Element {
     });
     let mut show_info = use_signal(|| false);
     let mut show_l3_optional = use_signal(|| false);
+    let mut show_info_cmd = use_signal(|| false);
+    let mut show_sentinel = use_signal(|| false);
+    let mut show_wire_protocol = use_signal(|| false);
     let mut field_help =
         use_context_provider(|| Signal::new(None::<&'static str>));
     let show_container_info = use_signal(|| false);
@@ -116,7 +119,14 @@ pub fn MonitorDatastores() -> Element {
                     title: "Why you might turn off L3",
                     "optional"
                 }
-                " L3 cache and FalkorDB, the knowledge-graph store. Both answer the same INFO command, so they share one health view."
+                " L3 cache and FalkorDB, the knowledge-graph store. Both answer the same "
+                span {
+                    class: "text-blue-400 hover:text-blue-300 underline cursor-pointer",
+                    onclick: move |_| show_info_cmd.set(true),
+                    title: "What the INFO command is",
+                    "INFO"
+                }
+                " command, so they share one health view."
             }
 
             if show_info() {
@@ -125,8 +135,17 @@ pub fn MonitorDatastores() -> Element {
             if show_l3_optional() {
                 {l3_optional_modal(show_l3_optional)}
             }
+            if show_info_cmd() {
+                {info_command_modal(show_info_cmd, show_wire_protocol)}
+            }
+            if show_wire_protocol() {
+                {wire_protocol_modal(show_wire_protocol)}
+            }
             if field_help().is_some() {
-                {field_reference_modal(field_help)}
+                {field_reference_modal(field_help, show_sentinel)}
+            }
+            if show_sentinel() {
+                {sentinel_modal(show_sentinel)}
             }
             if show_container_info() {
                 {stop_container_modal(show_container_info)}
@@ -247,12 +266,12 @@ fn cache_section(
                         "Disconnected"
                     }
                 }
-                span { class: "text-gray-500", "·" }
+                span { class: "text-gray-300", "·" }
                 span { class: "text-gray-400",
                     "URL: "
                     span { class: "font-mono text-gray-200", "{c.url}" }
                 }
-                span { class: "text-gray-500", "·" }
+                span { class: "text-gray-300", "·" }
                 span { class: "text-gray-400",
                     "TTL: "
                     span { class: "font-mono text-gray-200", "{c.ttl_seconds}s" }
@@ -349,12 +368,12 @@ fn falkor_section(f: &api::FalkorDatastore) -> Element {
                         "Disconnected"
                     }
                 }
-                span { class: "text-gray-500", "·" }
+                span { class: "text-gray-300", "·" }
                 span { class: "text-gray-400",
                     "falkordb.service: "
                     span { class: "font-mono {svc_color}", "{f.service_state}" }
                 }
-                span { class: "text-gray-500", "·" }
+                span { class: "text-gray-300", "·" }
                 span { class: "text-gray-400",
                     "URL: "
                     span { class: "font-mono text-gray-200", "{f.url}" }
@@ -576,6 +595,160 @@ fn l3_optional_modal(mut show: Signal<bool>) -> Element {
     }
 }
 
+/// What the Redis wire protocol (RESP) is — opened from the INFO command modal.
+fn wire_protocol_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "The Redis wire protocol"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "A wire protocol is the agreed format two programs use to talk over a network connection: how a request is framed in bytes, and how the reply comes back. Redis's is called "
+                        span { class: "font-mono text-gray-100", "RESP" }
+                        " (REdis Serialization Protocol)."
+                    }
+                    p {
+                        "It's deliberately simple and text-based. A command goes out as an array of arguments, and the reply is tagged by its first byte so the client knows what it's reading:"
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            span { class: "font-mono text-gray-100", "+" }
+                            " a simple string (e.g. "
+                            span { class: "font-mono text-gray-100", "+OK" }
+                            ")"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "-" }
+                            " an error"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", ":" }
+                            " an integer"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "$" }
+                            " a bulk string (arbitrary bytes, length-prefixed) — how the "
+                            span { class: "font-mono text-gray-100", "INFO" }
+                            " text block comes back"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "*" }
+                            " an array of the above"
+                        }
+                    }
+                    p {
+                        "Because the format is small and stable, any client library or store that implements it can interoperate. That's the key point for this page: the L3 cache is a Redis server and FalkorDB is a Redis module, but both speak "
+                        span { class: "font-mono text-gray-100", "RESP" }
+                        ", so ag can talk to them with one client and read their health the same way."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// What the Redis-protocol `INFO` command is and why both stores answer it.
+fn info_command_modal(mut show: Signal<bool>, mut show_wire_protocol: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "The INFO command"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "Both stores speak the Redis "
+                        span {
+                            class: "text-blue-400 hover:text-blue-300 underline cursor-pointer",
+                            onclick: move |_| show_wire_protocol.set(true),
+                            title: "What the wire protocol is",
+                            "wire protocol"
+                        }
+                        ", and "
+                        span { class: "font-mono text-gray-100", "INFO" }
+                        " is a built-in command in that protocol. Ask a server "
+                        span { class: "font-mono text-gray-100", "INFO" }
+                        " and it replies with one block of text reporting its version, uptime, memory use, connection count, keyspace hit/miss counters, eviction stats, persistence state, and more. ag reads that reply every 10 seconds and turns it into the health grid on this page."
+                    }
+                    p {
+                        "The reply is grouped into sections — every field on this page comes from one of them:"
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            span { class: "font-mono text-gray-100", "server" }
+                            " — Version, Mode, Uptime"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "clients" }
+                            " — Connected clients"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "memory" }
+                            " — Memory used, Memory limit, Eviction policy"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "stats" }
+                            " — Keyspace hit rate, Hits / misses, Evicted keys, Ops / sec, Commands processed"
+                        }
+                        li {
+                            span { class: "font-mono text-gray-100", "persistence" }
+                            " — Persistence (AOF), Unsaved changes"
+                        }
+                    }
+                    p {
+                        "One field is the exception: "
+                        strong { "Keys (DBSIZE)" }
+                        " comes from a separate "
+                        span { class: "font-mono text-gray-100", "DBSIZE" }
+                        " command, which just counts the keys currently stored."
+                    }
+                    p {
+                        "Why both datastores answer it: FalkorDB is a Redis module loaded into a Redis server, so it inherits the whole Redis command set — "
+                        span { class: "font-mono text-gray-100", "INFO" }
+                        " included. The L3 cache is a plain Redis server. To a protocol client they look like the same kind of store, which is exactly why ag can show one shared health view for both."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
 /// When (and when not) to tick the "Also start/stop the redis container" box.
 fn stop_container_modal(mut show: Signal<bool>) -> Element {
     rsx! {
@@ -724,25 +897,38 @@ fn field_button_column() -> Element {
     ];
     let mut field_help = use_context::<Signal<Option<&'static str>>>();
     rsx! {
-        // Offset matches: border (1) + p-4 top (16) + fixed header h-6 (24)
-        // + mb-3 (12) + connection-status row h-5 (20) + space-y-3 gap (12) = 85px.
-        // Each row is `h-8` to match the `stat()` row height exactly.
-        div { class: "flex flex-col items-center pt-[85px]",
-            for key in FIELDS.iter() {
-                div { class: "h-8 flex items-center",
-                    button {
-                        class: PARAM_ICON_BUTTON_CLASS,
-                        style: PARAM_ICON_BUTTON_STYLE,
-                        onclick: move |_| field_help.set(Some(*key)),
-                        title: "{key}",
-                        svg {
-                            class: INFO_ICON_SVG_CLASS,
-                            view_box: "0 0 20 20",
-                            fill: "none",
-                            stroke: "currentColor",
-                            circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
-                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
-                            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+        // Faithful clone of `aligned_panel` + a panel section, rendered transparent
+        // with invisible content, so the button grid starts at the exact same Y as
+        // each panel's `health_panel` grid. Every wrapper here mirrors the real
+        // markup byte-for-byte (header, content wrapper, the connection-status row,
+        // the `h-8 border-b` rows) — alignment falls out of structural identity
+        // rather than any hand-computed pixel offset.
+        div { class: "border border-transparent rounded-lg p-4",
+            div { class: "h-6 mb-3 flex items-center justify-between gap-3 overflow-hidden" }
+            div { class: "text-gray-100 text-xs space-y-2",
+                div { class: "space-y-3",
+                    div { class: "invisible flex items-center gap-x-2 text-xs h-5 overflow-hidden whitespace-nowrap",
+                        span { class: "px-2 py-0.5 rounded font-semibold", "Connected" }
+                    }
+                    div { class: "grid grid-cols-1",
+                        for key in FIELDS.iter() {
+                            div { class: "flex items-center justify-center h-8 border-b border-transparent",
+                                button {
+                                    class: PARAM_ICON_BUTTON_CLASS,
+                                    style: PARAM_ICON_BUTTON_STYLE,
+                                    onclick: move |_| field_help.set(Some(*key)),
+                                    title: "{key}",
+                                    svg {
+                                        class: INFO_ICON_SVG_CLASS,
+                                        view_box: "0 0 20 20",
+                                        fill: "none",
+                                        stroke: "currentColor",
+                                        circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                        line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                        circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -759,13 +945,13 @@ fn field_description(key: &str) -> &'static str {
         "Uptime" => "Time since the server process started. A short uptime after a recent change is normal; an unexpected reset means something restarted the container.",
         "Connected clients" => "Open TCP connections. ag itself accounts for a handful — the search server, the upload server, hot-reload subscribers. Spikes can indicate a runaway caller.",
         "Memory used" => "Current resident memory of the store process. Watch this against the limit to gauge pressure.",
-        "Memory limit" => "Configured maxmemory, or 'unlimited' if unset. Without a limit the store can grow until the host runs out of RAM. For the L3 cache a limit + LRU eviction is the safe default.",
-        "Eviction policy" => "What happens when memory hits the limit. 'noeviction' refuses writes; 'allkeys-lru' drops the least-recently-used key; 'volatile-ttl' drops the soonest-to-expire key. L3 typically uses LRU; FalkorDB typically uses noeviction so the graph never loses data silently.",
+        "Memory limit" => "Configured maxmemory, or 'unlimited' if unset. Without a limit the store can grow until the host runs out of RAM. ag sets no limit, so this reads 'unlimited' — which also means the eviction policy never takes effect, since there's no ceiling for it to react to. For the L3 cache a limit + LRU eviction is the safe default.",
+        "Eviction policy" => "What happens when memory hits the limit. 'noeviction' refuses new writes; 'allkeys-lru' drops the least-recently-used key; 'volatile-ttl' drops the soonest-to-expire key. ag runs both stores on Redis's default — noeviction — with no memory limit set, so neither evicts on its own. For FalkorDB that's the safe choice: the graph never loses data silently. For the L3 cache it means a full store would refuse writes rather than make room; giving it a memory limit plus an LRU policy is the usual change if you'd rather it discard old cached results than reject new ones. Note the policy is moot until a limit exists: with memory unlimited (ag's default), nothing ever triggers eviction no matter which policy is set.",
         "Keys (DBSIZE)" => "Total keys in the default DB. For FalkorDB this counts graph nodes, edges, and metadata keys; for L3 it counts cached search results.",
         "Keyspace hit rate" => "Percentage of GETs that found a value: hits / (hits + misses). A low rate on L3 means the cache isn't earning its keep — your queries are mostly unique.",
         "Hits / misses" => "Raw counters underneath the hit rate. Useful when the percentage rounds to 0% or 100% and you want absolute numbers.",
         "Evicted keys" => "Lifetime count of keys removed by the eviction policy. A growing number means you're hitting the memory limit regularly — consider raising maxmemory or shortening TTL.",
-        "Ops / sec" => "Instantaneous operations per second (instantaneous_ops_per_sec). Snapshot rate, not an average — refresh to see how it moves.",
+        "Ops / sec" => "How busy the store is right now: a snapshot rate over roughly the last 1.6 seconds, not a running total. It idles at 0 whenever nothing is hitting the store — and these stores only see traffic in bursts (L3 during a search, FalkorDB during ingestion or a graph query), so 0 is the normal resting value, not a fault. Even this page's 10-second health check is too few commands to register as 1/sec. To watch it move you'd have to refresh mid-burst; for cumulative proof the store is being used at all, look at Commands processed instead.",
         "Commands processed" => "Lifetime total commands the server has handled. Useful as a sanity check: is this store actually being talked to?",
         "Persistence (AOF)" => "Whether the append-only-file is enabled. AOF writes every change to disk so an abrupt stop loses little data. AOF off means you only have periodic snapshots — restart-time data loss can be larger.",
         "Unsaved changes" => "Writes since the last RDB snapshot (rdb_changes_since_last_save). High values mean a crash right now would lose that many writes, unless AOF is on.",
@@ -774,7 +960,10 @@ fn field_description(key: &str) -> &'static str {
 }
 
 /// Per-field info modal — content is selected by the active field key in `field_help`.
-fn field_reference_modal(mut field_help: Signal<Option<&'static str>>) -> Element {
+fn field_reference_modal(
+    mut field_help: Signal<Option<&'static str>>,
+    mut show_sentinel: Signal<bool>,
+) -> Element {
     let key = field_help().unwrap_or("");
     let description = field_description(key);
     rsx! {
@@ -792,11 +981,87 @@ fn field_reference_modal(mut field_help: Signal<Option<&'static str>>) -> Elemen
                         "×"
                     }
                 }
-                p { class: "text-sm text-gray-300 leading-relaxed", "{description}" }
+                if key == "Mode" {
+                    p { class: "text-sm text-gray-300 leading-relaxed",
+                        "Standalone, cluster, or "
+                        span {
+                            class: "text-blue-400 hover:text-blue-300 underline cursor-pointer",
+                            onclick: move |_| show_sentinel.set(true),
+                            title: "What sentinel mode is",
+                            "sentinel"
+                        }
+                        ". ag uses standalone for both stores; cluster or sentinel only show up if you've deliberately deployed those."
+                    }
+                } else {
+                    p { class: "text-sm text-gray-300 leading-relaxed", "{description}" }
+                }
                 button {
                     class: "btn btn-sm w-full mt-4",
                     style: "background-color:#7C2A02;",
                     onclick: move |_| field_help.set(None),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// What Redis Sentinel is — opened from the "sentinel" link in the Mode modal.
+fn sentinel_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-4",
+                    h2 { class: "text-lg font-semibold text-gray-100",
+                        "Sentinel mode"
+                    }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3 leading-relaxed",
+                    p {
+                        "Sentinel is Redis's built-in high-availability setup. Instead of one server holding your data, you run a primary plus one or more replicas, and a small set of Sentinel processes that watch over them. The Sentinels do three jobs:"
+                    }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            strong { "Monitor. " }
+                            "Each Sentinel keeps pinging the primary and its replicas to confirm they're alive."
+                        }
+                        li {
+                            strong { "Fail over. " }
+                            "If enough Sentinels agree the primary is down (a quorum), they promote a replica to be the new primary and point the others at it — no human needed."
+                        }
+                        li {
+                            strong { "Hand out the address. " }
+                            "Clients ask a Sentinel \"who is the primary right now?\" rather than hardcoding it, so they follow the primary across a failover automatically."
+                        }
+                    }
+                    p {
+                        "You typically run an odd number of Sentinels (often three) so they can vote and avoid a split-brain where two servers each think they're in charge."
+                    }
+                    p {
+                        strong { "Sentinel vs. cluster: " }
+                        "Sentinel is about staying available (automatic failover for a single logical primary); cluster is about scaling (the keyspace sharded across many primaries). They solve different problems."
+                    }
+                    p {
+                        "ag doesn't use either — it runs both stores as plain standalone servers on one box. This mode value only reads "
+                        span { class: "font-mono text-gray-100", "sentinel" }
+                        " if you've deliberately deployed that topology, so on a normal ag install you'll always see "
+                        span { class: "font-mono text-gray-100", "standalone" }
+                        "."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
                     "Got it"
                 }
             }

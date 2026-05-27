@@ -88,7 +88,7 @@ pub fn ConfigEmbedding() -> Element {
                                 span { class: "text-xs font-mono text-cyan-300 bg-gray-800 px-2 py-0.5 rounded",
                                     "{embed_model()}"
                                 }
-                                span { class: "text-xs text-gray-500", "· {embed_dim()} dims" }
+                                span { class: "text-xs text-gray-300", "· {embed_dim()} dims" }
                             }
 
                             // Status indicators
@@ -206,7 +206,7 @@ pub fn ConfigEmbedding() -> Element {
                     div { class: "rounded border border-gray-600 p-4 flex-1 min-w-64",
                         span { class: "text-sm text-gray-300 font-semibold mb-3 block", "Runtime Info" }
                         if onnx_loading() {
-                            p { class: "text-xs text-gray-500", "Loading…" }
+                            p { class: "text-xs text-gray-300", "Loading…" }
                         } else {
                             div { class: PARAM_COLUMN_CLASS,
                                 div { class: PARAM_BLOCK_CLASS,
@@ -223,7 +223,7 @@ pub fn ConfigEmbedding() -> Element {
                                 }
                             }
                         }
-                        p { class: "text-xs text-gray-500 mt-3 italic",
+                        p { class: "text-xs text-gray-300 mt-3 italic",
                             "Runtime parameters (threading, memory, optimization) are on the "
                             Link { to: Route::ConfigOnnx {}, class: "text-cyan-400 hover:underline", "ONNX" }
                             " page."

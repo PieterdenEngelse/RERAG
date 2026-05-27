@@ -1038,7 +1038,7 @@ pub async fn extract_ir_async(path: &Path, corpus: &str) -> Option<crate::doc_ir
             if let Some(ir) = ir_opt {
                 let chars = ir.to_plain_text().len();
                 crate::monitoring::record_extraction_format(
-                    "docling",
+                    ir.extractor_tag(),
                     true,
                     chars,
                     &filename,

@@ -300,10 +300,10 @@ pub fn MonitorRag() -> Element {
                                                     if let Some(ref mime) = detection.mime_type {
                                                         span { class: "px-1.5 py-0.5 rounded text-xs bg-green-900/50 text-green-300 font-mono", "{mime}" }
                                                     } else {
-                                                        span { class: "text-gray-600 text-xs", "—" }
+                                                        span { class: "text-gray-300 text-xs", "—" }
                                                     }
                                                 } else {
-                                                    span { class: "text-gray-600 text-xs", "—" }
+                                                    span { class: "text-gray-300 text-xs", "—" }
                                                 }
                                             }
                                             td { class: "py-2 px-2",
@@ -311,10 +311,10 @@ pub fn MonitorRag() -> Element {
                                                     if let Some(ref ext) = detection.extension {
                                                         span { class: "px-1.5 py-0.5 rounded text-xs bg-gray-700 text-gray-300 font-mono", ".{ext}" }
                                                     } else {
-                                                        span { class: "text-gray-600 text-xs", "—" }
+                                                        span { class: "text-gray-300 text-xs", "—" }
                                                     }
                                                 } else {
-                                                    span { class: "text-gray-600 text-xs", "—" }
+                                                    span { class: "text-gray-300 text-xs", "—" }
                                                 }
                                             }
                                             // Derived conclusions
@@ -322,7 +322,7 @@ pub fn MonitorRag() -> Element {
                                                 if let Some(ref detection) = entry.detection {
                                                     span { class: "px-1.5 py-0.5 rounded text-xs bg-blue-900 text-blue-200", "{detection.detected_format}" }
                                                 } else {
-                                                    span { class: "text-gray-600 text-xs", "—" }
+                                                    span { class: "text-gray-300 text-xs", "—" }
                                                 }
                                             }
                                             td { class: "py-2 px-2",
@@ -339,7 +339,7 @@ pub fn MonitorRag() -> Element {
                                                         "{detection.detection_method}"
                                                     }
                                                 } else {
-                                                    span { class: "text-gray-600 text-xs", "—" }
+                                                    span { class: "text-gray-300 text-xs", "—" }
                                                 }
                                             }
                                             // Outcome metrics
@@ -539,7 +539,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for PDF" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Splits content by character count with overlap. Best for PDFs where structure is lost during extraction." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: \"Lorem ipsum dolor sit amet...\" → [chunk1: 500 chars] [chunk2: 500 chars]"
                             }
                         }
@@ -550,7 +550,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for Plain Text" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Splits on double newlines to preserve paragraph boundaries. Keeps related sentences together." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: \"Para 1...\\n\\nPara 2...\" → [\"Para 1...\"] [\"Para 2...\"]"
                             }
                         }
@@ -561,7 +561,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for Markdown" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Respects Markdown header hierarchy (# ## ###). Each section becomes a chunk with its header." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: \"# Title\\n## Section\\nContent\" → [\"# Title\"] [\"## Section\\nContent\"]"
                             }
                         }
@@ -572,7 +572,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for HTML / XML" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Preserves tag structure. Splits at block-level elements while keeping nested content intact." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: \"<div><p>Text</p></div>\" → [\"<div><p>Text</p></div>\"]"
                             }
                         }
@@ -583,7 +583,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for JSON" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Respects JSON object/array boundaries. Each top-level element or nested object becomes a chunk." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 r#"Example: [{"a":1}, {"b":2}] → [obj1] [obj2]"#
                             }
                         }
@@ -594,7 +594,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for Source Code" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Parses code into AST and chunks by functions/classes. Keeps complete code units together." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: fn foo() + fn bar() → [fn foo()] [fn bar()]"
                             }
                         }
@@ -605,7 +605,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for Binary files" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Binary files (images, executables) are skipped as they cannot be meaningfully chunked for text search." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: image.png, app.exe → [skipped]"
                             }
                         }
@@ -616,7 +616,7 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-gray-400 text-xs", "for Unknown formats" }
                             }
                             p { class: "text-sm text-gray-300 mb-2", "Last resort for unrecognized formats. Uses basic paragraph splitting with conservative chunk sizes." }
-                            div { class: "text-xs text-gray-500 font-mono bg-gray-800 rounded p-2",
+                            div { class: "text-xs text-gray-300 font-mono bg-gray-800 rounded p-2",
                                 "Example: unknown.xyz → [paragraph chunks with overlap]"
                             }
                         }

@@ -13,6 +13,18 @@ static TOTAL_BATCH_TEXTS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_EMBED_US: AtomicU64 = AtomicU64::new(0);
 static LAST_EMBED_US: AtomicU64 = AtomicU64::new(0);
 
+/// Time spent waiting to acquire the embedder mutex. Visible because ort
+/// 2.0.0-rc.12 forces `&mut self` on `Session::run`, so concurrent embed
+/// requests serialize on this lock; this counter shows how much that costs.
+static TOTAL_LOCK_WAIT_US: AtomicU64 = AtomicU64::new(0);
+static LAST_LOCK_WAIT_US: AtomicU64 = AtomicU64::new(0);
+static LOCK_WAIT_SAMPLES: AtomicU64 = AtomicU64::new(0);
+
+/// Set once at startup if the embedder fell back to SimpleTokenizer because
+/// no usable `tokenizer.json` was found. Surfaces in the Monitor dashboard
+/// so operators can see they're running degraded embeddings.
+static SIMPLE_TOKENIZER_FALLBACK: AtomicU64 = AtomicU64::new(0);
+
 // ── Static model metadata ─────────────────────────────────────────────────────
 struct ModelMeta {
     name: String,
@@ -51,6 +63,17 @@ pub fn record_batch(text_count: usize) {
     TOTAL_BATCH_TEXTS.fetch_add(text_count as u64, Ordering::Relaxed);
 }
 
+pub fn record_simple_tokenizer_fallback() {
+    SIMPLE_TOKENIZER_FALLBACK.store(1, Ordering::Relaxed);
+}
+
+pub fn record_lock_wait(duration_ms: f64) {
+    let us = (duration_ms * 1_000.0) as u64;
+    TOTAL_LOCK_WAIT_US.fetch_add(us, Ordering::Relaxed);
+    LAST_LOCK_WAIT_US.store(us, Ordering::Relaxed);
+    LOCK_WAIT_SAMPLES.fetch_add(1, Ordering::Relaxed);
+}
+
 // ── Snapshot ──────────────────────────────────────────────────────────────────
 #[derive(serde::Serialize)]
 pub struct OnnxSnapshot {
@@ -66,6 +89,10 @@ pub struct OnnxSnapshot {
     pub total_batch_texts: u64,
     pub avg_embed_ms: f64,
     pub last_embed_ms: f64,
+    pub avg_lock_wait_ms: f64,
+    pub last_lock_wait_ms: f64,
+    pub lock_wait_samples: u64,
+    pub simple_tokenizer_fallback: bool,
 }
 
 pub fn snapshot() -> OnnxSnapshot {
@@ -85,6 +112,15 @@ pub fn snapshot() -> OnnxSnapshot {
     };
     let avg_embed_ms = if total > 0 {
         (total_us as f64 / 1_000.0) / total as f64
+    } else {
+        0.0
+    };
+
+    let lock_wait_samples = LOCK_WAIT_SAMPLES.load(Ordering::Relaxed);
+    let total_lock_wait_us = TOTAL_LOCK_WAIT_US.load(Ordering::Relaxed);
+    let last_lock_wait_us = LAST_LOCK_WAIT_US.load(Ordering::Relaxed);
+    let avg_lock_wait_ms = if lock_wait_samples > 0 {
+        (total_lock_wait_us as f64 / 1_000.0) / lock_wait_samples as f64
     } else {
         0.0
     };
@@ -111,5 +147,9 @@ pub fn snapshot() -> OnnxSnapshot {
         total_batch_texts: b_texts,
         avg_embed_ms,
         last_embed_ms: last_us as f64 / 1_000.0,
+        avg_lock_wait_ms,
+        last_lock_wait_ms: last_lock_wait_us as f64 / 1_000.0,
+        lock_wait_samples,
+        simple_tokenizer_fallback: SIMPLE_TOKENIZER_FALLBACK.load(Ordering::Relaxed) > 0,
     }
 }

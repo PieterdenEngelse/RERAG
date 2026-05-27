@@ -95,7 +95,7 @@ pub fn SearchBar() -> Element {
 
             // Backend status indicator
             div {
-                class: "mb-4 text-sm text-gray-600 dark:text-gray-400",
+                class: "mb-4 text-sm text-gray-300 dark:text-gray-400",
                 "Backend: {backend_status}"
             }
 
@@ -144,7 +144,7 @@ pub fn SearchBar() -> Element {
                     class: "space-y-4",
 
                     div {
-                        class: "text-sm text-gray-600 dark:text-gray-400 mb-4",
+                        class: "text-sm text-gray-300 dark:text-gray-400 mb-4",
                         "Found {results().len()} result(s)"
                     }
 
@@ -189,7 +189,7 @@ pub fn SearchBar() -> Element {
                 }
             } else if !loading() && query().trim().is_empty() {
                 div {
-                    class: "text-center py-12 text-gray-500 dark:text-gray-400",
+                    class: "text-center py-12 text-gray-300 dark:text-gray-400",
 
                     div {
                         class: "text-4xl mb-4",
@@ -214,7 +214,7 @@ pub fn SearchBar() -> Element {
                     }
 
                     p {
-                        class: "mt-4 text-gray-600 dark:text-gray-400",
+                        class: "mt-4 text-gray-300 dark:text-gray-400",
                         "Searching..."
                     }
                 }

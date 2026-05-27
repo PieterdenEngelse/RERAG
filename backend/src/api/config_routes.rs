@@ -329,6 +329,18 @@ pub(crate) struct OnnxConfigInfo {
     pub layout_ml_compiled: bool,
     pub layout_ml_enabled: bool,
     pub layout_model_ready: bool,
+    /// Human-readable description of the active layout-model tier
+    /// (e.g. "DETR (HF Hub: cmarkea/...)", "DETR (local: /path)",
+    /// "Word-ORT (local: /path)", "heuristic", or "not compiled").
+    pub layout_model_tier: String,
+    /// Current effective value of LAYOUT_ML_MODEL_ID — empty string when unset.
+    /// Surfaced so the /config/onnx UI can pre-populate the editor without a
+    /// second round-trip to /runtime/settings.
+    pub layout_ml_model_id: String,
+    /// Current effective CHUNKER_MODE (fixed | lightweight | semantic | sentence | pipeline).
+    /// Surfaced on /config/onnx so the Native PDF Extraction tile can show
+    /// which Layer-2 chunking strategy will run on uploaded PDFs.
+    pub chunker_mode: String,
 }
 
 pub(crate) fn validate_hardware_request(req: &HardwareConfigRequest) -> Result<(), String> {
@@ -1462,9 +1474,7 @@ pub(crate) async fn get_onnx_config() -> Result<HttpResponse, Error> {
             no_env_execution_providers: config.no_env_execution_providers,
             embedding_batch_size: crate::embedder::get_embedding_batch_size(),
             layout_ml_compiled: cfg!(feature = "layout_ml"),
-            layout_ml_enabled: std::env::var("LAYOUT_ML_ENABLED")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(false),
+            layout_ml_enabled: crate::settings::effective_bool("LAYOUT_ML_ENABLED", false),
             layout_model_ready: {
                 #[cfg(feature = "layout_ml")]
                 {
@@ -1475,6 +1485,20 @@ pub(crate) async fn get_onnx_config() -> Result<HttpResponse, Error> {
                     false
                 }
             },
+            layout_model_tier: {
+                #[cfg(feature = "layout_ml")]
+                {
+                    crate::pdf::layout_model::LayoutModel::load_or_heuristic()
+                        .source_label()
+                        .to_string()
+                }
+                #[cfg(not(feature = "layout_ml"))]
+                {
+                    "not compiled".to_string()
+                }
+            },
+            layout_ml_model_id: crate::settings::effective_or("LAYOUT_ML_MODEL_ID", ""),
+            chunker_mode: crate::settings::effective_or("CHUNKER_MODE", "fixed"),
         },
     }))
 }
@@ -1686,9 +1710,7 @@ pub(crate) async fn set_onnx_config(
             no_env_execution_providers: config.no_env_execution_providers,
             embedding_batch_size: crate::embedder::get_embedding_batch_size(),
             layout_ml_compiled: cfg!(feature = "layout_ml"),
-            layout_ml_enabled: std::env::var("LAYOUT_ML_ENABLED")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(false),
+            layout_ml_enabled: crate::settings::effective_bool("LAYOUT_ML_ENABLED", false),
             layout_model_ready: {
                 #[cfg(feature = "layout_ml")]
                 {
@@ -1699,6 +1721,20 @@ pub(crate) async fn set_onnx_config(
                     false
                 }
             },
+            layout_model_tier: {
+                #[cfg(feature = "layout_ml")]
+                {
+                    crate::pdf::layout_model::LayoutModel::load_or_heuristic()
+                        .source_label()
+                        .to_string()
+                }
+                #[cfg(not(feature = "layout_ml"))]
+                {
+                    "not compiled".to_string()
+                }
+            },
+            layout_ml_model_id: crate::settings::effective_or("LAYOUT_ML_MODEL_ID", ""),
+            chunker_mode: crate::settings::effective_or("CHUNKER_MODE", "fixed"),
         },
     }))
 }

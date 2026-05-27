@@ -38,7 +38,7 @@ pub fn ChartPlaceholder(props: ChartPlaceholderProps) -> Element {
                 div { "No data" }
             } else {
                 div { class: "flex gap-2", role: "img", aria_label: "trend placeholder",
-                    div { class: "flex flex-col justify-between text-[10px] text-gray-500 w-12 text-right pr-1",
+                    div { class: "flex flex-col justify-between text-[10px] text-gray-300 w-12 text-right pr-1",
                         span { "{max:.1}{props.unit}" }
                         span { "{((max + min) / 2.0):.1}{props.unit}" }
                         span { "{min:.1}{props.unit}" }
@@ -49,7 +49,7 @@ pub fn ChartPlaceholder(props: ChartPlaceholderProps) -> Element {
                         }
                     }
                 }
-                div { class: "text-[10px] text-gray-500 text-right italic mt-1", "X-axis: seconds (oldest → newest)" }
+                div { class: "text-[10px] text-gray-300 text-right italic mt-1", "X-axis: seconds (oldest → newest)" }
             }
         }
     }

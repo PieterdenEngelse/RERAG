@@ -345,7 +345,7 @@ pub fn MonitorTools() -> Element {
                                             },
                                         }
                                     }
-                                    div { class: "flex items-center justify-between text-xs text-gray-500",
+                                    div { class: "flex items-center justify-between text-xs text-gray-300",
                                         span {
                                             class: match tool_status.as_str() {
                                                 "active" => "text-green-400",
@@ -358,7 +358,7 @@ pub fn MonitorTools() -> Element {
                                                 _ => "✕ Disabled",
                                             }
                                         }
-                                        span { class: "text-gray-600", "{tool_category}" }
+                                        span { class: "text-gray-300", "{tool_category}" }
                                     }
                                 }
                             }
@@ -794,13 +794,13 @@ pub fn MonitorTools() -> Element {
                                                 if let Some(svg) = render_sparkline(points.as_slice()) {
                                                     div { class: "text-blue-300", {svg} }
                                                 } else {
-                                                    span { class: "text-gray-500 text-xs", "—" }
+                                                    span { class: "text-gray-300 text-xs", "—" }
                                                 }
                                             } else {
-                                                span { class: "text-gray-500 text-xs", "—" }
+                                                span { class: "text-gray-300 text-xs", "—" }
                                             }
                                         }
-                                        td { class: "py-2 px-2 text-gray-500 text-xs", "{entry.last_updated}" }
+                                        td { class: "py-2 px-2 text-gray-300 text-xs", "{entry.last_updated}" }
                                     }
                                 }
                             }
@@ -877,7 +877,7 @@ pub fn MonitorTools() -> Element {
                                         for edge in top_dependency_edges.iter() {
                                             tr { class: "border-b border-gray-800 last:border-0",
                                                 td { class: "py-2 px-2 text-white", "{edge.from}" }
-                                                td { class: "py-2 px-2 text-center text-gray-500", "→" }
+                                                td { class: "py-2 px-2 text-center text-gray-300", "→" }
                                                 td { class: "py-2 px-2 text-white", "{edge.to}" }
                                                 td { class: "py-2 px-2 text-gray-300", "{edge.count}" }
                                             }
@@ -929,17 +929,17 @@ pub fn MonitorTools() -> Element {
 
                                     div { class: "space-y-4",
                                         div {
-                                            div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Description" }
+                                            div { class: "text-xs text-gray-300 uppercase tracking-wide mb-1", "Description" }
                                             p { class: "text-sm text-gray-300", "{t_desc}" }
                                         }
 
                                         div {
-                                            div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Category" }
+                                            div { class: "text-xs text-gray-300 uppercase tracking-wide mb-1", "Category" }
                                             span { class: "px-2 py-1 rounded text-xs bg-gray-700 text-gray-300 capitalize", "{t_category}" }
                                         }
 
                                         div {
-                                            div { class: "text-xs text-gray-500 uppercase tracking-wide mb-1", "Status" }
+                                            div { class: "text-xs text-gray-300 uppercase tracking-wide mb-1", "Status" }
                                             span {
                                                 class: match t_status.as_str() {
                                                     "active" => "px-2 py-1 rounded text-xs bg-green-900/50 text-green-300",

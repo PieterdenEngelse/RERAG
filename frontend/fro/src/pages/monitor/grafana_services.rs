@@ -194,10 +194,10 @@ pub fn MonitorGrafanaServices() -> Element {
                                 }
                                 span { class: "text-gray-400 text-xs", "{description}" }
                                 div { class: "flex items-center justify-between",
-                                    span { class: "font-mono text-xs text-gray-500",
+                                    span { class: "font-mono text-xs text-gray-300",
                                         if *scope == "user" { "(user service)" } else { "(system service)" }
                                     }
-                                    span { class: "text-gray-500 text-xs ml-2",
+                                    span { class: "text-gray-300 text-xs ml-2",
                                         if expanded() == Some(idx) { "▲" } else { "▼" }
                                     }
                                 }

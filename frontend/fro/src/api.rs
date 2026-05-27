@@ -3297,6 +3297,12 @@ pub struct OnnxConfigInfo {
     pub layout_ml_enabled: bool,
     #[serde(default)]
     pub layout_model_ready: bool,
+    #[serde(default)]
+    pub layout_model_tier: String,
+    #[serde(default)]
+    pub layout_ml_model_id: String,
+    #[serde(default)]
+    pub chunker_mode: String,
 }
 
 fn default_embedding_batch_size() -> usize {

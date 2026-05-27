@@ -152,7 +152,15 @@ impl Default for EmbeddingConfig {
 type EmbeddingCache = LruCache<String, EmbeddingVector>;
 
 enum EmbeddingBackend {
-    /// ONNX Runtime - the only backend
+    /// ONNX Runtime — the only backend.
+    ///
+    /// The Mutex is forced by ort 2.0.0-rc.12, which makes `Session::run`
+    /// `&mut self` on the public API even though its internal `run_inner`
+    /// only needs `&self`. Concurrent embed requests therefore serialize
+    /// on this lock. Wait time is recorded via `onnx_metrics::record_lock_wait`
+    /// so the cost is visible in the Datastores dashboard; if it ever becomes
+    /// material the path forward is a Session pool (one per worker) rather
+    /// than dropping the lock.
     Onnx {
         inner: Mutex<crate::perf::onnx_embedder::OnnxEmbedder>,
     },
@@ -166,7 +174,6 @@ struct EmbeddingRuntime {
 
 impl EmbeddingRuntime {
     fn new(config: &EmbeddingConfig) -> Self {
-        eprintln!("[EMBEDDER] Starting ONNX embedding runtime initialization...");
         info!(
             model = %config.model.as_str(),
             hf_id = %config.model.huggingface_id(),
@@ -177,19 +184,47 @@ impl EmbeddingRuntime {
         let onnx_model_path = env::var("ONNX_MODEL_PATH")
             .unwrap_or_else(|_| "models/embedding_model.onnx".to_string());
 
-        eprintln!("[EMBEDDER] ONNX model path: {}", onnx_model_path);
-        eprintln!(
-            "[EMBEDDER] Model exists: {}",
-            std::path::Path::new(&onnx_model_path).exists()
+        debug!(
+            path = %onnx_model_path,
+            exists = std::path::Path::new(&onnx_model_path).exists(),
+            "Resolved ONNX model path"
+        );
+
+        // ── Operator-tunable ort knobs ──────────────────────────────────────
+        // Each one reads through settings::effective_* so the Runtime page can
+        // override at install or at runtime. All are restart-required because
+        // the Session is built once and held in the global runtime — flipping
+        // them needs a self re-exec, which the Runtime page wires up.
+        let allow_simple_tokenizer =
+            crate::settings::effective_bool("ONNX_ALLOW_SIMPLE_TOKENIZER", false);
+        let num_threads = crate::settings::effective_u64("ONNX_NUM_THREADS", 4) as usize;
+        let inter_op_num_threads =
+            crate::settings::effective_u64("ONNX_INTER_OP_NUM_THREADS", 1) as usize;
+        let optimization_level = crate::perf::onnx_embedder::OnnxOptimizationLevel::from_str_or_default(
+            &crate::settings::effective_or("ONNX_OPTIMIZATION_LEVEL", "all"),
+        );
+        let enable_mem_pattern = crate::settings::effective_bool("ONNX_ENABLE_MEM_PATTERN", true);
+        let normalize_output = crate::settings::effective_bool("ONNX_NORMALIZE_OUTPUT", true);
+        let pooling = crate::perf::onnx_embedder::PoolingStrategy::from_str_or_default(
+            &crate::settings::effective_or("ONNX_POOLING", "cls"),
         );
 
         let onnx_config = crate::perf::onnx_embedder::OnnxConfig {
             model_path: onnx_model_path.clone(),
             embedding_dim: config.model.dimension(),
+            allow_simple_tokenizer,
+            num_threads,
+            inter_op_num_threads,
+            optimization_level,
+            enable_mem_pattern,
+            normalize_output,
+            pooling,
+            // Keep this in lock-step with EmbeddingConfig.batch_size so the
+            // OnnxConfig copy isn't a separate, stale truth.
+            embedding_batch_size: config.batch_size,
             ..Default::default()
         };
 
-        eprintln!("[EMBEDDER] Creating OnnxEmbedder...");
         match crate::perf::onnx_embedder::OnnxEmbedder::new(onnx_config) {
             Ok(embedder) => {
                 info!(
@@ -227,7 +262,11 @@ impl EmbeddingRuntime {
         let result = match &self.backend {
             EmbeddingBackend::Onnx { inner } => {
                 let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                let lock_start = std::time::Instant::now();
                 let mut guard = inner.lock();
+                crate::monitoring::onnx_metrics::record_lock_wait(
+                    lock_start.elapsed().as_secs_f64() * 1000.0,
+                );
                 match guard.embed(&refs) {
                     Ok(vectors) => vectors,
                     Err(err) => {
@@ -588,7 +627,11 @@ pub fn embed_batch(texts: &[String]) -> Vec<EmbeddingVector> {
         EmbeddingBackend::Onnx { inner } => {
             for chunk in texts.chunks(batch_size) {
                 let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
+                let lock_start = std::time::Instant::now();
                 let mut guard = inner.lock();
+                crate::monitoring::onnx_metrics::record_lock_wait(
+                    lock_start.elapsed().as_secs_f64() * 1000.0,
+                );
                 match guard.embed(&refs) {
                     Ok(mut vectors) => result.append(&mut vectors),
                     Err(err) => {

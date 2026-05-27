@@ -21,7 +21,7 @@ pub fn ProgressBar(props: ProgressBarProps) -> Element {
                     style: "width: {pct}%;",
                 }
             }
-            div { class: "text-right text-[10px] text-gray-500 mt-1", "{pct as usize}%" }
+            div { class: "text-right text-[10px] text-gray-300 mt-1", "{pct as usize}%" }
         }
     }
 }

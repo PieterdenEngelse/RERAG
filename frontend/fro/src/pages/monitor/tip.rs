@@ -296,7 +296,7 @@ pub fn MonitorTip() -> Element {
                                     InfoIcon {}
                                 }
                             }
-                            span { class: "text-xs text-gray-600", "global" }
+                            span { class: "text-xs text-gray-300", "global" }
                         }
                         match &*io_uring_stats.read() {
                             Some(Ok(r)) => {
@@ -304,33 +304,33 @@ pub fn MonitorTip() -> Element {
                                 let backend_class = if info.backend.contains("io_uring") { "text-emerald-400 font-mono" } else { "text-gray-400 font-mono" };
                                 let br = format_bytes(info.stats.bytes_read);
                                 let bw = format_bytes(info.stats.bytes_written);
-                                let err_class = if info.stats.total_errors > 0 { "text-red-400 tabular-nums" } else { "text-gray-600" };
+                                let err_class = if info.stats.total_errors > 0 { "text-red-400 tabular-nums" } else { "text-gray-300" };
                                 let err_text = if info.stats.total_errors > 0 { format!("{}", info.stats.total_errors) } else { "—".to_string() };
                                 rsx! {
                                     div { class: "text-xs space-y-1.5",
                                         div { class: "flex items-center justify-between gap-2",
-                                            span { class: "text-gray-500 shrink-0", "Backend" }
+                                            span { class: "text-gray-300 shrink-0", "Backend" }
                                             span { class: "{backend_class}", "{info.backend}" }
                                         }
                                         div { class: "flex items-center justify-between gap-2",
-                                            span { class: "text-gray-500 shrink-0", "Reads" }
+                                            span { class: "text-gray-300 shrink-0", "Reads" }
                                             span { class: "text-gray-300 tabular-nums", "{info.stats.reads} · {br}" }
                                         }
                                         div { class: "flex items-center justify-between gap-2",
-                                            span { class: "text-gray-500 shrink-0", "Writes" }
+                                            span { class: "text-gray-300 shrink-0", "Writes" }
                                             span { class: "text-gray-300 tabular-nums", "{info.stats.writes} · {bw}" }
                                         }
                                         div { class: "flex items-center justify-between gap-2",
-                                            span { class: "text-gray-500 shrink-0", "Errors" }
+                                            span { class: "text-gray-300 shrink-0", "Errors" }
                                             span { class: "{err_class}", "{err_text}" }
                                         }
                                         if let Some(startup) = &info.startup {
                                             if startup.vectors_count > 0 || startup.cache_entries > 0 {
                                                 div { class: "pt-2 mt-1 border-t border-gray-700 space-y-1.5",
-                                                    p { class: "text-gray-600 uppercase text-xs tracking-wide", "Startup loads" }
+                                                    p { class: "text-gray-300 uppercase text-xs tracking-wide", "Startup loads" }
                                                     if startup.vectors_count > 0 {
                                                         div { class: "flex items-start justify-between gap-2",
-                                                            span { class: "text-gray-500 shrink-0", "Vectors" }
+                                                            span { class: "text-gray-300 shrink-0", "Vectors" }
                                                             span { class: "text-gray-300 tabular-nums text-right leading-tight",
                                                                 "{startup.vectors_count} · {format_bytes(startup.vectors_bytes)} · {startup.vectors_read_ms}ms"
                                                             }
@@ -338,7 +338,7 @@ pub fn MonitorTip() -> Element {
                                                     }
                                                     if startup.cache_entries > 0 {
                                                         div { class: "flex items-start justify-between gap-2",
-                                                            span { class: "text-gray-500 shrink-0", "Cache" }
+                                                            span { class: "text-gray-300 shrink-0", "Cache" }
                                                             span { class: "text-gray-300 tabular-nums text-right leading-tight",
                                                                 "{startup.cache_entries} · {format_bytes(startup.cache_bytes)} · {startup.cache_read_ms}ms"
                                                             }
@@ -351,10 +351,10 @@ pub fn MonitorTip() -> Element {
                                 }
                             },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
-                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
+                    div { class: "flex items-center text-gray-300 text-lg flex-shrink-0", "→" }
                 }
 
                 // ── Parser unit ──
@@ -385,7 +385,7 @@ pub fn MonitorTip() -> Element {
                         match &*parser_stats.read() {
                             Some(Ok(stats)) => rsx! { ParserStatsView { stats: stats.clone() } },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
                 }
@@ -393,7 +393,7 @@ pub fn MonitorTip() -> Element {
                 } // end row 1
 
                 // ── ↓ connector ──
-                div { class: "flex text-gray-600 text-sm leading-none pl-[17rem]", "↓" }
+                div { class: "flex text-gray-300 text-sm leading-none pl-[17rem]", "↓" }
 
                 // ── Row 2: Typography → NFC → DocIR (compact) → Chunker ──
                 div { class: "flex gap-2 items-stretch",
@@ -445,15 +445,15 @@ pub fn MonitorTip() -> Element {
                                                 if ps.html_files > 0 {
                                                     span { class: "ml-auto text-gray-300 tabular-nums", "{html_n}" }
                                                     if !html_tags.is_empty() {
-                                                        span { class: "text-gray-500", "·" }
+                                                        span { class: "text-gray-300", "·" }
                                                         span { class: "text-gray-400 tabular-nums", "{html_tags}" }
                                                     }
                                                     if !html_pct.is_empty() {
-                                                        span { class: "text-gray-500", "·" }
+                                                        span { class: "text-gray-300", "·" }
                                                         span { class: "{html_pct_class}", "{html_pct}" }
                                                     }
                                                 } else {
-                                                    span { class: "ml-auto text-gray-600", "—" }
+                                                    span { class: "ml-auto text-gray-300", "—" }
                                                 }
                                             }
                                             div { class: "flex items-start gap-2",
@@ -462,20 +462,20 @@ pub fn MonitorTip() -> Element {
                                                 if ps.unicode_files > 0 {
                                                     span { class: "ml-auto text-gray-300 tabular-nums", "{uni_n}" }
                                                     if !uni_pct.is_empty() {
-                                                        span { class: "text-gray-500", "·" }
+                                                        span { class: "text-gray-300", "·" }
                                                         span { class: "text-gray-400 tabular-nums", "{uni_pct}" }
                                                     }
                                                 } else {
-                                                    span { class: "ml-auto text-gray-600", "—" }
+                                                    span { class: "ml-auto text-gray-300", "—" }
                                                 }
                                             }
                                             div { class: "flex items-start gap-2 pt-1 border-t border-gray-700",
-                                                span { class: "text-gray-500 font-mono shrink-0 w-10", "TXT…" }
-                                                span { class: "text-gray-500 shrink-0", "pass-through" }
+                                                span { class: "text-gray-300 font-mono shrink-0 w-10", "TXT…" }
+                                                span { class: "text-gray-300 shrink-0", "pass-through" }
                                                 if ps.passthrough_files > 0 {
-                                                    span { class: "ml-auto text-gray-500 tabular-nums", "{pass_n}" }
+                                                    span { class: "ml-auto text-gray-300 tabular-nums", "{pass_n}" }
                                                 } else {
-                                                    span { class: "ml-auto text-gray-600", "—" }
+                                                    span { class: "ml-auto text-gray-300", "—" }
                                                 }
                                             }
                                         }
@@ -483,7 +483,7 @@ pub fn MonitorTip() -> Element {
                                             div { class: "mt-3 pt-2 border-t border-gray-700",
                                                 table { class: "w-full text-xs",
                                                     thead {
-                                                        tr { class: "text-gray-500 border-b border-gray-700",
+                                                        tr { class: "text-gray-300 border-b border-gray-700",
                                                             th { class: "text-left pb-1 pr-2 font-medium", "File" }
                                                             th { class: "text-left pb-1 pr-2 font-medium", "Type" }
                                                             th { class: "text-right pb-1 font-medium", "Reduction" }
@@ -495,7 +495,7 @@ pub fn MonitorTip() -> Element {
                                                                 let (kind_class, kind_label) = match rec.kind.as_str() {
                                                                     "html" => ("text-cyan-400", "HTML"),
                                                                     "unicode" => ("text-amber-400", "Unicode"),
-                                                                    _ => ("text-gray-500", "pass"),
+                                                                    _ => ("text-gray-300", "pass"),
                                                                 };
                                                                 let reduction = if rec.chars_in > 0 && rec.kind != "passthrough" {
                                                                     let removed = rec.chars_in.saturating_sub(rec.chars_out);
@@ -520,11 +520,11 @@ pub fn MonitorTip() -> Element {
                                     }
                                 },
                                 Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                                None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                                None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                             }
                         }
                     }
-                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
+                    div { class: "flex items-center text-gray-300 text-lg flex-shrink-0", "→" }
                 }
 
                 // ── NFC unit ──
@@ -545,10 +545,10 @@ pub fn MonitorTip() -> Element {
                         match &*canon_stats.read() {
                             Some(Ok(stats)) => rsx! { StoreRecordsView { records: stats.store_records.clone() } },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
-                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
+                    div { class: "flex items-center text-gray-300 text-lg flex-shrink-0", "→" }
                 }
 
                 // ── DocIR unit (compact chips) ──
@@ -566,7 +566,7 @@ pub fn MonitorTip() -> Element {
                         }
                         match &*chunk_meta_stats.read() {
                             Some(Ok(stats)) if stats.total == 0 => rsx! {
-                                p { class: "text-xs text-gray-600", "Upload a document to see block structure." }
+                                p { class: "text-xs text-gray-300", "Upload a document to see block structure." }
                             },
                             Some(Ok(stats)) => {
                                 let mut bt_sorted: Vec<(&String, &u32)> = stats.block_types.iter().collect();
@@ -598,7 +598,7 @@ pub fn MonitorTip() -> Element {
                                                     let c = match name.as_str() {
                                                         "docling"      => "bg-amber-900/40 text-amber-400",
                                                         "unstructured" => "bg-sky-900/40 text-sky-400",
-                                                        _              => "bg-gray-700 text-gray-500",
+                                                        _              => "bg-gray-700 text-gray-300",
                                                     };
                                                     rsx! {
                                                         span { class: "text-xs font-mono rounded px-1.5 py-0.5 {c}", "{name} {count}" }
@@ -610,10 +610,10 @@ pub fn MonitorTip() -> Element {
                                 }
                             },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
-                    div { class: "flex items-center text-gray-500 text-lg flex-shrink-0", "→" }
+                    div { class: "flex items-center text-gray-300 text-lg flex-shrink-0", "→" }
                 }
 
                 // ── Chunker unit ──
@@ -634,7 +634,7 @@ pub fn MonitorTip() -> Element {
                         match &*chunking_stats.read() {
                             Some(Ok(snaps)) => rsx! { ChunkerStatsView { snapshots: snaps.clone() } },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
                 }
@@ -642,7 +642,7 @@ pub fn MonitorTip() -> Element {
                 } // end row 2
 
                 // ── ↓ connector ──
-                div { class: "flex text-gray-600 text-sm leading-none", "↓" }
+                div { class: "flex text-gray-300 text-sm leading-none", "↓" }
 
                 // ── Row 3: NFKC · NFKC+punct ──
                 div { class: "flex gap-2 items-stretch",
@@ -665,7 +665,7 @@ pub fn MonitorTip() -> Element {
                             Some(Ok(stats)) => rsx! {
                                 if stats.embed_ingestion.calls == 0 && stats.embed_query.calls == 0 {
                                     div { class: "flex items-center justify-center h-16",
-                                        p { class: "text-xs text-gray-500", "Upload a document or run a search" }
+                                        p { class: "text-xs text-gray-300", "Upload a document or run a search" }
                                     }
                                 } else {
                                     CanonMiniTable {
@@ -678,7 +678,7 @@ pub fn MonitorTip() -> Element {
                                 }
                             },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
 
@@ -700,7 +700,7 @@ pub fn MonitorTip() -> Element {
                             Some(Ok(stats)) => rsx! {
                                 if stats.index_ingestion.calls == 0 && stats.index_query.calls == 0 {
                                     div { class: "flex items-center justify-center h-16",
-                                        p { class: "text-xs text-gray-500", "Upload a document or run a search" }
+                                        p { class: "text-xs text-gray-300", "Upload a document or run a search" }
                                     }
                                 } else {
                                     CanonMiniTable {
@@ -713,7 +713,7 @@ pub fn MonitorTip() -> Element {
                                 }
                             },
                             Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                            None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                            None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                         }
                     }
 
@@ -881,17 +881,17 @@ pub fn MonitorTip() -> Element {
                                         let backend_class = if info.backend.contains("io_uring") { "text-emerald-400" } else { "text-gray-400" };
                                         let br = format_bytes(info.stats.bytes_read);
                                         let bw = format_bytes(info.stats.bytes_written);
-                                        let err_class = if info.stats.total_errors > 0 { "text-red-400" } else { "text-gray-600" };
+                                        let err_class = if info.stats.total_errors > 0 { "text-red-400" } else { "text-gray-300" };
                                         let err_text = if info.stats.total_errors > 0 { format!("{}", info.stats.total_errors) } else { "—".to_string() };
                                         rsx! {
                                             div { class: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs",
-                                                span { class: "text-gray-500", "Backend" }
+                                                span { class: "text-gray-300", "Backend" }
                                                 span { class: "font-mono {backend_class}", "{info.backend}" }
-                                                span { class: "text-gray-500", "Reads" }
+                                                span { class: "text-gray-300", "Reads" }
                                                 span { class: "text-gray-300 tabular-nums", "{info.stats.reads} ({br})" }
-                                                span { class: "text-gray-500", "Writes" }
+                                                span { class: "text-gray-300", "Writes" }
                                                 span { class: "text-gray-300 tabular-nums", "{info.stats.writes} ({bw})" }
-                                                span { class: "text-gray-500", "Errors" }
+                                                span { class: "text-gray-300", "Errors" }
                                                 span { class: "{err_class} tabular-nums", "{err_text}" }
                                             }
                                             if let Some(startup) = &info.startup {
@@ -900,11 +900,11 @@ pub fn MonitorTip() -> Element {
                                                         p { class: "text-gray-400 font-semibold mb-1", "Startup loads" }
                                                         div { class: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs",
                                                             if startup.vectors_count > 0 {
-                                                                span { class: "text-gray-500", "Vectors" }
+                                                                span { class: "text-gray-300", "Vectors" }
                                                                 span { class: "text-gray-300 tabular-nums", "{startup.vectors_count} · {format_bytes(startup.vectors_bytes)} · {startup.vectors_read_ms}ms" }
                                                             }
                                                             if startup.cache_entries > 0 {
-                                                                span { class: "text-gray-500", "Cache" }
+                                                                span { class: "text-gray-300", "Cache" }
                                                                 span { class: "text-gray-300 tabular-nums", "{startup.cache_entries} entries · {format_bytes(startup.cache_bytes)} · {startup.cache_read_ms}ms" }
                                                             }
                                                         }
@@ -914,7 +914,7 @@ pub fn MonitorTip() -> Element {
                                         }
                                     },
                                     Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "Error: {e}" } },
-                                    None => rsx! { p { class: "text-xs text-gray-500", "Loading…" } },
+                                    None => rsx! { p { class: "text-xs text-gray-300", "Loading…" } },
                                 }
                             }
                             p { class: "text-gray-400",
@@ -1425,6 +1425,18 @@ pub fn MonitorTip() -> Element {
                             if tip_tab() == 1 {
                                 div { class: "space-y-2",
                                     h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "1 Parser" }
+                                    div { class: "rounded border border-amber-800/60 bg-amber-900/15 px-3 py-2 text-xs text-gray-300",
+                                        div { class: "text-amber-300 font-semibold mb-0.5", "Note for PDFs" }
+                                        p {
+                                            "If "
+                                            Link { to: Route::ConfigOnnx {}, class: "text-blue-400 hover:text-blue-300 underline",
+                                                "Native PDF Extraction"
+                                            }
+                                            " is compiled in and "
+                                            span { class: "font-mono", "LAYOUT_ML_ENABLED=true" }
+                                            ", PDFs reach this Parser tab as DocIR (typed Title / SectionHeader / Table / Figure / Caption / List blocks with word-level bounding boxes) — produced by the Stage 0 lopdf pipeline rather than by the plain pdftotext cascade described below. The block-type tags survive into chunk metadata and let the retriever reweight by structural role at query time."
+                                        }
+                                    }
                                     p { class: "text-gray-400",
                                         "Entry point. Reads raw bytes and converts them to plain text via "
                                         span {
@@ -1437,7 +1449,7 @@ pub fn MonitorTip() -> Element {
                                     if show_extractors_info() {
                                         div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-1.5",
                                             div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_extractors_info.set(false), "✕" }
+                                                button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_extractors_info.set(false), "✕" }
                                             }
                                             // PDF — full width, complex
                                             div {
@@ -1447,7 +1459,7 @@ pub fn MonitorTip() -> Element {
                                                     li { span { class: "font-mono text-gray-200", "pdf_extract" } " (Rust crate) — pure-Rust fallback when poppler absent." }
                                                     li { span { class: "font-mono text-gray-200", "pdftoppm" } " + " span { class: "font-mono text-gray-200", "tesseract" } " — OCR last resort for scanned/image PDFs (300 dpi). Requires both on PATH." }
                                                 }
-                                                p { class: "text-gray-500 mt-0.5",
+                                                p { class: "text-gray-300 mt-0.5",
                                                     span {
                                                         class: "font-mono text-sky-400 underline cursor-pointer hover:text-sky-300",
                                                         onclick: move |_| show_dedupe_pdf_info.set(!show_dedupe_pdf_info()),
@@ -1458,7 +1470,7 @@ pub fn MonitorTip() -> Element {
                                                 if show_dedupe_pdf_info() {
                                                     div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
                                                         div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                            button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_dedupe_pdf_info.set(false), "✕" }
+                                                            button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_dedupe_pdf_info.set(false), "✕" }
                                                         }
                                                         p { "A heuristic pass that removes repeated boilerplate PDFs accumulate across pages — things like page headers, footers, running titles, and page numbers. These appear on every page, so in a 20-page PDF they repeat 20 times. Without this pass they pollute the index: a search for \"architecture\" starts matching chapter headers instead of content, and the LLM gets context stuffed with repeated boilerplate instead of substance." }
                                                         p { class: "text-gray-200 font-semibold pt-1", "The two-part heuristic" }
@@ -1466,7 +1478,7 @@ pub fn MonitorTip() -> Element {
                                                             li { span { class: "text-gray-200 font-medium", "4+ repetitions — " } "a line appearing that many times is almost certainly structural, not content. Real sentences rarely repeat verbatim across a document." }
                                                             li { span { class: "text-gray-200 font-medium", "≤80 chars — " } "actual content tends to be longer. This guard prevents accidentally removing a short sentence that genuinely repeats (e.g. a refrain in a poem, a repeated warning in a manual)." }
                                                         }
-                                                        p { class: "text-gray-500 italic", "Not perfect — a long footer survives, a short genuine refrain gets stripped — but it's a cheap, zero-dependency pass that handles the majority of noisy PDFs." }
+                                                        p { class: "text-gray-300 italic", "Not perfect — a long footer survives, a short genuine refrain gets stripped — but it's a cheap, zero-dependency pass that handles the majority of noisy PDFs." }
                                                     }
                                                 }
                                             }
@@ -1497,7 +1509,7 @@ pub fn MonitorTip() -> Element {
                                                     p { class: "text-gray-400", span { class: "font-mono", "detect_and_decode" } " — charset detection + UTF-8 decode." }
                                                 }
                                             }
-                                            p { class: "text-gray-500 italic", "Every format then goes through Format cleanup → normalize(Store)." }
+                                            p { class: "text-gray-300 italic", "Every format then goes through Format cleanup → normalize(Store)." }
                                         }
                                     }
                                     h4 { class: "text-xs font-semibold text-gray-300 uppercase tracking-wide pt-1",
@@ -1542,7 +1554,7 @@ pub fn MonitorTip() -> Element {
                                         if show_noise_nodes_info() {
                                             div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
                                                 div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_noise_nodes_info.set(false), "✕" }
+                                                    button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_noise_nodes_info.set(false), "✕" }
                                                 }
                                                 p { "Every chunk becomes a node in the "
                                                     span {
@@ -1562,7 +1574,7 @@ pub fn MonitorTip() -> Element {
                                                 if show_boilerplate_nodes_info() {
                                                     div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-1.5 mt-1",
                                                         div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                            button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_boilerplate_nodes_info.set(false), "✕" }
+                                                            button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_boilerplate_nodes_info.set(false), "✕" }
                                                         }
                                                         p { "Boilerplate nodes are graph nodes that originate from repeated, non‑informative text such as:" }
                                                         ul { class: "ml-3 space-y-0.5 list-none list-outside text-gray-400",
@@ -1586,7 +1598,7 @@ pub fn MonitorTip() -> Element {
                                                 if show_pq_training_info() {
                                                     div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
                                                         div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                            button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_pq_training_info.set(false), "✕" }
+                                                            button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_pq_training_info.set(false), "✕" }
                                                         }
                                                         p { span { class: "text-gray-200 font-medium", "Product Quantization (PQ)" } " compresses embedding vectors to ~1/32 of their original size. A 384-dim f32 vector (1536 bytes) becomes 48 bytes — one byte per subvector." }
                                                         p { class: "text-gray-200 font-medium pt-1", "Training" }
@@ -1610,7 +1622,7 @@ pub fn MonitorTip() -> Element {
                                         if show_kg_info() {
                                             div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2 mt-1",
                                                 div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_kg_info.set(false), "✕" }
+                                                    button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_kg_info.set(false), "✕" }
                                                 }
                                                 p { class: "text-gray-200 font-semibold", "What Is a Knowledge Graph?" }
                                                 p { "A knowledge graph is a structured representation of information as a network of entities and relationships." }
@@ -1646,7 +1658,7 @@ pub fn MonitorTip() -> Element {
                                     if show_clustering_info() {
                                         div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2 mb-1",
                                             div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_clustering_info.set(false), "✕" }
+                                                button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_clustering_info.set(false), "✕" }
                                             }
 
                                             // 1. What clustering is
@@ -1706,7 +1718,7 @@ pub fn MonitorTip() -> Element {
                                             if show_centroid_info() {
                                                 div { class: "rounded bg-gray-900 border border-gray-700 p-3 text-xs text-gray-300 space-y-2 mt-1",
                                                     div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                        button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_centroid_info.set(false), "✕" }
+                                                        button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_centroid_info.set(false), "✕" }
                                                     }
                                                     p { "A centroid is the center point of a cluster — the average position of all vectors assigned to that cluster." }
                                                     p { "In embedding‑space terms, it's the mean vector: " span { class: "font-mono text-gray-200", "μ = (1/N) Σ xᵢ" } " where " span { class: "font-mono", "xᵢ" } " is an embedding vector, " span { class: "font-mono", "N" } " the cluster size, and " span { class: "font-mono", "μ" } " the centroid." }
@@ -1839,7 +1851,7 @@ pub fn MonitorTip() -> Element {
                                         if show_mojibake_info() {
                                             div { class: "rounded bg-gray-900 border border-sky-900 p-3 text-xs text-gray-300 space-y-2 mt-1",
                                                 div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_mojibake_info.set(false), "✕" }
+                                                    button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_mojibake_info.set(false), "✕" }
                                                 }
                                                 p { span { class: "text-gray-200 font-semibold", "Mojibake" } " = garbled, unreadable text caused by using the wrong character encoding. It happens when bytes written in one encoding (e.g., UTF‑8) are interpreted as another (e.g., Latin‑1)." }
                                                 p { class: "text-gray-200 font-semibold pt-1", "What mojibake actually is" }
@@ -1880,7 +1892,7 @@ pub fn MonitorTip() -> Element {
                                                 onclick: move |e| e.stop_propagation(),
                                                 div { class: "flex items-center justify-between -mt-1 -mr-1 mb-1",
                                                     h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "Format Cleanup" }
-                                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_format_cleanup_info.set(false), "✕" }
+                                                    button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_format_cleanup_info.set(false), "✕" }
                                                 }
                                                 p { "Removes artifacts that are byproducts of the source format, not the content itself. The extractor gives you text, format cleanup gives you " span { class: "italic", "clean" } " text." }
                                                 p { class: "text-gray-400 pt-1 font-semibold text-gray-200", "Pass 1 — HTML tag stripping" }
@@ -1930,7 +1942,7 @@ pub fn MonitorTip() -> Element {
                                     if show_store_target_info() {
                                         div { class: "rounded bg-gray-900 border border-amber-800 p-3 text-xs text-gray-300 space-y-2",
                                             div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_store_target_info.set(false), "✕" }
+                                                button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_store_target_info.set(false), "✕" }
                                             }
                                             p { "\"Store\" is the first of three normalization targets in the TIP canonicalization stage. It's not a data structure — it's the label for how text is normalized when it's being written to disk (stored/persisted)." }
                                             p { class: "text-gray-400 pt-1", "The three targets are a hierarchy of increasing aggressiveness:" }
@@ -1953,7 +1965,7 @@ pub fn MonitorTip() -> Element {
                                                     if show_emdash_info() {
                                                         div { class: "rounded bg-gray-900 border border-amber-800 p-3 text-xs text-gray-300 space-y-2 mt-2",
                                                             div { class: "flex justify-end -mt-1 -mr-1 mb-1",
-                                                                button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_emdash_info.set(false), "✕" }
+                                                                button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_emdash_info.set(false), "✕" }
                                                             }
                                                             p { "The long dash character — like the one in this sentence. Unicode U+2014. Used in prose for parenthetical asides or breaks in thought. Named \"em\" because it is roughly the width of the letter M." }
                                                             p { "The en-dash (U+2013) is the shorter sibling — used for ranges like \"pages 10–20\"." }
@@ -1973,7 +1985,7 @@ pub fn MonitorTip() -> Element {
                                                     " — NFKC + whitespace + punct canonicalization. Most aggressive: also normalizes smart quotes to ASCII, em-dashes to -, etc. Applied to Tantivy BM25 chunks and matched at query time."
                                                 }
                                             }
-                                            p { class: "text-gray-500 pt-1 italic", "So when the modal says \"Store — NFC + whitespace\", it means: this is the normalization form used for the copy that gets persisted to disk." }
+                                            p { class: "text-gray-300 pt-1 italic", "So when the modal says \"Store — NFC + whitespace\", it means: this is the normalization form used for the copy that gets persisted to disk." }
                                         }
                                     }
                                     p { class: "text-gray-400", "Applied after extraction, before chunking. Persisted to disk and shown to users." }
@@ -2178,7 +2190,7 @@ pub fn MonitorTip() -> Element {
                             if tip_tab() == 0 {
                                 div { class: "space-y-4",
                                 div { class: "flex justify-end -mt-1 -mr-1",
-                                    button { class: "text-gray-500 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_tip_info.set(false), "✕" }
+                                    button { class: "text-gray-300 hover:text-gray-200 text-sm font-bold leading-none", onclick: move |_| show_tip_info.set(false), "✕" }
                                 }
                                 h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2", "Pipeline flow" }
                                 pre { class: "text-xs font-mono leading-snug text-gray-400",
@@ -2314,7 +2326,7 @@ pub fn MonitorTip() -> Element {
                                 p { class: "font-semibold text-gray-200", "fixed" }
                                 p { class: "text-gray-400", "Splits on a hard token count. Every chunk is exactly max_size tokens (default 384) with no awareness of sentences, paragraphs, or meaning. The last chunk of a document may be shorter." }
                                 p { class: "text-gray-400", "Overlap (default 32 tokens) is carried forward from the tail of the previous chunk so a sentence cut at a boundary can still be retrieved from either side." }
-                                p { class: "text-gray-500", "Best for uniform corpora — logs, CSVs, code. Avoid for prose: sentences are frequently split mid-way, degrading retrieval quality." }
+                                p { class: "text-gray-300", "Best for uniform corpora — logs, CSVs, code. Avoid for prose: sentences are frequently split mid-way, degrading retrieval quality." }
                             }
 
                             // lightweight
@@ -2322,7 +2334,7 @@ pub fn MonitorTip() -> Element {
                                 p { class: "font-semibold text-gray-200", "lightweight" }
                                 p { class: "text-gray-400", "Accumulates sentences until the chunk reaches the target token count, then flushes at the next sentence boundary. Sentence detection uses punctuation patterns (.!? followed by a capital letter) — no NLP model required." }
                                 p { class: "text-gray-400", "If a single sentence would overflow the hard max, it is flushed immediately. The sentence_flushes counter in chunk stats shows how often the chunker waited for a boundary rather than cutting mid-sentence." }
-                                p { class: "text-gray-500", "The default mode. Good for general prose — articles, PDFs, documentation. Faster than semantic with much more readable output than fixed." }
+                                p { class: "text-gray-300", "The default mode. Good for general prose — articles, PDFs, documentation. Faster than semantic with much more readable output than fixed." }
                             }
 
                             // semantic
@@ -2331,7 +2343,7 @@ pub fn MonitorTip() -> Element {
                                 p { class: "text-gray-400", "Splits the document into natural units — paragraphs, headings, code blocks — then embeds each unit and compares consecutive embeddings. When cosine similarity between two adjacent units drops below a threshold (default 0.78), that gap is treated as a topic shift and a chunk is flushed." }
                                 p { class: "text-gray-400", "Result: each chunk covers one coherent idea. A paragraph about database indexing won't share a chunk with one about UI styling even if both fit within the token limit. The semantic_flushes counter shows how many topic-shift boundaries were detected." }
                                 p { class: "text-gray-400", "Threshold is tunable via SEMANTIC_SIMILARITY_THRESHOLD. Lower (e.g. 0.65) → larger chunks spanning more related content. Higher (e.g. 0.90) → tighter, more focused chunks." }
-                                p { class: "text-gray-500", "Best for long, mixed-topic documents. Requires the embedder to be running. Expect 2–5× the ingestion time of lightweight." }
+                                p { class: "text-gray-300", "Best for long, mixed-topic documents. Requires the embedder to be running. Expect 2–5× the ingestion time of lightweight." }
                             }
 
                             // shared mechanics
@@ -2788,7 +2800,7 @@ raw query
                                 li { "Ligatures (ﬁ, ﬂ) are preserved — NFC is typography-safe." }
                                 li { "Fullwidth ASCII characters keep their fullwidth form." }
                             }
-                            p { class: "text-gray-500", "This is intentional: stored text should look exactly as the author intended. Compatibility folding (ﬁ → fi) only happens at the Embed and Index stages where it is safe to discard visual distinctions." }
+                            p { class: "text-gray-300", "This is intentional: stored text should look exactly as the author intended. Compatibility folding (ﬁ → fi) only happens at the Embed and Index stages where it is safe to discard visual distinctions." }
                             h4 { class: "text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1", "RAG impact" }
                             ul { class: "ml-4 space-y-0.5 list-disc list-outside text-gray-400",
                                 li { "Eliminates encoding drift when the same document is re-ingested from different sources." }
@@ -3141,7 +3153,7 @@ fn ParserStatsView(props: ParserStatsViewProps) -> Element {
                                     if *empty > 0 {
                                         span { class: "text-yellow-500", "{empty}" }
                                     } else {
-                                        span { class: "text-gray-600", "0" }
+                                        span { class: "text-gray-300", "0" }
                                     }
                                 }
                                 td { class: "py-0.5 text-right text-gray-400", "{format_chars(*chars)}" }
@@ -3579,7 +3591,7 @@ fn NfkcFileRecordsView(props: NfkcFileRecordsViewProps) -> Element {
         div { class: "mt-2 pt-2 border-t border-gray-700 overflow-y-auto", style: "max-height:160px;",
             table { class: "w-full text-xs",
                 thead {
-                    tr { class: "text-gray-500 border-b border-gray-700",
+                    tr { class: "text-gray-300 border-b border-gray-700",
                         th { class: "text-left pb-1 pr-2 font-medium", "File" }
                         th { class: "text-right pb-1 pr-2 font-medium", "In" }
                         th { class: "text-right pb-1 pr-2 font-medium", "Out" }
@@ -3728,7 +3740,7 @@ struct CanonRowProps {
 #[component]
 fn CanonRow(props: CanonRowProps) -> Element {
     let dim = if props.site.calls == 0 {
-        "text-gray-600"
+        "text-gray-300"
     } else {
         "text-gray-300"
     };

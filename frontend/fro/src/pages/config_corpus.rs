@@ -285,7 +285,7 @@ pub fn ConfigCorpus() -> Element {
                             p { span { class: "text-gray-100 font-semibold", "Formatting rules — " } "no spaces (use " span { class: "font-mono", "-" } "), no punctuation, lowercase ASCII only." }
                             p { span { class: "text-gray-100 font-semibold", "URL-safe — " } "must survive browsers, routers, servers, and percent-encoding rules without mangling." }
                             p { span { class: "text-gray-100 font-semibold", "Filesystem-safe — " } "Windows forbids " span { class: "font-mono", "<>:\"/\\|?*" } ", macOS normalizes Unicode, Linux is case-sensitive. Lowercase ASCII with hyphens is the only universal subset." }
-                            p { class: "text-gray-500", "The slug is permanent — rename only changes the display name." }
+                            p { class: "text-gray-300", "The slug is permanent — rename only changes the display name." }
                         }
                     }
 
@@ -420,7 +420,7 @@ pub fn ConfigCorpus() -> Element {
                         div { class: "rounded bg-gray-800 border border-gray-600 p-3 text-xs text-gray-300 space-y-1",
                             p { "How many chunks the retriever returns per query. The RAG agent ranks and picks from these candidates before sending context to the LLM." }
                             p { "Lower values (3–5) keep token cost down. Higher values (15–30) give the agent more candidates — useful when documents are long or varied." }
-                            p { class: "text-gray-500", "Global default: 10. Leave blank to inherit." }
+                            p { class: "text-gray-300", "Global default: 10. Leave blank to inherit." }
                         }
                     }
                     if show_chunker() {
@@ -429,7 +429,7 @@ pub fn ConfigCorpus() -> Element {
                             p { span { class: "text-gray-200 font-medium", "fixed — " } "fixed token count with overlap. Fast, predictable. Best for structured data." }
                             p { span { class: "text-gray-200 font-medium", "lightweight — " } "sentence-aware splits. Balanced speed and coherence." }
                             p { span { class: "text-gray-200 font-medium", "semantic — " } "embedding-similarity boundaries. Highest quality, slowest. Best for narrative prose." }
-                            p { class: "text-gray-500", "Takes effect on next upload or reindex. Leave blank to inherit global." }
+                            p { class: "text-gray-300", "Takes effect on next upload or reindex. Leave blank to inherit global." }
                         }
                     }
                     if show_metric() {
@@ -513,7 +513,7 @@ pub fn ConfigCorpus() -> Element {
                         HealthCard { name: "Semantic threshold".into(), status: format!("{:.2}", cfg.semantic_similarity_threshold).into(), detail: Some("Cosine".into()) }
                     }
                 } else {
-                    p { class: "text-sm text-gray-500", "Loading…" }
+                    p { class: "text-sm text-gray-300", "Loading…" }
                 }
             }
 
@@ -525,7 +525,7 @@ pub fn ConfigCorpus() -> Element {
                         HealthCard { name: "Provider".into(), status: cfg.provider.into(), detail: Some("Backend".into()) }
                     }
                 } else {
-                    p { class: "text-sm text-gray-500", "Loading…" }
+                    p { class: "text-sm text-gray-300", "Loading…" }
                 }
             }
 
@@ -537,7 +537,7 @@ pub fn ConfigCorpus() -> Element {
                         HealthCard { name: "Vectors".into(), status: format!("{}", cfg.total_vectors).into(), detail: Some("Stored".into()) }
                     }
                 } else {
-                    p { class: "text-sm text-gray-500", "Loading…" }
+                    p { class: "text-sm text-gray-300", "Loading…" }
                 }
             }
         }

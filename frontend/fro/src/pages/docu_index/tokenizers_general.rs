@@ -37,7 +37,7 @@ pub fn DocuTokenizersGeneral() -> Element {
                                 li { span { class: "text-green-400", "Pro: " } "No OOV issues" }
                                 li { span { class: "text-red-400", "Con: " } "Very long sequences" }
                             }
-                            p { class: "text-xs text-gray-500 mt-1", "Char-CNN, DeepSpeech, DNA models" }
+                            p { class: "text-xs text-gray-300 mt-1", "Char-CNN, DeepSpeech, DNA models" }
                         }
 
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
@@ -48,7 +48,7 @@ pub fn DocuTokenizersGeneral() -> Element {
                                 li { span { class: "text-green-400", "Pro: " } "Fast, intuitive" }
                                 li { span { class: "text-red-400", "Con: " } "OOV and huge embedding matrices" }
                             }
-                            p { class: "text-xs text-gray-500 mt-1", "Early word2vec pipelines, classic NLP" }
+                            p { class: "text-xs text-gray-300 mt-1", "Early word2vec pipelines, classic NLP" }
                         }
 
                         div { class: "bg-gray-800 border border-blue-700 rounded-lg p-2",
@@ -63,7 +63,7 @@ pub fn DocuTokenizersGeneral() -> Element {
                                 li { span { class: "text-yellow-400", "Unigram LM — " } "probabilistic; prunes a candidate set" }
                                 li { span { class: "text-yellow-400", "SentencePiece — " } "framework: BPE or Unigram on raw bytes" }
                             }
-                            p { class: "text-xs text-gray-500 mt-1", "BERT, GPT-2, T5, ALBERT, LLaMA-1" }
+                            p { class: "text-xs text-gray-300 mt-1", "BERT, GPT-2, T5, ALBERT, LLaMA-1" }
                         }
 
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
@@ -74,7 +74,7 @@ pub fn DocuTokenizersGeneral() -> Element {
                                 li { span { class: "text-green-400", "Pro: " } "Handles emojis, accents, noise" }
                                 li { span { class: "text-red-400", "Con: " } "Longer sequences than subword" }
                             }
-                            p { class: "text-xs text-gray-500 mt-1", "GPT-2/3/4 tiktoken, LLaMA-2 BPE" }
+                            p { class: "text-xs text-gray-300 mt-1", "GPT-2/3/4 tiktoken, LLaMA-2 BPE" }
                         }
 
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
@@ -89,19 +89,19 @@ pub fn DocuTokenizersGeneral() -> Element {
                                 }
                                 li { span { class: "text-red-400", "Con: " } "Hard to generalise across languages" }
                             }
-                            p { class: "text-xs text-gray-500 mt-1", "MeCab (Japanese), Morfessor, KoNLPy (Korean)" }
+                            p { class: "text-xs text-gray-300 mt-1", "MeCab (Japanese), Morfessor, KoNLPy (Korean)" }
                         }
 
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
                             h3 { class: "text-xs font-bold text-purple-300 mb-1", "6. Hybrid (rules + stats)" }
                             p { class: "text-xs text-gray-400 mb-1", "Combines rule-based exceptions with statistical segmentation." }
-                            p { class: "text-xs text-gray-500 mt-1", "spaCy tokenizer, Moses (MT pipelines)" }
+                            p { class: "text-xs text-gray-300 mt-1", "spaCy tokenizer, Moses (MT pipelines)" }
                         }
 
                         div { class: "bg-gray-800 border border-gray-700 rounded-lg p-2",
                             h3 { class: "text-xs font-bold text-purple-300 mb-1", "7. Whitespace / rule-based" }
                             p { class: "text-xs text-gray-400 mb-1", "Simple splitting with heuristics. Classical NLP baseline." }
-                            p { class: "text-xs text-gray-500 mt-1", "NLTK word_tokenize, regex tokenizers" }
+                            p { class: "text-xs text-gray-300 mt-1", "NLTK word_tokenize, regex tokenizers" }
                         }
 
                         div { class: "bg-gray-800 border border-orange-700 rounded-lg p-2",
@@ -111,7 +111,7 @@ pub fn DocuTokenizersGeneral() -> Element {
                                 li { span { class: "text-yellow-400", "Neural segmentation — " } "subword boundaries via a neural net" }
                                 li { span { class: "text-yellow-400", "Tokenizer-free — " } "model trains directly on bytes or chars" }
                             }
-                            p { class: "text-xs text-gray-500 mt-1", "CANINE, ByT5, Charformer, Meta byte-level prototypes" }
+                            p { class: "text-xs text-gray-300 mt-1", "CANINE, ByT5, Charformer, Meta byte-level prototypes" }
                         }
                     }
 

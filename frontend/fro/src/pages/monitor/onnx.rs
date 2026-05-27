@@ -13,6 +13,51 @@ const BOARD_CLASS: &str = "rounded border border-gray-600 p-4 bg-gray-800/50";
 const LABEL_CLASS: &str = "text-gray-400 text-xs";
 const VALUE_CLASS: &str = "text-gray-100 text-sm font-mono";
 
+/// Top-of-page framing — what each board on this page is sourced from.
+fn onnx_vs_ort_monitor_banner() -> Element {
+    rsx! {
+        div { class: "border border-blue-700 bg-blue-900/20 rounded-lg p-3 text-xs space-y-1",
+            div { class: "font-semibold text-blue-200 text-sm",
+                "Each board below is tagged by source layer"
+            }
+            div { class: "text-gray-300 space-y-1",
+                p {
+                    span { class: "px-1 rounded bg-purple-900/40 text-purple-300", "ONNX file" }
+                    " — the .onnx file declares the model name and vector dimensions; nothing executes here."
+                }
+                p {
+                    span { class: "px-1 rounded bg-blue-900/40 text-blue-300", "ort runtime" }
+                    " — ONNX Runtime (Microsoft's C++ engine, called via the ort crate) produces every throughput and latency number."
+                }
+                p {
+                    span { class: "px-1 rounded bg-amber-900/40 text-amber-300", "ag-level" }
+                    " — the LRU cache sits in ag's process in front of ort; hits never reach the runtime."
+                }
+                p { class: "text-gray-400",
+                    "Longer write-up at "
+                    a { href: "/docu/index/onnx", class: "text-blue-400 hover:text-blue-300 underline",
+                        "/docu/index/onnx"
+                    }
+                    "."
+                }
+            }
+        }
+    }
+}
+
+/// Small badge marking a metric board by which layer produces its numbers.
+fn monitor_layer_tag(label: &'static str, color: &'static str) -> Element {
+    let cls = match color {
+        "blue" => "px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide bg-blue-900/40 text-blue-300 border-blue-700",
+        "amber" => "px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide bg-amber-900/40 text-amber-300 border-amber-700",
+        "purple" => "px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide bg-purple-900/40 text-purple-300 border-purple-700",
+        _ => "px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide bg-gray-700 text-gray-300 border-gray-600",
+    };
+    rsx! {
+        span { class: "{cls}", "{label}" }
+    }
+}
+
 #[derive(Clone, Default)]
 struct OnnxPageState {
     loading: bool,
@@ -82,6 +127,7 @@ pub fn MonitorOnnx() -> Element {
 
             NavTabs { active: Route::MonitorOnnx {} }
 
+            {onnx_vs_ort_monitor_banner()}
 
             div { class: "flex items-center gap-2 mb-3",
                 h3 { class: "text-gray-100 text-base font-semibold", "ONNX Embedding Runtime" }
@@ -285,7 +331,10 @@ pub fn MonitorOnnx() -> Element {
             }
 
             div { class: BOARD_CLASS,
-                h3 { class: "text-gray-200 text-sm font-semibold mb-3", "Model" }
+                div { class: "flex items-center gap-2 mb-3",
+                    h3 { class: "text-gray-200 text-sm font-semibold", "Model" }
+                    {monitor_layer_tag("ONNX file + ag config", "purple")}
+                }
                 div { class: "grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-4",
                     div {
                         p { class: LABEL_CLASS, "Status" }
@@ -307,7 +356,10 @@ pub fn MonitorOnnx() -> Element {
             }
 
             div { class: BOARD_CLASS,
-                h3 { class: "text-gray-200 text-sm font-semibold mb-3", "Embedding Cache (LRU)" }
+                div { class: "flex items-center gap-2 mb-3",
+                    h3 { class: "text-gray-200 text-sm font-semibold", "Embedding Cache (LRU)" }
+                    {monitor_layer_tag("ag-level", "amber")}
+                }
                 div { class: "grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-4",
                     div {
                         p { class: LABEL_CLASS, "Hit rate" }
@@ -338,7 +390,10 @@ pub fn MonitorOnnx() -> Element {
             }
 
             div { class: BOARD_CLASS,
-                h3 { class: "text-gray-200 text-sm font-semibold mb-3", "Throughput (since start)" }
+                div { class: "flex items-center gap-2 mb-3",
+                    h3 { class: "text-gray-200 text-sm font-semibold", "Throughput (since start)" }
+                    {monitor_layer_tag("ort runtime", "blue")}
+                }
                 div { class: "grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-3",
                     div {
                         p { class: LABEL_CLASS, "Single embeds" }
@@ -374,7 +429,10 @@ pub fn MonitorOnnx() -> Element {
             }
 
             div { class: BOARD_CLASS,
-                h3 { class: "text-gray-200 text-sm font-semibold mb-3", "Inference Latency (cache misses only)" }
+                div { class: "flex items-center gap-2 mb-3",
+                    h3 { class: "text-gray-200 text-sm font-semibold", "Inference Latency (cache misses only)" }
+                    {monitor_layer_tag("ort runtime", "blue")}
+                }
                 div { class: "grid grid-cols-2 gap-x-8 gap-y-2",
                     div {
                         p { class: LABEL_CLASS, "Avg embed" }
