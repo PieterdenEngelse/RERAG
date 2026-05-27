@@ -985,6 +985,33 @@ pub async fn extract_text_async(path: &Path) -> Option<String> {
 // Text block, so downstream chunking behaves exactly as before.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Resolve which named extractors to skip for `corpus` given `ct`. Currently
+/// only the Native PDF extractor is corpus-gated: when a corpus opts out (or
+/// inherits a global `LAYOUT_ML_ENABLED=false`), it is excluded from the
+/// registry lookup so PDFs fall through to Docling / pdftotext. For non-PDF
+/// content types this returns an empty slice without hitting SQLite, since
+/// NativePdfExtractor only claims `ContentType::Pdf`.
+fn corpus_extractor_excludes(
+    corpus: &str,
+    ct: &crate::mime_detect::ContentType,
+) -> &'static [&'static str] {
+    if !matches!(ct, crate::mime_detect::ContentType::Pdf) {
+        return &[];
+    }
+    let enabled = match crate::db::chunk_settings::get_db_path()
+        .and_then(|p| rusqlite::Connection::open(p).ok())
+    {
+        Some(conn) => crate::db::corpora::effective_native_pdf_enabled(&conn, corpus),
+        // No DB available — consult the global setting directly.
+        None => crate::settings::effective_bool("LAYOUT_ML_ENABLED", false),
+    };
+    if enabled {
+        &[]
+    } else {
+        &["native_pdf"]
+    }
+}
+
 /// Sync IR extractor: reads bytes, tries external extractors first, then built-in.
 fn extract_ir(path: &Path, corpus: &str) -> Option<crate::doc_ir::DocIR> {
     let bytes = fs::read(path).ok()?;
@@ -993,11 +1020,12 @@ fn extract_ir(path: &Path, corpus: &str) -> Option<crate::doc_ir::DocIR> {
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
     let ct = detect_content_type(&bytes, Some(filename));
+    let exclude = corpus_extractor_excludes(corpus, &ct);
 
     // Try registered external extractors (Docling, etc.)
     if let Some(reg) = crate::extractor::global_registry() {
-        if reg.has_handler(&ct) {
-            if let Some(ir) = reg.extract(bytes, filename, &ct) {
+        if reg.has_handler_filtered(&ct, exclude) {
+            if let Some(ir) = reg.extract_filtered(bytes, filename, &ct, exclude) {
                 return Some(ir);
             }
             // Extractor failed — re-read bytes for built-in fallback.
@@ -1021,20 +1049,23 @@ pub async fn extract_ir_async(path: &Path, corpus: &str) -> Option<crate::doc_ir
         .to_string();
     let ct = detect_content_type(&bytes, Some(&filename));
     let corpus = corpus.to_string();
+    let exclude = corpus_extractor_excludes(&corpus, &ct);
 
     // Offload blocking HTTP call to thread pool.
     // Move `bytes` into the extractor rather than cloning — saves one full copy of the
     // file in RAM. If the external extractor fails we re-read from disk for the fallback
     // (one extra disk read is cheaper than holding two copies of a large file).
     if let Some(reg) = crate::extractor::global_registry() {
-        if reg.has_handler(&ct) {
+        if reg.has_handler_filtered(&ct, exclude) {
             let fname = filename.clone();
             let ct_clone = ct.clone();
             let path_buf = path.to_path_buf();
-            let ir_opt = tokio::task::spawn_blocking(move || reg.extract(bytes, &fname, &ct_clone))
-                .await
-                .ok()
-                .flatten();
+            let ir_opt = tokio::task::spawn_blocking(move || {
+                reg.extract_filtered(bytes, &fname, &ct_clone, exclude)
+            })
+            .await
+            .ok()
+            .flatten();
             if let Some(ir) = ir_opt {
                 let chars = ir.to_plain_text().len();
                 crate::monitoring::record_extraction_format(

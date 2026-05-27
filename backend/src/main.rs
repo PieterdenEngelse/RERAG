@@ -478,22 +478,31 @@ async fn main() -> std::io::Result<()> {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // PHASE 5.7: Initialize External Document Extractors (Docling)
+    // PHASE 5.7+5.8: Register External Document Extractors
+    //
+    // Both Docling (sidecar) and Native PDF (in-process, layout_ml feature)
+    // are collected into a single registry init. NativePdfExtractor is
+    // always registered when the Cargo feature is compiled in; whether it
+    // actually runs for a given PDF is decided per-corpus at extract time
+    // (see `index::corpus_extractor_excludes`). LAYOUT_ML_ENABLED is the
+    // default that new corpora inherit, and controls model pre-warm.
     // ─────────────────────────────────────────────────────────────
 
     {
-        let enabled = std::env::var("DOCLING_ENABLED")
+        let mut extractors: Vec<Box<dyn ag::extractor::DocExtractor>> = Vec::new();
+
+        // Docling sidecar.
+        let docling_enabled = std::env::var("DOCLING_ENABLED")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
-
-        if enabled {
+        if docling_enabled {
             let url = std::env::var("DOCLING_URL")
                 .unwrap_or_else(|_| "http://localhost:5001".to_string());
             info!("🔬 Connecting to Docling sidecar at {}", url);
             let ext = ag::extractor::DoclingExtractor::new(url);
             match ext.health_check() {
                 Ok(()) => {
-                    ag::extractor::init_registry(vec![Box::new(ext)]);
+                    extractors.push(Box::new(ext));
                     info!("✅ Docling extractor registered (PDF/DOCX/PPTX structural extraction)");
                 }
                 Err(e) => {
@@ -503,27 +512,30 @@ async fn main() -> std::io::Result<()> {
         } else {
             debug!("Docling extraction disabled (set DOCLING_ENABLED=true to enable)");
         }
-    }
 
-    // ─────────────────────────────────────────────────────────────
-    // PHASE 5.8: Native In-Process PDF Extractor (layout_ml feature)
-    // ─────────────────────────────────────────────────────────────
+        // Native PDF (layout_ml).
+        #[cfg(feature = "layout_ml")]
+        {
+            let global_default = ag::settings::effective_bool("LAYOUT_ML_ENABLED", false);
+            extractors.push(Box::new(ag::pdf::native_extractor::NativePdfExtractor));
+            if global_default {
+                // Pre-warm models on a blocking thread so they're ready before first upload.
+                tokio::task::spawn_blocking(|| {
+                    ag::pdf::layout_model::LayoutModel::load_or_heuristic();
+                    ag::pdf::table_model::TableModel::load_or_text();
+                });
+                info!(
+                    "✅ NativePdfExtractor registered + models pre-warmed (LAYOUT_ML_ENABLED=true is the corpus default)"
+                );
+            } else {
+                info!(
+                    "✓ NativePdfExtractor registered; corpus default is off (set LAYOUT_ML_ENABLED=true or opt in per-corpus on /config/corpus). Models lazy-load on first use."
+                );
+            }
+        }
 
-    #[cfg(feature = "layout_ml")]
-    {
-        let enabled = ag::settings::effective_bool("LAYOUT_ML_ENABLED", false);
-
-        if enabled {
-            // Pre-warm models on a blocking thread so they're ready before first upload.
-            tokio::task::spawn_blocking(|| {
-                ag::pdf::layout_model::LayoutModel::load_or_heuristic();
-                ag::pdf::table_model::TableModel::load_or_text();
-            });
-            let native = ag::pdf::native_extractor::NativePdfExtractor;
-            ag::extractor::init_registry(vec![Box::new(native)]);
-            info!("✅ NativePdfExtractor registered (native in-process PDF extraction)");
-        } else {
-            debug!("Native PDF extraction disabled (set LAYOUT_ML_ENABLED=true to enable)");
+        if !extractors.is_empty() {
+            ag::extractor::init_registry(extractors);
         }
     }
 

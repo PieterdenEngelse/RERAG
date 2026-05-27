@@ -39,6 +39,8 @@ pub fn ConfigCorpus() -> Element {
     let mut ef_construction_str = use_signal(String::new);
     let mut ef_search_str = use_signal(String::new);
     let mut pq_str = use_signal(String::new);
+    // Native PDF tri-state: "" = inherit global, "true" = on, "false" = off.
+    let mut native_pdf_str = use_signal(String::new);
     let mut saving = use_signal(|| false);
     let mut save_msg = use_signal(|| Option::<String>::None);
 
@@ -57,6 +59,7 @@ pub fn ConfigCorpus() -> Element {
     let mut show_ef_c = use_signal(|| false);
     let mut show_ef_s = use_signal(|| false);
     let mut show_pq = use_signal(|| false);
+    let mut show_native_pdf = use_signal(|| false);
 
     // Build metadata for drift detection
     let mut build_meta = use_signal(|| Option::<api::CorpusBuildMeta>::None);
@@ -82,6 +85,7 @@ pub fn ConfigCorpus() -> Element {
             );
             ef_search_str.set(s.hnsw_ef_search.map(|v| v.to_string()).unwrap_or_default());
             pq_str.set(s.pq_subvectors.map(|v| v.to_string()).unwrap_or_default());
+            native_pdf_str.set(s.native_pdf_enabled.map(|b| b.to_string()).unwrap_or_default());
             build_meta.set(Some(r.build_meta));
         }
         if let Ok(r) = api::fetch_chunk_config().await {
@@ -103,6 +107,7 @@ pub fn ConfigCorpus() -> Element {
         ef_construction_str.set(String::new());
         ef_search_str.set(String::new());
         pq_str.set(String::new());
+        native_pdf_str.set(String::new());
         save_msg.set(None);
         build_meta.set(None);
         spawn(async move {
@@ -118,6 +123,8 @@ pub fn ConfigCorpus() -> Element {
                 );
                 ef_search_str.set(s.hnsw_ef_search.map(|v| v.to_string()).unwrap_or_default());
                 pq_str.set(s.pq_subvectors.map(|v| v.to_string()).unwrap_or_default());
+                native_pdf_str
+                    .set(s.native_pdf_enabled.map(|b| b.to_string()).unwrap_or_default());
                 build_meta.set(Some(r.build_meta));
             }
         });
@@ -133,6 +140,11 @@ pub fn ConfigCorpus() -> Element {
         let ef_c = ef_construction_str().parse::<usize>().ok();
         let ef_s = ef_search_str().parse::<usize>().ok();
         let pq = pq_str().parse::<usize>().ok();
+        let native_pdf = match native_pdf_str().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
         spawn(async move {
             let settings = api::CorpusSettings {
                 search_top_k: top_k,
@@ -141,6 +153,7 @@ pub fn ConfigCorpus() -> Element {
                 hnsw_ef_construction: ef_c,
                 hnsw_ef_search: ef_s,
                 pq_subvectors: pq,
+                native_pdf_enabled: native_pdf,
                 ..Default::default()
             };
             match api::patch_corpus_settings(&slug, &settings).await {
@@ -313,6 +326,7 @@ pub fn ConfigCorpus() -> Element {
                     p { span { class: "text-gray-100 font-medium", "HNSW ef_construction — " } "100. Build-time graph density. Higher = better recall, slower index build." }
                     p { span { class: "text-gray-100 font-medium", "HNSW ef_search — " } "100. Query-time candidate pool. Higher = better recall, slower queries." }
                     p { span { class: "text-gray-100 font-medium", "PQ subvectors — " } "48. Product quantization compression segments. Higher = better recall, less compression." }
+                    p { span { class: "text-gray-100 font-medium", "Native PDF — " } "set by LAYOUT_ML_ENABLED on /config/onnx. Controls whether PDFs in this corpus go through the layout-aware extractor or plain pdftotext. Per-corpus override takes effect on the next upload — no restart, no reindex." }
                 }
             }
             Panel { title: None, refresh: None,
@@ -413,6 +427,21 @@ pub fn ConfigCorpus() -> Element {
                                 oninput: move |evt| pq_str.set(evt.value()),
                             }
                         }
+
+                        div { class: "flex flex-col gap-1",
+                            div { class: "flex items-center gap-1",
+                                label { class: "text-xs text-gray-400 shrink-0", "Native PDF" }
+                                button { class: BTN_CLASS, style: BTN_STYLE, onclick: move |_| show_native_pdf.set(!show_native_pdf()), {info_icon()} }
+                            }
+                            select {
+                                class: "select select-sm select-bordered bg-gray-700 text-gray-200",
+                                value: native_pdf_str(),
+                                onchange: move |evt| native_pdf_str.set(evt.value()),
+                                option { value: "", "— global —" }
+                                option { value: "true",  "on" }
+                                option { value: "false", "off" }
+                            }
+                        }
                     }
 
                     // Info panels expand below
@@ -464,6 +493,15 @@ pub fn ConfigCorpus() -> Element {
                             p { "Product Quantization compresses vectors by splitting each into N sub-vectors and quantizing independently. Fewer subvectors = more compression, lower recall. More = better recall, less compression." }
                             p { "Must divide the embedding dimension evenly. For dim 384: valid values include 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 96, 128, 192, 384. Default 48 ≈ 8× compression." }
                             p { class: "text-yellow-600", "Takes effect only after the PQ index is rebuilt (reindex)." }
+                        }
+                    }
+                    if show_native_pdf() {
+                        div { class: "rounded bg-gray-800 border border-gray-600 p-3 text-xs text-gray-300 space-y-1",
+                            p { "Per-corpus override for the Native PDF Extraction pipeline (Stage 0: lopdf word bboxes → layout classifier → table detection → DocIR with block-type tags)." }
+                            p { span { class: "text-gray-200 font-medium", "on — " } "Use Native PDF for this corpus. Slower but extracts headers, tables, captions, and reading order. Best for papers, manuals, and PDFs with real layout." }
+                            p { span { class: "text-gray-200 font-medium", "off — " } "Skip the Native pipeline. PDFs go through plain pdftotext and arrive as one flat text block. Fast and side-effect-free; best for scratch corpora and bulk text dumps." }
+                            p { span { class: "text-gray-200 font-medium", "global — " } "Inherit the install-wide default (the " span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" } " setting on /config/onnx)." }
+                            p { class: "text-gray-400", "Takes effect on the next upload — no reindex of existing documents is triggered. Existing docs keep whatever extractor produced them; re-upload or reindex to refresh." }
                         }
                     }
 

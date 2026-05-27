@@ -37,16 +37,34 @@ impl ExtractorRegistry {
 
     /// True if any registered extractor claims this content type.
     pub fn has_handler(&self, ct: &ContentType) -> bool {
-        self.extractors.iter().any(|e| e.can_handle(ct))
+        self.has_handler_filtered(ct, &[])
+    }
+
+    /// Like `has_handler` but skips any extractor whose `name()` is in `exclude`.
+    pub fn has_handler_filtered(&self, ct: &ContentType, exclude: &[&str]) -> bool {
+        self.extractors
+            .iter()
+            .any(|e| !exclude.contains(&e.name()) && e.can_handle(ct))
     }
 
     /// Try each extractor in priority order; return the first success.
     /// Bytes are moved into the first matching extractor; cloned only on retry.
     pub fn extract(&self, bytes: Vec<u8>, filename: &str, ct: &ContentType) -> Option<DocIR> {
+        self.extract_filtered(bytes, filename, ct, &[])
+    }
+
+    /// Like `extract` but skips any extractor whose `name()` is in `exclude`.
+    pub fn extract_filtered(
+        &self,
+        bytes: Vec<u8>,
+        filename: &str,
+        ct: &ContentType,
+        exclude: &[&str],
+    ) -> Option<DocIR> {
         let matching: Vec<_> = self
             .extractors
             .iter()
-            .filter(|e| e.can_handle(ct))
+            .filter(|e| !exclude.contains(&e.name()) && e.can_handle(ct))
             .collect();
         let n = matching.len();
         let mut bytes_opt = Some(bytes);

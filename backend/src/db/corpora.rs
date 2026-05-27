@@ -57,6 +57,8 @@ pub struct CorpusSettings {
     pub context_prefix_tokens: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline_stages: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_pdf_enabled: Option<bool>,
 }
 
 /// Build-time parameters recorded after each reindex. Used to detect settings drift.
@@ -147,6 +149,17 @@ pub fn effective_chunker_config(
         cfg.pipeline_stages = v.clone();
     }
     cfg
+}
+
+/// Effective Native PDF Extraction setting for `slug`:
+/// per-corpus override → global LAYOUT_ML_ENABLED → false.
+pub fn effective_native_pdf_enabled(conn: &Connection, slug: &str) -> bool {
+    if let Ok(s) = get_corpus_settings(conn, slug) {
+        if let Some(v) = s.native_pdf_enabled {
+            return v;
+        }
+    }
+    crate::settings::effective_bool("LAYOUT_ML_ENABLED", false)
 }
 
 pub fn get_corpus_build_meta(conn: &Connection, slug: &str) -> Result<CorpusBuildMeta> {
@@ -337,7 +350,18 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("../db/schema.sql"))
             .unwrap();
-        // run v14 migration inline
+        // Apply migrations v15–v17 inline. `schema.sql` only carries the
+        // base table; the `settings` / `build_meta` / `description` columns
+        // are added at runtime by schema_init.rs and must be replayed here
+        // so test code can exercise create_corpus / set_corpus_settings.
+        for ddl in [
+            "ALTER TABLE corpora ADD COLUMN settings TEXT",
+            "ALTER TABLE corpora ADD COLUMN build_meta TEXT",
+            "ALTER TABLE corpora ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+        ] {
+            let _ = conn.execute_batch(ddl);
+        }
+        // v14 migration: seed the default corpus row.
         conn.execute_batch(
             "INSERT OR IGNORE INTO corpora (id, slug, name)
              VALUES (lower(hex(randomblob(16))), 'default', 'Default')",
@@ -379,5 +403,37 @@ mod tests {
             delete_corpus(&conn, "default"),
             Err(CorporaError::CannotDeleteDefault)
         ));
+    }
+
+    #[test]
+    fn native_pdf_override_true() {
+        let conn = fresh_db();
+        create_corpus(&conn, "papers", "Papers", "").unwrap();
+        set_corpus_settings(
+            &conn,
+            "papers",
+            &CorpusSettings {
+                native_pdf_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(effective_native_pdf_enabled(&conn, "papers"));
+    }
+
+    #[test]
+    fn native_pdf_override_false() {
+        let conn = fresh_db();
+        create_corpus(&conn, "scratch", "Scratch", "").unwrap();
+        set_corpus_settings(
+            &conn,
+            "scratch",
+            &CorpusSettings {
+                native_pdf_enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!effective_native_pdf_enabled(&conn, "scratch"));
     }
 }

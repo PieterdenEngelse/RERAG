@@ -118,6 +118,11 @@ pub fn ConfigOnnx() -> Element {
     let mut layout_restart_pending = use_signal(|| false);
     let mut layout_restarting = use_signal(|| false);
     let mut layout_toggle_message = use_signal::<Option<String>>(|| None);
+    // Corpus selector tile (top of page) — read-only view of per-corpus
+    // Native PDF overrides, with a Link to /config/corpus to actually edit.
+    let mut corpora_list = use_signal(Vec::<api::CorpusEntry>::new);
+    let mut selected_corpus = use_signal(|| "default".to_string());
+    let mut selected_corpus_settings = use_signal::<Option<api::CorpusSettings>>(|| None);
     // LAYOUT_ML_MODEL_ID editor — Tier 0 HF Hub spec (e.g. "cmarkea/detr-layout-detection")
     let mut model_id_draft = use_signal::<String>(String::new);
     let mut model_id_saving = use_signal(|| false);
@@ -176,6 +181,14 @@ pub fn ConfigOnnx() -> Element {
                     page_errors.with_mut(|errs| errs.set_error("onnx", &e));
                     let _ = api::log_frontend_error("onnx", &e).await;
                 }
+            }
+        });
+        spawn(async move {
+            if let Ok(list) = api::fetch_corpora().await {
+                corpora_list.set(list);
+            }
+            if let Ok(r) = api::fetch_corpus_settings(&selected_corpus()).await {
+                selected_corpus_settings.set(Some(r.settings));
             }
         });
     });
@@ -269,6 +282,87 @@ pub fn ConfigOnnx() -> Element {
                         }
                     }
 
+                }
+
+                // ═══════════════════════════════════════════════════════════════
+                // CORPUS SELECTOR TILE — first tile on the page
+                //
+                // Read-only view of per-corpus Native PDF overrides.
+                // The actual edit surface lives on /config/corpus; this tile
+                // surfaces "which corpus and what does it currently do" plus
+                // a Link to jump there.
+                // ═══════════════════════════════════════════════════════════════
+                Panel { title: None, refresh: None,
+                    div { class: "flex flex-col gap-2",
+                        div { class: "flex items-center gap-2 flex-wrap",
+                            span { class: "text-base text-gray-100 font-semibold", "Corpus" }
+                            {layer_badge("ag-level")}
+                            select {
+                                class: "select select-sm select-bordered bg-gray-700 text-gray-200 ml-2",
+                                value: selected_corpus(),
+                                onchange: move |evt| {
+                                    let slug = evt.value();
+                                    selected_corpus.set(slug.clone());
+                                    selected_corpus_settings.set(None);
+                                    spawn(async move {
+                                        if let Ok(r) = api::fetch_corpus_settings(&slug).await {
+                                            selected_corpus_settings.set(Some(r.settings));
+                                        }
+                                    });
+                                },
+                                for corpus in corpora_list.read().clone() {
+                                    option {
+                                        value: "{corpus.slug}",
+                                        selected: corpus.slug == selected_corpus(),
+                                        if corpus.doc_count > 0 {
+                                            "{corpus.slug} ({corpus.doc_count} docs)"
+                                        } else {
+                                            "{corpus.slug}"
+                                        }
+                                    }
+                                }
+                            }
+                            Link {
+                                to: Route::ConfigCorpus {},
+                                class: "text-blue-400 hover:text-blue-300 underline text-xs ml-2",
+                                "Manage per-corpus settings →"
+                            }
+                        }
+
+                        // Native PDF status for the selected corpus.
+                        {
+                            let global = config().layout_ml_enabled;
+                            let (override_label, effective) = match selected_corpus_settings()
+                                .and_then(|s| s.native_pdf_enabled)
+                            {
+                                Some(true) => ("on (override)", true),
+                                Some(false) => ("off (override)", false),
+                                None => ("inherit global", global),
+                            };
+                            let eff_class = if effective {
+                                "text-green-400 font-semibold"
+                            } else {
+                                "text-gray-300"
+                            };
+                            rsx! {
+                                div { class: "bg-gray-800 rounded px-2 py-1 text-xs flex items-center gap-3 flex-wrap",
+                                    span { class: "text-gray-400", "Native PDF for this corpus:" }
+                                    span { class: eff_class,
+                                        if effective { "on" } else { "off" }
+                                    }
+                                    span { class: "text-gray-500", "·" }
+                                    span { class: "text-gray-400", "{override_label}" }
+                                    span { class: "text-gray-500", "·" }
+                                    span { class: "text-gray-400",
+                                        "global default: "
+                                        span { class: if global { "text-green-400" } else { "text-gray-300" },
+                                            if global { "on" } else { "off" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // ═══════════════════════════════════════════════════════════════
@@ -387,6 +481,11 @@ pub fn ConfigOnnx() -> Element {
                                         }
                                     }
                                 }
+                            }
+
+                            // Caption: this is the corpus-wide default; per-corpus override lives on /config/corpus.
+                            div { class: "basis-full text-xs text-gray-400 italic",
+                                "This is the default for all corpora — each corpus can override on /config/corpus (no restart needed)."
                             }
 
                             // LAYOUT_ML_MODEL_ID input — Tier 0 HuggingFace Hub
@@ -2872,304 +2971,6 @@ fn layout_ml_model_id_info_modal(mut show: Signal<bool>) -> Element {
                         }
                     }
 
-                    // ── Document types and matching candidates ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Document types and matching candidates" }
-                    p {
-                        "Layout models are trained on a specific corpus and inherit its biases. Match the model to the documents you actually ingest — a PubLayNet model on business reports underperforms in a recoverable but visible way (figures misread as text, sidebars merged with body)."
-                    }
-                    div { class: "overflow-x-auto",
-                        table { class: "w-full text-xs border-collapse",
-                            thead {
-                                tr { class: "border-b border-gray-600",
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Document type" }
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Defining characteristics" }
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Best-fit training corpus" }
-                                    th { class: "text-left py-1 text-gray-400 font-semibold", "HF Hub search keywords" }
-                                }
-                            }
-                            tbody {
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Scientific / academic papers" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Multi-column, figures with captions, dense tables, formulas, references" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "PubLayNet" }
-                                        " (5 or 11 classes, ~360 k pages, arXiv-style)"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "publaynet detr onnx, layout-detection publaynet"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Business reports / annual reports" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Mixed prose + tables, headers/footers, charts, page numbers" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "DocLayNet" }
-                                        " (11 classes, ~80 k pages, broader doc types, CC-BY)"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "doclaynet detr, doclaynet layout-analysis"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Forms (tax, application, intake)" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Labeled fields, checkboxes, signature boxes, fixed templates" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "FUNSD" }
-                                        " / "
-                                        strong { class: "text-gray-100", "CORD" }
-                                        " / "
-                                        strong { class: "text-gray-100", "DocBank" }
-                                        " — better served by LayoutLM-family models (text+vision)"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "funsd detr, form-understanding"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Legal documents / contracts" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Dense single-column, numbered sections, citations, footnotes" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "DocLayNet" }
-                                        " works well; pure-prose corpora like Books also viable"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "doclaynet, legal document layout"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Technical manuals / docs" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Code blocks, diagrams, multi-step procedures, callouts" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "DocLayNet" }
-                                        " (covers manuals) or mixed-corpus models"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "doclaynet, document-layout-detection"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Slides exported to PDF" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Large titles, bullet hierarchy, visual emphasis, sparse text" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        "Vanilla layout models struggle here; "
-                                        strong { class: "text-gray-100", "DocLayNet" }
-                                        " is the least-bad general choice"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "slide layout, presentation layout-detection"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Books / long-form prose" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Single column, chapter headers, sparse figures, page numbers" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        "Any general model — even basic "
-                                        strong { class: "text-gray-100", "PubLayNet" }
-                                        " 5-class works"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "publaynet, book layout"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Financial filings / 10-K / prospectuses" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Heavy tables, KPI grids, footnotes, multi-column" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "DocLayNet" }
-                                        " + a dedicated "
-                                        strong { class: "text-gray-100", "Table Transformer" }
-                                        " for table structure (Tier 2 of a separate pipeline)"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "table-transformer, microsoft/table-transformer-detection"
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Scanned / OCR'd PDFs" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Variable quality, skew, noise, may need preprocessing" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "DocBank" }
-                                        " or DocLayNet-on-scans variants; OCR cleanup matters more than layout choice"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "scanned document layout, ocr layout detection"
-                                    }
-                                }
-                                tr {
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Mixed / general corpus" }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Variable per document — no dominant type" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top",
-                                        strong { class: "text-gray-100", "DocLayNet" }
-                                        " — broadest coverage; safer than PubLayNet for non-paper content"
-                                    }
-                                    td { class: "py-1 text-gray-400 align-top font-mono text-[10px]",
-                                        "document-layout-analysis, doclaynet"
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "Architecture family — speed vs accuracy" }
-                    div { class: "overflow-x-auto",
-                        table { class: "w-full text-xs border-collapse",
-                            thead {
-                                tr { class: "border-b border-gray-600",
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Family" }
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Speed (CPU)" }
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Accuracy" }
-                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Notes" }
-                                }
-                            }
-                            tbody {
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        strong { class: "text-gray-100", "DETR" }
-                                        " (original)"
-                                    }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Slower" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Solid baseline" }
-                                    td { class: "py-1 text-gray-400 align-top",
-                                        "Transformer + ResNet-50. What "
-                                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
-                                        " uses today."
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        strong { class: "text-gray-100", "Deformable-DETR" }
-                                    }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Medium" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Better small-object detection" }
-                                    td { class: "py-1 text-gray-400 align-top", "Most modern PubLayNet / DocLayNet exports use this. Faster convergence in training, better recall on captions and footnotes." }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        strong { class: "text-gray-100", "DINO / DETR-v2" }
-                                    }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Medium" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Higher accuracy" }
-                                    td { class: "py-1 text-gray-400 align-top", "Improved query initialization and denoising. ONNX exports are less common — search carefully." }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        strong { class: "text-gray-100", "RT-DETR" }
-                                    }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Fast" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Comparable to DETR" }
-                                    td { class: "py-1 text-gray-400 align-top", "Designed for real-time inference. Good fit for CPU-only ingestion if you can find a layout-finetuned export." }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        strong { class: "text-gray-100", "YOLOS" }
-                                    }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "Fast" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Solid for objects" }
-                                    td { class: "py-1 text-gray-400 align-top", "Vision transformer adapted for detection. Less common for layout, but lightweight." }
-                                }
-                                tr {
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        strong { class: "text-gray-100", "LayoutLMv3 / Donut" }
-                                    }
-                                    td { class: "py-1 pr-3 text-gray-400 align-top", "—" }
-                                    td { class: "py-1 pr-3 text-gray-300 align-top", "Highest for forms" }
-                                    td { class: "py-1 text-gray-400 align-top",
-                                        "Not pure detection — combine text + vision + position embeddings. "
-                                        strong { class: "text-yellow-400", "Won't work with this pipeline as-is" }
-                                        " — they require a different inference contract than DETR. Future expansion."
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    p { class: "text-gray-400",
-                        "On a CPU-only box (no GPU), prefer "
-                        strong { class: "text-gray-100", "Deformable-DETR" }
-                        " or "
-                        strong { class: "text-gray-100", "RT-DETR" }
-                        " over original DETR — better speed/accuracy ratio. If ingestion latency matters more than ceiling accuracy, also try INT8-quantized variants ("
-                        span { class: "font-mono text-gray-100", "model_quantized.onnx" }
-                        " in the repo's file list)."
-                    }
-
-                    // ── Combining corpus + architecture ──
-                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "Combining corpus and architecture" }
-                    p {
-                        "The two tables above describe "
-                        strong { class: "text-gray-100", "orthogonal axes" }
-                        ". A model on HF Hub is the cross-product: "
-                        em { "an architecture fine-tuned on a corpus." }
-                        " Pick one row from each table and search for repos that combine them. HF Hub repo names usually encode both: "
-                        span { class: "font-mono text-gray-100", "<owner>/<arch>-<corpus>-<task>" }
-                        " — e.g., your current "
-                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
-                        " is "
-                        strong { class: "text-gray-100", "DETR" }
-                        " + "
-                        strong { class: "text-gray-100", "PubLayNet" }
-                        " (11 classes) + layout-detection task."
-                    }
-                    p { "Common combinations to look for, ordered roughly by how often you'll find ONNX exports on HF Hub:" }
-                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
-                        li {
-                            strong { class: "text-gray-100", "DETR + PubLayNet" }
-                            " — vanilla baseline. Best documented, most exports. Fits scientific papers. "
-                            em { "Many repos." }
-                        }
-                        li {
-                            strong { class: "text-gray-100", "Deformable-DETR + DocLayNet" }
-                            " — the modern default. Broader doc coverage, better small-object recall (captions, footnotes). Fits business reports, legal, manuals, mixed corpora. "
-                            em { "Several repos; search for "}
-                            span { class: "font-mono text-gray-100 text-[10px]", "deformable-detr doclaynet onnx" }
-                            "."
-                        }
-                        li {
-                            strong { class: "text-gray-100", "Deformable-DETR + PubLayNet" }
-                            " — papers with better accuracy than vanilla DETR. "
-                            em { "A few repos." }
-                        }
-                        li {
-                            strong { class: "text-gray-100", "DETR + DocLayNet" }
-                            " — older option if you want DocLayNet coverage but a DINO/Deformable export isn't available. "
-                            em { "Several repos." }
-                        }
-                        li {
-                            strong { class: "text-gray-100", "RT-DETR + (PubLayNet or DocLayNet)" }
-                            " — faster inference, ideal for high-volume ingestion on weak hardware. "
-                            em { "Fewer repos; check carefully before committing." }
-                        }
-                        li {
-                            strong { class: "text-gray-100", "DINO / DETR-v2 + DocLayNet" }
-                            " — research-quality accuracy. "
-                            em { "Rare in ONNX form; you may need to convert from PyTorch yourself." }
-                        }
-                        li {
-                            strong { class: "text-gray-100", "Table Transformer + PubTables-1M" }
-                            " — table structure recognition specifically. Not a general layout model — used "
-                            em { "in addition to" }
-                            " a layout model on table regions. "
-                            span { class: "font-mono text-gray-100", "microsoft/table-transformer-structure-recognition" }
-                            " is the canonical pick."
-                        }
-                    }
-
-                    p { class: "text-gray-400",
-                        "Decision pattern: "
-                        strong { class: "text-gray-100", "(1)" }
-                        " pick the corpus row that matches your document mix from the first table, "
-                        strong { class: "text-gray-100", "(2)" }
-                        " pick an architecture from the second table based on speed/accuracy preference, "
-                        strong { class: "text-gray-100", "(3)" }
-                        " search HF Hub for "
-                        span { class: "font-mono text-gray-100", "<arch> <corpus> onnx" }
-                        " and verify a "
-                        span { class: "font-mono text-gray-100", "model.onnx" }
-                        " file exists in the repo. If only PyTorch weights are published, you can convert with "
-                        span { class: "font-mono text-gray-100", "optimum-cli export onnx" }
-                        " — but that's its own workflow beyond Tier 0's auto-download path."
-                    }
-
                     // ── Verification workflow ──
                     h3 { class: "text-gray-100 font-semibold pt-2", "Verification workflow" }
                     ol { class: "list-decimal pl-5 space-y-1 text-gray-300",
@@ -3221,123 +3022,80 @@ fn layout_ml_model_id_info_modal(mut show: Signal<bool>) -> Element {
                         li { "Tracking upstream model updates — hf-hub respects revision pins; without one you get the latest commit." }
                     }
 
-                    // ── Tier 0 vs Tier 1: same mechanism, different file source ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Tier 0 vs Tier 1 — same mechanism, different file source" }
+                    // ── Effect on quality of skipping Tier 0 ──
+                    h3 { class: "text-gray-100 font-semibold pt-2", "Effect on quality of skipping Tier 0" }
                     p {
-                        strong { class: "text-gray-100", "Tier 0 and Tier 1 are the same mechanism with different file sources." }
-                        " Both load a DETR-style ONNX model into an "
-                        span { class: "font-mono text-gray-100", "ort" }
-                        " session and run it on rendered page images. "
-                        strong { class: "text-gray-100", "Accuracy is determined by which model file is loaded, not by which tier loaded it." }
+                        strong { class: "text-gray-100", "The tier number is operational, not quality." }
+                        " Classification quality depends on "
+                        em { "which model file" }
+                        " is loaded, not on which tier mechanism loaded it. Skipping Tier 0 has zero quality impact "
+                        em { "if" }
+                        " Tier 1 points at the same model."
                     }
-                    p { "Reframing it correctly:" }
-                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
-                        li {
-                            strong { class: "text-gray-100", "Tier 0 (" }
-                            span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID" }
-                            strong { class: "text-gray-100", "):" }
-                            " \"fetch a DETR ONNX from HuggingFace Hub, cache it under "
-                            span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
-                            "\""
-                        }
-                        li {
-                            strong { class: "text-gray-100", "Tier 1 (" }
-                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
-                            strong { class: "text-gray-100", "):" }
-                            " \"load a DETR ONNX from a path you specified\""
-                        }
-                    }
-                    p {
-                        "If both point at the "
-                        strong { class: "text-gray-100", "same" }
-                        " model (e.g., your current "
-                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
-                        "), accuracy is "
-                        strong { class: "text-gray-100", "bit-identical" }
-                        " — same weights, same inference graph, same outputs. The tier label is purely about provenance / operations."
-                    }
-
-                    // ── Where accuracy would differ ──
-                    h4 { class: "text-gray-200 font-semibold text-xs pt-1", "Where accuracy would differ" }
+                    h4 { class: "text-gray-200 font-semibold text-xs pt-1", "What changes when Tier 0 → Tier 1 (same model file)" }
                     div { class: "overflow-x-auto",
                         table { class: "w-full text-xs border-collapse",
                             thead {
                                 tr { class: "border-b border-gray-600",
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Scenario" }
-                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Effect" }
+                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Aspect" }
+                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Result" }
                                 }
                             }
                             tbody {
                                 tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        "Tier 0 points at "
-                                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
-                                        ", Tier 1 points at the same model on disk"
-                                    }
-                                    td { class: "py-1 text-green-400 align-top",
-                                        strong { "Identical accuracy." }
-                                    }
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Bounding-box accuracy" }
+                                    td { class: "py-1 text-green-400", "Identical — same ONNX bytes, same weights" }
                                 }
                                 tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        "Tier 0 points at "
-                                        span { class: "font-mono text-gray-100", "someone/docbank-detr-v2" }
-                                        ", Tier 1 has the older cmarkea model"
-                                    }
-                                    td { class: "py-1 text-gray-300 align-top",
-                                        strong { class: "text-yellow-400", "Different — depends on the model. " }
-                                        "Newer / better-trained models will be more accurate; older / smaller ones less. The tier tells you nothing about this."
-                                    }
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Class assignment" }
+                                    td { class: "py-1 text-green-400", "Identical — same softmax over same logits" }
                                 }
                                 tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        "Tier 0 and Tier 1 point at "
-                                        em { "differently quantized" }
-                                        " files of the same model — e.g. Tier 0 at "
-                                        span { class: "font-mono text-gray-100", "model_quantized.onnx" }
-                                        " (INT8), Tier 1 at "
-                                        span { class: "font-mono text-gray-100", "model.onnx" }
-                                        " (FP32)"
-                                    }
-                                    td { class: "py-1 text-gray-300 align-top",
-                                        strong { class: "text-yellow-400", "Different — the INT8 file runs ~2-3× faster with measurably less accuracy. " }
-                                        "Quantization is a property of the "
-                                        em { "file" }
-                                        ", not the tier — both tiers run whatever ONNX bytes they're given, as-is. Swap which file goes where and the difference flips with them."
-                                    }
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Per-page latency" }
+                                    td { class: "py-1 text-green-400", "Identical — same compute graph" }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "First-boot delay" }
+                                    td { class: "py-1 text-gray-300", "Faster — no HF Hub download (Tier 0 incurs a one-time ~100 MB pull)" }
+                                }
+                                tr { class: "border-b border-gray-700/50",
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Offline behaviour" }
+                                    td { class: "py-1 text-gray-300", "Works — Tier 0 needs a populated cache or network on first boot" }
                                 }
                                 tr {
-                                    td { class: "py-1 pr-3 text-gray-200 align-top",
-                                        "Tier 0 set, model fails to download → fallthrough to Tier 1"
-                                    }
-                                    td { class: "py-1 text-gray-300 align-top",
-                                        "Whatever Tier 1's local model is, that's the accuracy."
-                                    }
+                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Upstream updates" }
+                                    td { class: "py-1 text-gray-300", "Frozen at the staged file (Tier 0 pulls latest unless revision-pinned)" }
                                 }
                             }
                         }
                     }
-
-                    // ── Resilience vs quality ──
-                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "The hierarchy is about resilience, not quality" }
-                    p { class: "text-gray-300",
-                        "It's there so that if Tier 0 can't reach HF Hub (offline machine, network blip) or the downloaded file is corrupted, ag automatically falls through to whatever local file you've staged — and from there to the word-feature ORT classifier ("
-                        strong { class: "text-yellow-400", "genuinely less accurate" }
-                        ", sees only geometry), and finally to the pure-Rust heuristic ("
-                        strong { class: "text-yellow-400", "least accurate" }
-                        ", font-size rules only)."
-                    }
-                    p { class: "text-gray-300",
-                        "So the right question isn't "
-                        em { "\"is Tier 0 more accurate?\"" }
-                        " but "
-                        strong { class: "text-gray-100", "\"which model file do I want loaded?\"" }
-                        " — then pick the tier (= delivery mechanism) that's most convenient. On a single dev box, Tier 1 with the locally-staged "
-                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
-                        " and Tier 0 set to the same HF repo would behave identically; the only difference is whether ag re-downloads on a fresh machine."
+                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "Where quality actually changes" }
+                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
+                        li {
+                            "Tier 1 also misses → "
+                            strong { class: "text-yellow-400", "Tier 2" }
+                            " ("
+                            span { class: "font-mono text-gray-100", "LAYOUT_ORT_MODEL_PATH" }
+                            ", word-feature ONNX). "
+                            em { "Notable drop." }
+                            " Word-feature ORT classifies from text + geometry only — it cannot see page pixels. Tables and figures get misclassified more often, especially in sparse documents."
+                        }
+                        li {
+                            "Tier 2 also misses → "
+                            strong { class: "text-yellow-400", "heuristic" }
+                            " (pure-Rust rules). "
+                            em { "Big drop on complex layouts." }
+                            " Font-size + position rules work on single-column prose, struggle on multi-column papers, mixed text/figures, dense tables."
+                        }
+                        li {
+                            strong { class: "text-yellow-400", "You point Tier 0 at a different DETR model than Tier 1. " }
+                            "Variable — depends on the model. A model trained on the wrong corpus (PubLayNet for business docs, DocLayNet for papers) underperforms. A mismatched "
+                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_NUM_CLASSES" }
+                            " returns gibberish."
+                        }
                     }
                     p { class: "text-gray-400",
-                        "The "
+                        "Quality concerns kick in only if Tier 1 itself fails to load. The "
                         em { "Layout model:" }
                         " chip on this page tells you which tier is currently active — as long as it shows "
                         span { class: "font-mono text-gray-100", "DETR (local: …)" }

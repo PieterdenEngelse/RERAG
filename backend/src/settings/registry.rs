@@ -207,7 +207,7 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
     // compiled in for these to do anything.
     KnownKey {
         key: "LAYOUT_ML_ENABLED",
-        description: "Turn on the Native PDF Extraction pipeline (Stage 0 — lopdf word bboxes, layout classification, table detection, DocIR assembly). Without it, PDFs go through the plain pdftotext cascade and arrive at the chunker without block-type tags. Requires the layout_ml Cargo feature in the binary; check the Feature compiled tile on /config/onnx.",
+        description: "Default for new corpora: turn on the Native PDF Extraction pipeline (Stage 0 — lopdf word bboxes, layout classification, table detection, DocIR assembly). Without it, PDFs go through the plain pdftotext cascade and arrive at the chunker without block-type tags. Each corpus can override this on /config/corpus (no restart needed). Requires the layout_ml Cargo feature in the binary; check the Feature compiled tile on /config/onnx.",
         kind: Kind::Bool,
         default: Some("false"),
         category: "pdf",

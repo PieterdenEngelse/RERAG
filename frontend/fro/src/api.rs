@@ -4361,6 +4361,7 @@ pub struct CorpusSettings {
     pub context_prefix_enabled: Option<bool>,
     pub context_prefix_tokens: Option<usize>,
     pub pipeline_stages: Option<String>,
+    pub native_pdf_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
