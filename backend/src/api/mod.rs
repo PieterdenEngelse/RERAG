@@ -230,146 +230,20 @@ pub fn get_knowledge_builder() -> Option<()> {
     None
 }
 
-/// Process a document and its chunks through the knowledge graph
-/// This extracts entities and stores them in FalkorDB
+/// Thin wrapper around `crate::graph::index_to_knowledge_graph` that resolves
+/// the globally-registered KnowledgeBuilder.  The actual NER + reconciler
+/// pipeline lives in `crate::graph::mod.rs` so there's only one copy.
 #[cfg(feature = "graph")]
 pub async fn index_to_knowledge_graph(
     doc_id: &str,
     title: &str,
     source: &str,
-    chunks: &[(String, String)], // (chunk_id, chunk_content)
+    chunks: &[(String, String)],
 ) {
-    use crate::graph::knowledge_builder::{ChunkMeta, DocumentMeta};
-    use crate::tools::entity_extractor::EntityExtractorTool;
-    use tracing::{debug, warn};
-
     let Some(kb) = get_knowledge_builder() else {
         return;
     };
-
-    // Check if entity extraction is enabled
-    let config = crate::graph::config::GraphConfig::from_env();
-    if !config.entity_extraction.enabled {
-        debug!("Entity extraction disabled, skipping knowledge graph indexing");
-        return;
-    }
-
-    // Add document to graph
-    let doc_meta = DocumentMeta {
-        id: doc_id.to_string(),
-        title: title.to_string(),
-        source: source.to_string(),
-        content_hash: {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            title.hash(&mut hasher);
-            format!("{:016x}", hasher.finish())
-        },
-        mime_type: "text/plain".to_string(),
-        chunk_count: chunks.len(),
-    };
-
-    if let Err(e) = kb.add_document(&doc_meta).await {
-        warn!(error = %e, doc_id = %doc_id, "Failed to add document to knowledge graph");
-        return;
-    }
-
-    // Process each chunk
-    let extractor = EntityExtractorTool::new();
-    let confidence_threshold = config.entity_extraction.confidence_threshold;
-    let ner_batch_size = crate::db::ner_settings::global_config().batch_size.max(1);
-
-    // Phase 1: add all chunks to the graph, collect the ones that succeeded.
-    let mut valid: Vec<(&str, &str)> = Vec::with_capacity(chunks.len());
-    for (chunk_id, chunk_content) in chunks {
-        tokio::task::yield_now().await;
-        let chunk_meta = ChunkMeta {
-            id: chunk_id.clone(),
-            document_id: doc_id.to_string(),
-            content: chunk_content.clone(),
-            embedding_id: chunk_id.clone(),
-            position: chunk_id
-                .split('#')
-                .next_back()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
-            token_count: chunk_content.split_whitespace().count(),
-        };
-        if let Err(e) = kb.add_chunk(&chunk_meta).await {
-            warn!(error = %e, chunk_id = %chunk_id, "Failed to add chunk to knowledge graph");
-        } else {
-            valid.push((chunk_id, chunk_content));
-        }
-    }
-
-    // Phase 2: batched NER — one ONNX call per batch of ner_batch_size chunks.
-    let texts: Vec<&str> = valid.iter().map(|(_, c)| *c).collect();
-    let ner_results: Vec<Vec<crate::tools::ner_extractor::NerEntity>> = texts
-        .chunks(ner_batch_size)
-        .flat_map(crate::tools::ner_extractor::extract_entities_batch)
-        .collect();
-
-    // Phase 3: entity mentions, regex fallback, co-occurrence links.
-    for (i, (chunk_id, chunk_content)) in valid.iter().enumerate() {
-        let ner_entities = &ner_results[i];
-        let use_ner = !ner_entities.is_empty();
-        if use_ner {
-            for ner_entity in ner_entities {
-                if let Err(e) = kb
-                    .add_entity_mention(
-                        chunk_id,
-                        &ner_entity.text,
-                        &ner_entity.label,
-                        ner_entity.score,
-                    )
-                    .await
-                {
-                    debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
-                }
-            }
-        }
-        let extraction = extractor.extract(chunk_content);
-        for entity in &extraction.entities {
-            if !use_ner && entity.confidence >= confidence_threshold {
-                if let Err(e) = kb
-                    .add_entity_mention(
-                        chunk_id,
-                        &entity.text,
-                        entity.entity_type.label(),
-                        entity.confidence,
-                    )
-                    .await
-                {
-                    debug!(error = %e, entity = %entity.text, "Failed to add entity mention");
-                }
-            }
-        }
-        let high_confidence_entities: Vec<_> = extraction
-            .entities
-            .iter()
-            .filter(|e| e.confidence >= confidence_threshold)
-            .collect();
-        for i in 0..high_confidence_entities.len() {
-            for j in (i + 1)..high_confidence_entities.len() {
-                let e1 = &high_confidence_entities[i];
-                let e2 = &high_confidence_entities[j];
-                let _ = kb
-                    .link_entities(
-                        &e1.text,
-                        &e2.text,
-                        "co_occurs_with",
-                        (e1.confidence + e2.confidence) / 2.0,
-                    )
-                    .await;
-            }
-        }
-    }
-
-    debug!(
-        doc_id = %doc_id,
-        chunks = chunks.len(),
-        "Indexed document to knowledge graph"
-    );
+    crate::graph::index_to_knowledge_graph(kb.as_ref(), doc_id, title, source, chunks).await;
 }
 
 #[cfg(not(feature = "graph"))]
@@ -704,6 +578,10 @@ pub enum ChatMode {
     RagStrict,
     /// Agentic mode: LLM-driven tool-use loop (Rig integration)
     Agentic,
+    /// Proxy-pointer RAG: hydrate full sections from the matched chunks'
+    /// section_ids before handing the LLM context.
+    #[serde(alias = "pointer_rag")]
+    PointerRag,
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]

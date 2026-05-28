@@ -51,6 +51,12 @@ impl KnowledgeBuilder {
         Self { graph, config }
     }
 
+    /// Cloneable handle to the underlying graph connection — used by helpers
+    /// (e.g. EntityReconciler) that need to issue their own Cypher.
+    pub fn graph(&self) -> &GraphHandle {
+        &self.graph
+    }
+
     /// Add a document to the knowledge graph
     pub async fn add_document(&self, doc: &DocumentMeta) -> Result<(), GraphClientError> {
         let params = params! {
@@ -146,6 +152,35 @@ impl KnowledgeBuilder {
             .await?;
 
         Ok(rows.first().map(|r| row_str(r, 0)).unwrap_or_default())
+    }
+
+    /// Attach an existing :Entity (already reconciled to a canonical id) to a
+    /// :Chunk via a :MENTIONS edge.  Splits the responsibility of
+    /// `add_entity_mention` so the reconciler owns node creation/merging while
+    /// this method only manages the edge.
+    pub async fn add_mention(
+        &self,
+        chunk_id: &str,
+        entity_id: &str,
+        surface_form: &str,
+        confidence: f32,
+    ) -> Result<(), GraphClientError> {
+        let params = params! {
+            "chunk_id" => lit::str(chunk_id),
+            "entity_id" => lit::str(entity_id),
+            "surface" => lit::str(surface_form),
+            "confidence" => lit::float(confidence as f64),
+        };
+        self.graph
+            .run(
+                "MATCH (c:Chunk {id: $chunk_id}), (e:Entity {id: $entity_id})
+                 MERGE (c)-[m:MENTIONS]->(e)
+                 SET m.surface_form = $surface,
+                     m.confidence = $confidence",
+                &params,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Create a relationship between two entities

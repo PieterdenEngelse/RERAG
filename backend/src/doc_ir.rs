@@ -187,7 +187,11 @@ impl DocIR {
         if let Some(t) = self.metadata.get("extractor") {
             return t;
         }
-        if let Some(t) = self.blocks.first().and_then(|b| b.metadata.get("extractor")) {
+        if let Some(t) = self
+            .blocks
+            .first()
+            .and_then(|b| b.metadata.get("extractor"))
+        {
             return t;
         }
         "external"
@@ -214,4 +218,12 @@ pub struct ChunkMeta {
     pub page: Option<u32>,
     /// Extractor that produced the source DocIR ("builtin", "docling", "unstructured").
     pub extractor: String,
+    /// Ancestor heading chain (root → leaf), e.g. ["AMD", "Financial Statements", "Cash Flows"].
+    /// Empty for content before the first header.
+    #[serde(default)]
+    pub heading_path: Vec<String>,
+    /// UUID shared by all chunks within the same heading-bounded section.
+    /// Empty for content carved off before any boundary (rare; covers pre-header text).
+    #[serde(default)]
+    pub section_id: String,
 }

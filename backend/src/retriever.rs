@@ -20,12 +20,11 @@ use tantivy::{
     collector::TopDocs,
     directory::error::OpenDirectoryError,
     directory::{MmapDirectory, RamDirectory},
-    query::QueryParser,
-    query::QueryParserError,
-    schema::{Field, Schema, Value, STORED, TEXT},
-    Index, IndexWriter, TantivyError,
+    query::{QueryParser, QueryParserError, TermQuery},
+    schema::{Field, IndexRecordOption, Schema, Value, STORED, STRING, TEXT},
+    Index, IndexWriter, TantivyError, Term,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Custom error type for Retriever operations
 #[derive(Debug, Serialize, Deserialize)]
@@ -190,6 +189,9 @@ pub struct Retriever {
     pub title_field: Field,
     pub content_field: Field,
     pub doc_id_field: Field,
+    /// Section identifier (UUID per heading-bounded run); STRING+STORED for exact lookups.
+    /// Optional at write time so older indices missing this field keep working.
+    pub section_id_field: Field,
     pub doc_id_to_vector_idx: HashMap<String, usize>,
     pub vector_file_path: String,
     pub auto_save_threshold: usize,
@@ -531,6 +533,8 @@ impl Retriever {
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let content_field = schema_builder.add_text_field("content", TEXT | STORED);
         let doc_id_field = schema_builder.add_text_field("doc_id", TEXT | STORED);
+        // STRING (not TEXT) → no tokenization; UUIDs match exactly via TermQuery.
+        let section_id_field = schema_builder.add_text_field("section_id", STRING | STORED);
         let schema = schema_builder.build();
         let index = if index_in_ram {
             info!("INDEX_IN_RAM=true: opening Tantivy index in RamDirectory (heap-allocated, re-indexed on every start)");
@@ -538,7 +542,22 @@ impl Retriever {
         } else {
             fs::create_dir_all(index_dir)?;
             let dir = MmapDirectory::open(index_dir)?;
-            Index::open_or_create(dir, schema)?
+            match Index::open_or_create(dir, schema.clone()) {
+                Ok(idx) => idx,
+                Err(TantivyError::SchemaError(msg)) => {
+                    warn!(
+                        index_dir = %index_dir,
+                        error = %msg,
+                        "Tantivy schema changed since last run — wiping on-disk index and \
+                         rebuilding. Indexed corpus will be re-ingested from sources."
+                    );
+                    fs::remove_dir_all(index_dir)?;
+                    fs::create_dir_all(index_dir)?;
+                    let dir = MmapDirectory::open(index_dir)?;
+                    Index::open_or_create(dir, schema)?
+                }
+                Err(e) => return Err(e.into()),
+            }
         };
 
         let vector_file_path_owned = vector_file_path.to_string();
@@ -549,6 +568,7 @@ impl Retriever {
             title_field,
             content_field,
             doc_id_field,
+            section_id_field,
             doc_id_to_vector_idx: HashMap::new(),
             vector_file_path: vector_file_path_owned.clone(),
             auto_save_threshold: 100,
@@ -2018,12 +2038,96 @@ impl Retriever {
         vector: Vec<f32>,
         meta: Option<crate::doc_ir::ChunkMeta>,
     ) -> Result<(), RetrieverError> {
-        self.add_document(chunk_id, chunk_id, chunk_text)?;
+        // Write the Tantivy doc inline so we can stamp the section_id field
+        // alongside the standard text fields. Mirrors add_document's behavior
+        // plus the section_id write.
+        let section_id = meta
+            .as_ref()
+            .map(|m| m.section_id.clone())
+            .unwrap_or_default();
+        if self.batch_mode {
+            let mut doc = tantivy::TantivyDocument::default();
+            doc.add_text(self.doc_id_field, chunk_id);
+            doc.add_text(self.title_field, chunk_id);
+            doc.add_text(self.content_field, chunk_text);
+            if !section_id.is_empty() {
+                doc.add_text(self.section_id_field, &section_id);
+            }
+            self.doc_id_to_content
+                .insert(chunk_id.to_string(), chunk_text.to_string());
+            self.content_to_chunk_id
+                .insert(content_hash(chunk_text), chunk_id.to_string());
+            let writer = self
+                .index_writer
+                .as_mut()
+                .ok_or_else(|| RetrieverError::IndexError("No writer available".to_string()))?;
+            writer.add_document(doc)?;
+        } else {
+            let mut doc = tantivy::TantivyDocument::default();
+            doc.add_text(self.doc_id_field, chunk_id);
+            doc.add_text(self.title_field, chunk_id);
+            doc.add_text(self.content_field, chunk_text);
+            if !section_id.is_empty() {
+                doc.add_text(self.section_id_field, &section_id);
+            }
+            let mut index_writer = self.index.writer(256_000_000)?;
+            index_writer.add_document(doc)?;
+            index_writer.commit()?;
+            self.content_to_chunk_id
+                .insert(content_hash(chunk_text), chunk_id.to_string());
+            self.clear_cache();
+            self.metrics.total_documents_indexed += 1;
+        }
         self.add_vector_with_id(chunk_id.to_string(), vector);
         if let Some(m) = meta {
             self.doc_id_to_meta.insert(chunk_id.to_string(), m);
         }
         Ok(())
+    }
+
+    /// Reassemble every chunk in a section (matched on the stored `section_id`
+    /// Tantivy field), returned in document/insert order. The first chunk lookup
+    /// happens via TermQuery on the STRING field; subsequent calls hit the cache.
+    ///
+    /// Returns the joined section text. Empty section_id yields an empty string.
+    pub fn fetch_section(&self, section_id: &str) -> Result<String, RetrieverError> {
+        if section_id.is_empty() {
+            return Ok(String::new());
+        }
+        let reader = self.index.reader()?;
+        let searcher = reader.searcher();
+        let term = Term::from_field_text(self.section_id_field, section_id);
+        let query = TermQuery::new(term, IndexRecordOption::Basic);
+        // Cap at 1k chunks/section — sections that large are pathological.
+        let top = searcher.search(&query, &TopDocs::with_limit(1000))?;
+
+        // (chunk_position_in_doc, content) — sort by position so we reassemble
+        // in original order. Position is encoded after '#' in doc_id (see
+        // index.rs's chunk_id format: "{filename}#{i}").
+        let mut pieces: Vec<(usize, String)> = Vec::with_capacity(top.len());
+        for (_score, addr) in top {
+            let doc = searcher.doc::<tantivy::TantivyDocument>(addr)?;
+            let chunk_id = doc
+                .get_first(self.doc_id_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let pos = chunk_id
+                .rsplit_once('#')
+                .and_then(|(_, n)| n.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let content = doc
+                .get_first(self.content_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            pieces.push((pos, content));
+        }
+        pieces.sort_by_key(|(p, _)| *p);
+        Ok(pieces
+            .into_iter()
+            .map(|(_, c)| c)
+            .collect::<Vec<_>>()
+            .join("\n\n"))
     }
 
     /// Incrementally delete all chunks belonging to a document from both Tantivy and the vector store.

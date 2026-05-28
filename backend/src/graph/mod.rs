@@ -21,6 +21,8 @@ pub mod agent_memory_graph;
 #[cfg(feature = "graph")]
 pub mod client;
 #[cfg(feature = "graph")]
+pub mod entity_reconciler;
+#[cfg(feature = "graph")]
 pub mod graph_retriever;
 #[cfg(feature = "graph")]
 pub mod knowledge_builder;
@@ -96,6 +98,18 @@ pub async fn index_to_knowledge_graph(
     let confidence_threshold = graph_config.entity_extraction.confidence_threshold;
     let ner_batch_size = crate::db::ner_settings::global_config().batch_size.max(1);
 
+    // Reconciler is built per-document so the LLM tiebreak budget resets.
+    // When disabled, we leave it as None and the original lowercase-MERGE
+    // path runs unchanged.
+    let reconciler = if graph_config.entity_extraction.reconcile_enabled {
+        Some(entity_reconciler::EntityReconciler::new(
+            kb.graph().clone(),
+            graph_config.entity_extraction.clone(),
+        ))
+    } else {
+        None
+    };
+
     // Phase 1: add all chunks to the graph, collect the ones that succeeded.
     let mut valid: Vec<(&str, &str)> = Vec::with_capacity(chunks.len());
     for (chunk_id, chunk_content) in chunks {
@@ -132,14 +146,16 @@ pub async fn index_to_knowledge_graph(
         let use_ner = !ner_entities.is_empty();
         if use_ner {
             for ner_entity in ner_entities {
-                if let Err(e) = kb
-                    .add_entity_mention(
-                        chunk_id,
-                        &ner_entity.text,
-                        &ner_entity.label,
-                        ner_entity.score,
-                    )
-                    .await
+                if let Err(e) = write_mention(
+                    kb,
+                    reconciler.as_ref(),
+                    chunk_id,
+                    chunk_content,
+                    &ner_entity.text,
+                    &ner_entity.label,
+                    ner_entity.score,
+                )
+                .await
                 {
                     debug!(error = %e, entity = %ner_entity.text, "Failed to add NER entity");
                 }
@@ -148,14 +164,16 @@ pub async fn index_to_knowledge_graph(
         let extraction = extractor.extract(chunk_content);
         for entity in &extraction.entities {
             if !use_ner && entity.confidence >= confidence_threshold {
-                if let Err(e) = kb
-                    .add_entity_mention(
-                        chunk_id,
-                        &entity.text,
-                        entity.entity_type.label(),
-                        entity.confidence,
-                    )
-                    .await
+                if let Err(e) = write_mention(
+                    kb,
+                    reconciler.as_ref(),
+                    chunk_id,
+                    chunk_content,
+                    &entity.text,
+                    entity.entity_type.label(),
+                    entity.confidence,
+                )
+                .await
                 {
                     debug!(error = %e, entity = %entity.text, "Failed to add entity mention");
                 }
@@ -182,11 +200,54 @@ pub async fn index_to_knowledge_graph(
         }
     }
 
+    if let Some(r) = &reconciler {
+        let snap = r.stats();
+        debug!(
+            doc_id = %doc_id,
+            auto_merges = snap.auto_merges,
+            llm_merges = snap.llm_merges,
+            llm_news = snap.llm_news,
+            auto_news = snap.auto_news,
+            llm_calls = snap.llm_calls,
+            fallbacks = snap.fallbacks,
+            "Reconciler stats for doc"
+        );
+    }
+
     debug!(
         doc_id = %doc_id,
         chunks = chunks.len(),
         "Indexed document to knowledge graph"
     );
+}
+
+/// Route a single entity mention either through the reconciler (when enabled)
+/// or through the legacy lowercase-MERGE path.  Centralizes the branch so the
+/// NER and regex-extractor loops stay readable.
+#[cfg(feature = "graph")]
+async fn write_mention(
+    kb: &KnowledgeBuilder,
+    reconciler: Option<&entity_reconciler::EntityReconciler>,
+    chunk_id: &str,
+    chunk_content: &str,
+    name: &str,
+    label: &str,
+    confidence: f32,
+) -> Result<(), client::GraphClientError> {
+    if let Some(r) = reconciler {
+        let candidate = entity_reconciler::EntityCandidate {
+            name: name.to_string(),
+            entity_type: label.to_string(),
+            confidence,
+        };
+        let canonical = r.reconcile(candidate, chunk_content).await?;
+        kb.add_mention(chunk_id, &canonical.id, name, confidence)
+            .await
+    } else {
+        kb.add_entity_mention(chunk_id, name, label, confidence)
+            .await
+            .map(|_| ())
+    }
 }
 
 /// No-op when graph feature is disabled

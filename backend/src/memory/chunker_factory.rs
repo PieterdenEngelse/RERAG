@@ -63,6 +63,12 @@ impl ChunkingStats {
 /// Returns `(chunk_text, ChunkMeta)` pairs so block provenance survives into
 /// the index and search results.  When a chunker splits one accumulation into
 /// several chunks, all share the same meta (page + type of the first block).
+///
+/// Two retrieval-quality features ride on the same heading walk:
+///   * `heading_path` — the H1>H2>H3 ancestor chain at the chunk's position,
+///     also prepended to the chunk text so the embedding model sees it.
+///   * `section_id` — a UUID shared by every chunk between two heading
+///     boundaries, so PointerRag can hydrate the full section at query time.
 pub fn chunk_ir(
     ir: &crate::doc_ir::DocIR,
     chunker: &dyn Chunker,
@@ -72,6 +78,9 @@ pub fn chunk_ir(
     let mut result: Vec<(String, ChunkMeta)> = Vec::new();
     let mut pending = String::new();
     let mut pending_meta = ChunkMeta::default();
+    // (level, header_text) stack — newest level at the back.
+    let mut heading_stack: Vec<(u8, String)> = Vec::new();
+    let mut current_section_id = uuid::Uuid::new_v4().to_string();
 
     let block_extractor = |block: &crate::doc_ir::DocBlock| -> String {
         block
@@ -79,6 +88,16 @@ pub fn chunk_ir(
             .get("extractor")
             .cloned()
             .unwrap_or_else(|| "builtin".into())
+    };
+
+    let heading_path =
+        |stack: &[(u8, String)]| -> Vec<String> { stack.iter().map(|(_, t)| t.clone()).collect() };
+    let format_breadcrumb = |stack: &[(u8, String)]| -> String {
+        stack
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join(" > ")
     };
 
     for block in &ir.blocks {
@@ -89,33 +108,64 @@ pub fn chunk_ir(
                     result.push((text, pending_meta.clone()));
                 }
                 pending.clear();
-                pending_meta = ChunkMeta::default();
+                pending_meta = ChunkMeta {
+                    heading_path: heading_path(&heading_stack),
+                    section_id: current_section_id.clone(),
+                    ..Default::default()
+                };
             }
             let text = block.embed_text().trim().to_string();
             if !text.is_empty() {
+                let crumb = format_breadcrumb(&heading_stack);
+                let embed_text = if crumb.is_empty() {
+                    text
+                } else {
+                    format!("{}\n\n{}", crumb, text)
+                };
                 let meta = ChunkMeta {
                     block_type: block.block_type.name().to_string(),
                     page: block.page,
                     extractor: block_extractor(block),
+                    heading_path: heading_path(&heading_stack),
+                    section_id: current_section_id.clone(),
                 };
-                result.push((text, meta));
+                result.push((embed_text, meta));
             }
         } else if block.block_type.is_strong_boundary() {
-            // Flush, then start fresh accumulation with the header leading
+            // Flush, then start fresh accumulation.
             if !pending.trim().is_empty() {
                 for text in chunker.chunk_text(pending.trim()) {
                     result.push((text, pending_meta.clone()));
                 }
                 pending.clear();
             }
-            let header = block.embed_text().trim().to_string();
+            // Only Header blocks contribute to the heading stack; PageBreak is a
+            // strong boundary too but carries no heading text.
+            if let crate::doc_ir::BlockType::Header { level } = block.block_type {
+                while let Some(&(lvl, _)) = heading_stack.last() {
+                    if lvl >= level {
+                        heading_stack.pop();
+                    } else {
+                        break;
+                    }
+                }
+                let header_text = block.text.trim().to_string();
+                if !header_text.is_empty() {
+                    heading_stack.push((level, header_text));
+                }
+            }
+            // Every strong boundary starts a new section.
+            current_section_id = uuid::Uuid::new_v4().to_string();
             pending_meta = ChunkMeta {
                 block_type: block.block_type.name().to_string(),
                 page: block.page,
                 extractor: block_extractor(block),
+                heading_path: heading_path(&heading_stack),
+                section_id: current_section_id.clone(),
             };
-            if !header.is_empty() {
-                pending.push_str(&header);
+            let crumb = format_breadcrumb(&heading_stack);
+            if !crumb.is_empty() {
+                pending.push_str(&crumb);
             }
         } else {
             if pending.is_empty() {
@@ -124,7 +174,13 @@ pub fn chunk_ir(
                     block_type: block.block_type.name().to_string(),
                     page: block.page,
                     extractor: block_extractor(block),
+                    heading_path: heading_path(&heading_stack),
+                    section_id: current_section_id.clone(),
                 };
+                let crumb = format_breadcrumb(&heading_stack);
+                if !crumb.is_empty() {
+                    pending.push_str(&crumb);
+                }
             }
             if !pending.is_empty() {
                 pending.push_str("\n\n");
@@ -910,4 +966,105 @@ fn split_into_segments(text: &str) -> Vec<String> {
     }
 
     segments
+}
+
+#[cfg(test)]
+mod chunk_ir_tests {
+    use super::*;
+    use crate::doc_ir::{DocBlock, DocIR};
+    use crate::memory::chunker::ChunkerConfig;
+
+    fn chunker() -> FixedChunker {
+        FixedChunker::new(ChunkerConfig::default())
+    }
+
+    #[test]
+    fn breadcrumb_carries_full_heading_path() {
+        let mut ir = DocIR::new("t.md", "text/markdown");
+        ir.push(DocBlock::header(1, "AMD"));
+        ir.push(DocBlock::header(2, "Financial Statements"));
+        ir.push(DocBlock::header(3, "Cash Flows"));
+        ir.push(DocBlock::text("Operating cash flow was $X."));
+
+        let chunks = chunk_ir(&ir, &chunker());
+        let (text, meta) = chunks.last().expect("at least one chunk");
+        assert_eq!(
+            meta.heading_path,
+            vec![
+                "AMD".to_string(),
+                "Financial Statements".to_string(),
+                "Cash Flows".to_string()
+            ]
+        );
+        assert!(
+            text.starts_with("AMD > Financial Statements > Cash Flows"),
+            "chunk text should start with breadcrumb, got: {text}"
+        );
+    }
+
+    #[test]
+    fn heading_stack_pops_siblings_at_same_level() {
+        // H1 A → H1 B should leave path == ["B"], not ["A", "B"].
+        let mut ir = DocIR::new("t.md", "text/markdown");
+        ir.push(DocBlock::header(1, "A"));
+        ir.push(DocBlock::text("under A"));
+        ir.push(DocBlock::header(1, "B"));
+        ir.push(DocBlock::text("under B"));
+
+        let chunks = chunk_ir(&ir, &chunker());
+        let (_, last_meta) = chunks.last().unwrap();
+        assert_eq!(last_meta.heading_path, vec!["B".to_string()]);
+    }
+
+    #[test]
+    fn deeper_headers_extend_then_pop_correctly() {
+        // H1 A → H2 a → H2 b: after entering H2 b, path should be ["A", "b"].
+        let mut ir = DocIR::new("t.md", "text/markdown");
+        ir.push(DocBlock::header(1, "A"));
+        ir.push(DocBlock::header(2, "a"));
+        ir.push(DocBlock::text("under a"));
+        ir.push(DocBlock::header(2, "b"));
+        ir.push(DocBlock::text("under b"));
+
+        let chunks = chunk_ir(&ir, &chunker());
+        let (_, last_meta) = chunks.last().unwrap();
+        assert_eq!(
+            last_meta.heading_path,
+            vec!["A".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn chunks_in_same_section_share_section_id() {
+        let mut ir = DocIR::new("t.md", "text/markdown");
+        ir.push(DocBlock::header(1, "Section One"));
+        ir.push(DocBlock::text("first paragraph"));
+        ir.push(DocBlock::text("second paragraph"));
+
+        let chunks = chunk_ir(&ir, &chunker());
+        assert!(!chunks.is_empty());
+        let first_section = &chunks[0].1.section_id;
+        assert!(!first_section.is_empty());
+        for (_, meta) in &chunks {
+            assert_eq!(&meta.section_id, first_section);
+        }
+    }
+
+    #[test]
+    fn section_id_changes_across_header_boundary() {
+        let mut ir = DocIR::new("t.md", "text/markdown");
+        ir.push(DocBlock::header(1, "One"));
+        ir.push(DocBlock::text("first section content"));
+        ir.push(DocBlock::header(1, "Two"));
+        ir.push(DocBlock::text("second section content"));
+
+        let chunks = chunk_ir(&ir, &chunker());
+        // At least two distinct section_ids, one per heading group.
+        let ids: std::collections::HashSet<_> =
+            chunks.iter().map(|(_, m)| m.section_id.clone()).collect();
+        assert!(
+            ids.len() >= 2,
+            "expected at least 2 section_ids across headers, got {ids:?}"
+        );
+    }
 }
