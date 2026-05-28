@@ -1,0 +1,351 @@
+# Plan: Proxy-Pointer RAG findings — three changes, deep dive on #2
+
+## Context
+
+The proxy-pointer-RAG article surfaced three concrete weaknesses in ag's
+ingest/retrieval pipeline. We've already audited the actual code at the cited
+file/line locations and confirmed each gap. This plan implements all three —
+breadcrumb-prefixed embeddings (#1), an entity reconciler shim (#2, the deep
+dive), and a `section_id` + `PointerRag` mode (#3) — in the ROI order from the
+audit, so the cheapest, highest-value change lands first and the speculative
+one lands last.
+
+The pieces are independent at the data layer (different DB columns / graph
+properties), but #3 depends on #1's heading stack. Land in order: #1 → #2 → #3.
+
+```mermaid
+flowchart TB
+    subgraph Ingest [Ingest pipeline]
+        IR[DocIR blocks] --> CIR["chunk_ir<br/>(memory/chunker_factory.rs)"]
+        CIR -->|"text + ChunkMeta{br/>heading_path, section_id}"| EMB[embedder::embed_batch]
+        EMB --> IDX["Retriever::index_chunk<br/>(stores text + section_id<br/>in Tantivy)"]
+    end
+
+    subgraph Entities [Entity write path]
+        IDX --> KB1[index_to_knowledge_graph]
+        KB1 --> NER[NER + EntityExtractor]
+        NER --> RECON["EntityReconciler<br/>(NEW: embed + cosine + LLM tiebreak)"]
+        RECON --> KB2[KnowledgeBuilder::add_entity_mention]
+        KB2 --> FDB[(FalkorDB :Entity nodes<br/>+ vecf32 embedding<br/>+ vector index)]
+        RECON <-->|"top-k canonical candidates"| FDB
+    end
+
+    subgraph Query [Query path]
+        Q[User query] --> SR[Retriever::search]
+        SR -->|"Vec&lt;String&gt; today"| AG[Agent]
+        SR -.->|"NEW: PointerRag asks for<br/>section_ids, then fetch_section"| FS["Retriever::fetch_section<br/>(NEW)"]
+        FS -->|"full section text"| AG
+    end
+```
+
+Change #1 (breadcrumb) prepends `heading_path` to chunk embed text. Change #2
+(reconciler) sits between NER and `add_entity_mention`, using FalkorDB's
+vector index to find canonical matches. Change #3 (PointerRag) stamps a
+`section_id` during chunking, stores it as a Tantivy field, and adds a new
+agent mode that fetches sections instead of chunks.
+
+---
+
+## #1 — Heading-stack breadcrumb prefix (~half day)
+
+### Goal
+Embed a chunk under `H1 AMD > H2 Financial Statements > H3 Cash Flows` with
+the full ancestor path, not just the immediate header.
+
+### Files to modify
+
+- `backend/src/doc_ir.rs:210` — extend `ChunkMeta`:
+  ```rust
+  pub heading_path: Vec<String>, // ["AMD", "Financial Statements", "Cash Flows"]
+  ```
+  Field is additive; existing `#[derive(Default)]` covers serde back-compat.
+
+- `backend/src/memory/chunker_factory.rs:66-143` — in `chunk_ir`, maintain a
+  `heading_stack: Vec<(u8, String)>` across the loop:
+  - On `BlockType::Header { level }`: pop entries with `entry_level >= level`,
+    then push `(level, header_text)`.
+  - When seeding `pending_meta` (the two existing assignment sites at
+    `:96-100`, `:112-116`, `:123-127`), set
+    `heading_path: heading_stack.iter().map(|(_, t)| t.clone()).collect()`.
+  - The existing behavior of seeding `pending` with the immediate header text
+    at `:117-119` stays — but switch it from "just the header" to the full
+    breadcrumb (e.g. `AMD > Financial Statements > Cash Flows\n\n`) so the
+    embed-side text matches what's in `heading_path`. Use a single
+    `format_breadcrumb(&heading_stack)` helper local to the module.
+  - `PageBreak` is also `is_strong_boundary()` but is not a header — guard the
+    stack mutation on `matches!(block.block_type, BlockType::Header { .. })`.
+
+- `backend/src/index.rs:403-406, 620-621, 764-765` — no signature change;
+  `chunk_metas` flows through unchanged, just carries the new field.
+
+- `backend/src/retriever.rs:232` (`doc_id_to_meta: HashMap<String, ChunkMeta>`)
+  — no change; already opaque.
+
+### Tests
+
+Add a unit test in `chunker_factory.rs` (the file already has none for
+`chunk_ir`, so it's new module-level `#[cfg(test)]`):
+```rust
+#[test]
+fn breadcrumb_carries_full_heading_path() {
+    let mut ir = DocIR::new("t.md", "text/markdown");
+    ir.push(DocBlock::header(1, "AMD"));
+    ir.push(DocBlock::header(2, "Financial Statements"));
+    ir.push(DocBlock::header(3, "Cash Flows"));
+    ir.push(DocBlock::text("Operating cash flow was $X."));
+    let chunks = chunk_ir(&ir, &FixedChunker::new(ChunkerConfig::default()));
+    let (text, meta) = chunks.last().unwrap();
+    assert_eq!(meta.heading_path, vec!["AMD", "Financial Statements", "Cash Flows"]);
+    assert!(text.starts_with("AMD > Financial Statements > Cash Flows"));
+}
+```
+Also a popping test: H1 A → H1 B should leave `heading_path == ["B"]`.
+
+---
+
+## #2 — Entity reconciler (deep dive)
+
+### The problem, concretely
+`KnowledgeBuilder::add_entity_mention` (`backend/src/graph/knowledge_builder.rs:117`)
+keys solely on `entity_name.trim().to_lowercase()`. NER routinely emits
+"Sony", "Sony Corp", "Sony Corporation", "Sony Interactive Entertainment" as
+distinct surface forms → four `:Entity` nodes, four sets of `:MENTIONS` edges,
+all denormalized. Same disease on `link_entities` (`:152`): the relation type
+is whatever the caller passed; `supplies` / `provides` / `contracts` stand as
+three edges.
+
+The article's recipe: at write time, vector-lookup against existing entities,
+fetch the context where each candidate was first defined, ask an LLM to pick
+canonical-vs-new, then `MENTIONS` the canonical node.
+
+### Design
+
+Slot a new module `backend/src/graph/entity_reconciler.rs` between NER output
+and `add_entity_mention` in `backend/src/graph/mod.rs:130-147`. The reconciler
+owns three responsibilities:
+
+1. **Embed the candidate** — `embedder::embed(&format!("{} ({}): {}", name, type, surrounding_chunk_text_window))`. Reusing the chunk content as context is what
+   the article calls the "definition snippet"; we already have `chunk_content`
+   in scope at `mod.rs:130`.
+
+2. **Top-k vector lookup against existing `:Entity` nodes** — FalkorDB
+   supports `vecf32` properties and `db.idx.vector.queryNodes`. Query:
+   ```cypher
+   CALL db.idx.vector.queryNodes('Entity', 'embedding', $k, vecf32($qvec))
+   YIELD node, score
+   WHERE node.entity_type = $type AND score >= $cosine_floor
+   RETURN node.id, node.name, node.normalized_name, node.definition_snippet, score
+   ```
+   Filter to same `entity_type` (cheap precision win — "Sony" the org vs
+   "Sony" a person shouldn't reconcile).
+
+3. **Decide canonical-vs-new**:
+   - **Auto-merge** when top score ≥ `RECONCILER_AUTO_MERGE_THRESHOLD`
+     (default 0.92): `MERGE` the mention onto the existing node, optionally
+     add the new surface form to a `:Entity.aliases: [String]` list.
+   - **LLM tiebreak** when `RECONCILER_LLM_REVIEW_THRESHOLD` (default 0.75) ≤
+     score < auto threshold: prompt
+     `"Are these the same real-world entity? A: {candidate name + snippet}
+     B: {existing name + snippet}. Answer YES or NEW."` Call via
+     `crate::llm::client` (whatever the existing Ollama/OpenAI client is —
+     same module the agent uses; locate via `grep "ollama\|generate" backend/src/llm`).
+     YES → merge. NEW → create.
+   - **Auto-new** when no candidate ≥ low threshold: create new node, embed
+     stored on the node, snippet stored on the node.
+
+4. **Write path**: instead of the bare `MERGE (e:Entity {normalized_name})`
+   in `add_entity_mention`, the reconciler returns a `CanonicalEntity { id,
+   created: bool }` and the writer does:
+   ```cypher
+   MATCH (c:Chunk {id: $chunk_id}), (e:Entity {id: $entity_id})
+   MERGE (c)-[m:MENTIONS]->(e)
+   ON CREATE SET m.surface_form = $surface, m.confidence = $confidence
+   SET e.mention_count = e.mention_count + 1, e.last_seen = $now
+   ```
+   Node creation moves to a separate `create_entity` Cypher that includes the
+   `embedding`, `definition_snippet`, and initial `aliases: [surface_form]`.
+
+### Schema additions
+
+In `backend/src/graph/client.rs:389-431` (`init_schema`):
+```cypher
+CREATE VECTOR INDEX FOR (e:Entity) ON (e.embedding)
+  OPTIONS { dimension: $EMBED_DIM, similarityFunction: 'cosine' }
+```
+`$EMBED_DIM` is `embedder::global_runtime().dim` — pass via string interp
+at schema-init time, not as a runtime param (FalkorDB needs the literal).
+Add to the `range_indexes` loop's neighbor with `swallow_already_exists`
+treatment.
+
+Also add `lit::float_list(&[f32]) -> String` helper to `backend/src/graph/client.rs:108-132`
+(produces `vecf32([0.1, 0.2, ...])`) — needed because vectors go through the
+literal-substitution path, not bound params.
+
+### Files / wiring
+
+- **NEW** `backend/src/graph/entity_reconciler.rs`:
+  ```
+  pub struct EntityReconciler { graph: GraphHandle, config: ReconcilerConfig, llm: Arc<dyn LlmClient> }
+  pub struct CanonicalEntity { pub id: String, pub created: bool, pub merged_with: Option<String> }
+  pub struct ReconcilerStats { auto_merges, llm_merges, llm_news, auto_news, llm_calls, llm_ms }
+  impl EntityReconciler {
+      pub async fn reconcile(&self, candidate: EntityCandidate, snippet: &str) -> Result<CanonicalEntity, _>
+  }
+  ```
+  Surface stats via a `metrics()` accessor; expose Prometheus counters in
+  `backend/src/monitoring/metrics.rs` (`reconciler_auto_merges_total`,
+  `reconciler_llm_decisions_total{outcome}`, `reconciler_llm_latency_ms`).
+
+- `backend/src/graph/knowledge_builder.rs:110-149` — split into
+  `create_entity(name, type, embedding, snippet) -> id` and
+  `add_mention(chunk_id, entity_id, surface_form, confidence)`. Keep the old
+  `add_entity_mention` as a thin shim (calls reconciler internally) so any
+  external callers still compile; add `#[deprecated]` note.
+
+- `backend/src/graph/mod.rs:122-147` — at the top of Phase 3 (NER loop),
+  construct the reconciler once per `index_to_knowledge_graph` call. For each
+  `ner_entity`, call `reconciler.reconcile(...).await` then
+  `kb.add_mention(...)`. Pass the chunk's text as the snippet window.
+
+- `backend/src/graph/config.rs:61-74` — extend `EntityExtractionSettings`:
+  ```rust
+  pub reconcile_enabled: bool,             // RECONCILER_ENABLED, default false
+  pub auto_merge_threshold: f32,           // RECONCILER_AUTO_MERGE_THRESHOLD, default 0.92
+  pub llm_review_threshold: f32,           // RECONCILER_LLM_REVIEW_THRESHOLD, default 0.75
+  pub vector_topk: usize,                  // RECONCILER_VECTOR_TOPK, default 5
+  pub llm_review_max_per_doc: usize,       // RECONCILER_LLM_MAX_PER_DOC, default 50
+  ```
+  Default `enabled: false` — this is a costly path (one embed + maybe one LLM
+  call per entity), keep it opt-in until tuned. Honor the standard
+  `effective_*` settings layer (see CLAUDE.md "Runtime settings layer") so it's
+  tunable from `/config/runtime`.
+
+- `backend/src/api/mod.rs:319, 335, 357` — same change pattern as
+  `graph/mod.rs`; both call sites of `add_entity_mention` get routed through
+  the reconciler.
+
+### Edge cases / failure modes
+
+- **Reconciler down (LLM unreachable, FalkorDB vector index missing)**: fall
+  back to today's behavior — `add_entity_mention` with bare lowercase merge.
+  Log a one-time warn per doc, increment `reconciler_fallback_total`. Don't
+  fail ingest.
+- **Vector index creation racing first ingest**: `init_schema` is idempotent;
+  call it on app startup as today.
+- **Dimension drift** (user swaps embedding model): `db.idx.vector.queryNodes`
+  errors on dim mismatch. Surface a warn → fall back. UI work to flag this
+  cleanly is out of scope here.
+- **Cost cap**: `llm_review_max_per_doc` short-circuits to auto-new once the
+  per-document LLM call budget is hit (protects against pathological docs
+  with hundreds of borderline-ambiguous entities).
+- **Relation-type sprawl** (`link_entities` accepting any string): noted, not
+  fixed in this change. The relation-type reconciler is a follow-on with the
+  same shape — a small fixed taxonomy + LLM mapping. Out of scope; flag in
+  the commit message.
+
+### Tests
+
+- Unit (mock GraphHandle + mock LLM): "Sony Corp" + "Sony Corporation" with
+  cosine 0.95 → auto-merge, no LLM call.
+- Unit: cosine 0.80 → LLM called, YES → merge.
+- Unit: cosine 0.80 → LLM called, NEW → new node.
+- Unit: vector index missing → fallback path, ingest succeeds.
+- Integration (`#[ignore]`, requires running FalkorDB): ingest a doc twice
+  with different surface forms, assert exactly one `:Entity` node per
+  reconciled identity.
+
+### Education-mode surface
+
+ag is a learning platform (CLAUDE.md). The reconciler should be visible:
+add a small panel on the existing graph monitoring page (find via
+`grep -rn "graph_routes\|GraphMonitoring" backend/src frontend/fro/src`)
+showing live `ReconcilerStats` — "auto-merges this hour: 42, LLM tiebreaks:
+7, new entities: 12". Make the invisible visible.
+
+---
+
+## #3 — `section_id` + `fetch_section` + `PointerRag` mode (2–3 days)
+
+### Goal
+Throw the matched chunk away after retrieval, hydrate the full
+heading-bounded section, hand that to the LLM. Useful only because #1
+already gives the chunker proper heading awareness.
+
+### Files to modify
+
+- `backend/src/doc_ir.rs:210` — add to `ChunkMeta`:
+  ```rust
+  pub section_id: String, // UUID per heading-bounded run
+  ```
+
+- `backend/src/memory/chunker_factory.rs:66-143` — in `chunk_ir`, generate a
+  fresh `Uuid::new_v4().to_string()` whenever the heading stack mutates (i.e.
+  on the strong-boundary branch). All chunks accumulated between two
+  boundaries share the same `section_id`. Atomic blocks (tables, code) also
+  get the current section's id rather than their own.
+
+- `backend/src/retriever.rs` — add a stored Tantivy field. Search for the
+  existing field declarations (`title_field`, `content_field`, `doc_id_field`
+  near `:230` and the schema-building site) and add `section_id_field` the
+  same way. In `add_document` / `index_chunk` (`:880-904`, `:2014-2027`),
+  write `meta.section_id` into the field. Add:
+  ```rust
+  pub fn fetch_section(&self, section_id: &str) -> Result<String, RetrieverError>
+  ```
+  that runs a Tantivy `TermQuery` on `section_id_field`, sorts results by the
+  chunk position (encoded in `doc_id` after `#`), and concatenates the
+  contents. Cache key: `format!("section:{}", section_id)` in the existing
+  `search_cache` LRU.
+
+- `backend/src/agent.rs:26-41` — add `PointerRag` variant. In
+  `run_with_mode` (`:412`), branch on `PointerRag` near the existing
+  `AgentMode::Rag` arm at `:594`: do a normal `retriever.search` to get
+  top chunks, then for each unique `section_id` (looked up via
+  `retriever.meta_for_content` at `:1208`), call `fetch_section`, dedupe,
+  hand the sections (rather than the chunks) to the LLM. Cap total tokens
+  via existing `MAX_CONTEXT_TOKENS` config.
+
+- Tantivy on-disk schema change → existing indices need a rebuild. Two
+  options: (a) bump an `INDEX_SCHEMA_VERSION` constant and have startup wipe
+  + rebuild if mismatched; (b) make `section_id_field` `OPTIONAL` and treat
+  empty as "no section info, fall back to chunk text" so old indices still
+  work. Go with (b) — gentler upgrade.
+
+### Tests
+
+- Unit: `fetch_section` returns chunks in `position` order.
+- Unit: chunker emits same `section_id` for two chunks under same heading,
+  different `section_id` after a header boundary.
+- Integration test in `agent.rs` mode-switch suite (look for existing
+  `test_agent_mode_*` patterns; add `test_pointer_rag_returns_section_text`).
+
+---
+
+## Verification
+
+Run in order; each tier must pass before moving on.
+
+```bash
+cd backend && cargo fmt && cargo clippy --all-targets -- -D warnings
+cd backend && cargo test --all
+cd backend && cargo test -- --ignored   # FalkorDB integration (after `docker compose up -d`)
+```
+
+Manual end-to-end (the user restarts via `systemctl --user restart ag.service`
+per CLAUDE.md — do not run `cargo build`):
+
+1. **#1 breadcrumb**: ingest a markdown doc with H1/H2/H3 nesting. Hit
+   `/search?q=<term-from-deep-section>` and confirm result content starts with
+   the full breadcrumb. Spot-check via the existing retrieval inspector UI.
+2. **#2 reconciler**: ingest a doc mentioning "Sony Corp" and a second
+   mentioning "Sony Corporation". Query FalkorDB:
+   `MATCH (e:Entity) WHERE e.normalized_name CONTAINS 'sony' RETURN count(e)` —
+   expect 1 (with reconciler on), 2 (with reconciler off via runtime toggle).
+   Check `/metrics` for `reconciler_auto_merges_total > 0`.
+3. **#3 PointerRag**: in the chat UI, switch mode to PointerRag, ask a
+   question whose answer requires the section's surrounding context (not just
+   the matched chunk). Confirm the response cites the full section. The
+   monitoring panel should show section IDs being fetched.
+
+Each change is shippable independently — land #1, observe, then #2 (behind
+its `RECONCILER_ENABLED=false` default), then #3 if #1 is visibly helping.

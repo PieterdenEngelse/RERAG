@@ -130,6 +130,29 @@ pub mod lit {
         out.push(']');
         out
     }
+
+    /// Encode a `vecf32(...)` literal for FalkorDB vector params.  Vectors
+    /// flow through literal substitution (the bound-params path doesn't
+    /// support the `vecf32` constructor today).
+    pub fn vecf32(items: &[f32]) -> String {
+        let mut out = String::from("vecf32([");
+        for (i, x) in items.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            if x.is_finite() {
+                if x.fract() == 0.0 {
+                    out.push_str(&format!("{x:.1}"));
+                } else {
+                    out.push_str(&x.to_string());
+                }
+            } else {
+                out.push_str("0.0");
+            }
+        }
+        out.push_str("])");
+        out
+    }
 }
 
 // ── Row value extraction ──────────────────────────────────────────────
@@ -424,6 +447,19 @@ impl GraphClient {
             if let Err(e) = self.handle.run(stmt, &no_params).await {
                 swallow_already_exists("fulltext index", stmt, &e);
             }
+        }
+
+        // Vector index on Entity.embedding — backs the proxy-pointer entity
+        // reconciler.  Dimension must match the live embedder; we read it once
+        // at schema init and bake the literal into the DDL (FalkorDB does not
+        // accept a bound parameter here).
+        let embed_dim = crate::embedder::embedding_dim();
+        let vector_stmt = format!(
+            "CREATE VECTOR INDEX FOR (e:Entity) ON (e.embedding) OPTIONS {{ dimension: {}, similarityFunction: 'cosine' }}",
+            embed_dim
+        );
+        if let Err(e) = self.handle.run(&vector_stmt, &no_params).await {
+            swallow_already_exists("vector index", &vector_stmt, &e);
         }
 
         info!("FalkorDB schema initialization complete");

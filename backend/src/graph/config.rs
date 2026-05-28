@@ -71,6 +71,22 @@ pub struct EntityExtractionSettings {
 
     /// Entity types to extract
     pub entity_types: Vec<String>,
+
+    /// Entity reconciler: vector-similarity + optional LLM tiebreak to collapse
+    /// "Sony Corp" / "Sony Corporation" / "Sony Interactive Entertainment" into
+    /// a single canonical :Entity node.  Off by default — costs one embed +
+    /// up to one LLM call per entity mention.
+    pub reconcile_enabled: bool,
+    /// Cosine score at or above which two candidates are merged with no LLM call.
+    pub reconcile_auto_merge_threshold: f32,
+    /// Cosine score at or above which the LLM is asked to decide.  Below this,
+    /// the candidate becomes a new node with no LLM call.
+    pub reconcile_llm_review_threshold: f32,
+    /// Top-k neighbours pulled from the entity vector index per candidate.
+    pub reconcile_vector_topk: usize,
+    /// Hard cap on LLM tiebreak calls per ingested document.  Past this cap,
+    /// borderline candidates short-circuit to auto-new.
+    pub reconcile_llm_review_max_per_doc: usize,
 }
 
 impl Default for GraphConfig {
@@ -116,6 +132,11 @@ impl Default for EntityExtractionSettings {
                 "TECHNOLOGY".to_string(),
                 "EVENT".to_string(),
             ],
+            reconcile_enabled: false,
+            reconcile_auto_merge_threshold: 0.92,
+            reconcile_llm_review_threshold: 0.75,
+            reconcile_vector_topk: 5,
+            reconcile_llm_review_max_per_doc: 50,
         }
     }
 }
@@ -236,6 +257,24 @@ impl EntityExtractionSettings {
             entity_types: env::var("ENTITY_EXTRACTION_TYPES")
                 .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
                 .unwrap_or_else(|_| EntityExtractionSettings::default().entity_types),
+
+            reconcile_enabled: crate::settings::effective_bool("RECONCILER_ENABLED", false),
+            reconcile_auto_merge_threshold: env::var("RECONCILER_AUTO_MERGE_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.92),
+            reconcile_llm_review_threshold: env::var("RECONCILER_LLM_REVIEW_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.75),
+            reconcile_vector_topk: env::var("RECONCILER_VECTOR_TOPK")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            reconcile_llm_review_max_per_doc: env::var("RECONCILER_LLM_MAX_PER_DOC")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50),
         }
     }
 }

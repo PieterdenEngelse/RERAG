@@ -200,9 +200,10 @@ impl EmbeddingRuntime {
         let num_threads = crate::settings::effective_u64("ONNX_NUM_THREADS", 4) as usize;
         let inter_op_num_threads =
             crate::settings::effective_u64("ONNX_INTER_OP_NUM_THREADS", 1) as usize;
-        let optimization_level = crate::perf::onnx_embedder::OnnxOptimizationLevel::from_str_or_default(
-            &crate::settings::effective_or("ONNX_OPTIMIZATION_LEVEL", "all"),
-        );
+        let optimization_level =
+            crate::perf::onnx_embedder::OnnxOptimizationLevel::from_str_or_default(
+                &crate::settings::effective_or("ONNX_OPTIMIZATION_LEVEL", "all"),
+            );
         let enable_mem_pattern = crate::settings::effective_bool("ONNX_ENABLE_MEM_PATTERN", true);
         let normalize_output = crate::settings::effective_bool("ONNX_NORMALIZE_OUTPUT", true);
         let pooling = crate::perf::onnx_embedder::PoolingStrategy::from_str_or_default(
@@ -656,6 +657,12 @@ pub fn set_embedding_batch_size(size: usize) {
 /// Read the current live embedding batch size.
 pub fn get_embedding_batch_size() -> usize {
     global_runtime().batch_size.load(Ordering::Relaxed)
+}
+
+/// Public dimension accessor for the currently loaded embedding model.
+/// Used by the graph layer to size the FalkorDB vector index.
+pub fn embedding_dim() -> usize {
+    global_runtime().dim
 }
 
 #[cfg(test)]
