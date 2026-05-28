@@ -2172,10 +2172,22 @@ fn onnx_vs_ort_page_banner() -> Element {
 /// Small layer-source badge for board titles.
 fn layer_badge(layer: &str) -> Element {
     let (label, color) = match layer {
-        "ort-session-option" => ("ort · SessionOption", "bg-blue-900/40 text-blue-300 border-blue-700"),
-        "ort-session-config" => ("ort · SessionConfig K/V", "bg-cyan-900/40 text-cyan-300 border-cyan-700"),
-        "ag-level" => ("ag-level", "bg-amber-900/40 text-amber-300 border-amber-700"),
-        "onnx-file" => ("ONNX file", "bg-purple-900/40 text-purple-300 border-purple-700"),
+        "ort-session-option" => (
+            "ort · SessionOption",
+            "bg-blue-900/40 text-blue-300 border-blue-700",
+        ),
+        "ort-session-config" => (
+            "ort · SessionConfig K/V",
+            "bg-cyan-900/40 text-cyan-300 border-cyan-700",
+        ),
+        "ag-level" => (
+            "ag-level",
+            "bg-amber-900/40 text-amber-300 border-amber-700",
+        ),
+        "onnx-file" => (
+            "ONNX file",
+            "bg-purple-900/40 text-purple-300 border-purple-700",
+        ),
         other => (other, "bg-gray-700 text-gray-300 border-gray-600"),
     };
     let class = format!("px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide {color}");

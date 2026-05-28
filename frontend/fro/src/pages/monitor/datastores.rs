@@ -37,8 +37,7 @@ pub fn MonitorDatastores() -> Element {
     let mut show_info_cmd = use_signal(|| false);
     let mut show_sentinel = use_signal(|| false);
     let mut show_wire_protocol = use_signal(|| false);
-    let mut field_help =
-        use_context_provider(|| Signal::new(None::<&'static str>));
+    let mut field_help = use_context_provider(|| Signal::new(None::<&'static str>));
     let show_container_info = use_signal(|| false);
     let also_container = use_signal(|| false);
     let submitting = use_signal(|| false);

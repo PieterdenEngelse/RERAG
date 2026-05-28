@@ -751,7 +751,13 @@ fn l2_normalize(v: &mut EmbeddingVector) {
 /// row-major order. Padded positions (`mask[i] == 0`) are excluded from both
 /// the sum and the divisor — using `seq` as the divisor would dilute the mean
 /// with padding zeros. A fully-masked sequence yields a zero vector.
-fn mean_pool(data: &[f32], mask: &[i64], batch: usize, seq: usize, hidden: usize) -> Vec<EmbeddingVector> {
+fn mean_pool(
+    data: &[f32],
+    mask: &[i64],
+    batch: usize,
+    seq: usize,
+    hidden: usize,
+) -> Vec<EmbeddingVector> {
     let mut out = Vec::with_capacity(batch);
     for b in 0..batch {
         let mut acc = vec![0.0_f32; hidden];

@@ -85,7 +85,11 @@ pub fn ConfigCorpus() -> Element {
             );
             ef_search_str.set(s.hnsw_ef_search.map(|v| v.to_string()).unwrap_or_default());
             pq_str.set(s.pq_subvectors.map(|v| v.to_string()).unwrap_or_default());
-            native_pdf_str.set(s.native_pdf_enabled.map(|b| b.to_string()).unwrap_or_default());
+            native_pdf_str.set(
+                s.native_pdf_enabled
+                    .map(|b| b.to_string())
+                    .unwrap_or_default(),
+            );
             build_meta.set(Some(r.build_meta));
         }
         if let Ok(r) = api::fetch_chunk_config().await {
@@ -123,8 +127,11 @@ pub fn ConfigCorpus() -> Element {
                 );
                 ef_search_str.set(s.hnsw_ef_search.map(|v| v.to_string()).unwrap_or_default());
                 pq_str.set(s.pq_subvectors.map(|v| v.to_string()).unwrap_or_default());
-                native_pdf_str
-                    .set(s.native_pdf_enabled.map(|b| b.to_string()).unwrap_or_default());
+                native_pdf_str.set(
+                    s.native_pdf_enabled
+                        .map(|b| b.to_string())
+                        .unwrap_or_default(),
+                );
                 build_meta.set(Some(r.build_meta));
             }
         });

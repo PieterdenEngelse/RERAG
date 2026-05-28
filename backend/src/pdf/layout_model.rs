@@ -282,8 +282,7 @@ impl DetrLayoutModel {
         let threshold = crate::settings::effective_f64("LAYOUT_DETR_THRESHOLD", 0.7) as f32;
 
         // cmarkea/detr-layout-detection: 11 classes
-        let num_classes =
-            crate::settings::effective_u64("LAYOUT_DETR_NUM_CLASSES", 11) as usize;
+        let num_classes = crate::settings::effective_u64("LAYOUT_DETR_NUM_CLASSES", 11) as usize;
 
         Ok(DetrLayoutModel {
             session,

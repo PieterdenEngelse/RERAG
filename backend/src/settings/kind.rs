@@ -83,7 +83,10 @@ mod tests {
     #[test]
     fn u64_parses_and_rejects() {
         assert_eq!(Kind::U64.parse("0").unwrap(), "0");
-        assert_eq!(Kind::U64.parse("18446744073709551615").unwrap(), "18446744073709551615");
+        assert_eq!(
+            Kind::U64.parse("18446744073709551615").unwrap(),
+            "18446744073709551615"
+        );
         let err = Kind::U64.parse("fast").unwrap_err();
         assert!(err.contains("u64") && err.contains("'fast'"), "got: {err}");
         // Negative number is invalid for u64.
@@ -103,7 +106,10 @@ mod tests {
         let kind = Kind::Enum(&["fixed", "lightweight", "semantic"]);
         assert_eq!(kind.parse("semantic").unwrap(), "semantic");
         let err = kind.parse("banana").unwrap_err();
-        assert!(err.contains("'banana'") && err.contains("fixed"), "got: {err}");
+        assert!(
+            err.contains("'banana'") && err.contains("fixed"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -125,6 +131,9 @@ mod tests {
     #[test]
     fn string_trims_and_passes_through() {
         assert_eq!(Kind::String.parse("  hello  ").unwrap(), "hello");
-        assert_eq!(Kind::String.parse("anything goes").unwrap(), "anything goes");
+        assert_eq!(
+            Kind::String.parse("anything goes").unwrap(),
+            "anything goes"
+        );
     }
 }

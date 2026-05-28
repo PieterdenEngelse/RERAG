@@ -293,8 +293,7 @@ mod tests {
         let err = s.set("REDIS_ENABLED", Some("maybe".into())).unwrap_err();
         assert!(err.contains("'maybe'"), "{err}");
         // And nothing got written.
-        let raw = std::fs::read_to_string(td.path().join("overrides.json"))
-            .unwrap_or_default();
+        let raw = std::fs::read_to_string(td.path().join("overrides.json")).unwrap_or_default();
         assert!(!raw.contains("REDIS_ENABLED"));
     }
 

@@ -115,10 +115,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn paths(td: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
-        (
-            td.path().to_path_buf(),
-            td.path().join("overrides.json"),
-        )
+        (td.path().to_path_buf(), td.path().join("overrides.json"))
     }
 
     #[test]
@@ -147,7 +144,10 @@ mod tests {
 
         let (returned_path, recovery) = Recovery::boot_check(&base, &overrides);
         assert_eq!(returned_path, overrides);
-        assert!(!overrides.exists(), "overrides should have been moved aside");
+        assert!(
+            !overrides.exists(),
+            "overrides should have been moved aside"
+        );
 
         let rollback = recovery
             .last_rollback
