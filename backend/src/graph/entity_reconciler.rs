@@ -98,12 +98,11 @@ impl EntityReconciler {
         candidate: EntityCandidate,
         snippet: &str,
     ) -> Result<CanonicalEntity, GraphClientError> {
-        let qtext = format!(
-            "{} ({}): {}",
-            candidate.name,
-            candidate.entity_type,
-            snippet.chars().take(512).collect::<String>()
-        );
+        // Name + type only — snippet was dominating the embedding and
+        // dropping same-entity cosine from ~0.98 to ~0.85, defeating the
+        // auto_merge threshold. Snippet still flows into `definition_snippet`
+        // (for the LLM tiebreak in llm_says_same) via create_entity below.
+        let qtext = format!("{} ({})", candidate.name, candidate.entity_type);
         let embedding = crate::embedder::embed(&qtext);
 
         // Top-k nearest existing entities of the same type.
@@ -173,26 +172,33 @@ impl EntityReconciler {
         entity_type: &str,
     ) -> Result<Vec<NeighbourRow>, GraphClientError> {
         let mut params = std::collections::HashMap::new();
-        params.insert(
-            "k".to_string(),
-            lit::int(self.settings.reconcile_vector_topk as i64),
-        );
         params.insert("type".to_string(), lit::str(entity_type));
-        params.insert("qvec".to_string(), lit::vecf32(embedding));
 
-        let cypher = "CALL db.idx.vector.queryNodes('Entity', 'embedding', $k, $qvec) \
-                      YIELD node, score \
-                      WHERE node.entity_type = $type \
-                      RETURN node.id AS id, node.name AS name, \
-                             coalesce(node.definition_snippet, '') AS snippet, score";
-        let rows = self.graph.query(cypher, &params).await?;
+        // vecf32(...) must be inlined into the query body — FalkorDB's bound-params
+        // parser rejects the constructor as a parameter value. See lit::vecf32 docs.
+        let cypher = format!(
+            "CALL db.idx.vector.queryNodes('Entity', 'embedding', {k}, {qvec}) \
+             YIELD node, score \
+             WHERE node.entity_type = $type \
+             RETURN node.id AS id, node.name AS name, \
+                    coalesce(node.definition_snippet, '') AS snippet, score",
+            k = self.settings.reconcile_vector_topk as i64,
+            qvec = lit::vecf32(embedding),
+        );
+        let rows = self.graph.query(&cypher, &params).await?;
         Ok(rows
             .into_iter()
             .map(|r| NeighbourRow {
                 id: row_str(&r, 0),
                 name: row_str(&r, 1),
                 snippet: row_str(&r, 2),
-                score: row_f64(&r, 3, 0.0),
+                // FalkorDB's 'cosine' vector index returns cosine *distance*
+                // (0 = identical, higher = farther apart), not similarity as
+                // the docs imply. Convert here so the rest of the reconciler
+                // can keep using similarity-style threshold checks against
+                // reconcile_auto_merge_threshold / reconcile_llm_review_threshold.
+                // Default 1.0 (max distance → 0 similarity) on missing column.
+                score: 1.0 - row_f64(&r, 3, 1.0),
             })
             .collect())
     }
@@ -212,24 +218,23 @@ impl EntityReconciler {
             "type" => lit::str(&candidate.entity_type),
             "snippet" => lit::str(&snippet_trimmed),
             "aliases" => lit::str_list(&[candidate.name.clone()]),
-            "embedding" => lit::vecf32(embedding),
             "now" => lit::int(now_millis()),
         };
-        self.graph
-            .run(
-                "CREATE (e:Entity {id: $id}) \
-                 SET e.name = $name, \
-                     e.normalized_name = $normalized, \
-                     e.entity_type = $type, \
-                     e.definition_snippet = $snippet, \
-                     e.aliases = $aliases, \
-                     e.embedding = $embedding, \
-                     e.mention_count = 1, \
-                     e.first_seen = $now, \
-                     e.last_seen = $now",
-                &params,
-            )
-            .await?;
+        // vecf32(...) must be inlined — see lit::vecf32 docs.
+        let cypher = format!(
+            "CREATE (e:Entity {{id: $id}}) \
+             SET e.name = $name, \
+                 e.normalized_name = $normalized, \
+                 e.entity_type = $type, \
+                 e.definition_snippet = $snippet, \
+                 e.aliases = $aliases, \
+                 e.embedding = {embedding}, \
+                 e.mention_count = 1, \
+                 e.first_seen = $now, \
+                 e.last_seen = $now",
+            embedding = lit::vecf32(embedding),
+        );
+        self.graph.run(&cypher, &params).await?;
         Ok(())
     }
 
@@ -345,5 +350,32 @@ mod tests {
         assert_eq!(snap.llm_calls, 2);
         assert_eq!(snap.llm_merges, 1);
         assert_eq!(snap.auto_news, 0);
+    }
+
+    #[test]
+    #[ignore = "diagnostic probe: cargo test --features graph -- --nocapture --ignored probe_reconciler_cosines"]
+    fn probe_reconciler_cosines() {
+        use crate::embedder::{self, similarity::cosine};
+
+        let pairs: &[(&str, &str, &str)] = &[
+            ("identity",         "Hitachi Energy",       "Hitachi Energy"),
+            ("bare names",       "Hitachi Energy",       "Hitachi Energy Ltd"),
+            ("name + type",      "Hitachi Energy (ORG)", "Hitachi Energy Ltd (ORG)"),
+            ("current qtext",
+             "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
+             "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo."),
+            ("Sony Corp/Corp",   "Sony Corp (ORG)",      "Sony Corporation (ORG)"),
+            ("Sony Corp/SIE",    "Sony Corp (ORG)",      "Sony Interactive Entertainment (ORG)"),
+            // Cross-format: new bare-name query lookup against old stored-with-snippet vectors.
+            ("xfmt same name",   "Hitachi Energy (ORG)",
+             "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results."),
+            ("xfmt diff name",   "Hitachi Energy (ORG)",
+             "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo."),
+        ];
+        for (label, a, b) in pairs {
+            let va = embedder::embed(a);
+            let vb = embedder::embed(b);
+            println!("{:>20}  cosine={:.4}  a={:?}  b={:?}", label, cosine(&va, &vb), a, b);
+        }
     }
 }
