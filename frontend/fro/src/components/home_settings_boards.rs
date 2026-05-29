@@ -288,6 +288,13 @@ pub fn HomeSettingsBoards(
                                         }
                                     }
 
+                                    // TODO(proxy-pointer-rag): add PointerRag mode button here.
+                                    // Backend wired in c23ba40 — ChatMode::PointerRag + alias
+                                    // "pointer_rag" both route to AgentMode::PointerRag (grounded,
+                                    // pointer-style citations). Currently only reachable via direct
+                                    // API call with mode=pointer_rag. Copy the RAG Strict button
+                                    // pattern above. See docs/proxy-pointer-rag-followups.md.
+
                                     // Tune button
                                     div {
                                         class: "flex items-center gap-1",

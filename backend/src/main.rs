@@ -585,6 +585,12 @@ async fn main() -> std::io::Result<()> {
         // RUST_LOG → live tracing-filter reload via the handle installed in
         // `init_tracing`. The directive accepts the same syntax as the env
         // var (e.g. "info", "debug,ag=trace").
+        // TODO(runtime-config): boot-loaded RUST_LOG overrides aren't applied
+        // — `init_tracing` reads only env via `EnvFilter::try_from_default_env`,
+        // and this subscriber only fires on subsequent changes via the API.
+        // Fix: after `s.subscribe(...)` below, call `reload_filter(&current)`
+        // once with `ag::settings::effective("RUST_LOG")` so disk-loaded
+        // overrides take effect at startup. See docs/proxy-pointer-rag-followups.md.
         s.subscribe(
             "RUST_LOG",
             move |new| match ag::monitoring::tracing_config::reload_filter(new) {
