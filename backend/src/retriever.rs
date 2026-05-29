@@ -542,6 +542,10 @@ impl Retriever {
         } else {
             fs::create_dir_all(index_dir)?;
             let dir = MmapDirectory::open(index_dir)?;
+            // Load-bearing: any field added or removed in the schema built above
+            // invalidates an existing on-disk index. Without this wipe-and-rebuild
+            // branch, schema additions become a breaking change for upgraders.
+            // Replace with INDEX_SCHEMA_VERSION migrations before removing.
             match Index::open_or_create(dir, schema.clone()) {
                 Ok(idx) => idx,
                 Err(TantivyError::SchemaError(msg)) => {

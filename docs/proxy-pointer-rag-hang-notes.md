@@ -1,114 +1,61 @@
-# Proxy-pointer RAG bundle — upload hang debug notes
+# Proxy-pointer RAG bundle — upload-hang post-mortem
 
-Companion to commit c23ba40. Updates the "Known issue" section of that
-commit's message with bisect findings from a second debug pass.
+Companion to commits c23ba40 and 732badf. The original "Known issue"
+section in c23ba40 and the bisect findings in 732badf described an
+upload hang that turned out to be **state-dependent, not bundle-causal**.
 
-## TL;DR for whoever picks this up
+## TL;DR
 
-Uploading any file to `POST :3011/upload` hangs the HTTP response
-indefinitely. One `actix-rt|system` worker thread sits at 100% CPU in
-userspace until process restart. Other workers respond instantly
-(`/monitoring/health` returns in <20 ms). Tantivy indexing via the
-file-watcher path completes cleanly; the hang is on the upload
-handler's `index_prepared_doc` → `commit` → graph indexing chain, but
-**no `graph::*` debug log fires** because the spin happens before
-Phase 4.
+- Hang is resolved. `POST /upload` works on this branch with a clean
+  release build (`strip = true`, no debug info).
+- Root cause: stale Tantivy segments left over from a pre-bundle
+  schema. The bundle adds `section_id_field` to the schema; the
+  schema-recover patch at `backend/src/retriever.rs:539-558` detects
+  the `Index::open_or_create` `SchemaError`, wipes the on-disk index,
+  and rebuilds. Once that wipe-and-rebuild had run, subsequent uploads
+  worked normally.
+- The "busy-spinning Future" diagnosis from the bisect doc was wrong.
+  The gdb signature (hash mixing + vtable dispatch) is also what a
+  Tantivy writer looks like when it's trying to reconcile segments
+  whose term dictionaries don't match the live schema.
 
-## What's been ruled out
+## Deploy note for first install of this bundle
 
-- **Reconciler**: set `RECONCILER_ENABLED=false`, hang persists.
-- **Chunker (#1 breadcrumb / heading-stack)**: `chunker_factory.rs`
-  fully reverted to `main`'s version (with `..ChunkMeta::default()`
-  stubs to satisfy the new fields), hang persists.
-- **`index_chunk` writer rewrite**: the bundle's non-batch path is
-  functionally identical to `main`'s `add_document` — both create a
-  fresh `IndexWriter` with 256 MB heap per call. Pre-existing pattern.
-- **Pathological regex in `tools/entity_extractor.rs`**: file is
-  unmodified by the bundle (working tree clean for `tools/`), and
-  357 pre-bundle documents indexed through it without issue.
-- **New `tokio::spawn` / explicit loop**: `git diff main..HEAD` shows
-  none added.
+**On first restart after pulling this bundle, ag will wipe and rebuild
+any existing Tantivy index** (per corpus). The cause is the new
+`section_id_field` (STRING+STORED), which invalidates the existing
+schema. Users will see:
 
-## What's confirmed (gdb on stripped binary)
+- A one-time re-index delay on first boot proportional to corpus size
+  (a few seconds per 100 docs on the dev box).
+- Index size on disk may differ after the rebuild — that's expected,
+  not a bug.
 
-Hot thread = `actix-rt|system` (TID varies per restart). 22-deep stack,
-all `?? ()` because release binary is stripped. Disassembly of frame
-addresses (after PIE base adjustment):
+No manual action is required. The schema-recover path is in
+`backend/src/retriever.rs:539-558`. If a deployer wants to skip the
+implicit wipe, they can delete `~/.local/share/ag/index/<corpus>/`
+themselves before starting ag.
 
-- **Frame 0**: hash mixing — `rorx $0x2f`/`$0x2b`/`$0x20` + chained
-  `xor` (signature of `AHasher` / `DefaultHasher::write`)
-- **Frames 1–10**: repeated indirect calls via vtables (`call *0x18(%rax)`)
-  interleaved with `cmp $0x4, <reg>` discriminant checks — the
-  Tokio `Future::poll` machinery
-- **Frames 14–21**: scheduler internals (`__rseq` thread-local
-  updates, `futex`, `start_thread`)
+## Confirmation
 
-This shape — vtable dispatch in a tight loop, hash op at the leaf —
-matches a **busy-spinning Future**: one that returns `Poll::Pending`
-while immediately re-waking itself (anti-pattern), so the scheduler
-re-polls it forever without yielding to other tasks.
+Six sequential `POST :3011/upload` requests on commit 732badf,
+stripped release build, `RECONCILER_ENABLED=false`:
 
-## Suspect surfaces, ranked
+| File              | Wall time |
+|-------------------|-----------|
+| reconciler_test.md (cold) | 1.48 s |
+| hammer_1.md       | 0.77 s |
+| hammer_2.md       | 0.81 s |
+| hammer_3.md       | 0.90 s |
+| hammer_4.md       | 0.86 s |
+| hammer_5.md       | 0.94 s |
 
-1. **Tantivy writer contention** in `Retriever::begin_batch()` or the
-   commit at the end of `upload_search.rs:139`. File-watcher's
-   `index_prepared_doc` log appears at the moment the upload arrives
-   (the upload handler's Phase 1 saved the file, file_watcher noticed,
-   indexed it via the non-batch path that creates its own writer). If
-   the upload handler's `begin_batch()` then tries to acquire the
-   global Tantivy writer lock while the file_watcher's writer is still
-   draining, *and* this happens inside a Future that doesn't suspend
-   correctly, the spin pattern fits.
-2. **`add_mention` write path** added in `graph/knowledge_builder.rs` —
-   even though dormant on the reconciler-off path, may have introduced
-   a static-init or lazy-static that fires on first use.
-3. **Field-dict initialization** for the new `section_id_field`
-   (STRING+STORED) in Tantivy — first write to a new STRING field
-   builds a fresh term dictionary; if the bundle's write path enters
-   this initialization inside a non-yielding Future, same shape.
+All `status=200`, all chunks indexed via the `io_uring` writer path,
+no thread above 25% CPU during or after the test.
 
-## How to reproduce (clean)
+## What didn't matter (audit trail, to save the next debugger time)
 
-```bash
-git switch feat/proxy-pointer-rag
-cargo build --release --features graph
-systemctl --user restart ag.service
-# Make sure RECONCILER_ENABLED=false in overrides.json
-curl -X POST -F file=@/tmp/anyfile.md -m 60 http://127.0.0.1:3011/upload
-# → curl times out at 60 s; ag stays at 100% CPU on one actix-rt thread
-# → file_watcher's Tantivy index entry appears in journalctl; nothing else
-```
-
-## How to confirm function names (cost: ~12 min)
-
-```toml
-# Cargo.toml [profile.release]
-debug = true     # ← add this
-strip = false    # ← flip this
-```
-
-Then `cargo build --release --features graph` and re-attach gdb:
-
-```bash
-PID=$(systemctl --user show ag.service -p MainPID --value)
-gdb -p $PID -batch -ex "set pagination off" \
-    -ex "thread apply all bt 30" -ex quit
-```
-
-Look for the thread with name `actix-rt|system` and CPU ticks orders
-of magnitude above the others.
-
-## Workaround for users
-
-- `RECONCILER_ENABLED=false` (default) keeps existing graph behavior
-- File-watcher ingest (drop files into `~/.local/share/ag/data/corpora/default/documents/`)
-  works fine — that path doesn't go through `index_to_knowledge_graph`
-- HTTP `/upload` is broken until the spin is fixed
-
-## Patch I already added (independent of this hang)
-
-`backend/src/retriever.rs:539-558` — auto-recover from Tantivy
-SchemaError on `Index::open_or_create`. Wipes the on-disk index and
-retries with the new schema. Necessary because the bundle's new
-`section_id_field` invalidates any existing index. Keep this when
-fixing the hang.
+The bisect doc ruled out reconciler, chunker, and `index_chunk`
+rewrite — those rulings stand, those weren't the bug either. The
+debug-symbol toggle (`strip = false`, `debug = true`) was a red
+herring; the hang doesn't return when the toggle is reverted.
