@@ -131,9 +131,13 @@ pub mod lit {
         out
     }
 
-    /// Encode a `vecf32(...)` literal for FalkorDB vector params.  Vectors
-    /// flow through literal substitution (the bound-params path doesn't
-    /// support the `vecf32` constructor today).
+    /// Encode a `vecf32(...)` literal for FalkorDB vector queries.
+    ///
+    /// **Must be inlined into the cypher query string, not passed via bound
+    /// params.** FalkorDB's parameter parser rejects the `vecf32(...)` constructor
+    /// as a parameter value (errors with `to parse query parameter '<name>' value`),
+    /// so callers must `format!("... {qvec} ...", qvec = lit::vecf32(embedding))`
+    /// rather than `params.insert("qvec", lit::vecf32(embedding))`.
     pub fn vecf32(items: &[f32]) -> String {
         let mut out = String::from("vecf32([");
         for (i, x) in items.iter().enumerate() {
