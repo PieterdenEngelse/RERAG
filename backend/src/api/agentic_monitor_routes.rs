@@ -1041,8 +1041,7 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
             .route("/episodes", web::get().to(get_recent_episodes))
             .route("/goals", web::get().to(get_goals))
             .route("/reflections", web::get().to(get_reflections))
-            .route("/rig-stats", web::get().to(get_rig_stats))
-            .route("/pointer-stats", web::get().to(get_pointer_stats)),
+            .route("/rig-stats", web::get().to(get_rig_stats)),
     )
     .service(web::scope("/monitoring/memory").route("/stats", web::get().to(get_memory_stats)))
     .service(

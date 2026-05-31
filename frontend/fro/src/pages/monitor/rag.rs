@@ -31,12 +31,15 @@ WHAT THE TILES MEAN
 • Routed to PointerRag   — how many of those Auto queries triggered
                            section reassembly; the % is the share
 • Sections hydrated      — unique sections the index reassembled and
-                           handed to the LLM (lifetime total)
-• Hydration success      — fraction of hydration attempts that
-                           returned section text; the rest fell back
-                           to raw chunk text (no section_id on the
-                           chunk, the fetch came back empty, or the
-                           retriever lock was busy)
+                           handed to the LLM (lifetime total). Lower
+                           than chunks_in is expected: multiple chunks
+                           often share a section, so dedup compresses.
+• Clean rate             — fraction of input chunks whose section was
+                           successfully hydrated. Falls when chunks
+                           drop back to raw text — no section_id on
+                           the chunk, the section fetch came back
+                           empty, or the retriever lock was busy.
+                           Healthy pipeline trends toward 100 %.
 
 THE RECENT TABLE
 One row per Pointer-routed query, newest first. Gap and threshold
@@ -478,12 +481,12 @@ pub fn MonitorRag() -> Element {
                                 ),
                             }
                             StatCard {
-                                title: "Hydration success".into(),
-                                value: format!("{:.1}", p.hydration_success_rate_pct).into(),
+                                title: "Clean rate".into(),
+                                value: format!("{:.1}", p.clean_rate_pct).into(),
                                 unit: Some("%".into()),
                                 trend: Some(
                                     format!(
-                                        "{:.0}% of recent routes clean",
+                                        "{:.0}% of recent routes had zero fallbacks",
                                         p.clean_pointer_route_pct,
                                     ).into(),
                                 ),

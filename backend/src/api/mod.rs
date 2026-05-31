@@ -838,6 +838,10 @@ pub fn start_api_server(
                         web::get().to(agentic_monitor_routes::get_reflections),
                     )
                     .route(
+                        "/agents/rig-stats",
+                        web::get().to(agentic_monitor_routes::get_rig_stats),
+                    )
+                    .route(
                         "/agents/pointer-stats",
                         web::get().to(agentic_monitor_routes::get_pointer_stats),
                     )

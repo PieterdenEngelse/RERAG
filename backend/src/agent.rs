@@ -982,8 +982,8 @@ impl<'a> Agent<'a> {
                         crate::monitoring::pointer_stats::record_pointer_hydration(
                             used_chunks.len(),
                             &h,
-                            frag_gap as f32,
-                            gap_threshold as f32,
+                            frag_gap,
+                            gap_threshold,
                         );
                         tracing::info!(
                             chunks = used_chunks.len(),

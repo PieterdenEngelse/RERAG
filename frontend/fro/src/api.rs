@@ -2678,8 +2678,8 @@ pub struct PointerHistoryEntry {
     pub fb_no_section_id: usize,
     pub fb_fetch_empty: usize,
     pub fb_lock_failed: usize,
-    pub gap: f32,
-    pub threshold: f32,
+    pub gap: f64,
+    pub threshold: f64,
 }
 
 /// Auto-mode routing + section-reassembly hydration counters.
@@ -2692,13 +2692,13 @@ pub struct PointerStatsResponse {
     pub pointer_route_pct: f64,
     pub sections_hydrated_total: usize,
     pub chunks_in_total: usize,
-    pub hydration_success_rate_pct: f64,
+    pub clean_rate_pct: f64,
     pub fb_no_section_id_total: usize,
     pub fb_fetch_empty_total: usize,
     pub fb_lock_failed_total: usize,
     pub recent: Vec<PointerHistoryEntry>,
-    pub avg_gap: f32,
-    pub avg_threshold: f32,
+    pub avg_gap: f64,
+    pub avg_threshold: f64,
     pub clean_pointer_route_pct: f64,
 }
 

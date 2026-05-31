@@ -38,8 +38,8 @@ pub struct PointerHistoryEntry {
     pub fb_no_section_id: usize,
     pub fb_fetch_empty: usize,
     pub fb_lock_failed: usize,
-    pub gap: f32,
-    pub threshold: f32,
+    pub gap: f64,
+    pub threshold: f64,
 }
 
 impl PointerHistoryEntry {
@@ -83,8 +83,8 @@ pub fn record_auto_route(route: AutoRoute) {
 pub fn record_pointer_hydration(
     chunks_in: usize,
     hydration: &PointerHydration,
-    gap: f32,
-    threshold: f32,
+    gap: f64,
+    threshold: f64,
 ) {
     POINTER_CHUNKS_IN_TOTAL.fetch_add(chunks_in, Ordering::Relaxed);
     POINTER_SECTIONS_HYDRATED.fetch_add(hydration.hydrated, Ordering::Relaxed);
@@ -125,10 +125,15 @@ pub struct PointerStatsSnapshot {
 
     pub sections_hydrated_total: usize,
     pub chunks_in_total: usize,
-    /// Hydration attempts that produced section text, as a percentage of
-    /// all hydration attempts (success + every fallback bucket). 0 when
-    /// no attempts have happened yet.
-    pub hydration_success_rate_pct: f64,
+    /// Fraction of input chunks whose section was successfully hydrated:
+    /// `(chunks_in_total − total_fallbacks) / chunks_in_total * 100`.
+    /// Trends toward 100 % when the Pointer pipeline is healthy; drops as
+    /// chunks fall back to raw text (no section_id, empty fetch, or lock
+    /// busy). 0 when no Pointer routes have happened yet. Caveat:
+    /// `fb_no_section_id` and `fb_lock_failed` count per-chunk while
+    /// `fb_fetch_empty` counts per-unique-section (dedup), so this
+    /// modestly under-counts the chunks lost to fetch_empty failures.
+    pub clean_rate_pct: f64,
     pub fb_no_section_id_total: usize,
     pub fb_fetch_empty_total: usize,
     pub fb_lock_failed_total: usize,
@@ -136,10 +141,10 @@ pub struct PointerStatsSnapshot {
     /// Most recent ≤100 Pointer routes, newest first.
     pub recent: Vec<PointerHistoryEntry>,
     /// Mean `gap` over `recent`.
-    pub avg_gap: f32,
+    pub avg_gap: f64,
     /// Mean `threshold` over `recent`. Surfaces threshold churn from
     /// users moving the Pointer-trigger slider.
-    pub avg_threshold: f32,
+    pub avg_threshold: f64,
     /// Fraction of `recent` routes that completed with zero fallbacks.
     pub clean_pointer_route_pct: f64,
 }
@@ -162,9 +167,10 @@ pub fn snapshot() -> PointerStatsSnapshot {
         0.0
     };
 
-    let attempts = hydrated + fb_no_section + fb_fetch_empty + fb_lock_failed;
-    let hydration_success_rate_pct = if attempts > 0 {
-        (hydrated as f64 / attempts as f64) * 100.0
+    let total_fallbacks = fb_no_section + fb_fetch_empty + fb_lock_failed;
+    let clean_rate_pct = if chunks_in > 0 {
+        let clean = chunks_in.saturating_sub(total_fallbacks);
+        (clean as f64 / chunks_in as f64) * 100.0
     } else {
         0.0
     };
@@ -173,16 +179,16 @@ pub fn snapshot() -> PointerStatsSnapshot {
         Ok(guard) => {
             let n = guard.len();
             if n == 0 {
-                (Vec::new(), 0.0_f32, 0.0_f32, 0.0_f64)
+                (Vec::new(), 0.0_f64, 0.0_f64, 0.0_f64)
             } else {
-                let sum_gap: f32 = guard.iter().map(|e| e.gap).sum();
-                let sum_thr: f32 = guard.iter().map(|e| e.threshold).sum();
+                let sum_gap: f64 = guard.iter().map(|e| e.gap).sum();
+                let sum_thr: f64 = guard.iter().map(|e| e.threshold).sum();
                 let clean = guard.iter().filter(|e| e.total_fallbacks() == 0).count();
                 let recent: Vec<PointerHistoryEntry> = guard.iter().rev().cloned().collect();
                 (
                     recent,
-                    sum_gap / n as f32,
-                    sum_thr / n as f32,
+                    sum_gap / n as f64,
+                    sum_thr / n as f64,
                     (clean as f64 / n as f64) * 100.0,
                 )
             }
@@ -198,7 +204,7 @@ pub fn snapshot() -> PointerStatsSnapshot {
         pointer_route_pct,
         sections_hydrated_total: hydrated,
         chunks_in_total: chunks_in,
-        hydration_success_rate_pct,
+        clean_rate_pct,
         fb_no_section_id_total: fb_no_section,
         fb_fetch_empty_total: fb_fetch_empty,
         fb_lock_failed_total: fb_lock_failed,
@@ -260,7 +266,7 @@ mod tests {
         assert_eq!(s.route_hybrid_total, 0);
         assert_eq!(s.pointer_route_pct, 0.0);
         assert_eq!(s.sections_hydrated_total, 0);
-        assert_eq!(s.hydration_success_rate_pct, 0.0);
+        assert_eq!(s.clean_rate_pct, 0.0);
         assert!(s.recent.is_empty());
         assert_eq!(s.avg_gap, 0.0);
         assert_eq!(s.clean_pointer_route_pct, 0.0);
@@ -309,8 +315,9 @@ mod tests {
         assert!((s.avg_threshold - 0.5).abs() < 1e-6);
         // 1 of 2 routes had zero fallbacks.
         assert!((s.clean_pointer_route_pct - 50.0).abs() < 1e-9);
-        // hydration_success_rate: 5 hydrated / (5 + 1 + 1 + 0) attempts.
-        let expected = 5.0_f64 / 7.0_f64 * 100.0;
-        assert!((s.hydration_success_rate_pct - expected).abs() < 1e-9);
+        // clean_rate_pct: 12 chunks_in, 2 total fallbacks across both
+        // routes (1 no_section_id + 1 fetch_empty) → 10/12 clean.
+        let expected = 10.0_f64 / 12.0_f64 * 100.0;
+        assert!((s.clean_rate_pct - expected).abs() < 1e-9);
     }
 }
