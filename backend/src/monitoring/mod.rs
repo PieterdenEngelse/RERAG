@@ -25,6 +25,7 @@ pub mod metrics_config;
 pub mod onnx_metrics;
 pub mod otel_config;
 pub mod performance_analysis;
+pub mod pointer_stats;
 pub mod pprof;
 pub mod preprocess_stats;
 pub mod rate_limit_middleware;

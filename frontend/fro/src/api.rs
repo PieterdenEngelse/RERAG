@@ -2669,6 +2669,44 @@ pub async fn fetch_rig_stats() -> Result<RigStatsResponse, String> {
     fetch_json("/monitoring/agents/rig-stats").await
 }
 
+/// One ring-buffer entry for a single Pointer-routed query.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PointerHistoryEntry {
+    pub recorded_at_ms: u64,
+    pub chunks_in: usize,
+    pub sections_hydrated: usize,
+    pub fb_no_section_id: usize,
+    pub fb_fetch_empty: usize,
+    pub fb_lock_failed: usize,
+    pub gap: f32,
+    pub threshold: f32,
+}
+
+/// Auto-mode routing + section-reassembly hydration counters.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PointerStatsResponse {
+    pub auto_queries_total: usize,
+    pub route_pointer_total: usize,
+    pub route_strict_total: usize,
+    pub route_hybrid_total: usize,
+    pub pointer_route_pct: f64,
+    pub sections_hydrated_total: usize,
+    pub chunks_in_total: usize,
+    pub hydration_success_rate_pct: f64,
+    pub fb_no_section_id_total: usize,
+    pub fb_fetch_empty_total: usize,
+    pub fb_lock_failed_total: usize,
+    pub recent: Vec<PointerHistoryEntry>,
+    pub avg_gap: f32,
+    pub avg_threshold: f32,
+    pub clean_pointer_route_pct: f64,
+}
+
+/// Fetch Auto → PointerRag routing + hydration stats
+pub async fn fetch_pointer_stats() -> Result<PointerStatsResponse, String> {
+    fetch_json("/monitoring/agents/pointer-stats").await
+}
+
 pub async fn fetch_runtime_health() -> Result<RuntimeHealth, String> {
     fetch_json("/sys/runtime-health").await
 }

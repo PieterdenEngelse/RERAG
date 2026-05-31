@@ -175,12 +175,12 @@ pub fn auto_route(
 /// Auto→Pointer routing decision; the stats are surfaced in the step
 /// trace so the user can see how many sections actually came back
 /// versus fell back to raw text.
-struct PointerHydration {
-    context: String,
-    hydrated: usize,
-    fb_no_section_id: usize,
-    fb_fetch_empty: usize,
-    fb_lock_failed: usize,
+pub(crate) struct PointerHydration {
+    pub(crate) context: String,
+    pub(crate) hydrated: usize,
+    pub(crate) fb_no_section_id: usize,
+    pub(crate) fb_fetch_empty: usize,
+    pub(crate) fb_lock_failed: usize,
 }
 
 impl PointerHydration {
@@ -975,9 +975,16 @@ impl<'a> Agent<'a> {
                     POINTERRAG_AUTO_GAP_THRESHOLD_DEFAULT,
                 );
                 let route = auto_route(frag, gap_threshold, used_chunks.len(), est_tokens);
+                crate::monitoring::pointer_stats::record_auto_route(route);
                 match route {
                     AutoRoute::PointerHydration => {
                         let h = self.hydrate_pointer_sections(&used_chunks);
+                        crate::monitoring::pointer_stats::record_pointer_hydration(
+                            used_chunks.len(),
+                            &h,
+                            frag_gap as f32,
+                            gap_threshold as f32,
+                        );
                         tracing::info!(
                             chunks = used_chunks.len(),
                             hydrated = h.hydrated,
@@ -1081,8 +1088,7 @@ impl<'a> Agent<'a> {
     /// Called by the `AgentMode::Auto` routing decision when
     /// `gap ≥ threshold` — Auto's only path into section hydration.
     fn hydrate_pointer_sections(&self, used_chunks: &[String]) -> PointerHydration {
-        let mut seen_sections: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut seen_sections: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut sections: Vec<String> = Vec::with_capacity(used_chunks.len());
         let mut hydrated = 0usize;
         let mut fb_no_section_id = 0usize;

@@ -1025,6 +1025,13 @@ pub async fn get_rig_stats() -> ActixResult<HttpResponse> {
     Ok(HttpResponse::Ok().json(snap))
 }
 
+/// GET /monitoring/agents/pointer-stats
+/// Returns Auto-mode routing counters and section-reassembly hydration stats.
+pub async fn get_pointer_stats() -> ActixResult<HttpResponse> {
+    let snap = crate::monitoring::pointer_stats::snapshot();
+    Ok(HttpResponse::Ok().json(snap))
+}
+
 // ============ Route Configuration ============
 
 pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
@@ -1034,7 +1041,8 @@ pub fn configure_agentic_monitor_routes(cfg: &mut web::ServiceConfig) {
             .route("/episodes", web::get().to(get_recent_episodes))
             .route("/goals", web::get().to(get_goals))
             .route("/reflections", web::get().to(get_reflections))
-            .route("/rig-stats", web::get().to(get_rig_stats)),
+            .route("/rig-stats", web::get().to(get_rig_stats))
+            .route("/pointer-stats", web::get().to(get_pointer_stats)),
     )
     .service(web::scope("/monitoring/memory").route("/stats", web::get().to(get_memory_stats)))
     .service(
