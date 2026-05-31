@@ -1148,7 +1148,6 @@ pub(crate) async fn run_agent(req: web::Json<AgentRequest>) -> Result<HttpRespon
             ChatMode::Auto => crate::agent::AgentMode::Auto,
             ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
             ChatMode::Agentic => crate::agent::AgentMode::Agentic,
-            ChatMode::PointerRag => crate::agent::AgentMode::PointerRag,
         };
         let query_clone = req.query.clone();
         let top_k = req.top_k;
@@ -1325,7 +1324,6 @@ pub(crate) async fn run_agent_get(
             ChatMode::Auto => crate::agent::AgentMode::Auto,
             ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
             ChatMode::Agentic => crate::agent::AgentMode::Agentic,
-            ChatMode::PointerRag => crate::agent::AgentMode::PointerRag,
         };
         let query_str = query.query.clone();
         let top_k = query.top_k;
@@ -1725,7 +1723,6 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         ChatMode::Auto => crate::agent::AgentMode::Auto,
         ChatMode::RagStrict => crate::agent::AgentMode::RagStrict,
         ChatMode::Agentic => crate::agent::AgentMode::Agentic,
-        ChatMode::PointerRag => crate::agent::AgentMode::PointerRag,
     };
 
     // Agentic mode: Rig-powered tool-calling loop with all tools
@@ -1920,9 +1917,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
     // For RAG-only mode, use non-streaming (document search doesn't benefit from streaming)
     if matches!(
         agent_mode,
-        crate::agent::AgentMode::Rag
-            | crate::agent::AgentMode::RagStrict
-            | crate::agent::AgentMode::PointerRag
+        crate::agent::AgentMode::Rag | crate::agent::AgentMode::RagStrict
     ) {
         if let Some(retriever) = get_corpus_retriever(&stream_corpus_slug) {
             let query_clone = req.query.clone();
@@ -2044,9 +2039,9 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
     // Get mode-specific config
     use crate::db::llm_settings::LlmConfig;
     let mut config = match agent_mode {
-        crate::agent::AgentMode::Rag
-        | crate::agent::AgentMode::RagStrict
-        | crate::agent::AgentMode::PointerRag => LlmConfig::documents_only(),
+        crate::agent::AgentMode::Rag | crate::agent::AgentMode::RagStrict => {
+            LlmConfig::documents_only()
+        }
         crate::agent::AgentMode::Llm => LlmConfig::llm_only(),
         crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto => LlmConfig::combined(),
         crate::agent::AgentMode::Agentic => LlmConfig::combined(),

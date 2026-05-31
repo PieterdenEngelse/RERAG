@@ -122,6 +122,22 @@ impl DocBlock {
         }
     }
 
+    /// Marker block emitted between PDF pages so the chunker creates a
+    /// fresh section_id per page (PageBreak is a strong boundary).
+    /// Carries the upcoming page number for downstream consumers; text
+    /// is empty because the boundary itself has no content.
+    pub fn page_break(page: u32) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            block_type: BlockType::PageBreak,
+            text: String::new(),
+            markdown: None,
+            bbox: None,
+            page: Some(page),
+            metadata: HashMap::new(),
+        }
+    }
+
     pub fn table(rows: usize, cols: usize, content: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -161,8 +177,14 @@ impl DocIR {
     }
 
     /// Push a block, silently dropping empty non-atomic blocks.
+    /// Strong-boundary blocks (Header, PageBreak) are also kept even when
+    /// their text is empty — PageBreak in particular is empty by design
+    /// and exists purely as a chunker boundary marker.
     pub fn push(&mut self, block: DocBlock) {
-        if !block.text.trim().is_empty() || block.block_type.is_atomic() {
+        if !block.text.trim().is_empty()
+            || block.block_type.is_atomic()
+            || block.block_type.is_strong_boundary()
+        {
             self.blocks.push(block);
         }
     }
@@ -226,4 +248,31 @@ pub struct ChunkMeta {
     /// Empty for content carved off before any boundary (rare; covers pre-header text).
     #[serde(default)]
     pub section_id: String,
+}
+
+#[cfg(test)]
+mod docir_push_tests {
+    //! Regression: `DocIR::push` used to drop empty non-atomic blocks
+    //! unconditionally, which silently filtered every `PageBreak` (empty
+    //! text by design). That broke `pdf_paged_ir`'s per-page sectioning —
+    //! the chunker never saw the boundary blocks so every PDF chunk
+    //! landed in one section_id.
+    use super::{BlockType, DocBlock, DocIR};
+
+    #[test]
+    fn page_break_is_kept_despite_empty_text() {
+        let mut ir = DocIR::new("t.pdf", "pdf");
+        ir.push(DocBlock::page_break(2));
+        assert_eq!(ir.blocks.len(), 1);
+        assert!(matches!(ir.blocks[0].block_type, BlockType::PageBreak));
+    }
+
+    #[test]
+    fn empty_text_block_still_dropped() {
+        // We didn't accidentally weaken the filter — empty non-atomic
+        // non-boundary blocks (plain empty Text) still get filtered.
+        let mut ir = DocIR::new("t.pdf", "pdf");
+        ir.push(DocBlock::text(""));
+        assert_eq!(ir.blocks.len(), 0);
+    }
 }

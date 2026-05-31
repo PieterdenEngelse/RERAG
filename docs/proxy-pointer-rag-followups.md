@@ -56,6 +56,64 @@ Anchor: `frontend/fro/src/components/home_settings_boards.rs` — TODO
 comment placed between the Agentic and Tune buttons. Copy the RAG Strict
 button pattern (line 186 in that file at time of writing).
 
+### PointerRag auto-trigger from fragmentation signal
+
+The Pointer RAG info modal is honest about Pointer being user-as-router:
+"There's no per-query heuristic — selecting Pointer is the decision."
+Auto mode (`backend/src/agent.rs:740-769`) *does* make a per-query
+routing decision — `used_chunks.len() >= 3 && (context.len() / 4) >= 1536`
+picks between `RagStrict` and `Hybrid`. Pointer has no equivalent.
+
+A natural extension is to add a fragmentation check that routes to
+PointerRag automatically, before the existing high-confidence check:
+
+```mermaid
+flowchart TD
+    A[Auto mode entry] --> F{fragmented?<br/>signal TBD}
+    F -- yes --> P[PointerRag branch]
+    F -- no --> B{high_confidence?<br/>chunks ≥ 3 AND est_tokens ≥ 1536}
+    B -- yes --> C[RagStrict]
+    B -- no --> D[Hybrid]
+```
+
+Fragmentation runs first because it's orthogonal to confidence: a
+high-confidence retrieval spread across many sections is exactly the
+case Pointer is designed for, and a low-confidence retrieval all in
+one section is not.
+
+Open design questions to settle before implementing:
+
+1. **Signal.** Candidates, ordered by how cheap they are with the
+   existing code:
+   - `unique_section_ids / chunk_count` ratio (high = fragmented).
+     `Retriever::meta_for_content` (already used at
+     `backend/src/agent.rs:770-836` for the Pointer section lookup)
+     gives `section_id` per chunk — computable without new retrieval
+     work.
+   - Score spread across top-k (wide spread = weak coherence).
+   - Section-span coverage: do chunks cluster at section boundaries
+     (suggesting the body is what's wanted)?
+   - Or some combination.
+2. **Threshold.** What ratio / count actually correlates with Pointer
+   beating Hybrid? Needs measurement against a real corpus before
+   picking a number — a placeholder default will calcify.
+3. **UX.** Three options, all viable:
+   - Silent switch (matches today's Auto behavior — just log the branch
+     taken in the step trace).
+   - Step-trace hint only ("retrieval looks fragmented — Pointer would
+     reassemble these N sections") with no automatic switch.
+   - Suggest-in-UI: one-click "Try Pointer" affordance when the signal
+     fires, leaving the user as decision-maker.
+4. **Composition with the existing Auto switch.** Fragmentation check
+   runs first per the diagram above; `high_confidence` is only consulted
+   on the non-fragmented branch.
+5. **Educational surface.** CLAUDE.md frames ag as a learning platform —
+   "make the invisible visible". Whichever UX wins, the *signal value*
+   (e.g. "5 chunks → 5 sections, fragmentation 1.0") should appear in
+   the step trace so the user can see why the router chose what it
+   chose. Same shape as the hydrated/fallback counters now emitted by
+   the PointerRag branch.
+
 ## Out-of-bundle bugs surfaced
 
 ### Runtime overrides → process env propagation gap

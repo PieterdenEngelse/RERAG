@@ -1235,7 +1235,7 @@ fn extract_ir_from_bytes_typed(
                 ir
             })
             .or_else(|| flat_text_ir(path, bytes, ContentType::Pptx, "builtin/pptx", corpus)),
-        ContentType::Pdf => flat_text_ir(path, bytes, ContentType::Pdf, "builtin/pdf", corpus),
+        ContentType::Pdf => pdf_paged_ir(path, bytes, corpus),
         ContentType::Xlsx => flat_text_ir(
             path,
             bytes,
@@ -1271,6 +1271,91 @@ fn flat_text_ir(
     let mut ir = crate::doc_ir::DocIR::new(filename, "text");
     ir.push(crate::doc_ir::DocBlock::text(text));
     ir.tag_extractor(format);
+    Some(ir)
+}
+
+/// PDF-specific IR builder. Splits pdftotext's output on form-feed
+/// (`\x0c`) page markers and emits one `Text` block per page with a
+/// `PageBreak` between them. The chunker treats PageBreak as a strong
+/// boundary, so every page lands in its own `section_id` — which is
+/// what `Retriever::fetch_section` and the Auto-mode fragmentation
+/// signal both rely on.
+///
+/// Without this split the entire PDF collapses to a single section,
+/// which silently neuters PointerRag hydration and any cross-page
+/// observability. See `flat_text_ir` for the legacy single-block path
+/// that all non-PDF binary formats still use.
+fn pdf_paged_ir(
+    path: &Path,
+    bytes: Vec<u8>,
+    corpus: &str,
+) -> Option<crate::doc_ir::DocIR> {
+    use crate::doc_ir::{DocBlock, DocIR};
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    // Call pdftotext directly so we see the form-feed page markers it
+    // emits. The standard `extract_text_from_bytes` path runs the
+    // result through `apply_text_preprocessing` and the normalizer,
+    // both of which treat `\x0c` as whitespace and strip it — which
+    // would collapse every PDF back into one big section_id.
+    let raw = extract_text_from_pdf_pdftotext(path);
+    let raw = match raw {
+        Some(t) if !t.trim().is_empty() => t,
+        _ => {
+            // pdftotext didn't return text (image-only PDF, missing
+            // binary, etc.). Fall back to the standard path which
+            // covers OCR + dedupe + preprocessing. No page boundaries
+            // to surface in that case, so emit a single Text block.
+            drop(bytes);
+            let fallback = extract_text_from_bytes(path, Vec::new(), ContentType::Pdf, corpus)?;
+            let mut ir = DocIR::new(filename, "pdf");
+            ir.push(DocBlock::text(fallback));
+            ir.tag_extractor("builtin/pdf");
+            return Some(ir);
+        }
+    };
+    drop(bytes);
+    let mut ir = DocIR::new(filename, "pdf");
+    let mut emitted_any = false;
+    for (idx, page) in raw.split('\x0c').enumerate() {
+        let trimmed = page.trim_end_matches('\n');
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        // Run the standard preprocessing per page so each emitted Text
+        // block matches the canonicalization the rest of the pipeline
+        // expects, without losing the form-feed split that already ran.
+        let normalized = crate::normalizer::normalize(
+            &apply_text_preprocessing(
+                trimmed.to_string(),
+                false, // needs_html_clean
+                true,  // needs_unicode_clean — same flag the bulk path sets for PDFs
+                corpus,
+                filename,
+            ),
+            crate::normalizer::NormalizeTarget::Store,
+        );
+        if normalized.trim().is_empty() {
+            continue;
+        }
+        let page_num = (idx + 1) as u32;
+        if emitted_any {
+            ir.push(DocBlock::page_break(page_num));
+        }
+        let mut block = DocBlock::text(normalized);
+        block.page = Some(page_num);
+        ir.push(block);
+        emitted_any = true;
+    }
+    // If pdftotext returned a non-empty extract but every page was
+    // whitespace-only after trim, fall back to one flat block so the
+    // doc still indexes (mirrors the historical behavior).
+    if !emitted_any {
+        ir.push(DocBlock::text(raw));
+    }
+    ir.tag_extractor("builtin/pdf");
     Some(ir)
 }
 

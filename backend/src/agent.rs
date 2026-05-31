@@ -7,6 +7,227 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+/// Fragmentation signal for a set of matched chunks.
+///
+/// Two ratios are tracked because they answer different questions on
+/// real corpora:
+///
+/// - `section_ratio = unique_sections / tracked` — how spread the
+///   retrieval is across distinct *section* boundaries. This is the
+///   pp4-original "PointerRag wheelhouse" signal: high values mean
+///   matches scatter across many sections (Pointer's case).
+/// - `doc_ratio = unique_docs / tracked` — how spread the retrieval
+///   is across distinct *documents*. On corpora where most files are
+///   single-section (e.g. short header-less markdown), `section_ratio`
+///   collapses to `doc_ratio` and the within-doc signal vanishes.
+///
+/// The *gap* `section_ratio − doc_ratio` is the within-document
+/// fragmentation: any value above zero means at least one document
+/// contributed multiple sections to the retrieval. Invariant:
+/// `unique_sections ≥ unique_docs` (sections are nested in docs and
+/// `section_id` is a UUID generated per boundary).
+///
+/// Both ratios are `None` when no chunks were tracked (older index, or
+/// every meta lookup returned `None`). `None` is preserved instead of
+/// synthesizing `NaN` or `0.0` so callers can distinguish "no signal"
+/// from "real low fragmentation".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FragmentationStats {
+    pub tracked: usize,
+    pub untracked: usize,
+    pub unique_sections: usize,
+    pub unique_docs: usize,
+    pub section_ratio: Option<f32>,
+    pub doc_ratio: Option<f32>,
+}
+
+/// Compute the fragmentation signal over a set of chunk contents.
+///
+/// `lookup` returns `Some((section_id, doc_id))` for chunks the caller
+/// could associate with a source, and `None` otherwise (missing meta,
+/// retriever lock unavailable — the helper doesn't care which). An
+/// empty `section_id` is treated as untracked (the chunk lacks a usable
+/// section boundary); an empty `doc_id` while `section_id` is present
+/// still counts the chunk as tracked but skips the docs-set insert.
+///
+/// Pure over its inputs — no `Mutex`, no IO. Tests pass a synthetic
+/// closure; the Auto arm passes a closure that delegates to
+/// `Retriever::meta_for_content` + `Retriever::doc_id_for_content`.
+pub fn fragmentation(
+    chunks: &[String],
+    lookup: impl Fn(&str) -> Option<(String, String)>,
+) -> FragmentationStats {
+    let mut tracked = 0usize;
+    let mut untracked = 0usize;
+    let mut sections: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut docs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for chunk in chunks {
+        match lookup(chunk) {
+            Some((section_id, doc_id)) if !section_id.is_empty() => {
+                tracked += 1;
+                sections.insert(section_id);
+                if !doc_id.is_empty() {
+                    docs.insert(doc_id);
+                }
+            }
+            _ => {
+                untracked += 1;
+            }
+        }
+    }
+    let unique_sections = sections.len();
+    let unique_docs = docs.len();
+    let (section_ratio, doc_ratio) = if tracked > 0 {
+        (
+            Some(unique_sections as f32 / tracked as f32),
+            Some(unique_docs as f32 / tracked as f32),
+        )
+    } else {
+        (None, None)
+    };
+    FragmentationStats {
+        tracked,
+        untracked,
+        unique_sections,
+        unique_docs,
+        section_ratio,
+        doc_ratio,
+    }
+}
+
+/// Format the fragmentation ratio for log output. `None` (no tracked
+/// chunks) becomes `"unknown"` so it's never confusable with a real
+/// low-fragmentation `0.000`.
+fn format_ratio(ratio: Option<f32>) -> String {
+    ratio
+        .map(|x| format!("{x:.3}"))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Default for the Auto→PointerRag routing threshold. The "gap" is
+/// `section_ratio - doc_ratio`: a measure of how much of the
+/// retrieval's spread is *within* documents (Pointer's wheelhouse)
+/// versus *across* documents (Strict/Hybrid territory). Overridable
+/// at runtime via the `POINTERRAG_AUTO_GAP_THRESHOLD` setting key.
+///
+/// Picked from the n=13 corpus analysis in `docs/pp-conclusion.md`:
+/// queries above 0.5 cluster as "PointerRag would help"; queries
+/// below cluster as "Strict/Hybrid is fine." Provisional — re-tune
+/// when the corpus shape changes.
+pub const POINTERRAG_AUTO_GAP_THRESHOLD_DEFAULT: f64 = 0.5;
+
+/// The three routing outcomes Auto can pick for a query with chunks.
+/// `run_with_mode` consults `auto_route` to map observed retrieval
+/// into one of these, then takes the corresponding action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoRoute {
+    /// Within-doc fragmentation gap met threshold — hydrate full
+    /// sections via `hydrate_pointer_sections` and answer with strict
+    /// grounding.
+    PointerHydration,
+    /// Coherent retrieval with enough material — strict grounded RAG
+    /// over the raw chunks.
+    Strict,
+    /// Coherent retrieval with not-enough material — fall back to
+    /// Hybrid (LLM + whatever context exists).
+    Hybrid,
+}
+
+/// Pure routing decision for `AgentMode::Auto`. Split out from
+/// `run_with_mode` so the rules can be unit-tested without standing up
+/// an Agent + Retriever + DB.
+///
+/// Rules (pp4 Phase 2 Step 3):
+/// 1. `frag_gap = section_ratio - doc_ratio ≥ gap_threshold`
+///    → [`AutoRoute::PointerHydration`] regardless of confidence.
+///    **Inclusive** on the boundary: gap == threshold also routes to
+///    Pointer.
+/// 2. Otherwise, `chunk_count ≥ 3 && est_tokens ≥ 1536`
+///    → [`AutoRoute::Strict`].
+/// 3. Otherwise → [`AutoRoute::Hybrid`].
+///
+/// When fragmentation is unmeasurable (all chunks untracked — older
+/// index without `section_id`s, retriever lock unavailable),
+/// `frag.section_ratio` is `None`; the gap collapses to `0.0` and the
+/// Pointer route only fires when the threshold is also `≤ 0.0`.
+pub fn auto_route(
+    frag: FragmentationStats,
+    gap_threshold: f64,
+    chunk_count: usize,
+    est_tokens: usize,
+) -> AutoRoute {
+    let frag_gap = frag
+        .section_ratio
+        .zip(frag.doc_ratio)
+        .map(|(s, d)| (s - d) as f64)
+        .unwrap_or(0.0);
+    if frag_gap >= gap_threshold {
+        AutoRoute::PointerHydration
+    } else if chunk_count >= 3 && est_tokens >= 1536 {
+        AutoRoute::Strict
+    } else {
+        AutoRoute::Hybrid
+    }
+}
+
+/// Result of hydrating a chunk set into full sections via the
+/// retriever. Produced by `hydrate_pointer_sections`, called from the
+/// Auto→Pointer routing decision; the stats are surfaced in the step
+/// trace so the user can see how many sections actually came back
+/// versus fell back to raw text.
+struct PointerHydration {
+    context: String,
+    hydrated: usize,
+    fb_no_section_id: usize,
+    fb_fetch_empty: usize,
+    fb_lock_failed: usize,
+}
+
+impl PointerHydration {
+    fn total_fallbacks(&self) -> usize {
+        self.fb_no_section_id + self.fb_fetch_empty + self.fb_lock_failed
+    }
+}
+
+/// Build the fragmentation suffix appended to the Auto-mode step-trace
+/// message. Format is locked by tests so step-trace consumers (UI, log
+/// scrapers) can parse it. Includes both ratios + the raw counts so a
+/// reader can see (a) the section-spread signal pp4 cares about and
+/// (b) how much of it is "really" within-doc spread vs cross-doc.
+///
+/// Returns the suffix with a leading space — callers concatenate it
+/// directly onto the existing message.
+fn fragmentation_suffix(frag: FragmentationStats) -> String {
+    let section = format_ratio(frag.section_ratio);
+    let doc = format_ratio(frag.doc_ratio);
+    let total = frag.tracked + frag.untracked;
+    format!(
+        " (fragmentation: section {section}, doc {doc}, {}/{} chunks tracked, {} sections / {} docs)",
+        frag.tracked, total, frag.unique_sections, frag.unique_docs
+    )
+}
+
+/// Emit the Auto-mode fragmentation observability log. Extracted as a
+/// free function so the structured fields can be asserted with a
+/// `tracing_subscriber::fmt` writer in tests without standing up an
+/// Agent + Retriever. Called exactly once per `AgentMode::Auto` query,
+/// before the high/low-confidence fork.
+fn log_auto_fragmentation(chunks: usize, frag: FragmentationStats, est_tokens: usize) {
+    let section_ratio_str = format_ratio(frag.section_ratio);
+    let doc_ratio_str = format_ratio(frag.doc_ratio);
+    tracing::info!(
+        chunks = chunks,
+        tracked = frag.tracked,
+        untracked = frag.untracked,
+        unique_sections = frag.unique_sections,
+        unique_docs = frag.unique_docs,
+        section_ratio = %section_ratio_str,
+        doc_ratio = %doc_ratio_str,
+        est_tokens = est_tokens,
+        "Auto mode: fragmentation signal"
+    );
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentStep {
     pub kind: String,
@@ -38,10 +259,6 @@ pub enum AgentMode {
     RagStrict,
     /// Agentic mode: LLM decides which tools to call in a loop (Rig)
     Agentic,
-    /// Proxy-pointer RAG: use the matched chunks only to discover their
-    /// section_ids, then hand the LLM the full reassembled sections instead
-    /// of the raw chunks. Falls back to chunk text when section info missing.
-    PointerRag,
 }
 
 /// Verbosity level for responses
@@ -677,22 +894,6 @@ impl<'a> Agent<'a> {
                         used_chunks,
                     };
                 }
-                AgentMode::PointerRag => {
-                    // No chunks → no sections to hydrate; treat like strict RAG.
-                    let answer =
-                        "I don't have enough information in the knowledge base to answer this question.".to_string();
-                    steps.push(AgentStep {
-                        kind: "plan".into(),
-                        message: "No chunks found; PointerRag returns 'I don't know'".into(),
-                    });
-                    self.store_memory(query, &answer);
-                    self.store_episode(query, &answer, 0, false);
-                    return AgentResponse {
-                        answer,
-                        steps,
-                        used_chunks,
-                    };
-                }
                 AgentMode::Llm => unreachable!(), // Already handled above
                 AgentMode::Agentic => unreachable!(), // Already handled above
             }
@@ -738,75 +939,109 @@ impl<'a> Agent<'a> {
                 self.call_llm_strict(query, &context, goal_context_opt)
             }
             AgentMode::Auto => {
-                // Auto: check retrieval confidence to decide strict RAG vs Hybrid
+                // Auto: fragmentation gap routes to PointerHydration; otherwise
+                // chunk count + est_tokens picks Strict vs Hybrid via `auto_route`.
                 let context = used_chunks.join("\n\n");
-                let high_confidence = used_chunks.len() >= 3 && (context.len() / 4) >= 1536;
-                if high_confidence {
-                    steps.push(AgentStep {
-                        kind: "llm".into(),
-                        message: format!(
-                            "Auto mode: high confidence ({} chunks, ~{} tokens) → strict grounded RAG",
-                            used_chunks.len(),
-                            context.len() / 4
-                        ),
-                    });
-                    crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
-                    crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
-                    self.call_llm_strict(query, &context, goal_context_opt)
-                } else {
-                    steps.push(AgentStep {
-                        kind: "llm".into(),
-                        message: format!(
-                            "Auto mode: low confidence ({} chunks, ~{} tokens) → Hybrid",
-                            used_chunks.len(),
-                            context.len() / 4
-                        ),
-                    });
-                    crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
-                    crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
-                    self.call_llm(query, Some(&context), AgentMode::Hybrid, goal_context_opt)
-                }
-            }
-            AgentMode::PointerRag => {
-                // Map chunks → unique section_ids → reassembled sections.
-                // When a chunk has no section_id (older index, missing meta),
-                // fall back to using the chunk text itself.
-                let mut seen_sections: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
-                let mut sections: Vec<String> = Vec::with_capacity(used_chunks.len());
-                if let Ok(r) = self.retriever.lock() {
-                    for chunk in &used_chunks {
+                let est_tokens = context.len() / 4;
+                // Fragmentation signal (pp4 Phase 1). The helper handles
+                // empty section_id and lock-failure cases by treating both
+                // as untracked.
+                let frag = if let Ok(r) = self.retriever.lock() {
+                    fragmentation(&used_chunks, |c| {
                         let section_id = r
-                            .meta_for_content(chunk)
+                            .meta_for_content(c)
                             .map(|m| m.section_id.clone())
                             .unwrap_or_default();
-                        if section_id.is_empty() {
-                            sections.push(chunk.clone());
-                            continue;
-                        }
-                        if !seen_sections.insert(section_id.clone()) {
-                            continue;
-                        }
-                        match r.fetch_section(&section_id) {
-                            Ok(text) if !text.is_empty() => sections.push(text),
-                            _ => sections.push(chunk.clone()),
-                        }
-                    }
+                        let doc_id = r.doc_id_for_content(c).unwrap_or_default();
+                        Some((section_id, doc_id))
+                    })
                 } else {
-                    sections.clone_from(&used_chunks);
+                    fragmentation(&used_chunks, |_| None)
+                };
+                log_auto_fragmentation(used_chunks.len(), frag, est_tokens);
+                let frag_suffix = fragmentation_suffix(frag);
+                // pp4 Phase 2: delegate routing to the pure `auto_route`
+                // helper so the decision logic stays unit-testable. The
+                // gap and threshold values are recomputed here only for
+                // the log/step-message payloads (the decision itself is
+                // already made).
+                let frag_gap = frag
+                    .section_ratio
+                    .zip(frag.doc_ratio)
+                    .map(|(s, d)| (s - d) as f64)
+                    .unwrap_or(0.0);
+                let gap_threshold = crate::settings::effective_f64(
+                    "POINTERRAG_AUTO_GAP_THRESHOLD",
+                    POINTERRAG_AUTO_GAP_THRESHOLD_DEFAULT,
+                );
+                let route = auto_route(frag, gap_threshold, used_chunks.len(), est_tokens);
+                match route {
+                    AutoRoute::PointerHydration => {
+                        let h = self.hydrate_pointer_sections(&used_chunks);
+                        tracing::info!(
+                            chunks = used_chunks.len(),
+                            hydrated = h.hydrated,
+                            fallback_no_section_id = h.fb_no_section_id,
+                            fallback_fetch_empty = h.fb_fetch_empty,
+                            fallback_lock_failed = h.fb_lock_failed,
+                            gap = frag_gap,
+                            threshold = gap_threshold,
+                            "Auto mode: routing to PointerRag (within-doc fragmentation)"
+                        );
+                        steps.push(AgentStep {
+                            kind: "llm".into(),
+                            message: format!(
+                                "Auto mode: within-doc fragmentation (gap {:.3} ≥ {:.3}) → PointerRag (hydrated {} sections from {} chunks, {} fallbacks){}",
+                                frag_gap,
+                                gap_threshold,
+                                h.hydrated,
+                                used_chunks.len(),
+                                h.total_fallbacks(),
+                                frag_suffix
+                            ),
+                        });
+                        crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                        crate::monitoring::record_tool_dependency_str(
+                            "SemanticSearch",
+                            "LLMGenerate",
+                        );
+                        self.call_llm_strict(query, &h.context, goal_context_opt)
+                    }
+                    AutoRoute::Strict => {
+                        steps.push(AgentStep {
+                            kind: "llm".into(),
+                            message: format!(
+                                "Auto mode: high confidence ({} chunks, ~{} tokens) → strict grounded RAG{}",
+                                used_chunks.len(),
+                                est_tokens,
+                                frag_suffix
+                            ),
+                        });
+                        crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                        crate::monitoring::record_tool_dependency_str(
+                            "SemanticSearch",
+                            "LLMGenerate",
+                        );
+                        self.call_llm_strict(query, &context, goal_context_opt)
+                    }
+                    AutoRoute::Hybrid => {
+                        steps.push(AgentStep {
+                            kind: "llm".into(),
+                            message: format!(
+                                "Auto mode: low confidence ({} chunks, ~{} tokens) → Hybrid{}",
+                                used_chunks.len(),
+                                est_tokens,
+                                frag_suffix
+                            ),
+                        });
+                        crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                        crate::monitoring::record_tool_dependency_str(
+                            "SemanticSearch",
+                            "LLMGenerate",
+                        );
+                        self.call_llm(query, Some(&context), AgentMode::Hybrid, goal_context_opt)
+                    }
                 }
-                let context = sections.join("\n\n---\n\n");
-                steps.push(AgentStep {
-                    kind: "llm".into(),
-                    message: format!(
-                        "PointerRag: hydrated {} unique sections from {} chunks, answering with strict RAG",
-                        sections.len(),
-                        used_chunks.len()
-                    ),
-                });
-                crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
-                crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
-                self.call_llm_strict(query, &context, goal_context_opt)
             }
             AgentMode::Llm => unreachable!(), // Already handled above
             AgentMode::Agentic => unreachable!(), // Already handled above
@@ -837,6 +1072,60 @@ impl<'a> Agent<'a> {
         }
     }
 
+    /// Map matched chunks → unique section_ids → reassembled section
+    /// text via `Retriever::fetch_section`. Falls back to the raw chunk
+    /// text when the section_id is missing (older index), the fetch
+    /// returns empty, or the retriever lock is unavailable. The four
+    /// fallback counters let the step-trace surface silent degradation.
+    ///
+    /// Called by the `AgentMode::Auto` routing decision when
+    /// `gap ≥ threshold` — Auto's only path into section hydration.
+    fn hydrate_pointer_sections(&self, used_chunks: &[String]) -> PointerHydration {
+        let mut seen_sections: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut sections: Vec<String> = Vec::with_capacity(used_chunks.len());
+        let mut hydrated = 0usize;
+        let mut fb_no_section_id = 0usize;
+        let mut fb_fetch_empty = 0usize;
+        let mut fb_lock_failed = 0usize;
+        if let Ok(r) = self.retriever.lock() {
+            for chunk in used_chunks {
+                let section_id = r
+                    .meta_for_content(chunk)
+                    .map(|m| m.section_id.clone())
+                    .unwrap_or_default();
+                if section_id.is_empty() {
+                    fb_no_section_id += 1;
+                    sections.push(chunk.clone());
+                    continue;
+                }
+                if !seen_sections.insert(section_id.clone()) {
+                    continue;
+                }
+                match r.fetch_section(&section_id) {
+                    Ok(text) if !text.is_empty() => {
+                        hydrated += 1;
+                        sections.push(text);
+                    }
+                    _ => {
+                        fb_fetch_empty += 1;
+                        sections.push(chunk.clone());
+                    }
+                }
+            }
+        } else {
+            fb_lock_failed = used_chunks.len();
+            sections.extend_from_slice(used_chunks);
+        }
+        PointerHydration {
+            context: sections.join("\n\n---\n\n"),
+            hydrated,
+            fb_no_section_id,
+            fb_fetch_empty,
+            fb_lock_failed,
+        }
+    }
+
     /// Call LLM to generate a response (blocking)
     /// Uses mode-specific LlmConfig for optimal parameters
     fn call_llm(
@@ -853,7 +1142,7 @@ impl<'a> Agent<'a> {
             AgentMode::Rag => LlmConfig::documents_only(),
             AgentMode::Llm => LlmConfig::llm_only(),
             AgentMode::Hybrid | AgentMode::Auto => LlmConfig::combined(),
-            AgentMode::RagStrict | AgentMode::PointerRag => LlmConfig::documents_only(),
+            AgentMode::RagStrict => LlmConfig::documents_only(),
             AgentMode::Agentic => LlmConfig::combined(),
         };
 
@@ -1540,4 +1829,651 @@ fn naive_summarize(_query: &str, chunks: &[String]) -> String {
         out.push_str("No relevant content found.");
     }
     out
+}
+
+#[cfg(test)]
+mod fragmentation_tests {
+    use super::{fragmentation, FragmentationStats};
+
+    fn chunks(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("chunk-{i}")).collect()
+    }
+
+    #[test]
+    fn all_chunks_share_one_section_and_one_doc() {
+        // Every chunk maps to ("section-A", "doc-X"). 1 section + 1 doc
+        // over N tracked → both ratios = 1/N. Low fragmentation on
+        // both axes: matches cluster in one section of one doc.
+        let xs = chunks(5);
+        let stats = fragmentation(&xs, |_| Some(("section-A".into(), "doc-X".into())));
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 5,
+                untracked: 0,
+                unique_sections: 1,
+                unique_docs: 1,
+                section_ratio: Some(0.2),
+                doc_ratio: Some(0.2),
+            }
+        );
+    }
+
+    #[test]
+    fn every_chunk_distinct_section_and_distinct_doc() {
+        // Each chunk has its own section and its own doc. Both
+        // ratios = 1.0. Canonical maximum-spread case across both
+        // axes: every match is from a different document.
+        let xs = chunks(4);
+        let stats = fragmentation(&xs, |c| Some((format!("section-{c}"), format!("doc-{c}"))));
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 4,
+                untracked: 0,
+                unique_sections: 4,
+                unique_docs: 4,
+                section_ratio: Some(1.0),
+                doc_ratio: Some(1.0),
+            }
+        );
+    }
+
+    #[test]
+    fn within_doc_fragmentation_section_ratio_gt_doc_ratio() {
+        // The new insight pp4 needed to surface: chunks spread across
+        // multiple sections of the SAME doc. 4 chunks, 4 distinct
+        // sections, but only 2 docs. section_ratio = 1.0, doc_ratio
+        // = 0.5. The gap (0.5) is within-doc fragmentation — the case
+        // PointerRag was originally designed for.
+        let xs = chunks(4);
+        let stats = fragmentation(&xs, |c| {
+            let doc = match c {
+                "chunk-0" | "chunk-1" => "doc-A",
+                _ => "doc-B",
+            };
+            Some((format!("section-{c}"), doc.to_string()))
+        });
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 4,
+                untracked: 0,
+                unique_sections: 4,
+                unique_docs: 2,
+                section_ratio: Some(1.0),
+                doc_ratio: Some(0.5),
+            }
+        );
+    }
+
+    #[test]
+    fn cross_doc_no_within_doc_fragmentation_ratios_match() {
+        // Mirror case: 4 chunks across 4 distinct docs, but each doc
+        // is single-section (every chunk in a given doc shares its
+        // section_id). section_ratio == doc_ratio == 1.0. This is
+        // what we observed on the actual corpus: header-less .md
+        // files collapse section_ratio onto doc_ratio.
+        let xs = chunks(4);
+        let stats = fragmentation(&xs, |c| {
+            let doc = match c {
+                "chunk-0" => "doc-A",
+                "chunk-1" => "doc-B",
+                "chunk-2" => "doc-C",
+                _ => "doc-D",
+            };
+            Some((format!("section-{doc}"), doc.to_string()))
+        });
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 4,
+                untracked: 0,
+                unique_sections: 4,
+                unique_docs: 4,
+                section_ratio: Some(1.0),
+                doc_ratio: Some(1.0),
+            }
+        );
+    }
+
+    #[test]
+    fn mixed_some_chunks_missing_meta() {
+        // chunk-0, chunk-2 → ("section-A", "doc-X"); chunk-1 → None;
+        // chunk-3 → ("section-B", "doc-Y"). untracked counts the None
+        // case; both sections and docs ignore it; ratios are over
+        // tracked, not over the full chunk count.
+        let xs = chunks(4);
+        let stats = fragmentation(&xs, |c| match c {
+            "chunk-0" | "chunk-2" => Some(("section-A".into(), "doc-X".into())),
+            "chunk-3" => Some(("section-B".into(), "doc-Y".into())),
+            _ => None,
+        });
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 3,
+                untracked: 1,
+                unique_sections: 2,
+                unique_docs: 2,
+                section_ratio: Some(2.0 / 3.0),
+                doc_ratio: Some(2.0 / 3.0),
+            }
+        );
+    }
+
+    #[test]
+    fn empty_input_no_panic_returns_none_ratios() {
+        // Empty chunk slice. No division by zero, no NaN, no panic.
+        // Both ratios are None — distinguishable from a real low-
+        // fragmentation 0.0 by callers that care.
+        let stats = fragmentation(&[], |_| {
+            Some(("never-called-s".into(), "never-called-d".into()))
+        });
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 0,
+                untracked: 0,
+                unique_sections: 0,
+                unique_docs: 0,
+                section_ratio: None,
+                doc_ratio: None,
+            }
+        );
+    }
+
+    #[test]
+    fn lock_failure_all_chunks_untracked() {
+        // Simulates the Auto arm's lock-failure closure: every lookup
+        // returns None. Chunks exist but none are tracked.
+        // Distinguished from the empty-input case by untracked > 0;
+        // both ratios None so callers don't synthesize a value.
+        let xs = chunks(7);
+        let stats = fragmentation(&xs, |_| None);
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 0,
+                untracked: 7,
+                unique_sections: 0,
+                unique_docs: 0,
+                section_ratio: None,
+                doc_ratio: None,
+            }
+        );
+    }
+
+    #[test]
+    fn empty_section_id_treated_as_untracked() {
+        // Empty section_id at the lookup boundary → chunk is untracked
+        // even if doc_id is present. The section-spread signal is the
+        // primary one; without it the chunk doesn't contribute.
+        let xs = chunks(3);
+        let stats = fragmentation(&xs, |_| Some((String::new(), "doc-X".into())));
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 0,
+                untracked: 3,
+                unique_sections: 0,
+                unique_docs: 0,
+                section_ratio: None,
+                doc_ratio: None,
+            }
+        );
+    }
+
+    #[test]
+    fn empty_doc_id_with_section_id_still_tracks_section() {
+        // Inverse of the above: section_id present, doc_id empty. The
+        // chunk still contributes to the section signal (and untracked
+        // stays 0), but the docs-set insert is skipped — unique_docs
+        // stays 0 and doc_ratio = 0/N. This is a defensive shape:
+        // in practice every indexed chunk has both, but the helper
+        // shouldn't assume.
+        let xs = chunks(3);
+        let stats = fragmentation(&xs, |_| Some(("section-A".into(), String::new())));
+        assert_eq!(
+            stats,
+            FragmentationStats {
+                tracked: 3,
+                untracked: 0,
+                unique_sections: 1,
+                unique_docs: 0,
+                section_ratio: Some(1.0 / 3.0),
+                doc_ratio: Some(0.0),
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod auto_log_tests {
+    //! Tests for `log_auto_fragmentation` — the seam that the Auto arm
+    //! calls so observability is verifiable without standing up a full
+    //! Agent + Retriever harness.
+    //!
+    //! Captures `tracing` output by installing a `fmt::Subscriber` whose
+    //! writer is a shared `Vec<u8>`. `with_default` makes the
+    //! subscriber active only for the scope of the test closure.
+
+    use super::{log_auto_fragmentation, FragmentationStats};
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    /// Thread-safe `MakeWriter` that appends every byte written into a
+    /// shared `Vec<u8>`. Tests then decode that buffer to UTF-8 and
+    /// inspect the formatted log lines.
+    #[derive(Clone, Default)]
+    struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for BufWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for BufWriter {
+        type Writer = BufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn capture<F: FnOnce()>(f: F) -> String {
+        let buf = BufWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn high_confidence_shape_emits_all_fields() {
+        // High-confidence-like inputs: 5 chunks, 1 section, 1 doc,
+        // both ratios 0.2 (low fragmentation, single section in one
+        // doc — Strict's wheelhouse). All structured fields must
+        // appear so a reader can reconstruct the signal from logs.
+        let frag = FragmentationStats {
+            tracked: 5,
+            untracked: 0,
+            unique_sections: 1,
+            unique_docs: 1,
+            section_ratio: Some(0.2),
+            doc_ratio: Some(0.2),
+        };
+        let out = capture(|| log_auto_fragmentation(5, frag, 1700));
+        assert!(
+            out.contains("Auto mode: fragmentation signal"),
+            "missing message: {out}"
+        );
+        for field in [
+            "chunks=5",
+            "tracked=5",
+            "untracked=0",
+            "unique_sections=1",
+            "unique_docs=1",
+            "section_ratio=0.200",
+            "doc_ratio=0.200",
+            "est_tokens=1700",
+        ] {
+            assert!(out.contains(field), "missing {field}: {out}");
+        }
+    }
+
+    #[test]
+    fn within_doc_fragmentation_shape_emits_split_ratios() {
+        // The new key signal: 4 chunks across 2 docs but with 4
+        // distinct sections. section_ratio = 1.0, doc_ratio = 0.5.
+        // The gap (0.5) is within-doc fragmentation. Asserts both
+        // ratios appear independently so the gap is visible.
+        let frag = FragmentationStats {
+            tracked: 4,
+            untracked: 0,
+            unique_sections: 4,
+            unique_docs: 2,
+            section_ratio: Some(1.0),
+            doc_ratio: Some(0.5),
+        };
+        let out = capture(|| log_auto_fragmentation(4, frag, 1200));
+        assert!(out.contains("Auto mode: fragmentation signal"));
+        for field in [
+            "chunks=4",
+            "tracked=4",
+            "untracked=0",
+            "unique_sections=4",
+            "unique_docs=2",
+            "section_ratio=1.000",
+            "doc_ratio=0.500",
+            "est_tokens=1200",
+        ] {
+            assert!(out.contains(field), "missing {field}: {out}");
+        }
+    }
+
+    #[test]
+    fn ratios_none_render_as_unknown() {
+        // tracked=0 → both ratios are None → log renders "unknown"
+        // for each, not "NaN" or "0.000". Older indexes / lock-
+        // failure cases both land here.
+        let frag = FragmentationStats {
+            tracked: 0,
+            untracked: 6,
+            unique_sections: 0,
+            unique_docs: 0,
+            section_ratio: None,
+            doc_ratio: None,
+        };
+        let out = capture(|| log_auto_fragmentation(6, frag, 400));
+        assert!(
+            out.contains("section_ratio=unknown"),
+            "missing section unknown: {out}"
+        );
+        assert!(
+            out.contains("doc_ratio=unknown"),
+            "missing doc unknown: {out}"
+        );
+        assert!(!out.contains("NaN"));
+        assert!(!out.contains("ratio=0.000"));
+    }
+
+    #[test]
+    fn each_call_emits_exactly_one_line() {
+        // Anti-test from pp4: calling the function twice produces
+        // exactly two log lines, not one (hoisted) or three (duplicate
+        // emit). Counts lines that contain the message string —
+        // robust to fmt-subscriber line-format changes.
+        let frag = FragmentationStats {
+            tracked: 1,
+            untracked: 0,
+            unique_sections: 1,
+            unique_docs: 1,
+            section_ratio: Some(1.0),
+            doc_ratio: Some(1.0),
+        };
+        let out = capture(|| {
+            log_auto_fragmentation(1, frag, 100);
+            log_auto_fragmentation(1, frag, 100);
+        });
+        let count = out
+            .lines()
+            .filter(|l| l.contains("Auto mode: fragmentation signal"))
+            .count();
+        assert_eq!(count, 2, "expected 2 log lines, got {count}: {out}");
+    }
+}
+
+#[cfg(test)]
+mod auto_suffix_tests {
+    //! Tests for `fragmentation_suffix` — the step-trace suffix the
+    //! Auto arm appends to both its high- and low-confidence
+    //! `AgentStep` messages. Format is locked by `assert_eq!` so any
+    //! drift surfaces in CI before reaching log scrapers or the UI.
+
+    use super::{fragmentation_suffix, FragmentationStats};
+
+    #[test]
+    fn cross_doc_no_within_doc_suffix_is_exact() {
+        // 4 sections over 5 tracked chunks (1 untracked), 4 distinct
+        // docs. section_ratio = 0.8, doc_ratio = 0.8 — the gap is
+        // zero, no within-doc fragmentation. This is the case the
+        // actual corpus produces on its header-less .md files.
+        let frag = FragmentationStats {
+            tracked: 5,
+            untracked: 1,
+            unique_sections: 4,
+            unique_docs: 4,
+            section_ratio: Some(0.8),
+            doc_ratio: Some(0.8),
+        };
+        assert_eq!(
+            fragmentation_suffix(frag),
+            " (fragmentation: section 0.800, doc 0.800, 5/6 chunks tracked, 4 sections / 4 docs)"
+        );
+    }
+
+    #[test]
+    fn within_doc_fragmentation_suffix_shows_ratio_gap() {
+        // 4 sections, 2 docs — the canonical pp4 "PointerRag
+        // wheelhouse" shape. section_ratio (1.0) > doc_ratio (0.5);
+        // the visible gap in the suffix is the within-doc signal a
+        // future router would key on.
+        let frag = FragmentationStats {
+            tracked: 4,
+            untracked: 0,
+            unique_sections: 4,
+            unique_docs: 2,
+            section_ratio: Some(1.0),
+            doc_ratio: Some(0.5),
+        };
+        assert_eq!(
+            fragmentation_suffix(frag),
+            " (fragmentation: section 1.000, doc 0.500, 4/4 chunks tracked, 4 sections / 2 docs)"
+        );
+    }
+
+    #[test]
+    fn ratios_none_render_as_unknown_suffix() {
+        // tracked=0 → both ratios None → both render "unknown"
+        // (not "0.000", not "NaN"). Older index / lock-failure case.
+        let frag = FragmentationStats {
+            tracked: 0,
+            untracked: 6,
+            unique_sections: 0,
+            unique_docs: 0,
+            section_ratio: None,
+            doc_ratio: None,
+        };
+        assert_eq!(
+            fragmentation_suffix(frag),
+            " (fragmentation: section unknown, doc unknown, 0/6 chunks tracked, 0 sections / 0 docs)"
+        );
+    }
+
+    #[test]
+    fn suffix_starts_with_leading_space() {
+        // Callers concatenate the suffix directly onto the existing
+        // message string; the leading space is what separates it from
+        // the previous word. Regression-prevention: never drop it.
+        let frag = FragmentationStats {
+            tracked: 1,
+            untracked: 0,
+            unique_sections: 1,
+            unique_docs: 1,
+            section_ratio: Some(1.0),
+            doc_ratio: Some(1.0),
+        };
+        let s = fragmentation_suffix(frag);
+        assert!(s.starts_with(' '), "suffix should start with space: {s:?}");
+    }
+}
+
+#[cfg(test)]
+mod auto_route_tests {
+    //! Tests for the `auto_route` routing decision (pp4 Phase 2 Step 3).
+    //!
+    //! Confirms the five rules the plan called out:
+    //! 1. Fragmented (gap ≥ threshold) → PointerHydration, regardless of confidence.
+    //! 2. Non-fragmented + high-confidence (≥3 chunks, ≥1536 tokens) → Strict.
+    //! 3. Non-fragmented + low-confidence → Hybrid.
+    //! 4. Boundary `gap == threshold` → inclusive (also PointerHydration).
+    //! 5. All chunks untracked → does NOT trigger Pointer (gap collapses to 0,
+    //!    so unless the threshold is also ≤ 0 the route falls through).
+    use super::{auto_route, AutoRoute, FragmentationStats};
+
+    /// Build a `FragmentationStats` with the requested gap.
+    /// Picks section_ratio = gap + 0.2, doc_ratio = 0.2 (so the gap
+    /// is exactly the difference and both ratios stay in `[0, 1]`).
+    fn frag_with_gap(gap: f32) -> FragmentationStats {
+        FragmentationStats {
+            tracked: 5,
+            untracked: 0,
+            unique_sections: 5,
+            unique_docs: 1,
+            section_ratio: Some(gap + 0.2),
+            doc_ratio: Some(0.2),
+        }
+    }
+
+    /// Stats representing "we couldn't measure fragmentation" — older
+    /// index without `section_id`s, or retriever lock unavailable. Both
+    /// ratios are `None`, so the helper collapses gap to `0.0`.
+    fn frag_untracked() -> FragmentationStats {
+        FragmentationStats {
+            tracked: 0,
+            untracked: 5,
+            unique_sections: 0,
+            unique_docs: 0,
+            section_ratio: None,
+            doc_ratio: None,
+        }
+    }
+
+    // Rule 1 — fragmented routes to Pointer regardless of confidence.
+
+    #[test]
+    fn fragmented_high_confidence_routes_to_pointer() {
+        let frag = frag_with_gap(0.6);
+        // chunks=5, tokens=2000 → would-be high_confidence shape.
+        let route = auto_route(frag, 0.5, 5, 2000);
+        assert_eq!(route, AutoRoute::PointerHydration);
+    }
+
+    #[test]
+    fn fragmented_low_confidence_routes_to_pointer() {
+        let frag = frag_with_gap(0.6);
+        // chunks=2, tokens=400 → low-confidence shape, but gap wins.
+        let route = auto_route(frag, 0.5, 2, 400);
+        assert_eq!(route, AutoRoute::PointerHydration);
+    }
+
+    // Rule 2 — non-fragmented + high-confidence → Strict (existing behavior preserved).
+
+    #[test]
+    fn non_fragmented_high_confidence_routes_to_strict() {
+        let frag = frag_with_gap(0.1);
+        let route = auto_route(frag, 0.5, 5, 2000);
+        assert_eq!(route, AutoRoute::Strict);
+    }
+
+    #[test]
+    fn high_confidence_lower_bound_inclusive() {
+        // Exactly at the confidence cutoff (3 chunks, 1536 tokens) → Strict.
+        let frag = frag_with_gap(0.1);
+        let route = auto_route(frag, 0.5, 3, 1536);
+        assert_eq!(route, AutoRoute::Strict);
+    }
+
+    // Rule 3 — non-fragmented + low-confidence → Hybrid.
+
+    #[test]
+    fn non_fragmented_low_confidence_routes_to_hybrid() {
+        let frag = frag_with_gap(0.1);
+        let route = auto_route(frag, 0.5, 2, 400);
+        assert_eq!(route, AutoRoute::Hybrid);
+    }
+
+    #[test]
+    fn just_under_high_confidence_chunks_routes_to_hybrid() {
+        // 2 chunks (below the 3-chunk cutoff) but plenty of tokens.
+        let frag = frag_with_gap(0.1);
+        let route = auto_route(frag, 0.5, 2, 10_000);
+        assert_eq!(route, AutoRoute::Hybrid);
+    }
+
+    #[test]
+    fn just_under_high_confidence_tokens_routes_to_hybrid() {
+        // 5 chunks but est_tokens below the 1536 floor.
+        let frag = frag_with_gap(0.1);
+        let route = auto_route(frag, 0.5, 5, 1535);
+        assert_eq!(route, AutoRoute::Hybrid);
+    }
+
+    // Rule 4 — boundary at `gap == threshold` is inclusive.
+
+    #[test]
+    fn gap_equal_to_threshold_routes_to_pointer() {
+        // 0.5 == 0.5 → PointerHydration (the `>=` convention locked in).
+        // Use exact f32 values so the comparison doesn't drift.
+        let frag = FragmentationStats {
+            tracked: 5,
+            untracked: 0,
+            unique_sections: 5,
+            unique_docs: 1,
+            section_ratio: Some(0.7),
+            doc_ratio: Some(0.2),
+        };
+        let route = auto_route(frag, 0.5, 5, 2000);
+        assert_eq!(
+            route,
+            AutoRoute::PointerHydration,
+            "boundary should be inclusive (`gap >= threshold`)"
+        );
+    }
+
+    #[test]
+    fn gap_just_below_threshold_falls_through() {
+        let frag = FragmentationStats {
+            tracked: 5,
+            untracked: 0,
+            unique_sections: 5,
+            unique_docs: 1,
+            // section_ratio - doc_ratio = 0.499...
+            section_ratio: Some(0.7),
+            doc_ratio: Some(0.201),
+        };
+        let route = auto_route(frag, 0.5, 5, 2000);
+        assert_ne!(route, AutoRoute::PointerHydration);
+        assert_eq!(route, AutoRoute::Strict);
+    }
+
+    // Rule 5 — untracked retrieval (older index / lock failure) doesn't trigger Pointer
+    // unless threshold is also ≤ 0.
+
+    #[test]
+    fn all_untracked_falls_through_to_high_confidence() {
+        let frag = frag_untracked();
+        // gap collapses to 0.0; threshold 0.5 → falls through.
+        let route = auto_route(frag, 0.5, 5, 2000);
+        assert_eq!(route, AutoRoute::Strict);
+    }
+
+    #[test]
+    fn all_untracked_falls_through_to_hybrid_on_low_confidence() {
+        let frag = frag_untracked();
+        let route = auto_route(frag, 0.5, 2, 400);
+        assert_eq!(route, AutoRoute::Hybrid);
+    }
+
+    #[test]
+    fn always_pointer_setting_fires_even_on_untracked() {
+        // Threshold == 0.0 is the documented "Always Pointer" slider
+        // setting. The `gap >= 0.0` clause is satisfied even with
+        // untracked retrieval (collapsed gap = 0.0). Inclusive boundary
+        // is the load-bearing detail that makes the extreme work.
+        let frag = frag_untracked();
+        let route = auto_route(frag, 0.0, 5, 2000);
+        assert_eq!(route, AutoRoute::PointerHydration);
+    }
+
+    #[test]
+    fn never_pointer_setting_never_routes_to_pointer() {
+        // Threshold > 1.0 — the documented "Never Pointer" extreme.
+        // gap can never exceed 1.0 (it's section_ratio - doc_ratio,
+        // both in [0, 1]), so Pointer never fires.
+        let frag = frag_with_gap(1.0);
+        let route = auto_route(frag, 1.0001, 5, 2000);
+        assert_ne!(route, AutoRoute::PointerHydration);
+    }
 }

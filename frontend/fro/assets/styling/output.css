@@ -3816,6 +3816,15 @@
   .grid-cols-4 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+  .grid-cols-\[1fr_auto\] {
+    grid-template-columns: 1fr auto;
+  }
+  .grid-cols-\[4rem_1fr\] {
+    grid-template-columns: 4rem 1fr;
+  }
+  .grid-cols-\[5rem_1fr\] {
+    grid-template-columns: 5rem 1fr;
+  }
   .flex-col {
     flex-direction: column;
   }
@@ -4118,6 +4127,12 @@
   }
   .border-blue-400 {
     border-color: var(--color-blue-400);
+  }
+  .border-blue-400\/40 {
+    border-color: color-mix(in srgb, oklch(70.7% 0.165 254.624) 40%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-blue-400) 40%, transparent);
+    }
   }
   .border-blue-600 {
     border-color: var(--color-blue-600);
@@ -4531,6 +4546,12 @@
     background-color: color-mix(in srgb, oklch(21% 0.034 264.665) 60%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-gray-900) 60%, transparent);
+    }
+  }
+  .bg-gray-900\/80 {
+    background-color: color-mix(in srgb, oklch(21% 0.034 264.665) 80%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-gray-900) 80%, transparent);
     }
   }
   .bg-gray-950 {

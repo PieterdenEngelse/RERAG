@@ -209,6 +209,7 @@ pub async fn index_to_knowledge_graph(
             llm_news = snap.llm_news,
             auto_news = snap.auto_news,
             llm_calls = snap.llm_calls,
+            llm_timeouts = snap.llm_timeouts,
             fallbacks = snap.fallbacks,
             "Reconciler stats for doc"
         );

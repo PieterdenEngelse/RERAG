@@ -160,6 +160,31 @@ pub fn Home() -> Element {
     let show_tune_panel = use_signal(|| false);
     let mut show_tune_info = use_signal(|| false);
     let rag_priority_override = use_signal(|| Option::<f64>::None);
+    // pp4: Auto→Pointer routing threshold. Default mirrors the backend
+    // `POINTERRAG_AUTO_GAP_THRESHOLD_DEFAULT`. Hydrated from
+    // `/runtime/settings` once on mount so a refresh restores any
+    // user override. The slider's info button opens the Auto modal —
+    // they share a single explanation surface.
+    let mut pointer_gap_threshold = use_signal(|| 0.5_f64);
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(snapshot) = crate::api::fetch_runtime_settings().await {
+                for entry in snapshot.entries.iter() {
+                    if entry.key == "POINTERRAG_AUTO_GAP_THRESHOLD" {
+                        let raw = entry
+                            .effective
+                            .as_deref()
+                            .or(entry.override_value.as_deref())
+                            .or(entry.env_value.as_deref())
+                            .unwrap_or("0.5");
+                        if let Ok(v) = raw.parse::<f64>() {
+                            pointer_gap_threshold.set(v.clamp(0.0, 1.0));
+                        }
+                    }
+                }
+            }
+        });
+    });
 
     let mut show_delete_memories_modal = use_signal(|| false);
     let mut rag_memories = use_signal(Vec::<RagMemoryItem>::new);
@@ -209,6 +234,7 @@ pub fn Home() -> Element {
     // Mode info modal states
     let mut show_llm_info = use_signal(|| false);
     let mut show_auto_info = use_signal(|| false);
+    let mut show_section_reassembly = use_signal(|| false);
     let mut show_strict_info = use_signal(|| false);
     let mut show_agentic_info = use_signal(|| false);
 
@@ -1027,6 +1053,7 @@ pub fn Home() -> Element {
             show_tune_panel: show_tune_panel,
             show_tune_info: show_tune_info,
             rag_priority_override: rag_priority_override,
+            pointer_gap_threshold: pointer_gap_threshold,
             selected_model: selected_model,
         }
 
@@ -1699,6 +1726,11 @@ pub fn Home() -> Element {
                 }
             }
 
+            // (Pointer RAG mode button + info modal removed — the behavior
+            // is reachable via Auto with the Pointer-trigger slider at 0.0
+            // ("Always Pointer"); the Auto Mode Info Modal explains the
+            // routing and the slider in one surface.)
+
             // Agentic Mode Info Modal
             if show_agentic_info() {
                 div {
@@ -1843,48 +1875,183 @@ pub fn Home() -> Element {
                     }
                 }
             }
-            // Auto Mode Info Modal
+            // Auto Mode Info Modal — also serves as the Pointer-trigger
+            // threshold info surface, since the slider is part of Auto's
+            // routing machinery. 3-column layout per feedback_modal_sizing.
             if show_auto_info() {
                 div {
-                    class: "fixed inset-0 bg-black/50 flex items-center justify-center z-50",
+                    class: "fixed inset-0 bg-black/60 flex items-center justify-center p-4",
+                    style: "z-index: 100;",
                     onclick: move |_| show_auto_info.set(false),
-
                     div {
-                        class: "bg-base-100 rounded-lg mx-4 shadow-xl p-4 max-w-md",
-                        style: "margin-top: -3cm;",
+                        class: "bg-gray-800 rounded-xl p-4 w-[98vw] border border-gray-600 shadow-2xl max-h-[92vh] flex flex-col",
                         onclick: move |evt| evt.stop_propagation(),
-
-                        div {
-                            class: "flex justify-between items-center mb-3",
-                            h3 { class: "text-base font-bold", "\u{2728} Auto Mode" }
+                        div { class: "flex justify-between items-center mb-2 shrink-0",
+                            h3 { class: "text-base font-bold", "\u{2728} Auto Mode \u{2014} routing + Pointer trigger" }
                             button {
-                                class: "btn btn-ghost btn-xs",
+                                class: "text-gray-400 hover:text-white text-lg",
                                 onclick: move |_| show_auto_info.set(false),
                                 "\u{2715}"
                             }
                         }
-
-                        div {
-                            class: "text-sm space-y-2",
-                            p { class: "font-semibold text-amber-400", "Smart Adaptive Mode" }
-                            p { "Automatically picks the best strategy based on retrieval quality. Searches your documents first, then decides:" }
-                            div {
-                                class: "bg-base-200 p-2 rounded mt-2",
-                                p { class: "font-medium", "How it works:" }
-                                ul {
-                                    class: "text-xs list-disc list-inside mt-1 space-y-1",
-                                    li { "High confidence (\u{2265}3 chunks, \u{2265}1536 tokens): Uses strict grounded RAG \u{2014} answers only from documents" }
-                                    li { "Low confidence: Falls back to Hybrid mode \u{2014} LLM enhanced with whatever context was found" }
-                                    li { "No documents found: Falls back to pure LLM" }
+                        // 3-column grid: how Auto routes / the Pointer trigger trade-off / tuning practice.
+                        div { class: "flex-1 overflow-y-auto min-h-0 grid grid-cols-3 divide-x divide-gray-700 gap-x-4 text-sm text-gray-300",
+                            // Column 1 — how Auto decides, including the Pointer route
+                            div { class: "px-2 space-y-3",
+                                p { class: "font-semibold text-amber-400 text-xs", "Smart adaptive mode" }
+                                p { class: "text-xs",
+                                    "Auto searches your documents, then picks a strategy per query. The Pointer-trigger slider on the chat bar controls one of those decisions \u{2014} when Auto routes to "
+                                    span {
+                                        class: "font-semibold text-blue-400 hover:text-blue-300 cursor-pointer underline",
+                                        onclick: move |_| {
+                                            let cur = show_section_reassembly();
+                                            show_section_reassembly.set(!cur);
+                                        },
+                                        title: "Click to learn what section reassembly is",
+                                        "section reassembly"
+                                    }
+                                    " instead of using the raw retrieved chunks."
+                                }
+                                if show_section_reassembly() {
+                                    div { class: "bg-gray-900/80 border border-blue-400/40 p-2 rounded text-xs space-y-2",
+                                        p {
+                                            span { class: "font-semibold text-blue-300", "Section reassembly " }
+                                            "(the action behind PointerRag): for each matched chunk, the app looks up its section id, fetches the full section from the index, deduplicates, and hands the LLM those full sections instead of the raw chunks."
+                                        }
+                                        p {
+                                            span { class: "font-medium text-gray-200", "What it fixes: " }
+                                            "chunks are fixed-size cuts of the original text \u{2014} they can land mid-paragraph, mid-table, or in the middle of a list. The reassembled section restores the surrounding prose, the table header row, the rest of the list, etc."
+                                        }
+                                        p {
+                                            span { class: "font-medium text-gray-200", "Cost: " }
+                                            "one extra section fetch per matched chunk, and the LLM sees more tokens per call (sections are larger than chunks). When the chunk already contained the full answer, the extra context is noise that can make the model drift. That\u{2019}s why Auto only does this when the gap signal says retrieval is fragmented \u{2014} the case where reassembly genuinely helps."
+                                        }
+                                        p { class: "text-gray-400",
+                                            "Step traces show how many chunks were hydrated vs fell back to raw text, so you can see when the hydration actually succeeded."
+                                        }
+                                    }
+                                }
+                                div { class: "bg-gray-900/60 p-2 rounded",
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "How the mode is decided" }
+                                    ul { class: "text-xs list-disc list-inside mt-1 space-y-1",
+                                        li { "Fragmented (gap \u{2265} threshold) \u{2192} " span { class: "font-semibold text-orange-300", "PointerRag" } " (hydrate full sections) \u{2014} " span { class: "italic", "regardless of confidence" } }
+                                        li { "Non-fragmented + high-confidence (\u{2265}3 chunks, \u{2265}1536 tokens) \u{2192} " span { class: "font-semibold", "Strict" } " (grounded answer from chunks only)" }
+                                        li { "Non-fragmented + low-confidence \u{2192} " span { class: "font-semibold", "Hybrid" } " (LLM enhanced with the context it has)" }
+                                        li { "Boundary: gap exactly equals threshold \u{2192} counted as fragmented (the \u{2265} is inclusive)" }
+                                        li { "All chunks untracked (older index, no section ids) \u{2192} fragmentation isn\u{2019}t measurable, so Auto skips Pointer and falls through to the confidence check" }
+                                        li { "No documents matched at all \u{2192} pure LLM" }
+                                    }
+                                }
+                                div { class: "bg-gray-900/60 p-2 rounded",
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "What\u{2019}s actually measured" }
+                                    p { class: "text-xs",
+                                        "After retrieval, the app computes two ratios from the matched chunks:"
+                                    }
+                                    ul { class: "text-xs list-disc list-inside mt-1 space-y-0.5",
+                                        li { "section_ratio: how many distinct " span { class: "italic", "sections" } " the matches span" }
+                                        li { "doc_ratio: how many distinct " span { class: "italic", "documents" } " the matches span" }
+                                    }
+                                    p { class: "text-xs mt-2",
+                                        "The "
+                                        span { class: "font-semibold text-orange-300", "gap" }
+                                        " = section_ratio \u{2212} doc_ratio. A positive gap means at least one document contributed multiple sections \u{2014} the exact case PointerRag was designed for."
+                                    }
+                                }
+                                div {
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "What the slider does" }
+                                    p { class: "text-xs",
+                                        "Sets the threshold the gap must reach for Auto to pick PointerRag (see rule 1 above). Otherwise Auto falls through to the confidence check."
+                                    }
+                                    div { class: "text-xs mt-2 grid grid-cols-[5rem_1fr] gap-x-2 gap-y-1",
+                                        span { class: "text-gray-400", "0.00 Eager:" }
+                                        span { "Pointer fires on almost every multi-section retrieval. Risk: noisier context, slower, higher cost." }
+                                        span { class: "text-gray-400", "0.50 Balanced:" }
+                                        span { "Recommended default. Fires when within-doc fragmentation is at least moderate." }
+                                        span { class: "text-gray-400", "1.00 Never:" }
+                                        span { "Pointer never auto-fires; Auto behaves like Strict-or-Hybrid only." }
+                                    }
                                 }
                             }
-                            p { class: "text-xs text-base-content/60 mt-2", "Best for: Default choice \u{2014} accurate when docs are strong, flexible when they're not" }
+                            // Column 2 — the trade-off + per-query-type guidance
+                            div { class: "px-2 space-y-3",
+                                div { class: "bg-gray-900/60 p-2 rounded",
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "Why the trade-off isn\u{2019}t one-sided" }
+                                    p { class: "text-xs",
+                                        "Lower-threshold isn\u{2019}t strictly better, and neither is higher. Each end has its own failure mode:"
+                                    }
+                                    div { class: "text-xs mt-2 grid grid-cols-[4rem_1fr] gap-x-2 gap-y-1",
+                                        span { class: "text-gray-400 font-medium", "Lower:" }
+                                        span { "More complete answers when chunks miss context. More hallucination risk from " span { class: "italic", "misleading" } " content (large sections drift)." }
+                                        span { class: "text-gray-400 font-medium", "Higher:" }
+                                        span { "Tighter, faster, cheaper. More \u{201C}I don\u{2019}t know\u{201D} on edge cases. More hallucination risk from " span { class: "italic", "insufficient" } " context." }
+                                    }
+                                }
+                                div {
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "What helps which kind of query" }
+                                    div { class: "text-xs space-y-2",
+                                        div {
+                                            span { class: "font-semibold text-gray-200", "Factoid lookups " }
+                                            span { class: "text-gray-400", "(\u{201C}What is X?\u{201D}, \u{201C}When did Y?\u{201D})" }
+                                            ":"
+                                            " Lower threshold helps when the answer was just outside the chunk boundary; hurts when the chunk already had it."
+                                        }
+                                        div {
+                                            span { class: "font-semibold text-gray-200", "Synthesis / comparison " }
+                                            span { class: "text-gray-400", "(\u{201C}Compare\u{2026}\u{201D}, \u{201C}How does X work?\u{201D})" }
+                                            ":"
+                                            " Lower threshold reliably helps \u{2014} these benefit from broader per-source context."
+                                        }
+                                        div {
+                                            span { class: "font-semibold text-gray-200", "List / enumeration " }
+                                            span { class: "text-gray-400", "(\u{201C}List all X\u{201D})" }
+                                            ":"
+                                            " Lower threshold helps if the list spans pages; hurts if it was already in one chunk."
+                                        }
+                                        div {
+                                            span { class: "font-semibold text-gray-200", "Specific entity " }
+                                            span { class: "text-gray-400", "(\u{201C}Sony Corp\u{201D}, \u{201C}X vs Y\u{201D})" }
+                                            ":"
+                                            " Lower threshold helps when entity context is split across pages; can hurt when similarly-named entities pull in unrelated sections."
+                                        }
+                                    }
+                                }
+                            }
+                            // Column 3 — tune by symptom + caveats
+                            div { class: "px-2 space-y-3",
+                                div { class: "bg-gray-900/60 p-2 rounded",
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "How to tune by symptom" }
+                                    div { class: "text-xs grid grid-cols-[1fr_auto] gap-x-2 gap-y-1",
+                                        span { "Answers feel incomplete / cut off" }
+                                        span { class: "text-orange-300", "\u{2193} lower" }
+                                        span { "Answers feel drifty / off-topic" }
+                                        span { class: "text-orange-300", "\u{2191} raise" }
+                                        span { "Seeing \u{201C}I don\u{2019}t know\u{201D} often" }
+                                        span { class: "text-orange-300", "\u{2193} lower" }
+                                        span { "Answer is in the right area but misses the specific fact" }
+                                        span { class: "text-orange-300", "\u{2191} raise" }
+                                    }
+                                    p { class: "text-xs text-gray-400 mt-2",
+                                        "The Auto step trace shows the gap of every query plus the route chosen \u{2014} use it as feedback to find the value that fits your corpus."
+                                    }
+                                }
+                                div {
+                                    p { class: "font-medium text-gray-200 mb-1 text-xs", "What the slider isn\u{2019}t" }
+                                    ul { class: "text-xs list-disc list-inside space-y-1",
+                                        li { "Not optimal-once-for-everyone: the right value depends on your corpus and how you usually ask questions." }
+                                        li { "Not a quality switch: it picks " span { class: "italic", "which failure mode" } " you find more tolerable, not whether you have one." }
+                                        li { "Not active in other modes: only Auto consults it. Explicit Pointer, Strict, and Hybrid each have their own fixed behavior." }
+                                    }
+                                }
+                                p { class: "text-xs text-gray-400 mt-1",
+                                    "Best for: Default choice \u{2014} accurate when docs are strong, flexible when they\u{2019}re not."
+                                }
+                            }
                         }
-
                         button {
-                            class: "btn btn-primary btn-xs w-full mt-3",
+                            class: "btn btn-sm mt-2 w-full shrink-0",
+                            style: "background-color:#7C2A02; border-color:#7C2A02; color:white;",
                             onclick: move |_| show_auto_info.set(false),
-                            "Close"
+                            "Got it"
                         }
                     }
                 }
