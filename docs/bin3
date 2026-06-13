@@ -418,10 +418,15 @@ demand exists).
 
 ### Versioning
 
-Semver. Tags are `vMAJOR.MINOR.PATCH`. The installer binary surfaces
-its version via:
+Semver. Tags are `vMAJOR.MINOR.PATCH`. **Starting version: `v0.1.0`**
+(Phase 0 decision — no pre-release tags; ship `v1.0.0` only when Phase H
+acceptance criteria are met). Each successive release bumps PATCH for
+bug fixes, MINOR for new features, MAJOR only when behavior changes
+break existing installs.
+
+The installer binary surfaces its version via:
 - `ag-installer --version` (CLI flag for sanity-checking the AppImage)
-- A footer on every screen (`v1.0.0`)
+- A footer on every screen
 - The Welcome screen explicitly
 
 The ag binary inside the AppImage gets the same version embedded via
@@ -431,7 +436,7 @@ finally adding `build.rs`).
 
 `ag --version` will print:
 ```
-ag 1.0.0
+ag 0.1.0
 git: a1b2c3d
 built: 2026-06-13T12:34:56Z (ubuntu-22.04)
 ```
@@ -439,13 +444,24 @@ built: 2026-06-13T12:34:56Z (ubuntu-22.04)
 The installer compares against `ag-installer --version` on launch to
 confirm the bundle is consistent.
 
-### Auto-update check (optional, Phase 2)
+### Auto-update check
 
 The installer queries
-`https://api.github.com/repos/qodo-ai/ag/releases/latest` on launch,
-compares against its own version, and shows a non-blocking banner if a
-newer AppImage exists. Click → opens the GitHub Release page. We do
-NOT auto-download/install — too much trust to ask for in v1.
+`https://api.github.com/repos/<owner>/ag/releases/latest` on launch
+(default — stable releases only; pre-releases are filtered out by the
+endpoint), compares against its own version, and shows a non-blocking
+banner if a newer AppImage exists. Click → opens the GitHub Release
+page. We do NOT auto-download/install — too much trust to ask for in
+v1.
+
+Opt-in `--include-prereleases` flag instead polls `/releases` and
+takes the topmost tag with `draft=false`. Useful for early testers
+who want to track development builds.
+
+The check result is cached in `~/.cache/ag-installer/last-check.json`
+for 4 hours so the launch doesn't always pay the network round-trip
+(and to stay well under the 60-req/hour unauthenticated rate limit on
+api.github.com).
 
 ## What goes in `~/.config/ag/ag.env` after first-run
 
@@ -593,23 +609,26 @@ the README).
 ### Phase 0 — Pre-flight (~2 days, before Phase A)
 
 <details>
-<summary>Lock-in decisions table</summary>
+<summary>Lock-in decisions table — DECIDED</summary>
 
 
-Lock in choices that gate the rest of the work.
+Six choices that gate the rest of the work. **All six decided
+2026-06-13** — values below are the contract Phase A and onward
+implement against.
 
-| Task | Why | File / artifact |
+| Decision | Pinned value | Artifact written in |
 |---|---|---|
-| Pin the FalkorDB image SHA | AppImage builds need a deterministic source for `redis-server` + `falkordb.so`. `falkordb/falkordb:latest` drifts. | `installer/falkordb.pin` (text file with `image@sha256:…`) |
-| Pin the Ubuntu runner image | Reproducible CI; glibc baseline. | `.github/workflows/release.yml` (`runs-on: ubuntu-22.04`) |
-| Pick semver starting version | First release tag. Suggest `v0.1.0` for "pre-stable, usable." | `Cargo.toml` workspace `version` |
-| Reserve the GitHub Releases section in the repo | Releases need to exist before automation can post to them. Decide between public vs draft-only-until-stable. | GitHub repo settings |
-| Confirm AppImage `Categories=` and `MimeType=` | `.desktop` file content. ag isn't a recognized application class; `Categories=Office;Database;` is closest. | `installer/assets/ag-installer.desktop` |
-| Decide AppImage update channel: stable-only vs include pre-releases | The auto-update banner needs a policy. Suggest stable-only by default with a `--include-prereleases` flag for early testers. | `installer/src/update_check.rs` (later) |
+| FalkorDB image SHA | `falkordb/falkordb@sha256:e93fcd753fe612fb0a222166a0620a1ae31b826a12f223c3b6d06038d9d7a364` (human tag: `v4.2.0`; Redis 8.6.3; image dated 2026-05-14) | `installer/falkordb.pin` |
+| Ubuntu runner image | `ubuntu-22.04` — glibc 2.35; covers Ubuntu 22.04+, Debian 12+, Fedora 38+, RHEL 9+. 20.04 is EOL on Actions; 24.04 (glibc 2.39) would lock out 22.04 users. | `.github/workflows/release.yml` (`runs-on: ubuntu-22.04`) |
+| Semver starting version | `v0.1.0`. No pre-release tags (`-alpha` / `-beta` / `-rc`) — iterate `0.1.0 → 0.1.1 → 0.1.2 → … → 0.x.0 → 1.0.0`. `v1.0.0` only when Phase H acceptance is met. | `Cargo.toml` workspace `version` + `installer/Cargo.toml` |
+| GitHub Releases publish mode | **Public** from day one with `prerelease=true` on every tag before `v1.0.0`. Lets early testers discover and report; the auto-update channel policy can correctly filter stable vs pre-release. | repo settings + `release.yml` step `gh release create … --prerelease` |
+| `.desktop` `Categories=` and `MimeType=` | `Categories=Development;Database;`. **No `MimeType=`** — ag ingests through the web UI, not OS file association. Skipped `Office` / `Education` / `Science` as misleading. | `installer/assets/ag-installer.desktop` |
+| Auto-update channel policy | Stable-only default: GET `https://api.github.com/repos/<owner>/<repo>/releases/latest` (excludes pre-releases by definition). Opt-in `--include-prereleases` flag polls `/releases` and filters `draft=false`. Cache result in `~/.cache/ag-installer/last-check.json` for 4 hours. | `installer/src/update_check.rs` |
 
-**Outcome:** no code yet, but every following phase can start without
-re-litigating choices. End with a `chore: bin3 pre-flight decisions`
-commit updating bin3's tables with the pinned values.
+**Outcome:** every following phase can start without re-litigating
+these. The `installer/` paths above are referenced but not yet
+written — Phase A creates the crate skeleton and lays these files
+down with the values from this table.
 
 </details>
 
