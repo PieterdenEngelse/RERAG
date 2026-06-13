@@ -25,28 +25,146 @@ does not match the current project. Today the real shape is:
 - Health endpoint: `/health` on `BACKEND_PORT` (default `3010`)
   (`backend/src/api/mod.rs:705`, :796, :951).
 - Config: `.env.example` is the canonical template — 200+ keys.
+- FalkorDB (knowledge graph) is **not** a container — it runs as a native
+  systemd user service `falkordb.service` (`redis-server` loading
+  `falkordb.so` on `127.0.0.1:6380`). Binaries and data live at
+  `$AG_HOME/falkordb/{redis-server,redis-cli,falkordb.so,data/}`. Rationale
+  and verified setup: `docs/falkordb-native-service.md`. The binaries are
+  extracted from the `falkordb/falkordb` Docker image — so even the
+  "native" path needs Docker present at install time, even though the
+  runtime no longer depends on `dockerd`.
+
+### Two parallel systemd templates exist — installer commits to the XDG one
+
+The repo carries **two checked-in `ag` systemd unit templates** that have
+never been reconciled:
+
+- `systemd/ag-full-stack.service` (19 lines, last touched April 30) — the
+  "run in-place from the repo" model. Invokes `start-ag.sh`, hard-codes
+  `/home/pde/ag` paths, and has drifted behind the live `ag.service` on
+  dev boxes (missing `EnvironmentFile=`, `ExecStartPre=`, `LimitNOFILE=`,
+  and the `NoNewPrivileges`/`PrivateTmp`/`ProtectSystem` hardening lines).
+- `backend/src/ops/systemd/ag.service` (also touched April 30) — the
+  XDG-style model. Binary at `%h/.local/bin/ag`, env at
+  `%h/.config/ag/ag.env`, working dir at `%h/.local/share/ag`, full
+  hardening, port-clearing `ExecStartPre`. Has never actually run a real
+  install, but it's the closer-to-prod-quality file of the two.
+
+This installer commits to the **XDG model**. `start-ag.sh`'s three jobs
+split cleanly into systemd primitives:
+
+- Locate `libtika_native.so` → copied out of the cargo build artifacts
+  (`target/release/build/extractous-*/out/libs/`) at install time and
+  placed at `~/.local/lib/`, picked up at runtime via
+  `Environment=LD_LIBRARY_PATH=%h/.local/lib` in `ag.service`.
+- `docker compose up -d` for the observability/cache stack → its own
+  `ag-stack.service` user unit, with `ag.service` declaring
+  `Wants=`/`After=` via a drop-in.
+- `exec target/release/ag` → `ExecStart=%h/.local/bin/ag` in `ag.service`.
+
+After install, the repo is no longer load-bearing: binary, libs, compose
+file, frontend dist, env file, and FalkorDB binaries are all copied out
+to XDG paths. The repo can be moved or deleted without breaking the
+running system. `start-ag.sh` becomes dead code — kept on disk so the
+existing dev-box `ag.service` keeps working through the transition, but
+no installed unit references it. **Promotion plan:**
+`backend/src/ops/systemd/ag.service` is promoted to
+`systemd/ag.service.tmpl` (with placeholders for env/compose paths); the
+old `systemd/ag-full-stack.service` is deleted.
 
 Goal: produce one correct, well-named Linux installer (`install-linux.sh`)
-that builds `ag`, wires the existing `start-ag.sh` + systemd unit to the
-caller's actual paths, optionally brings up the docker stack and optionally
-builds the frontend. Also clean up the file-name swap and remove the stale
-v1.1.0 bash script.
+that builds `ag`, copies binary + libraries + frontend assets + compose
+file to XDG paths, sets up three composable systemd user units
+(`falkordb.service`, `ag-stack.service`, `ag.service`), optionally
+installs Docker itself if absent. Also clean up the installers-dir
+file-name swap and remove the stale v1.1.0 bash script.
+
+### External dependencies the installer does not create
+
+The installer creates three user systemd units. Two more sit beside them
+at runtime, owned outside the installer's scope:
+
+- **`docker.service`** (system unit). Required for both `ag-stack.service`
+  (`ExecStart=docker compose …`) and the one-shot FalkorDB binary
+  extraction. Provided by the OS package or installed via the opt-in
+  `--install-docker` step. The installer's templates declare
+  `After=docker.service` but never touch the unit itself.
+- **`ollama.service`** (user unit). Required at runtime for any
+  LLM-backed agent mode (`Llm`, `Hybrid`, `Agentic`); `Rag` and
+  `RagStrict` will still work without it. The installer **does not
+  create this unit and explicitly does not call ollama's `install.sh`**.
+  On this project's reference box, ollama is set up manually from a
+  tarball, with `--exclude=lib/ollama/cuda_v*` because the host is CPU-
+  only; ollama's `install.sh` would create a conflicting *system*
+  `ollama.service` on port 11434 that can't see the user's existing
+  models. The installer's behavior:
+  - Preflight: detect whether `ollama.service` (user) is active; if not,
+    treat it as a **soft** warning, not a failure — install proceeds,
+    LLM-dependent endpoints will surface their own 503s at use time.
+  - Final summary: if ollama wasn't detected, print a one-liner pointing
+    at the manual-tarball flow (see the auto-memory reference
+    `reference-ollama-setup`, or whatever doc lands at `docs/ollama-native-service.md`
+    if one is written later).
+  - Never invoke `curl … install.sh | sh`-style flows for ollama.
+
+`OLLAMA_URL` and `OLLAMA_MODEL` in `.env.example` are the canonical pointers
+ag uses to reach ollama; they're seeded into `~/.config/ag/ag.env` as
+part of the seed-config step and remain user-editable from there.
 
 ## Defaults chosen (these are the redirect points)
 
-- **Scope**: per the user's reply ("all the points you mentioned"), the
-  installer runs **all four** steps by default — build backend, build
-  frontend, bring up the docker stack, install + enable the systemd user
-  service. Each step has a `--no-*` flag to skip it (`--no-frontend`,
-  `--no-stack`, `--no-systemd`), and `--with-stack=PROFILE` selects a
-  compose profile.
-- **Layout**: **in-place**. Binary stays at `./target/release/ag`,
-  `start-ag.sh` runs from the repo. The systemd unit gets templated to the
-  repo's actual `WorkingDirectory` (replacing the hard-coded `/home/pde/ag`)
-  and installed to `~/.config/systemd/user/ag.service`. State lives at
-  `${AG_HOME:-~/.local/share/ag}`.
-- **No copy to `~/.local/bin`** and **no `sudo`**. The existing systemd unit
-  is a `--user` unit; nothing here needs root.
+- **Scope**: the installer runs **five** steps by default — build backend,
+  build frontend, install artifacts to XDG paths, set up FalkorDB native
+  service, install + enable the three systemd user units (`ag.service`,
+  `ag-stack.service`, `falkordb.service`). Each step has a `--no-*` flag
+  where it makes sense (`--no-frontend`, `--no-falkordb`, `--no-stack`,
+  `--no-systemd`); `--with-stack=PROFILE` selects a compose profile that
+  `ag-stack.service` will apply.
+- **Layout**: **XDG-clean**. After install, the repo is not load-bearing
+  — it can be moved or deleted without breaking the running system.
+  Specifically:
+  - `~/.local/bin/ag` — the binary
+  - `~/.local/lib/libtika_native.so` — Apache Tika native lib (copied out
+    of `target/release/build/extractous-*/out/libs/`; symlink the
+    versioned file if any, plus the bare `libtika_native.so` name the
+    binary dlopens)
+  - `~/.local/share/ag/web/` — frontend dist (copied from
+    `frontend/fro/dist/`)
+  - `~/.local/share/ag/falkordb/{redis-server,redis-cli,falkordb.so,data/}`
+    — Redis + FalkorDB module binaries + data
+  - `~/.config/ag/ag.env` — env file (seeded from repo `.env.example`)
+  - `~/.config/ag/docker-compose.yml` — copied from repo so the stack
+    unit doesn't reach back into the source tree
+  - `~/.config/systemd/user/{ag,ag-stack,falkordb}.service` — three units
+  - `~/.local/share/ag/{data,index,db,logs,cache,locks}` — runtime state
+    (matches `PathManager`)
+- **No `sudo`** for the default path. All systemd units are `--user`
+  units; all writes land under `$HOME`. Root is only needed for the
+  **opt-in** `--install-docker` step.
+- **`start-ag.sh` is no longer invoked by any installed unit.** The file
+  stays on disk so existing dev-box `ag.service` units that still
+  reference it keep working. New installs use `ag.service` (XDG)
+  + `ag-stack.service` for the compose stack.
+- **Use existing software.** The installer's governing principle is
+  reuse what's already on the box. **Verifiable** reuses (binary sha
+  match, libtika mtime, healthy FalkorDB, active Ollama, docker
+  present, existing `ag.env`, warm cargo / target/, etc.) fire
+  silently. **Non-verifiable** reuses (active native observability,
+  system Redis on 6379, divergent existing `ag.service`) prompt with
+  "use existing" as the default; the post-install summary lists what
+  was reused and what assumptions weren't checkable (`⚠`). The default
+  install on a clean machine still runs to completion without prompts;
+  prompts only appear when existing state was detected.
+  `--non-interactive` collapses prompts to their defaults;
+  `--force-fresh` overrides every reuse. See "Detection and reuse
+  policy" in §Implementation notes.
+- **Docker installation is opt-in.** Most users already have Docker, the
+  install requires `sudo`, the official script touches package manager
+  state, and it can need a logout/login for group membership to take
+  effect. Default behavior: preflight requires `docker` on PATH (since
+  FalkorDB binary extraction needs it); if missing and `--install-docker`
+  was not passed, the installer fails with a clear pointer at
+  `--install-docker` or the Docker docs.
 
 ## Shape
 
@@ -55,15 +173,43 @@ install-linux.sh
    │
    ├─ parse flags ──────────────────────────────────────────────┐
    │                                                            │
-   ├─ preflight  (rustc, cargo, gcc, optional: docker, dx,     │
-   │              npm — only when their flag is set)            │
+   ├─ preflight                                                │
+   │   hard:  rustc, cargo, gcc, docker                         │
+   │   hard:  free disk ≥ 10 GB on min($HOME, $PROJECT_PATH)    │
+   │         (warn 10–20 GB; refuse <10 GB unless --skip-checks)│
+   │   soft:  ollama.service (warn, don't fail)                 │
+   │   opt:   dx, npm  (only when their flag is set)            │
    │                                                            │
-   ├─ ensure AG_HOME tree                                       │
+   ├─ detect existing state                                     │
+   │   verifiable reuse (silent + logged):                      │
+   │     docker, ollama, compose-up, falkordb-healthy, ag.env,  │
+   │     existing ag binary (sha match), existing libtika       │
+   │     (mtime), existing frontend dist (hash match),          │
+   │     ~/.cargo, target/                                      │
+   │   non-verifiable reuse (prompt, default = use existing):   │
+   │     native loki/tempo/otelcol active,                      │
+   │     system Redis at :6379, existing ag.service (diff),     │
+   │     system redis-server (falkordb fallback)                │
+   │   --non-interactive applies "use existing" defaults        │
+   │   ALL prompts fire here, before any writes                 │
+   │                                                            │
+   ├─ install docker  [opt-in: --install-docker]                │
+   │     ├─ curl -fsSL https://get.docker.com | sh   (sudo)     │
+   │     ├─ sudo usermod -aG docker "$USER"                     │
+   │     ├─ sudo systemctl enable --now docker                  │
+   │     └─ warn: re-login (or `newgrp docker`) for group       │
+   │                                                            │
+   ├─ ensure XDG tree                                           │
+   │     ~/.local/bin/                                          │
+   │     ~/.local/lib/                                          │
    │     ~/.local/share/ag/{data,index,db,logs,cache,locks,    │
-   │                        config}                             │
+   │                        web,falkordb,falkordb/data}         │
+   │     ~/.config/ag/                                          │
+   │     ~/.config/systemd/user/ag.service.d/                   │
    │                                                            │
-   ├─ seed config                                              │
-   │     ${AG_HOME}/config/.env  ← copied from repo .env.example│
+   ├─ seed config                                               │
+   │     ~/.config/ag/ag.env           ← from repo .env.example │
+   │     ~/.config/ag/docker-compose.yml ← from repo            │
    │     (only if absent — never overwrite user edits)          │
    │                                                            │
    ├─ build backend  (cargo build --release in repo root)       │
@@ -73,23 +219,68 @@ install-linux.sh
    │     ├─ npm ci + npm run css:build                          │
    │     └─ trunk build --release                               │
    │                                                            │
-   ├─ docker stack  [skip: --no-stack;                          │
-   │                 select: --with-stack=PROFILE]              │
-   │     docker compose up -d for PROFILE                       │
-   │     (core | observability | "" = all)                      │
+   ├─ install artifacts to XDG paths                            │
+   │     ├─ install -m 0755 target/release/ag ~/.local/bin/ag   │
+   │     ├─ find newest target/release/build/extractous-*/out/  │
+   │     │   libs/libtika_native.so → cp to ~/.local/lib/       │
+   │     ├─ rsync -a frontend/fro/dist/ ~/.local/share/ag/web/  │
+   │     │   [skip if --no-frontend]                            │
+   │     └─ smoke-test: ~/.local/bin/ag --version  (no daemon)  │
    │                                                            │
-   ├─ systemd user service  [skip: --no-systemd]                │
-   │     ├─ render systemd/ag-full-stack.service:               │
-   │     │     /home/pde/ag → $(pwd)  (or --project-path)       │
-   │     │     install to ~/.config/systemd/user/ag.service     │
+   ├─ falkordb native service  [skip: --no-falkordb]            │
+   │     ├─ extract binaries from falkordb/falkordb image:      │
+   │     │     docker create --name ag-fdb-extract \\           │
+   │     │         falkordb/falkordb:latest                     │
+   │     │     docker cp …/redis-server  ~/.local/share/ag/     │
+   │     │         falkordb/                                    │
+   │     │     docker cp …/redis-cli     ~/.local/share/ag/     │
+   │     │         falkordb/                                    │
+   │     │     docker cp …/falkordb.so   ~/.local/share/ag/     │
+   │     │         falkordb/                                    │
+   │     │     docker rm ag-fdb-extract                         │
+   │     ├─ smoke-test:                                         │
+   │     │     ~/.local/share/ag/falkordb/redis-server --version│
+   │     │     (fails → musl/glibc mismatch; abort with hint)   │
+   │     ├─ render systemd/falkordb.service.tmpl                │
+   │     │     install to ~/.config/systemd/user/falkordb.service
    │     ├─ systemctl --user daemon-reload                      │
+   │     ├─ systemctl --user enable --now falkordb.service      │
+   │     └─ smoke-test: redis-cli -p $FDB_PORT -a $FDB_PASS ping│
+   │                                                            │
+   ├─ systemd user units  [skip: --no-systemd]                  │
+   │     ├─ render systemd/ag.service.tmpl                      │
+   │     │   (promoted from backend/src/ops/systemd/ag.service) │
+   │     │     {{AG_BIN}}      → ~/.local/bin/ag                │
+   │     │     {{AG_HOME}}     → ~/.local/share/ag              │
+   │     │     {{AG_ENV}}      → ~/.config/ag/ag.env            │
+   │     │     {{AG_LIB_DIR}}  → ~/.local/lib                   │
+   │     │     install to ~/.config/systemd/user/ag.service     │
+   │     ├─ render systemd/ag-stack.service.tmpl                │
+   │     │     {{COMPOSE_FILE}}    → ~/.config/ag/docker-compose.yml
+   │     │     {{COMPOSE_PROFILE}} → $WITH_STACK ("" = all)     │
+   │     │     install to ~/.config/systemd/user/ag-stack.service
+   │     │     [skip: --no-stack]                               │
+   │     ├─ install drop-in ag.service.d/falkordb.conf          │
+   │     │     Wants=falkordb.service + After=falkordb.service  │
+   │     │     [skip: --no-falkordb]                            │
+   │     ├─ install drop-in ag.service.d/stack.conf             │
+   │     │     Wants=ag-stack.service + After=ag-stack.service  │
+   │     │     [skip: --no-stack]                               │
+   │     ├─ systemctl --user daemon-reload                      │
+   │     ├─ systemctl --user enable --now ag-stack.service      │
+   │     │     [skip: --no-stack]                               │
    │     └─ systemctl --user enable --now ag.service            │
    │                                                            │
    ├─ post-install health check                                 │
    │     curl http://127.0.0.1:${BACKEND_PORT}/health           │
    │     up to ~20s, warning-only if --no-systemd was passed    │
    │                                                            │
-   └─ summary  (paths, endpoints, next-step commands)
+   └─ summary  (paths, endpoints, log file path, total elapsed,
+                disk footprint (XDG artifacts, docker images,
+                target/, ~/.cargo),
+                ✓ reused-silent / ✓ reused-confirmed /
+                + installed-fresh / ⚠ reused-with-assumption,
+                next-step commands)
 ```
 
 ## Files to change
@@ -97,10 +288,130 @@ install-linux.sh
 | Path | Action |
 |------|--------|
 | `installers/install-linux.sh` | **new** — the real installer. |
-| `installers/uninstall-linux.sh` | **new** — small symmetry: stop+disable systemd unit, remove `~/.config/systemd/user/ag.service`, optionally `docker compose down`, optionally delete `$AG_HOME` (behind `--purge`). |
+| `installers/uninstall-linux.sh` | **new** — symmetry: stop+disable `ag.service`, `ag-stack.service`, `falkordb.service`; remove the three unit files + the `ag.service.d/` drop-ins; remove `~/.local/bin/ag` and `~/.local/lib/libtika_native.so`; optionally delete `~/.config/ag/` and `~/.local/share/ag/` (behind `--purge`, with a y/N prompt because that nukes FalkorDB data). Does **not** uninstall Docker itself even if `--install-docker` was used to install it. |
 | `installers/install-windows.ps1` | **rename** from `installers/install.sh` (file is PowerShell, was mis-named). |
 | `installers/install-windows-v1.0.0.ps1` | **delete** — file is actually the broken legacy bash installer; nothing else references it. |
-| `systemd/README.md` | Add one line pointing at `installers/install-linux.sh --with-systemd`; fix the stale `cp ag.service` step (the file is `ag-full-stack.service`). |
+| `systemd/ag.service.tmpl` | **new (promoted)** — move/rename `backend/src/ops/systemd/ag.service` here, replace hard-coded `%h` and `/bin/bash -c` paths with placeholders (`{{AG_BIN}}`, `{{AG_HOME}}`, `{{AG_ENV}}`, `{{AG_LIB_DIR}}`), add `Environment=LD_LIBRARY_PATH={{AG_LIB_DIR}}`. |
+| `systemd/ag-stack.service.tmpl` | **new** — wraps `docker compose -f {{COMPOSE_FILE}} --profile {{COMPOSE_PROFILE}} up -d` as a oneshot user unit, with `ExecStop=docker compose … down`. `RemainAfterExit=yes` so systemd treats the brought-up state as "active". |
+| `systemd/falkordb.service.tmpl` | **new** — checked-in template for the FalkorDB user unit (placeholders `{{AG_HOME}}`, `{{FDB_PORT}}`, `{{FDB_PASS}}`). Mirrors the verified hand-written unit at `~/.config/systemd/user/falkordb.service` but with hard-coded `/home/pde` paths and `agpassword123` lifted out. |
+| `systemd/ag.service.d/falkordb.conf` | **new** — drop-in declaring `Wants=falkordb.service` + `After=falkordb.service`, installed alongside `ag.service`. |
+| `systemd/ag.service.d/stack.conf` | **new** — drop-in declaring `Wants=ag-stack.service` + `After=ag-stack.service`, installed alongside `ag.service`. |
+| `systemd/ag-full-stack.service` | **delete** — superseded by `systemd/ag.service.tmpl` + `systemd/ag-stack.service.tmpl`. Stale and never reconciled with the live unit. |
+| `backend/src/ops/systemd/ag.service` | **delete** — moved to `systemd/ag.service.tmpl` (above). |
+| `start-ag.sh` | **leave on disk for now** — no new install references it, but existing dev-box `ag.service` units may still call it during the transition. Mark as deprecated in a short header comment; full deletion is a separate follow-up once all live units have been re-templated. |
+| `systemd/README.md` | Rewrite: point at `installers/install-linux.sh`; explain the three-unit composition (`falkordb` ← `ag-stack` ← `ag` via drop-ins); document each `.tmpl` file's placeholders; note the deletion of `ag-full-stack.service`. |
+
+## Disk footprint
+
+Measured on the reference dev box (Linux glibc, Rust 1.x release build).
+The installer should print these numbers in the post-install summary so
+users can size cleanups, and should refuse to start in preflight if free
+space is dangerously low.
+
+**Three install scenarios.** The headline number depends heavily on
+what the reuse policy (§Detection and reuse policy) finds already on
+the host. Cold-cache fresh box is the worst case; warm-cache rerun on
+an existing install adds almost nothing.
+
+| Scenario | New disk used | Why |
+|---|---|---|
+| Cold-cache fresh box | ~14.5 GB persistent / ~17 GB transient peak | First-time cargo build, first-time docker pulls, first-time FalkorDB extraction, fresh `~/.cargo` registry. See breakdown below. |
+| Warm-cache re-run (this box now) | ~200 MB | Tier 1 auto-reuse fires for everything: docker images cached, FalkorDB healthy (skip), `ag.env` kept, compose state idempotent. Net new on disk: the binary + libtika + frontend dist in their XDG paths, plus a small cargo incremental delta. |
+| Half-warm (fresh XDG, populated repo) | ~2.5 GB | Repo's `target/` and `~/.cargo` already exist; docker images already pulled. New: XDG artifacts (~260 MB) + ~2 GB of docker images if compose was never run + nothing else. |
+
+What each Tier 1 reuse saves vs. cold-cache:
+
+- **Docker images already pulled** → ~1.5 GB of disk + ~1.5 GB of network skipped
+- **FalkorDB healthy** → 640 MB image not pulled (if also already cached) + 78 MB extraction skipped + ~5–10s of work skipped
+- **`~/.cargo` warm** → 1–2 GB of registry growth avoided
+- **`target/` warm** → ~10 GB of cold-cache cargo work becomes incremental (~100 MB to 1 GB depending on what changed)
+- **Existing `ag.env`** → no disk saving, but config edits preserved
+- **Compose stack already up** → 0 disk impact (`docker compose up -d` is idempotent)
+
+**Persistent after install (cold cache, no cleanup) ≈ 14.5 GB:**
+
+| Where | What | Size |
+|---|---|---|
+| `~/.local/bin/ag` | release binary | 63 MB |
+| `~/.local/lib/libtika_native.so` | Apache Tika JNI lib | 110 MB |
+| `~/.local/share/ag/falkordb/` | redis-server, redis-cli, falkordb.so (empty data dir) | 78 MB |
+| `~/.local/share/ag/web/` | frontend dist (wasm + JS) | 10 MB |
+| `~/.config/ag/` | env file + compose file + units | <1 MB |
+| Docker images: compose stack | grafana 577 + prometheus 352 + otelcol 309 + tempo 153 + loki 101 + redis 61 | 1.5 GB |
+| Docker images: `falkordb/falkordb:latest` | needed for extraction; installer leaves it cached | 640 MB |
+| `target/` | kept for incremental rebuilds | 10 GB |
+| `~/.cargo` | registry cache; shared across all Rust projects | 2.2 GB |
+| `frontend/fro/node_modules` | npm deps | 37 MB |
+
+**Minimum persistent (aggressive cleanup) ≈ 2.4 GB:**
+
+After `cargo clean` + `docker image rm falkordb/falkordb:latest`
+(extraction image is unused at runtime), the steady-state footprint is
+~260 MB of XDG-installed artifacts + ~1.5 GB of compose docker images.
+`~/.cargo` is shared across Rust projects so attributing it to ag isn't
+honest.
+
+**Transient peak during install ≈ 17 GB:**
+
+- Cargo build working set on a fresh-box (no prior cache): ~10–12 GB at
+  peak inside `target/`
+- Cargo registry growth: ~1–2 GB into `~/.cargo`
+- Docker image pulls: ~2 GB
+
+These overlap in time, not just sum. After the build finishes and the
+pulls complete, usage settles to one of the two figures above.
+
+**Runtime growth — not included** (depends on use):
+
+- FalkorDB AOF + RDB in `~/.local/share/ag/falkordb/data/` — KB to GB,
+  scales with graph size.
+- Tantivy index in `~/.local/share/ag/index/` — MB to GB, scales with
+  corpus.
+- Loki / Tempo / Prometheus Docker volumes — hundreds of MB per month
+  under active use.
+- ag application logs in `~/.local/share/ag/logs/` — bounded by log
+  rotation.
+
+### Preflight disk check (hard, gated by `--skip-checks`)
+
+Run `df -P "$HOME"` and `df -P "$PROJECT_PATH"`, take the **minimum**
+available across the two (they're usually the same filesystem on a
+workstation but not always). Three thresholds:
+
+| Free space | Behavior |
+|---|---|
+| ≥ 20 GB | Green. Proceed silently. |
+| 10–20 GB | Yellow. Warn: `install peaks ~17 GB; you have N GB free on $FS. Proceed? (y/N)` — answered by `--non-interactive` defaulting to "no" (refuse, exit clean). |
+| < 10 GB | Red. Refuse with exit 1 unless `--skip-checks` was passed. Message: `< 10 GB free on $FS; install would almost certainly fail mid-build. Run \`cargo clean\` or free up space first, or re-run with --skip-checks to override.` |
+
+Threshold reasoning: the 10 GB floor matches the typical cargo build
+peak; below that the build will hit `No space left on device` partway
+through, leaving a half-installed state to clean up. 20 GB gives 1.3x
+headroom for the full transient peak — enough that an active swap file
+or a parallel build elsewhere won't push the host into low-disk
+pressure mid-install.
+
+**These thresholds assume cold-cache.** A warm-cache re-run on an
+existing install needs ~200 MB of new disk, not 17 GB. To avoid
+false-positive refusals on warm-cache machines with tight free space,
+the disk check **runs after preflight tool detection but before the
+detection phase writes anything**, and downgrades by tier:
+
+- If `target/` already exists with a recent successful build (mtime on
+  `target/release/ag` newer than `Cargo.lock`): drop the threshold to
+  **5 GB free / 2 GB hard floor** — incremental build needs almost
+  nothing.
+- If FalkorDB is healthy AND all compose images are already pulled:
+  the FalkorDB image (640 MB) and compose pulls (1.5 GB) won't happen
+  → drop the threshold by 2 GB.
+- Both conditions met: 3 GB free is enough to finish. Hard floor:
+  1 GB.
+
+The check still refuses if any layer of caching is missing and the
+host has < 10 GB free, since the cargo build alone needs that.
+
+The disk check runs *before* the detection phase's prompts — no point
+asking about prompt defaults if the install can't possibly finish.
 
 ## Implementation notes for the new `install-linux.sh`
 
@@ -108,37 +419,222 @@ Keep the shape of the old script (set -euo pipefail, color logger,
 `--help`/`--version`, log file). Differences from the v1.1.0 file that
 matter:
 
-- `INSTALL_PREFIX` default → `${AG_HOME:-$HOME/.local/share/ag}`. Match
+### Progress reporting
+
+The default install is mostly stretches of underlying-tool output (cargo
+crate-by-crate, npm spinner, docker layer-pull bars). Without a frame
+around them, the user can't tell which step they're inside when they
+scroll back, and can't tell how long a step took. Three cheap conventions
+the installer enforces on its own log lines (not on the underlying tools'
+output):
+
+- **Step counter prefix** on every step header:
+  `[N/TOTAL] ► <step name>` where `TOTAL` is the live count of enabled
+  steps (5 default; drops as `--no-*` flags are passed; rises to 6 with
+  `--install-docker`). Print this immediately *before* invoking the
+  step's underlying tool so it's visible above the cargo/npm/docker
+  output that follows.
+- **Per-step duration** on the step-completed line:
+  `[N/TOTAL] ✓ <step name>  (Ns)` — recorded with `SECONDS` between the
+  step's start and end. Failed steps print `✗` with the same shape so the
+  duration is visible even on failure.
+- **Pinned log file path** — chosen up front as
+  `${AG_HOME}/logs/install-$(date -u +%Y%m%dT%H%M%SZ).log`, created
+  before any step runs, and `tee`'d to. Print the absolute path in the
+  startup banner *and again* in the final summary, so the user always
+  knows where to look when underlying-tool output drowned out an error.
+  On failure (`trap ERR`), print the log path one more time with a
+  pointer at the last 50 lines.
+
+These are installer-side only — don't try to wrap `cargo`/`npm`/`docker`
+output in step prefixes. They stream to the terminal as they always do;
+the prefixes bracket them.
+
+### Detection and reuse policy
+
+The installer is not assuming a clean slate. The governing principle:
+**use what's already there.** Before every write, detect existing state
+and decide based on whether the reuse is **verifiable** (the installer
+can confirm the existing software is correct for ag's needs) or
+**non-verifiable** (correctness depends on configuration the installer
+can't introspect from outside).
+
+- **Verifiable reuse** → silent. Log it in the post-install summary so
+  the user can audit, but don't ask.
+- **Non-verifiable reuse** → prompt with sensible default. Default
+  toward reuse when active state suggests the user has chosen this
+  configuration deliberately.
+- **No existing state** → install fresh.
+- **`--force-fresh`** overrides every reuse decision. **`--non-interactive`**
+  applies defaults silently on prompts.
+
+**Verifiable reuses — silent + logged:**
+
+| Component | Verification | Reuse behavior |
+|---|---|---|
+| `~/.local/bin/ag` ⏳ *Phase 2* | `sha256` of binary vs sha embedded by build (compare against `git rev-parse HEAD`) | Skip rebuild AND skip copy; the install is already current. **Phase 1: always rebuild** (cargo incremental is cheap); copy step uses mtime. |
+| `~/.local/share/ag/web/` frontend ⏳ *Phase 2* | wasm hash in filename matches what trunk would produce from current HEAD | Skip frontend build + rsync. **Phase 1: always rebuild**; rsync uses mtime / `--checksum`. |
+| `~/.local/lib/libtika_native.so` | mtime newer than `target/release/build/extractous-*/out/libs/libtika_native.so` source | Skip copy. |
+| Docker | `command -v docker` | Use it. |
+| Ollama (user) | `systemctl --user is-active ollama` AND `curl -fsS http://127.0.0.1:11434/api/tags` succeeds | Use it. |
+| Compose stack already up | `docker compose ls` shows our project name | No-op (`docker compose up -d` is idempotent anyway). |
+| FalkorDB healthy | `falkordb.service` active AND `redis-cli -p $FDB_PORT -a $FDB_PASS ping` returns `PONG` | Skip extraction, skip unit install. Data dir untouched. |
+| `~/.config/ag/ag.env` | file present | Keep — never overwrite. New keys added in `.env.example` since last install are listed in the summary as "merge candidates" — not auto-merged. |
+| `target/`, `~/.cargo` | mtime / presence | Implicit — cargo handles incremental build and registry reuse on its own. No installer logic needed; just don't `cargo clean` first. |
+
+**Non-verifiable reuses — prompt with sensible default:**
+
+| Component | Trigger | Prompt + default |
+|---|---|---|
+| Native observability stack active | any of `loki`/`tempo`/`otelcol` is `systemctl --user is-active` AND its expected port responds | `[U]se natives` *(default)* — skip `ag-stack.service`, point ag.env at the native endpoints (installer prints the assumed URLs; user confirms) / `[I]nstall compose alongside` (compose units on alternate ports — only offered if no port conflict) / `[S]top natives and use compose` / `[A]bort install`. **⚠** logged: "you said use natives — verify your scrape config covers ag.service `/metrics`, your retention policy is what you expect, etc." **Phase 1 caveat:** Loki isn't configurable separately — logs flow through OTel collector → Loki, so "use native Loki" only takes effect via `OTEL_EXPORTER_OTLP_ENDPOINT`. The native-Loki branch is offered only when *also* using native OTel. Phase 2 adds a separate `LOKI_URL` once ag has a direct Loki client. |
+| System Redis on `127.0.0.1:6379` | `redis-cli -p 6379 ping` returns `PONG` | `[U]se system Redis` *(default)* — write `REDIS_URL=redis://127.0.0.1:6379` into ag.env, skip `ag-redis` from compose / `[I]nstall ag-redis (compose) anyway` (parallel cache on 6380). **⚠** logged: "auth config not verified — set `REDIS_PASSWORD` in ag.env if your Redis requires it." |
+| System `redis-server` for FalkorDB fallback | only triggered if the extracted FalkorDB binary failed the host smoke-test (musl/glibc mismatch); check `redis-server --version` for Redis 7.x | `[U]se system redis-server with extracted falkordb.so` *(default)* — write a falkordb.service variant that loads the system `redis-server` binary / `[A]bort, set up FalkorDB manually` (see `docs/falkordb-native-service.md` §2). |
+| Existing `ag.service` with different content | unit file exists and `diff` against the rendered template is non-empty | `[K]eep existing` *(default)* / `[B]ackup → ag.service.bak-<ts> and replace` / `[R]eplace without backup`. Live hand-edits accumulate over time; "keep" is the safe default. |
+| Existing `ag-stack.service` differs | same | Same shape as `ag.service`. |
+| `--purge` on uninstall | always | y/N before deleting `$AG_HOME`. `--purge --yes` for scripted use; **`--non-interactive` does NOT override this** — data loss is irreversible. |
+
+**Install a second copy in parallel — out of scope for v1.** A second
+binary at `~/.local/bin/ag-v2` + `ag-v2.service` on an alternate port is
+meaningful for A/B testing across versions, but it's a deliberate dev
+workflow. Don't surface it in v1; revisit if it ever comes up as a real
+ask. (The "install ag-redis alongside system Redis" prompt option above
+is a narrower exception — Redis-on-alt-port is cheap and useful when
+the user has a system Redis with auth they don't want to share.)
+
+**Post-install summary always shows three explicit lists:**
+
+```
+✓ Reused (silent):      docker, ollama, ~/.cargo, target/, ag.env, libtika
+✓ Reused (confirmed):   native-loki at :3100, native-tempo at :3200,
+                        system-redis at :6379
++ Installed fresh:      ag.service, ag-stack.service (only OTel + Grafana
+                        + Prometheus — others reused above),
+                        falkordb.service (binaries extracted from image)
+⚠ Reused with assumption:
+    native-loki at :3100   — verify your scrape config covers
+                             ag.service's /metrics endpoint
+    system-redis at :6379  — auth not verified; set REDIS_PASSWORD
+                             in ag.env if your Redis requires it
+```
+
+The `⚠` block is the audit hook: anything reused that the installer
+couldn't fully verify gets called out, with the specific assumption to
+check. A user who reviews this list at end-of-install will catch the
+configuration gaps that aggressive reuse otherwise hides.
+
+**Observability deployment choice — the default flipped to natives**
+
+Earlier drafts had compose as the default with `--reuse-observability`
+as opt-in. Under the "use existing software" principle, the default
+flips: if native loki/tempo/otelcol units are *active* (not merely
+installed), prefer them, prompt the user, default to using them. Compose
+fills in only for services without an active native equivalent.
+
+Rationale for the flip:
+
+- An *active* native unit is strong evidence the user chose this setup
+  deliberately. Replacing it surprises more than serving it does.
+- Installer-side endpoint inference is cheap: each native unit's port
+  is in its unit file's `ExecStart`. The installer reads them and
+  writes the corresponding URLs into `ag.env`. No guesswork on the
+  user's part beyond confirming the prompt.
+- The retention / scrape / config concerns become a single `⚠` line in
+  the summary, not a reason to refuse reuse.
+- *Inactive* natives still default to compose — they're noise, not a
+  signal of user intent.
+
+The flag `--reuse-observability` is removed (default behavior subsumes
+it). The new opt-out is `--force-compose`: ignore native units even if
+active, always install `ag-stack.service` for the full stack.
+
+**The `--non-interactive` flag.** All Tier 2 prompts apply their default
+silently when `--non-interactive` is passed (or env
+`AG_INSTALL_NONINTERACTIVE=1` is set). This restores the "default
+install runs to completion without prompts" behavior for CI / scripted
+installs at the cost of taking the conservative default everywhere.
+`--purge` always prompts — `--non-interactive` does *not* override
+that, since the consequence is irreversible data loss and there's a
+separate `--purge --yes` for the truly automated case.
+
+**Detection-phase placement.** All detection runs in a single phase
+*before* any step writes to disk, with results cached in shell
+variables for later use. The new shape:
+
+```
+parse flags → preflight → DETECT → confirm prompts → execute steps
+```
+
+This means: if there are three prompts, the user answers all three up
+front, then walks away. Long-running build steps don't pause asking for
+input two-thirds of the way in. The detection phase also gates the
+flow — if `[A]bort install` is chosen at any prompt, no writes happen
+at all.
+
+- `AG_HOME` default → `$HOME/.local/share/ag`. Match
   `PathManager::get_base_dir` exactly so the installer's directories are
   the ones the running binary actually uses. Drop the
   `documents.db`/`memory.db` touch — those aren't real schemas; let the
   app create what it needs on first boot.
-- Subdirs: `data index db logs cache locks config` (mirror PathManager,
-  plus a `config/` slot for `.env`).
-- Don't touch `~/.bashrc`/`.zshrc`. Instead write `${AG_HOME}/config/.env`
-  by copying `.env.example` and overwriting `BACKEND_HOST`/`BACKEND_PORT`
-  and `AG_HOME` if `--backend-port`/`--prefix` are passed. Print a one-
-  liner telling the user how to `export AG_HOME=...` for their shell.
+- Runtime-state subdirs under `AG_HOME`: `data index db logs cache locks
+  web falkordb falkordb/data` (PathManager dirs + `web/` for frontend
+  dist + `falkordb/` for the native graph store).
+- Don't touch `~/.bashrc`/`.zshrc`. Instead write `~/.config/ag/ag.env`
+  by copying `.env.example` and overwriting `BACKEND_HOST` /
+  `BACKEND_PORT` / `AG_HOME` if `--backend-port` / `--prefix` are passed.
+  `AG_HOME` doesn't need to be in the shell — the systemd unit's
+  `EnvironmentFile=` reads `ag.env`. The startup banner prints a one-line
+  `export AG_HOME=…` for interactive-shell parity; optional.
+- Compose-file copy: `install -m 0644 docker-compose.yml
+  ~/.config/ag/docker-compose.yml` (only if absent — never overwrite user
+  edits). This is what lets the repo become deletable after install. If
+  the file already exists and differs from the repo's version, log a
+  warning with `diff` summary; don't silently overwrite, don't fail.
 - Backend build: `cargo build --release` from the repo root (workspace
   default-member is `backend`, so this builds `ag`). Verify
   `target/release/ag` exists; print its size.
 - Frontend build (default; skip with `--no-frontend`): `cd frontend/fro &&
   npm ci && npm run css:build && trunk build --release`. Refuse with a
   clear error if `trunk` or `npm` is missing — don't try to install them.
-- Docker stack (default; skip with `--no-stack`, select with
-  `--with-stack=PROFILE`): require `docker` on PATH. Run
-  `docker compose -f docker-compose.yml --profile "$PROFILE" up -d`. Empty
-  profile (the default) = all services (matches the compose file's
-  `profiles: ["", ...]` convention).
-- Systemd (default; skip with `--no-systemd`): use `sed` to template
-  `systemd/ag-full-stack.service`:
-  - `WorkingDirectory=/home/pde/ag` → `WorkingDirectory=$PROJECT_PATH`
-  - `ExecStart=/home/pde/ag/start-ag.sh` → `ExecStart=$PROJECT_PATH/start-ag.sh`
-  Add `Environment=AG_HOME=$INSTALL_PREFIX` and
-  `Environment=BACKEND_PORT=$BACKEND_PORT` so the unit picks up the
-  installer's choices. Install as `~/.config/systemd/user/ag.service`,
-  then `daemon-reload`, `enable --now`. Don't enable lingering — that's a
-  separate user decision.
+- Install artifacts to XDG paths (always runs after build steps):
+  - `install -m 0755 target/release/ag ~/.local/bin/ag` — atomic replace,
+    survives in-place updates with the unit running (systemd re-execs on
+    next restart).
+  - `libtika_native.so` lives under `target/release/build/extractous-*/out/libs/`
+    with a build-hash directory name that changes per build. Find the
+    **newest** match (`ls -td target/release/build/extractous-*/out/libs |
+    head -n1`), copy `libtika_native.so` to `~/.local/lib/`. Abort if
+    multiple candidates and none has a clear "newest" — surface the
+    paths and let the user pick.
+  - Frontend dist (only if `--no-frontend` was not passed):
+    `rsync -a --delete frontend/fro/dist/ ~/.local/share/ag/web/`.
+    `--delete` so stale assets from prior builds get cleaned up; the
+    target dir is wholly owned by the installer.
+  - Final smoke-test of the installed binary, no daemon involved:
+    `LD_LIBRARY_PATH=~/.local/lib ~/.local/bin/ag --version`. If this
+    fails with "cannot open shared object file: libtika_native.so", the
+    libtika copy step is broken — abort here, *before* installing
+    systemd units that would just keep restarting.
+- Systemd unit rendering (default; skip with `--no-systemd`):
+  - `ag.service`: `sed` `systemd/ag.service.tmpl` to substitute
+    `{{AG_BIN}}` → `$HOME/.local/bin/ag`, `{{AG_HOME}}` →
+    `$HOME/.local/share/ag`, `{{AG_ENV}}` → `$HOME/.config/ag/ag.env`,
+    `{{AG_LIB_DIR}}` → `$HOME/.local/lib`. Use **literal paths**, not
+    `%h` — keeps the rendered unit readable for users debugging via
+    `systemctl --user cat ag.service`. Install to
+    `~/.config/systemd/user/ag.service`.
+  - `ag-stack.service` (skip with `--no-stack`): `sed`
+    `systemd/ag-stack.service.tmpl` to substitute `{{COMPOSE_FILE}}` →
+    `$HOME/.config/ag/docker-compose.yml`, `{{COMPOSE_PROFILE}}` →
+    `$WITH_STACK` (the `--with-stack=` value, default empty string =
+    all services). Install to `~/.config/systemd/user/ag-stack.service`.
+  - Drop-ins (`ag.service.d/falkordb.conf`, `ag.service.d/stack.conf`)
+    install from the repo's `systemd/ag.service.d/` to
+    `~/.config/systemd/user/ag.service.d/`. Skip `falkordb.conf` if
+    `--no-falkordb`. Skip `stack.conf` if `--no-stack`.
+  - `systemctl --user daemon-reload`, then
+    `systemctl --user enable --now ag-stack.service` (if installed) and
+    `systemctl --user enable --now ag.service`. Don't enable lingering —
+    that's a separate user decision.
 - Health check: poll `http://127.0.0.1:${BACKEND_PORT}/health` up to 10x
   at 2s intervals. Treat "no response" as a warning, not a hard failure,
   because the user might have passed `--no-systemd` and not started the
@@ -147,31 +643,267 @@ matter:
   user's quality-gate (`cargo fmt && cargo clippy`) is for and it doubles
   install time. The old script did this; we drop it.
 - Don't try to start a verification `cargo run` and then `kill` it (the
-  old script's "post-build verification"). It's fragile, it racially
-  fights with systemd if `--with-systemd` is in play, and the health
-  check covers the same need.
+  old script's "post-build verification"). The artifact smoke-test above
+  (`ag --version`) covers the "binary loads its libs" question without a
+  daemon, and the systemd health check covers the "service actually
+  came up" question. Together they replace the old hack.
+
+### Docker install (opt-in, `--install-docker`)
+
+- Refuse if not running on a glibc Linux with a recognized package manager
+  (Debian/Ubuntu/Fedora/Arch). Don't try to be clever on exotic distros —
+  point the user at the Docker docs.
+- Use Docker's official convenience script: `curl -fsSL https://get.docker.com
+  -o /tmp/get-docker.sh && sudo sh /tmp/get-docker.sh`. Prompt for sudo
+  once, up front, so the rest of the install isn't interleaved with
+  password prompts.
+- After install: `sudo usermod -aG docker "$USER"` + `sudo systemctl
+  enable --now docker`. Then **warn loudly** that the user must either log
+  out and back in or run `newgrp docker` before the subsequent steps in
+  this same installer run will see the new group membership. The simplest
+  honest move: if the installer started without docker group access, exit
+  cleanly with that instruction after installing Docker, and have the user
+  re-invoke. Don't try to `sudo -u "$USER" ...` the rest of the pipeline.
+- If Docker is already present, `--install-docker` is a no-op (log it,
+  don't fail).
+
+### FalkorDB native service (default; `--no-falkordb` skips)
+
+- Require `docker` on PATH (used only to extract binaries — runtime is
+  native). If `--install-docker` was passed earlier in the same run, this
+  step is what justified it.
+- Extraction paths inside the image are version-sensitive. The current
+  verified locations (from the `falkordb/falkordb:latest` image as of the
+  native-service migration) are
+  `/usr/local/bin/redis-server`, `/usr/local/bin/redis-cli`,
+  `/var/lib/falkordb/bin/falkordb.so`. If `docker cp` fails with "no such
+  file", probe with `docker run --rm --entrypoint sh falkordb/falkordb
+  -c 'command -v redis-server; find / -name falkordb.so 2>/dev/null'` and
+  surface a clear error pointing at this paragraph — don't silently
+  install nothing.
+- After `docker cp`, **smoke-test on the host before installing the
+  unit**: `chmod +x ${AG_HOME}/falkordb/redis-server &&
+  ${AG_HOME}/falkordb/redis-server --version`. If this fails with an ELF /
+  loader error, the image is musl-based and the extracted binaries won't
+  run on glibc. Abort with the fallback options from
+  `docs/falkordb-native-service.md` §2: a distro `redis-server` + a built
+  `falkordb.so`, or build FalkorDB from source. Don't try to auto-fall-back
+  — surface the choice.
+- Render `systemd/falkordb.service.tmpl` → `~/.config/systemd/user/falkordb.service`
+  with `sed`, substituting `{{AG_HOME}}`, `{{FDB_PORT}}` (default `6380`),
+  `{{FDB_PASS}}` (default `agpassword123` for parity with the verified
+  unit; overridable via `--falkordb-password`). The `ExecStart` line stays
+  identical in shape to the verified unit (`--port`, `--bind 127.0.0.1`,
+  `--requirepass`, `--appendonly yes`, `--dir`, `--loadmodule`).
+- `systemctl --user daemon-reload && systemctl --user enable --now
+  falkordb.service`.
+- Final smoke-test: `${AG_HOME}/falkordb/redis-cli -p $FDB_PORT -a
+  $FDB_PASS ping` — expect `PONG`. Treat failure here as hard: the rest of
+  the install assumes FalkorDB is reachable, and `ag.service`'s `Wants=`
+  will surface the same failure later anyway.
+- **Don't overwrite an existing healthy service.** If
+  `~/.config/systemd/user/falkordb.service` already exists and
+  `redis-cli ... ping` returns `PONG`, log "FalkorDB already running" and
+  skip extraction + unit install. The data dir is precious; never touch
+  `${AG_HOME}/falkordb/data/`.
+- The `ag.service` drop-in (`systemd/ag.service.d/falkordb.conf`) gets
+  installed to `~/.config/systemd/user/ag.service.d/falkordb.conf` as
+  part of the systemd step, not here — but skip the drop-in install if
+  `--no-falkordb` was passed.
+
+### `ag-stack.service` (default; `--no-stack` skips)
+
+Wraps `docker compose up -d`/`down` as a oneshot systemd user unit so
+the compose stack has the same `journalctl --user -u` ergonomics as
+`ag` and `falkordb`, and so `ag.service` can declare a real dependency
+on it via the `stack.conf` drop-in.
+
+Template shape (`systemd/ag-stack.service.tmpl`):
+
+```ini
+[Unit]
+Description=ag — docker compose stack (observability, redis, …)
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f {{COMPOSE_FILE}} \
+    --profile {{COMPOSE_PROFILE}} up -d
+ExecStop=/usr/bin/docker compose -f {{COMPOSE_FILE}} \
+    --profile {{COMPOSE_PROFILE}} down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
+```
+
+Notes:
+
+- `Type=oneshot` + `RemainAfterExit=yes` is the canonical pattern for
+  "this command brings up state that persists; treat the unit as active
+  while that state is up." `systemctl --user status ag-stack.service`
+  will show "active (exited)" after the up completes.
+- `After=docker.service` is a soft ordering hint; on a non-systemd-Docker
+  setup (rare) it's a no-op. `network-online.target` matters for the
+  first image pull on a fresh box.
+- `TimeoutStartSec=300` is to cover the first-time-Ollama-image-pull
+  case, which can take minutes.
+- The renderer leaves an empty `--profile ""` arg when
+  `--with-stack` was unset; compose treats empty profile as "all
+  services with no profile constraint", which matches the previous
+  install behavior. If `--with-stack=core` was passed, the rendered
+  unit ends up with `--profile core`.
+- **Why not `Restart=on-failure`?** `docker compose up -d` exits as soon
+  as the compose has been brought up; there's nothing to restart. The
+  compose services restart themselves via their own healthcheck/policy.
+- **Why not in `ag.service` itself?** Decoupling means a binary crash
+  doesn't bring the stack down (so Grafana stays reachable for
+  debugging), and `systemctl --user restart ag.service` doesn't churn
+  the stack.
+
+### Retiring `start-ag.sh`
+
+Don't reference `start-ag.sh` from any installed unit. The file stays on
+disk so existing dev-box `ag.service` units that point at it keep
+working; the uninstaller doesn't remove it either. A short header comment
+is added marking it deprecated, with a pointer at this doc.
+
+A separate cleanup commit — not part of installer landing — will delete
+`start-ag.sh` once `git grep start-ag.sh` returns no live references in
+the repo or in any tracked systemd unit.
 
 ## Flags
 
 ```
 ./installers/install-linux.sh [OPTIONS]
 
-  --project-path PATH    Repo path (default: $PWD)
-  --prefix PATH          AG_HOME (default: $AG_HOME or ~/.local/share/ag)
-  --backend-port PORT    BACKEND_PORT (default: 3010)
-  --mode release|debug   cargo build profile (default: release)
-  --no-systemd           Skip installing ~/.config/systemd/user/ag.service
-  --no-stack             Skip docker compose up
-  --with-stack=PROFILE   Compose profile (core | observability | "" = all,
-                         default "")
-  --no-frontend          Skip npm ci + css:build + trunk build in frontend/fro
-  --skip-checks          Skip preflight tool checks
-  --verbose              set -x
+  --project-path PATH       Repo path (default: $PWD)
+  --prefix PATH             AG_HOME (default: $AG_HOME or ~/.local/share/ag)
+  --backend-port PORT       BACKEND_PORT (default: 3010)
+  --mode release|debug      cargo build profile (default: release)
+  --install-docker          Install Docker via get.docker.com (sudo; no-op if
+                            docker is already present). Off by default.
+  --no-systemd              Skip installing all three systemd user units
+                            (ag.service, ag-stack.service, falkordb.service)
+                            and both ag.service.d drop-ins
+  --no-stack                Skip ag-stack.service install/enable and the
+                            stack.conf drop-in. ag.service still installs
+                            and runs, but without the compose stack dependency.
+  --with-stack=PROFILE      Compose profile written into ag-stack.service
+                            (core | observability | "" = all services,
+                            default "")
+  --no-frontend             Skip npm ci + css:build + trunk build in
+                            frontend/fro
+  --no-falkordb             Skip FalkorDB binary extraction + falkordb.service
+                            install. Use this if you've already set up
+                            FalkorDB another way, or you don't want graph
+                            features.
+  --falkordb-port PORT      FalkorDB port (default: 6380)
+  --falkordb-password PASS  FalkorDB requirepass (default: agpassword123,
+                            matching the verified hand-written unit)
+  --force-compose           Ignore active native observability units
+                            (loki/tempo/otelcol) even if running, and install
+                            the full compose stack via ag-stack.service.
+                            Use when you want a known-good canonical stack
+                            independent of whatever's locally installed.
+                            Replaces the older --reuse-observability flag
+                            (default behavior now uses natives when active).
+  --non-interactive         Take the conservative default on every detection
+                            prompt (no terminal interaction). Env equivalent:
+                            AG_INSTALL_NONINTERACTIVE=1. Does NOT override
+                            the --purge confirm; use --purge --yes for that.
+  --force-fresh             Skip the auto-reuse heuristics and overwrite
+                            anything detected. Implies "replace" on every
+                            prompt. Use only when you know what you're doing
+                            — most useful for re-running after a half-failed
+                            install.
+  --skip-checks             Skip preflight tool checks
+  --verbose                 set -x
   --version, --help
 
-By default (no flags): does all four — backend build, frontend build,
-docker compose up -d (all profiles), and systemd --user enable --now.
+By default (no flags): does five steps — backend build, frontend build,
+artifact install (binary + libtika + frontend dist to XDG paths),
+FalkorDB native-service setup, and systemd --user enable --now for the
+three units (ag.service + ag-stack.service + falkordb.service) with both
+drop-ins (`falkordb.conf`, `stack.conf`). The compose stack comes up via
+`enable --now ag-stack.service`, not via a separate `docker compose up`
+in the installer. Docker itself is **not** installed by default; the
+installer fails fast if `docker` is missing, with a pointer at
+--install-docker.
 ```
+
+## Phasing — what ships in v1 vs v2
+
+The design specified above is the long-form target. To get a working
+installer in the smallest credible chunk of work, three optimizations
+are deferred to a follow-up commit (marked ⏳ *Phase 2* in
+§Detection and reuse policy). None of them block the installer's core
+value; all three have a clean degradation path that Phase 1 takes.
+
+### Phase 1 ships
+
+Everything in the doc *except* the items below. In particular:
+
+- Full XDG install (binary, libtika, frontend dist, compose file, env file → XDG paths)
+- All three systemd units with templated rendering
+- FalkorDB native-service setup + smoke tests + skip-if-healthy
+- Docker stack via `ag-stack.service` with profile selection
+- Opt-in Docker install via `--install-docker`
+- Verifiable reuse for: Docker, Ollama (+ `/api/tags` probe), compose-up, healthy FalkorDB, `ag.env`, libtika mtime, `~/.cargo` / `target/` (cargo handles them implicitly)
+- Non-verifiable reuse with prompts for: native observability (active), system Redis on 6379, divergent `ag.service`, `--purge`
+- Three-list summary (`✓ silent / ✓ confirmed / + fresh / ⚠ assumption`)
+- Tiered disk preflight
+- All flags listed in §Flags (`--force-compose`, `--non-interactive`, `--force-fresh`, etc.)
+
+### Phase 2 deferred — what each deferral degrades to in Phase 1
+
+1. **Skip rebuild when `~/.local/bin/ag` matches HEAD.**
+   - Requires: `build.rs` that bakes `git rev-parse HEAD` into a
+     `const GIT_SHA` and surfaces it via `ag --version`. Then the
+     installer's verifiable-reuse check is `ag --version | awk
+     '/git/{print $NF}'` vs `git rev-parse HEAD`.
+   - Phase 1 fallback: cargo `--release` always runs. It's incremental
+     when `target/` is warm, so the cost is small (~10s) on re-runs.
+     The XDG copy step still skips work via mtime: if
+     `~/.local/bin/ag` is newer than `target/release/ag`, no copy.
+
+2. **Skip frontend build when dist matches HEAD.**
+   - Requires: an inspectable hash of frontend source state that the
+     installer can compute without running trunk. Simplest is
+     `git ls-files frontend/fro | xargs sha256sum | sha256sum`, then
+     compare against a hash file written next to `dist/`.
+   - Phase 1 fallback: `trunk build --release` always runs when
+     `--no-frontend` wasn't passed. Trunk is incremental on warm
+     state. The rsync to `~/.local/share/ag/web/` uses
+     `rsync -a --checksum` so unchanged files don't re-copy.
+
+3. **`LOKI_URL` as a first-class observability target.**
+   - Requires: ag has a direct Loki client (today it ships logs via
+     OTel → Loki, so Loki's URL is only configured indirectly through
+     `OTEL_EXPORTER_OTLP_ENDPOINT`).
+   - Phase 1 fallback: the "use native Loki" prompt branch is only
+     offered when the user is *also* using native OTel — and the
+     installer just writes `OTEL_EXPORTER_OTLP_ENDPOINT` to point at
+     the native OTel collector, which then forwards to native Loki.
+     Functionally equivalent for log routing; loses the ability to
+     point ag at native Loki *while* using compose OTel. Acceptable
+     for v1.
+
+### Additional follow-ups (not blocking v1)
+
+- **`COMPOSE_PROJECT_NAME=ag`** set in `ag-stack.service`'s
+  `Environment=`. Makes `docker compose ls` detection deterministic
+  regardless of where compose was first invoked from.
+- **`docs/ollama-native-service.md`** — write the manual-tarball flow up
+  as a real doc (currently only lives in the `reference-ollama-setup`
+  memory). The installer summary's "ollama not detected" hint can then
+  point at the doc instead of a memory key.
+- **`start-ag.sh` deletion.** Once no live `ag.service` references it
+  (sweep `~/.config/systemd/user/` on dev boxes during a regular
+  housekeeping commit), delete the file. The bin2 doc says "leave on
+  disk for now"; this is the eventual cleanup.
 
 ## Verification
 
@@ -180,24 +912,54 @@ After implementation, sanity-check on this machine:
 1. `bash installers/install-linux.sh --help` prints the new help.
 2. `bash installers/install-linux.sh` (no flags) from the repo root —
    the full path:
-   - creates `~/.local/share/ag/{data,index,db,logs,cache,locks,config}`
-   - writes `~/.local/share/ag/config/.env` if absent
-   - builds `target/release/ag`
-   - builds frontend at `frontend/fro/dist/`
-   - `docker ps` shows ag-redis (and the observability containers) up
-   - installs `~/.config/systemd/user/ag.service` with the templated
-     `WorkingDirectory` matching `$PWD`
+   - creates `~/.local/bin/`, `~/.local/lib/`, `~/.config/ag/`,
+     `~/.local/share/ag/{data,index,db,logs,cache,locks,web,falkordb,falkordb/data}`,
+     and `~/.config/systemd/user/ag.service.d/`
+   - writes `~/.config/ag/ag.env` if absent
+   - copies `docker-compose.yml` → `~/.config/ag/docker-compose.yml` if
+     absent
+   - builds `target/release/ag` and copies it to `~/.local/bin/ag`
+   - finds the newest `target/release/build/extractous-*/out/libs/libtika_native.so`
+     and copies it to `~/.local/lib/`
+   - `LD_LIBRARY_PATH=~/.local/lib ~/.local/bin/ag --version` succeeds
+     (no daemon — pure binary smoke-test)
+   - builds frontend at `frontend/fro/dist/` and rsyncs it to
+     `~/.local/share/ag/web/`
+   - `~/.local/share/ag/falkordb/` contains `redis-server`, `redis-cli`,
+     `falkordb.so`
+   - `systemctl --user status falkordb.service` reports active;
+     `~/.local/share/ag/falkordb/redis-cli -p 6380 -a agpassword123 ping`
+     returns `PONG`
+   - `systemctl --user status ag-stack.service` reports
+     `active (exited)`; `docker ps` shows ag-redis (and the
+     observability containers) up
+   - installs `~/.config/systemd/user/ag.service` with literal XDG paths
+     for `ExecStart`, `EnvironmentFile`, `WorkingDirectory`, and a
+     `LD_LIBRARY_PATH` env line; plus drop-ins at
+     `~/.config/systemd/user/ag.service.d/{falkordb,stack}.conf`
    - `systemctl --user status ag.service` reports active
+   - **moving or `rm -rf`'ing the repo dir does not break the running
+     stack** (the canonical "XDG works" check)
    - health probe to `http://127.0.0.1:3010/health` returns 200 within
      ~20s
-3. `bash installers/install-linux.sh --no-stack --no-systemd --no-frontend`
-   reduces to "build only": creates dirs + .env, builds the backend, does
-   NOT touch docker or systemd or `frontend/fro/dist/`.
-4. `bash installers/install-linux.sh --with-stack=core --no-systemd
-   --no-frontend` brings only Redis + Ollama up.
-5. `bash installers/uninstall-linux.sh` reverses (2): stops + disables
-   `ag.service`, removes the unit file, optionally `docker compose down`.
-   `--purge` also deletes `~/.local/share/ag`.
-6. `cargo fmt && cargo clippy --all-targets -- -D warnings` still pass
+3. `bash installers/install-linux.sh --no-stack --no-systemd --no-frontend
+   --no-falkordb` reduces to "artifact install only": creates XDG dirs,
+   seeds `ag.env`, builds + installs binary + libtika, does NOT touch
+   docker, systemd, FalkorDB, or `~/.local/share/ag/web/`.
+4. `bash installers/install-linux.sh --with-stack=core --no-falkordb`
+   installs ag.service + ag-stack.service with `--profile core` (Redis
+   + Ollama only). `systemctl --user cat ag-stack.service` shows
+   `--profile core` in the `ExecStart`.
+5. `bash installers/install-linux.sh --install-docker` on a fresh machine
+   without docker: installs Docker, exits cleanly with the "re-login then
+   re-run" instruction. Second invocation (after re-login) completes the
+   full install.
+6. `bash installers/uninstall-linux.sh` reverses (2): stops + disables
+   `ag.service`, `ag-stack.service`, `falkordb.service`; removes the
+   three unit files and both drop-ins; removes `~/.local/bin/ag` and
+   `~/.local/lib/libtika_native.so`. `--purge` also deletes
+   `~/.config/ag/` and `~/.local/share/ag/` (confirm prompt required;
+   that nukes FalkorDB data + ag.env).
+7. `cargo fmt && cargo clippy --all-targets -- -D warnings` still pass
    (no Rust code touched, but run it as the project's quality gate
    demands).

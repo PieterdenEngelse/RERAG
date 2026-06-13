@@ -1,0 +1,22 @@
+# falkordb.service — rendered by installers/install-linux.sh
+# Native FalkorDB user service: redis-server + falkordb.so extracted
+# from the falkordb/falkordb image. See docs/falkordb-native-service.md.
+#
+# Placeholders ({{AG_HOME}}, {{FDB_PORT}}, {{FDB_PASS}}) are replaced
+# with literal values at install time.
+
+[Unit]
+Description=FalkorDB — knowledge graph store for ag (GraphRAG)
+Documentation=https://docs.falkordb.com
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{AG_HOME}}/falkordb/redis-server --port {{FDB_PORT}} --bind 127.0.0.1 --requirepass {{FDB_PASS}} --appendonly yes --dir {{AG_HOME}}/falkordb/data --loadmodule {{AG_HOME}}/falkordb/falkordb.so
+Restart=on-failure
+RestartSec=5
+# FalkorDB is light; cap well clear of its real footprint.
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target

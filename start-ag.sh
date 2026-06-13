@@ -1,4 +1,10 @@
 #!/bin/bash
+# DEPRECATED — left on disk so existing ag.service units that still
+# reference it keep working. New installs (installers/install-linux.sh)
+# use the XDG layout: binary at ~/.local/bin/ag, docker compose stack via
+# ag-stack.service, LD_LIBRARY_PATH via Environment= in ag.service.
+# Slated for deletion once no live unit on any dev box still calls it.
+# See docs/bin2 for the design.
 set -euo pipefail
 
 ROOT_DIR="/home/pde/ag"
