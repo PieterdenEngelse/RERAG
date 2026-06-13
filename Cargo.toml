@@ -2,7 +2,8 @@
 members = [
     "backend",
     "frontend/fro",
-    "tools/memory_cli"
+    "tools/memory_cli",
+    "installer"
 ]
 default-members = ["backend"]
 resolver = "2"

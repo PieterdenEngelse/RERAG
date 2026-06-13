@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0). For workflow_dispatch only."
+        required: true
+        default: "v0.1.0-dev"
+
+# Phase 0 lock-ins implemented here:
+#   - runs-on: ubuntu-22.04 (glibc 2.35 baseline)
+#   - gh release create --prerelease for any v0.x.y tag (stripped for v1.0.0+)
+#   - FalkorDB image SHA pinned via installer/falkordb.pin
+#
+# See docs/bin3 §Detailed execution plan §Phase A for the spec.
+
+permissions:
+  contents: write  # gh release create needs this
+
+jobs:
+  appimage:
+    name: Build AppImage (linux-x86_64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # build.rs needs the git history for SHA stamping
+
+      - name: Determine version tag
+        id: tag
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip leading v for the version string.
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Pre-release if MAJOR is 0.
+          if [[ "$VERSION" =~ ^0\. ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Building $TAG (version=$VERSION, prerelease=${{ steps.tag.outputs.prerelease }})"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target/
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/fro/package-lock.json
+
+      - name: Install trunk
+        run: cargo install trunk --locked
+
+      - name: Install appimagetool
+        run: |
+          wget -qO /tmp/appimagetool \
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x /tmp/appimagetool
+          sudo mv /tmp/appimagetool /usr/local/bin/appimagetool
+          appimagetool --version || true
+
+      - name: Build ag (backend)
+        run: cargo build --release -p ag
+
+      - name: Build ag-installer
+        run: cargo build --release -p ag-installer
+
+      - name: Smoke-test ag-installer --version
+        run: ./target/release/ag-installer --version
+
+      - name: Build frontend dist
+        run: |
+          cd frontend/fro
+          npm ci
+          npm run css:build
+          trunk build --release
+
+      - name: Extract FalkorDB binaries from pinned image
+        run: |
+          PIN="$(grep -v '^#' installer/falkordb.pin | head -1 | tr -d '[:space:]')"
+          echo "FalkorDB pin: $PIN"
+          docker pull "$PIN"
+          STAGE="installer/stage/falkordb"
+          mkdir -p "$STAGE"
+          docker rm -f ag-fdb-extract >/dev/null 2>&1 || true
+          docker create --name ag-fdb-extract "$PIN" >/dev/null
+          docker cp ag-fdb-extract:/usr/local/bin/redis-server          "$STAGE/" 2>/dev/null
+          docker cp ag-fdb-extract:/usr/local/bin/redis-cli             "$STAGE/" 2>/dev/null
+          docker cp ag-fdb-extract:/var/lib/falkordb/bin/falkordb.so    "$STAGE/" 2>/dev/null
+          docker rm ag-fdb-extract >/dev/null
+          chmod +x "$STAGE/redis-server" "$STAGE/redis-cli"
+          ls -lh "$STAGE"
+
+      - name: Assemble + build AppImage
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          FALKORDB_STAGE: installer/stage/falkordb
+        run: bash installer/build-appimage.sh
+
+      - name: Upload AppImage as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ag-installer-${{ steps.tag.outputs.tag }}-x86_64
+          path: |
+            ag-installer-v${{ steps.tag.outputs.version }}-x86_64.AppImage
+            ag-installer-v${{ steps.tag.outputs.version }}-x86_64.AppImage.sha256
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "$PRERELEASE" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            $PRERELEASE_FLAG \
+            "ag-installer-v${{ steps.tag.outputs.version }}-x86_64.AppImage" \
+            "ag-installer-v${{ steps.tag.outputs.version }}-x86_64.AppImage.sha256"

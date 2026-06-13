@@ -1,0 +1,49 @@
+[package]
+name = "ag-installer"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+description = "GUI installer for ag — the agentic RAG stack"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PieterdenEngelse/RARAG"
+
+# Phase A scope: minimal Dioxus desktop window, version surfaces via --version,
+# and the binary is what the AppImage build packages. Real install logic lands
+# in Phase C/D.
+
+[[bin]]
+name = "ag-installer"
+path = "src/main.rs"
+
+[dependencies]
+# Pin to exact same Dioxus version the dashboard uses for ecosystem consistency.
+dioxus = { version = "=0.7.9", features = ["desktop"] }
+dioxus-signals = "0.7.0"
+
+# Async runtime + std-streaming for subprocess output in later phases.
+tokio = { version = "1", features = ["full"] }
+
+# Subprocess + filesystem ergonomics for later phases.
+anyhow = "1"
+thiserror = "1"
+
+# Serde for ag.env munging + update-check JSON parsing.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging — written to journalctl when the installer runs via the AppImage's
+# AppRun shim, or stdout when invoked directly for dev iteration.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP client for /api/tags (Ollama probe) and GitHub Releases update check.
+# rustls instead of openssl — no native dep, AppImage stays portable.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Diff for ag.service drift detection.
+similar = "2"
+
+[build-dependencies]
+# build.rs stamps the git SHA and build timestamp into the binary so the
+# update check + dry-run summary can report what was built when.
+chrono = "0.4"

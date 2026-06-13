@@ -1,0 +1,78 @@
+/* ag-installer — Phase A foundation styles.
+   Pulls the dashboard's brand-blue (#1D6B9A) and dark-tile palette
+   so the installer reads as part of the ag product family. The full
+   palette comes in Phase B alongside the six screens. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    background: #111418;
+    color: #e5e7eb;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    padding: 2rem;
+}
+
+.card {
+    background: #1a1f2a;
+    border: 1px solid #2d3543;
+    border-radius: 12px;
+    padding: 2.5rem 3rem;
+    max-width: 560px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.card h1 {
+    color: #1D6B9A;
+    font-size: 1.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.tagline {
+    color: #9ca3af;
+    margin-bottom: 1.5rem;
+}
+
+.meta {
+    background: #0f1218;
+    border: 1px solid #2d3543;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.meta-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.25rem 0;
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+    font-size: 0.85rem;
+}
+
+.meta-row + .meta-row {
+    border-top: 1px solid #2d3543;
+}
+
+.label {
+    color: #6b7280;
+}
+
+.value {
+    color: #d1d5db;
+}
+
+.next {
+    color: #9ca3af;
+    font-size: 0.9rem;
+    border-left: 3px solid #1D6B9A;
+    padding-left: 0.75rem;
+}

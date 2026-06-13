@@ -1,0 +1,11 @@
+# Pinned FalkorDB image — extracted at AppImage build time for redis-server,
+# redis-cli, and falkordb.so. See docs/bin3 §Phase 0 for rationale.
+#
+# Human tag : falkordb/falkordb:v4.2.0
+# Redis ver : 8.6.3
+# Image date: 2026-05-14
+#
+# When bumping: pull the new image, verify on a glibc host with
+# `installers/install-linux.sh --no-systemd --no-stack --no-frontend` to
+# confirm the binaries still work, then update this file and re-tag a release.
+falkordb/falkordb@sha256:e93fcd753fe612fb0a222166a0620a1ae31b826a12f223c3b6d06038d9d7a364
