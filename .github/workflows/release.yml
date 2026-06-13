@@ -52,6 +52,21 @@ jobs:
           fi
           echo "Building $TAG (version=$VERSION, prerelease=${{ steps.tag.outputs.prerelease }})"
 
+      - name: Install Dioxus desktop system deps
+        # Dioxus desktop (0.7.x) uses webkit2gtk under the hood. Ubuntu 22.04
+        # ships webkit2gtk-4.1 but not 4.0; install both libs that show up in
+        # the dependency graph for cargo build to succeed.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libxdo-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
