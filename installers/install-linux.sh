@@ -257,10 +257,23 @@ preflight_tools() {
     if ! command -v docker >/dev/null 2>&1; then
         if $INSTALL_DOCKER; then
             log_dim "  docker not present; will install via --install-docker"
-        else
-            log_error "docker not found on PATH."
+        elif $NON_INTERACTIVE; then
+            log_error "docker not found on PATH (and --non-interactive disables the install prompt)."
             log_error "Either install Docker manually, or re-run with --install-docker."
             exit 1
+        else
+            log_warn "docker not found on PATH."
+            local choice
+            choice=$(prompt_choice \
+                "Install Docker now via the official get.docker.com script (requires sudo)?" \
+                "Y" \
+                "Y:Yes — install via get.docker.com (equivalent to --install-docker)" \
+                "N:No — abort install")
+            case "$choice" in
+                Y) INSTALL_DOCKER=true
+                   log_dim "  ok — docker install added to step list" ;;
+                *) log_error "docker is required; aborting"; exit 1 ;;
+            esac
         fi
     fi
 
@@ -397,6 +410,34 @@ detect_existing_state() {
 
     # Existing ag.service content drift
     detect_ag_service_drift
+
+    # Backend port already in use
+    detect_backend_port_busy
+
+    # Low RAM — recommend smaller compose profile
+    detect_low_ram
+}
+
+detect_backend_port_busy() {
+    DETECT[backend_port_busy]=false
+    # ss -tln output column 4 is Local Address:Port. Match exact port at end.
+    if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${BACKEND_PORT}$"; then
+        DETECT[backend_port_busy]=true
+    fi
+}
+
+detect_low_ram() {
+    DETECT[low_ram]=false
+    local kb gb
+    kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    gb=$(( kb / 1024 / 1024 ))
+    DETECT[ram_gb]=$gb
+    # Threshold: below 8 GB total, the full observability stack is tight.
+    # Only suggest a smaller profile if the user didn't already pick one
+    # and isn't skipping the stack.
+    if (( gb > 0 && gb < 8 )) && [[ -z "$WITH_STACK" ]] && ! $NO_STACK; then
+        DETECT[low_ram]=true
+    fi
 }
 
 find_newest_libtika() {
@@ -550,6 +591,72 @@ run_prompts() {
             "B:Backup → ag.service.bak-<ts> and replace" \
             "R:Replace without backup")
         DETECT[choice_ag_service]="$choice"
+    fi
+
+    # Backend port already in use — detection-driven prompt for --backend-port.
+    if [[ "${DETECT[backend_port_busy]:-false}" == "true" ]]; then
+        if $NON_INTERACTIVE; then
+            log_error "port $BACKEND_PORT is in use; refusing to install under --non-interactive."
+            log_error "Re-run with --backend-port=<other> to override."
+            exit 1
+        fi
+        local choice
+        choice=$(prompt_choice \
+            "Port $BACKEND_PORT is already in use by another process. Pick a different port?" \
+            "P" \
+            "P:Pick a new port (you'll be asked)" \
+            "F:Force — use $BACKEND_PORT anyway (ag.service will fail to bind)" \
+            "A:Abort install")
+        case "$choice" in
+            P)
+                local new_port
+                while :; do
+                    printf '  New backend port (1024-65535): ' > /dev/tty
+                    read -r new_port < /dev/tty
+                    if [[ "$new_port" =~ ^[0-9]+$ ]] && (( new_port >= 1024 && new_port <= 65535 )); then
+                        if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${new_port}$"; then
+                            printf '%s  port %s is also in use; pick another%s\n' \
+                                "$c_yellow" "$new_port" "$c_reset" > /dev/tty
+                            continue
+                        fi
+                        BACKEND_PORT="$new_port"
+                        log_dim "  using BACKEND_PORT=$BACKEND_PORT"
+                        DETECT_REUSE_CONFIRM[backend_port]="changed to $BACKEND_PORT (default :3010 was busy)"
+                        break
+                    fi
+                    printf '%s  invalid; enter a number 1024-65535%s\n' \
+                        "$c_yellow" "$c_reset" > /dev/tty
+                done
+                ;;
+            F)
+                log_warn "continuing with conflicting port; ag.service will likely fail to start"
+                DETECT_ASSUMPTION[backend_port]="port $BACKEND_PORT was busy — ag.service may not bind"
+                ;;
+            A)  log_info "install aborted at backend-port prompt."; exit 0 ;;
+        esac
+    fi
+
+    # Low-RAM — detection-driven prompt for --with-stack profile.
+    if [[ "${DETECT[low_ram]:-false}" == "true" ]]; then
+        local choice
+        choice=$(prompt_choice \
+            "Host has ${DETECT[ram_gb]:-unknown} GB RAM. Full compose stack uses ~3 GB resident. Pick a profile?" \
+            "C" \
+            "C:--with-stack=core (Redis only) — recommended for low-RAM" \
+            "O:--with-stack=observability (Loki/Tempo/OTel/Grafana/Prom) without Redis cache" \
+            "F:Full stack — install everything anyway" \
+            "S:--no-stack — skip the compose stack entirely")
+        case "$choice" in
+            C) WITH_STACK="core" ;;
+            O) WITH_STACK="observability" ;;
+            F) WITH_STACK="" ;;
+            S) NO_STACK=true ;;
+        esac
+        if ! $NO_STACK; then
+            DETECT_REUSE_CONFIRM[stack_profile]="--with-stack=${WITH_STACK:-(all)} (chosen for low-RAM)"
+        else
+            DETECT_REUSE_CONFIRM[stack_profile]="stack skipped (chosen for low-RAM)"
+        fi
     fi
 }
 
@@ -977,11 +1084,17 @@ print_dry_run_plan() {
     log_info "  system Redis on :6379  : ${DETECT[system_redis]:-false}"
     log_info "  native obs active      : ${DETECT[native_obs_active]:-false}${DETECT[native_obs_units]:+ ($([[ -n "${DETECT[native_obs_units]}" ]] && echo "${DETECT[native_obs_units]}"))}"
     log_info "  ag.service drift       : ${DETECT[ag_service_drift]:-false}"
+    log_info "  backend port :$BACKEND_PORT busy : ${DETECT[backend_port_busy]:-false}"
+    log_info "  host RAM (GB)          : ${DETECT[ram_gb]:-unknown}  (low-RAM prompt: ${DETECT[low_ram]:-false})"
     log_info ""
-    log_info "Prompt outcomes (or defaults under --non-interactive):"
-    [[ -n "${DETECT[choice_observability]:-}" ]] && log_info "  observability          : ${DETECT[choice_observability]}"
-    [[ -n "${DETECT[choice_redis]:-}" ]] && log_info "  redis                  : ${DETECT[choice_redis]}"
-    [[ -n "${DETECT[choice_ag_service]:-}" ]] && log_info "  ag.service             : ${DETECT[choice_ag_service]}"
+    log_info "Effective settings after prompts (or defaults under --non-interactive):"
+    log_info "  BACKEND_PORT           : $BACKEND_PORT"
+    log_info "  WITH_STACK             : ${WITH_STACK:-(all services)}"
+    log_info "  NO_STACK               : $NO_STACK"
+    log_info "  INSTALL_DOCKER         : $INSTALL_DOCKER"
+    [[ -n "${DETECT[choice_observability]:-}" ]] && log_info "  observability prompt   : ${DETECT[choice_observability]}"
+    [[ -n "${DETECT[choice_redis]:-}" ]] && log_info "  redis prompt           : ${DETECT[choice_redis]}"
+    [[ -n "${DETECT[choice_ag_service]:-}" ]] && log_info "  ag.service prompt      : ${DETECT[choice_ag_service]}"
     log_info ""
     log_info "Targets (would-write paths):"
     log_info "  $XDG_BIN_DIR/ag"

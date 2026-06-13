@@ -929,6 +929,136 @@ Everything in the doc *except* the items below. In particular:
   housekeeping commit), delete the file. The bin2 doc says "leave on
   disk for now"; this is the eventual cleanup.
 
+## Decision surface — and the case for/against a graphical installer
+
+A natural follow-up question: should the installer be graphical (TUI,
+zenity, web wizard, full GUI) instead of terminal? The right way to
+answer is to first count how many decisions the installer actually
+presents to the user — then ask whether a graphical UI helps with
+*those decisions* or with something else entirely.
+
+### Pre-install decisions (flags, before running)
+
+Flags the user picks via command line. Most users never set these and
+accept defaults:
+
+| Flag | Default | When you'd change it |
+|---|---|---|
+| `--prefix` | `~/.local/share/ag` | Only if you want non-XDG paths |
+| `--backend-port` | `3010` | Port already in use |
+| `--mode` | `release` | Almost never |
+| `--with-stack` | "" (all) | Only core or only observability subset |
+| `--falkordb-port`, `--falkordb-password` | sensible defaults | Almost never |
+| `--no-systemd`, `--no-stack`, `--no-falkordb`, `--no-frontend` | off | Partial installs |
+| `--install-docker` | off | Fresh box without Docker |
+| `--non-interactive`, `--force-fresh`, `--force-compose` | off | CI / scripted runs |
+
+**Realistic count: 0 flags for a typical fresh-box install.** The
+common path is `bash installers/install-linux.sh` with nothing else.
+
+### During-install decisions (terminal prompts that fire from detection)
+
+| Prompt | When it fires | Choices |
+|---|---|---|
+| Disk warning | 10–20 GB free on min(`$HOME`, `$PROJECT_PATH`) | y/N |
+| Docker missing | `docker` not on PATH AND `--install-docker` not passed | Y/N |
+| Backend port busy | `ss -tln` shows a listener on `$BACKEND_PORT` | P/F/A (P prompts for a new port with validation) |
+| Native observability | active `loki`/`tempo`/`otelcol` user units | U/C/A |
+| System Redis | `redis-cli -p 6379 ping` AND no `ag-redis` container | U/I/A |
+| Low-RAM compose profile | `MemTotal < 8 GB` AND no `--with-stack` passed AND `--no-stack` not passed | C/O/F/S (defaults `--with-stack=core`) |
+| `ag.service` drift | installed unit differs from template | K/B/R |
+
+### Real-world prompt counts by scenario
+
+| Scenario | Prompts |
+|---|---|
+| Fresh laptop, never installed ag, ≥ 8 GB RAM, docker present, port 3010 free, ≥ 20 GB disk | **0** |
+| Fresh laptop, 4 GB RAM (raspberry pi class) | **1** (low-RAM compose profile) |
+| Fresh laptop, no docker installed | **1** (install docker?) |
+| Re-run on a box where ag is already installed | **1** (`ag.service` drift) |
+| Same, plus manually set up native observability | **2** |
+| Same, plus system Redis on 6379 | **3** |
+| Plus port conflict + low RAM + low disk | **6** |
+
+**Most fresh-box users still hit 0 prompts.** The new detection-driven
+prompts (docker missing, port conflict, low-RAM profile) fire only when
+the detected state would cause an actual install failure or
+configuration mismatch — not preemptively.
+
+### Implication: a graphical UI isn't really about decision count
+
+The "make it graphical" case is strongest when there are many
+decisions to navigate. ag's installer has at most 4, and most users
+hit 0. A graphical UI built around 0–4 decisions is heavy machinery
+for a small surface.
+
+But "easier for the end user" usually isn't about decision count.
+It's about three different things:
+
+1. **"Not staring at a black terminal."** A non-technical user looks at
+   colored bash output scrolling and feels lost even if there are zero
+   prompts. A GUI changes how *waiting* feels — a progress bar in a
+   window instead of cargo build chatter flying past.
+2. **"Discoverability."** In a terminal, the user has to know `--help`
+   exists, what flags mean, how to read the output. A GUI surfaces all
+   of that as visible widgets.
+3. **"Trust."** A polished GUI signals "this is a real product." A
+   bash script signals "this is a tool for developers."
+
+### The coupling that matters: GUI installer = pre-built distribution
+
+A GUI installer has to be a binary the user can run. That binary has to
+come from somewhere: a download link, a `.deb`, an AppImage, a Flatpak,
+a Homebrew tap. **The moment you have a distribution channel for the
+GUI installer binary, you also have a distribution channel for the ag
+binary itself**, which makes the whole "compile from source" installer
+flow optional. The GUI installer naturally couples with shipping
+pre-built ag artifacts.
+
+So the real question isn't "TUI vs. zenity vs. web vs. GUI." It's:
+**do you want ag to be installable by someone who can't `cd` and
+`bash installers/install-linux.sh`?**
+
+- **If yes:** you need a distribution channel (apt / Homebrew / Flatpak /
+  AppImage) and CI to publish pre-built binaries. The GUI installer
+  comes along for the ride from that path; the source-build installer
+  becomes a developer-only path.
+- **If no:** the current terminal installer is fine for the audience
+  you actually have (developers who already use cargo).
+
+The Phase 1 → Phase 2 split in this doc deliberately stays inside "no"
+territory — source build, terminal UI, no release infrastructure.
+Pivoting to "yes" is a different project, scoped roughly as:
+
+- CI matrix builds (GitHub Actions; at minimum linux-x86_64-glibc)
+- Release versioning + signing
+- Artifact hosting (GitHub Releases works as a start)
+- Pick a UI toolkit and write the GUI (Dioxus would be the natural
+  pick given the project already uses it for the dashboard)
+- Pick at least one distribution channel and learn its packaging
+  discipline (AppImage is the lightest entry; Flatpak is more "real"
+  but more work)
+
+Rough effort: 4–8 weeks for v1 of all of the above. Ongoing maintenance
+tax: hours per month forever.
+
+### Smaller fixes that close the real gap without going graphical
+
+If the goal is "make the current installer feel less daunting to
+end-users" without committing to the GUI+distribution project, two
+already-implemented additions close most of the felt gap:
+
+- **`--dry-run`** — user previews exactly what would happen before
+  committing. Reduces "I don't know what this will do to my system"
+  anxiety.
+- **Completion notification** (terminal bell + `notify-send`) — user
+  walks away during a 30-minute install and gets pinged when it's done
+  (or when it failed). Reduces "is it stuck or done?" anxiety.
+
+Neither fixes the "not staring at a terminal" or "doesn't read as a
+real product" gaps — those genuinely need the GUI+distribution path.
+But they're the cheap wins on the way there.
+
 ## Verification
 
 After implementation, sanity-check on this machine:
