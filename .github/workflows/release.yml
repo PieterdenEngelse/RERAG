@@ -54,9 +54,12 @@ jobs:
 
       - name: Install build-time system deps
         # Dioxus desktop (0.7.x) uses webkit2gtk under the hood. Ubuntu 22.04
-        # runners don't ship the -dev packages by default. libfuse2 is for
-        # appimagetool's runtime — without it, appimagetool fails to mount
-        # the AppDir for sandbox introspection.
+        # runners don't ship the -dev packages by default.
+        # mold: backend/.cargo/config.toml passes -C link-arg=-fuse-ld=mold
+        # to rustc; without mold installed, the linker step fails with
+        # "cannot find 'ld'" because gcc has no fallback path.
+        # libfuse2 is for appimagetool's runtime — without it, appimagetool
+        # fails to mount the AppDir for sandbox introspection.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -67,7 +70,9 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
-            libfuse2
+            libfuse2 \
+            mold \
+            build-essential
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
