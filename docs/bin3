@@ -592,6 +592,10 @@ the README).
 
 ### Phase 0 — Pre-flight (~2 days, before Phase A)
 
+<details>
+<summary>Lock-in decisions table</summary>
+
+
 Lock in choices that gate the rest of the work.
 
 | Task | Why | File / artifact |
@@ -607,9 +611,15 @@ Lock in choices that gate the rest of the work.
 re-litigating choices. End with a `chore: bin3 pre-flight decisions`
 commit updating bin3's tables with the pinned values.
 
+</details>
+
 ---
 
 ### Phase A — Foundation (week 1)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** `installer/` exists as a workspace member; CI builds an
 AppImage on every tag push.
@@ -673,9 +683,15 @@ AppImage on every tag push.
 AppImage CI`. Single commit, or one commit per task if PR review is
 needed.
 
+</details>
+
 ---
 
 ### Phase B — GUI scaffold (week 2)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** all six screens render with mocked data; navigation works.
 
@@ -718,9 +734,15 @@ needed.
 **End-of-phase commit:** `feat(installer): GUI scaffold — six screens
 with mock data`. Plus a screenshot for the PR description.
 
+</details>
+
 ---
 
 ### Phase C — Detection + prompts (week 3)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** Detection mirrors the bash installer 1:1; prompts wire to
 the real state and feed the next screen.
@@ -769,9 +791,15 @@ the real state and feed the next screen.
 **End-of-phase commit:** `feat(installer): real detection + prompt
 forms`.
 
+</details>
+
 ---
 
 ### Phase D — Real install (week 4)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** Install Progress screen drives actual file writes and
 systemd setup. By end of phase the GUI produces a working ag install.
@@ -818,9 +846,15 @@ finalized (Phase A produces it; this phase reads from it).
 **End-of-phase commit:** `feat(installer): real install steps —
 artifact copy, FalkorDB extract, systemd setup`.
 
+</details>
+
 ---
 
 ### Phase E — First-run config (week 5)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** Screen 5 collects Ollama model, FalkorDB password, agent
 mode; writes the env file; starts ag.service.
@@ -867,9 +901,15 @@ mode; writes the env file; starts ag.service.
 **End-of-phase commit:** `feat(installer): first-run config — Ollama
 model, FalkorDB password, agent mode`.
 
+</details>
+
 ---
 
 ### Phase F — Release pipeline polish (week 6)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** A non-developer can download the AppImage and install ag
 without touching the repo.
@@ -902,9 +942,15 @@ without touching the repo.
 **End-of-phase commit:** `feat(installer): auto-update check + README
 quick install`.
 
+</details>
+
 ---
 
 ### Phase G — Multi-distro verify (week 7)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** AppImage works on the five Linux distros the project
 supports.
@@ -942,9 +988,15 @@ supports.
 **End-of-phase commit:** `docs: distro support matrix` (covering
 verification results).
 
+</details>
+
 ---
 
 ### Phase H — Polish + accessibility (week 8)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
 
 **Goal:** ship-quality v1.0.0.
 
@@ -978,6 +1030,8 @@ verification results).
 - README's "Quick install" section is the recommended path
 
 **End-of-phase commit:** `release: v1.0.0`. Tag, release notes, done.
+
+</details>
 
 ---
 
