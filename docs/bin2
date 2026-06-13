@@ -1028,19 +1028,12 @@ So the real question isn't "TUI vs. zenity vs. web vs. GUI." It's:
 
 The Phase 1 → Phase 2 split in this doc deliberately stays inside "no"
 territory — source build, terminal UI, no release infrastructure.
-Pivoting to "yes" is a different project, scoped roughly as:
-
-- CI matrix builds (GitHub Actions; at minimum linux-x86_64-glibc)
-- Release versioning + signing
-- Artifact hosting (GitHub Releases works as a start)
-- Pick a UI toolkit and write the GUI (Dioxus would be the natural
-  pick given the project already uses it for the dashboard)
-- Pick at least one distribution channel and learn its packaging
-  discipline (AppImage is the lightest entry; Flatpak is more "real"
-  but more work)
-
-Rough effort: 4–8 weeks for v1 of all of the above. Ongoing maintenance
-tax: hours per month forever.
+Pivoting to "yes" is a different project, **now scoped in `docs/bin3`**:
+GUI installer in Dioxus desktop, AppImage distribution, pre-built ag
+binaries, first-run config screen inside the GUI. That doc covers the
+screen flow, AppImage bundle layout, CI release pipeline, and an 8-week
+phasing plan. The terminal installer here in `bin2` stays as the
+developer / contributor path either way.
 
 ### Smaller fixes that close the real gap without going graphical
 
