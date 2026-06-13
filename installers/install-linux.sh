@@ -44,6 +44,7 @@ NON_INTERACTIVE="${AG_INSTALL_NONINTERACTIVE:-false}"
 FORCE_FRESH=false
 SKIP_CHECKS=false
 VERBOSE=false
+DRY_RUN=false
 
 # Detection results — populated by detect_*; consumed by step_* and summary.
 declare -A DETECT
@@ -106,9 +107,27 @@ on_error() {
         log_error "last 50 lines:"
         tail -n 50 "$LOG_FILE" | sed 's/^/    /' >&2
     fi
+    notify_done "failed" "ag install failed at line $lineno (exit $exit_code). See $LOG_FILE"
     exit "$exit_code"
 }
 trap 'on_error $LINENO' ERR
+
+# notify_done — terminal bell + notify-send (both best-effort)
+# $1 = "ok" | "failed", $2 = body text
+notify_done() {
+    local status="$1" body="$2"
+    # Terminal bell — wrapped in a subshell so bash's redirect-failure
+    # message (printed to bash's own stderr, not printf's) is captured by
+    # the subshell-level 2>/dev/null.
+    ( printf '\a' > /dev/tty ) 2>/dev/null || true
+    # Desktop notification, if available; never fail the script.
+    if command -v notify-send >/dev/null 2>&1; then
+        local urgency="normal" icon="dialog-information"
+        [[ "$status" == "failed" ]] && { urgency="critical"; icon="dialog-error"; }
+        notify-send --urgency="$urgency" --icon="$icon" \
+            "ag installer — $status" "$body" 2>/dev/null || true
+    fi
+}
 
 # =============================================================================
 # Flag parsing
@@ -145,6 +164,9 @@ Usage: bash installers/install-linux.sh [OPTIONS]
   --force-fresh             Skip auto-reuse heuristics; overwrite anything
                             detected. Implies "replace" on every prompt.
   --skip-checks             Skip preflight tool + disk checks.
+  --dry-run                 Run preflight, detection, and prompts; print the
+                            plan; then exit without writing anything. Useful
+                            for previewing what an install would do.
   --verbose                 set -x
   --help, -h                This help.
   --version, -V             $SCRIPT_VERSION
@@ -173,6 +195,7 @@ parse_flags() {
             --non-interactive)    NON_INTERACTIVE=true ;;
             --force-fresh)        FORCE_FRESH=true ;;
             --skip-checks)        SKIP_CHECKS=true ;;
+            --dry-run)            DRY_RUN=true ;;
             --verbose|-v)         VERBOSE=true ;;
             --help|-h)            usage; exit 0 ;;
             --version|-V)         printf '%s\n' "$SCRIPT_VERSION"; exit 0 ;;
@@ -921,11 +944,56 @@ main() {
 
     plan_steps
 
+    if $DRY_RUN; then
+        print_dry_run_plan
+        return 0
+    fi
+
     for step in "${STEP_LIST[@]}"; do
         "step_$step"
     done
 
     print_summary
+    notify_done "ok" "Install complete in $((SECONDS - INSTALL_START))s. ag on http://127.0.0.1:$BACKEND_PORT"
+}
+
+print_dry_run_plan() {
+    log_info ""
+    log_info "${c_bold}━━━ Dry run — no writes will happen ━━━${c_reset}"
+    log_info ""
+    log_info "Steps that would run, in order:"
+    local i=0
+    for step in "${STEP_LIST[@]}"; do
+        i=$((i + 1))
+        log_info "  [$i/$STEP_TOTAL] $step"
+    done
+    log_info ""
+    log_info "Detection results:"
+    log_info "  target/ warm           : ${DETECT[target_warm]:-false}"
+    log_info "  ollama active          : ${DETECT[ollama_active]:-false}"
+    log_info "  ag.env exists          : ${DETECT[ag_env_exists]:-false}"
+    log_info "  falkordb healthy       : ${DETECT[falkordb_healthy]:-false}"
+    log_info "  compose stack up       : ${DETECT[compose_up]:-false}"
+    log_info "  system Redis on :6379  : ${DETECT[system_redis]:-false}"
+    log_info "  native obs active      : ${DETECT[native_obs_active]:-false}${DETECT[native_obs_units]:+ ($([[ -n "${DETECT[native_obs_units]}" ]] && echo "${DETECT[native_obs_units]}"))}"
+    log_info "  ag.service drift       : ${DETECT[ag_service_drift]:-false}"
+    log_info ""
+    log_info "Prompt outcomes (or defaults under --non-interactive):"
+    [[ -n "${DETECT[choice_observability]:-}" ]] && log_info "  observability          : ${DETECT[choice_observability]}"
+    [[ -n "${DETECT[choice_redis]:-}" ]] && log_info "  redis                  : ${DETECT[choice_redis]}"
+    [[ -n "${DETECT[choice_ag_service]:-}" ]] && log_info "  ag.service             : ${DETECT[choice_ag_service]}"
+    log_info ""
+    log_info "Targets (would-write paths):"
+    log_info "  $XDG_BIN_DIR/ag"
+    log_info "  $XDG_LIB_DIR/libtika_native.so"
+    log_info "  $XDG_CONFIG_DIR/ag.env (only if absent)"
+    log_info "  $XDG_CONFIG_DIR/docker-compose.yml (only if absent)"
+    log_info "  $AG_HOME/web/ (rsync)"
+    $NO_FALKORDB || log_info "  $AG_HOME/falkordb/{redis-server,redis-cli,falkordb.so}"
+    $NO_SYSTEMD  || log_info "  $SYSTEMD_USER_DIR/{ag,ag-stack,falkordb}.service + drop-ins"
+    log_info ""
+    log_info "Re-run without --dry-run to apply."
+    notify_done "ok" "Dry run complete — no changes made"
 }
 
 main "$@"

@@ -450,6 +450,25 @@ These are installer-side only — don't try to wrap `cargo`/`npm`/`docker`
 output in step prefixes. They stream to the terminal as they always do;
 the prefixes bracket them.
 
+### Completion notification
+
+Cold-cache install runs ~20–30 minutes. Users walk away. The installer
+fires two notifications when it finishes (success or failure), both
+best-effort, both silent on failure:
+
+- **Terminal bell** — `printf '\a' > /dev/tty` in a subshell that
+  swallows bash's redirect-failure message when /dev/tty isn't
+  available (CI, `bash <(...)`, etc.).
+- **`notify-send`** — desktop notification. `--urgency=critical` on
+  failure (red icon, doesn't auto-dismiss on most desktops);
+  `--urgency=normal` on success.
+
+Fires from `print_summary` on success and from the `on_error` trap on
+failure. The body text includes elapsed time on success and the log
+file path + exit line on failure, so the notification alone is enough
+context for the user to know what happened without opening the
+terminal.
+
 ### Detection and reuse policy
 
 The installer is not assuming a clean slate. The governing principle:
@@ -820,6 +839,11 @@ the repo or in any tracked systemd unit.
                             — most useful for re-running after a half-failed
                             install.
   --skip-checks             Skip preflight tool checks
+  --dry-run                 Run preflight + detection + prompts; print the
+                            plan and detection results; exit without writing
+                            anything. Useful for previewing what an install
+                            would do on a given box (e.g. before committing
+                            on a production host).
   --verbose                 set -x
   --version, --help
 
