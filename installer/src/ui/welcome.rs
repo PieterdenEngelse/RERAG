@@ -49,7 +49,7 @@ pub fn Welcome() -> Element {
                             li { code { "~/.local/share/ag/" } "  — runtime state (data, index, db, logs, FalkorDB, web/)" }
                             li { code { "~/.config/ag/ag.env" } "  — env file (seeded from .env.example; never overwritten)" }
                             li { code { "~/.config/ag/docker-compose.yml" } "  — observability stack definition" }
-                            li { code { "~/.config/systemd/user/{ag,ag-stack,falkordb}.service" } " — three composable units" }
+                            li { code { "~/.config/systemd/user/{{ag,ag-stack,falkordb}}.service" } " — three composable units" }
                         }
                     }
                     div { class: "welcome-meta",

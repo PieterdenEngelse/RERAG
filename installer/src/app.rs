@@ -71,7 +71,7 @@ pub fn use_screen() -> Signal<Screen> {
 // Detection mock data
 // =============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DetectionRow {
     pub label: &'static str,
     pub value: &'static str,
@@ -133,7 +133,7 @@ pub fn mock_detections() -> Vec<DetectionRow> {
 // Install steps + log mock
 // =============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InstallStep {
     pub name: &'static str,
     pub status: StepStatus,
@@ -145,6 +145,8 @@ pub enum StepStatus {
     Pending,
     Running,
     Done,
+    /// Exercised by Phase D's failure modal — not in Phase B mock data.
+    #[allow(dead_code)]
     Failed,
 }
 
@@ -183,7 +185,7 @@ pub fn mock_log_lines() -> Vec<&'static str> {
 // Summary buckets (the four-list view on the Done screen)
 // =============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SummaryItem {
     pub key: &'static str,
     pub detail: &'static str,
