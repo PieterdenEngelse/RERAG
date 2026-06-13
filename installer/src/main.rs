@@ -1,13 +1,20 @@
 //! ag-installer — GUI installer for ag, distributed as an AppImage.
 //!
-//! Phase A scope (minimum-viable foundation): a Dioxus desktop window that
-//! shows "Hello ag installer" + version info. No real install logic yet —
-//! the screens get fleshed out in Phase B (mocked data) and Phase C+ (wired
-//! to real detection + steps).
+//! Phase B scope: all six screens render with mocked data; Back/Next
+//! navigation between them works; brand colors match the dashboard.
+//! Real detection / install / first-run config land in Phases C, D, E.
 //!
 //! See `docs/bin3` for the full design and execution plan.
 
+#![allow(non_snake_case)]
+
+mod app;
+mod ui;
+
 use dioxus::prelude::*;
+
+use app::{use_screen, Screen};
+use ui::{DetectionScreen, FirstRunForm, ProgressScreen, PromptsScreen, SummaryScreen, Welcome};
 
 /// Bake-time constants from build.rs.
 const GIT_SHA: &str = env!("AG_INSTALLER_GIT_SHA");
@@ -16,10 +23,7 @@ const RUNNER: &str = env!("AG_INSTALLER_RUNNER");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
-    // Honor a CLI-style --version flag without spinning up the GUI. The bin3
-    // plan calls for this for two reasons: (a) sanity-check the AppImage from
-    // a terminal, and (b) the installer compares its own version against the
-    // bundled ag binary's version at launch.
+    // CLI flags short-circuit before Dioxus boots.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         print_version();
@@ -39,14 +43,14 @@ fn main() {
 
     tracing::info!("ag-installer {VERSION} (git: {GIT_SHA}, built: {BUILT_AT})");
 
-    let cfg = dioxus::desktop::Config::new()
-        .with_window(
-            dioxus::desktop::WindowBuilder::new()
-                .with_title(format!("ag installer {VERSION}"))
-                .with_inner_size(dioxus::desktop::LogicalSize::new(900.0, 650.0))
-                .with_resizable(true),
-        );
-    dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(app);
+    let cfg = dioxus::desktop::Config::new().with_window(
+        dioxus::desktop::WindowBuilder::new()
+            .with_title(format!("ag installer {VERSION}"))
+            .with_inner_size(dioxus::desktop::LogicalSize::new(900.0, 650.0))
+            .with_min_inner_size(dioxus::desktop::LogicalSize::new(720.0, 500.0))
+            .with_resizable(true),
+    );
+    dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
 }
 
 fn print_version() {
@@ -69,34 +73,72 @@ fn print_help() {
 }
 
 #[component]
-fn app() -> Element {
+fn App() -> Element {
+    // Top-level screen signal. Every component can navigate by mutating it.
+    use_context_provider(|| Signal::new(Screen::Welcome));
+    let screen = use_screen();
+    let current = *screen.read();
+
     rsx! {
         style { {include_str!("../assets/style.css")} }
-        div { class: "container",
-            div { class: "card",
-                h1 { "ag installer" }
-                p { class: "tagline",
-                    "Foundation scaffold — Phase A. The six screens land in Phase B."
-                }
-                div { class: "meta",
-                    div { class: "meta-row",
-                        span { class: "label", "Version" }
-                        span { class: "value", "{VERSION}" }
-                    }
-                    div { class: "meta-row",
-                        span { class: "label", "Git" }
-                        span { class: "value", "{GIT_SHA}" }
-                    }
-                    div { class: "meta-row",
-                        span { class: "label", "Built" }
-                        span { class: "value", "{BUILT_AT} ({RUNNER})" }
-                    }
-                }
-                p { class: "next",
-                    "Next: Phase B scaffolds Welcome → Detection → Prompts → "
-                    "Install Progress → First-Run Config → Done."
+        div { class: "app",
+            ProgressBar { current: current }
+            div { class: "screen-host",
+                match current {
+                    Screen::Welcome => rsx! { Welcome {} },
+                    Screen::Detection => rsx! { DetectionScreen {} },
+                    Screen::Prompts => rsx! { PromptsScreen {} },
+                    Screen::Progress => rsx! { ProgressScreen {} },
+                    Screen::FirstRun => rsx! { FirstRunForm {} },
+                    Screen::Done => rsx! { SummaryScreen {} },
                 }
             }
+            FooterMeta {}
+        }
+    }
+}
+
+/// Top-of-window progress bar showing 6 dots — one per screen.
+#[component]
+fn ProgressBar(current: Screen) -> Element {
+    let screens = [
+        Screen::Welcome,
+        Screen::Detection,
+        Screen::Prompts,
+        Screen::Progress,
+        Screen::FirstRun,
+        Screen::Done,
+    ];
+    rsx! {
+        div { class: "progress-bar",
+            for (i, s) in screens.iter().enumerate() {
+                {
+                    let class_state = if *s == current {
+                        "progress-dot progress-dot-active"
+                    } else if (*s as usize) < (current as usize) {
+                        "progress-dot progress-dot-done"
+                    } else {
+                        "progress-dot"
+                    };
+                    rsx! {
+                        div { key: "{i}", class: "{class_state}",
+                            span { class: "progress-dot-number", "{s.step_number()}" }
+                            span { class: "progress-dot-label", "{s.title()}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn FooterMeta() -> Element {
+    rsx! {
+        div { class: "footer-meta",
+            span { "ag-installer " span { class: "footer-version", "{VERSION}" } }
+            span { class: "footer-sep", "·" }
+            span { class: "footer-dim", "git {GIT_SHA}" }
         }
     }
 }
