@@ -76,6 +76,11 @@ pub fn ConfigChunker() -> Element {
     let mut index_size_bytes: Signal<u64> = use_signal(|| 0);
     let mut index_size_human: Signal<String> = use_signal(|| "…".to_string());
     let mut memory_label: Signal<String> = use_signal(|| "Est. RAM if active".to_string());
+    // Disk size is always the on-disk Tantivy footprint, regardless of
+    // INDEX_IN_RAM. Used both for the visible "On disk" tag on the board
+    // and for the 100 MB heap-allocation warning on toggle save.
+    let mut disk_size_bytes: Signal<u64> = use_signal(|| 0);
+    let mut disk_size_human: Signal<String> = use_signal(|| "…".to_string());
     let mut restart_msg: Signal<Option<String>> = use_signal(|| None);
     let mut show_restart_confirm = use_signal(|| false);
 
@@ -112,6 +117,8 @@ pub fn ConfigChunker() -> Element {
                     info.memory_label
                         .unwrap_or_else(|| "Est. RAM if active".into()),
                 );
+                disk_size_bytes.set(info.disk_size_bytes.unwrap_or(0));
+                disk_size_human.set(info.disk_size_human.unwrap_or_else(|| "?".into()));
             }
         });
     });
@@ -218,7 +225,7 @@ pub fn ConfigChunker() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Config", Some(Route::Config {})),
+                    BreadcrumbItem::new("Config", Some(Route::ConfigRuntime {})),
                     BreadcrumbItem::new("Chunker", Some(Route::ConfigChunker {})),
                 ],
             }
@@ -650,16 +657,18 @@ pub fn ConfigChunker() -> Element {
                                 checked: index_in_ram(),
                                 onchange: move |evt: Event<FormData>| {
                                     let enabled = evt.value() == "true";
-                                    let sz_bytes = index_size_bytes();
-                                    let sz = index_size_human();
+                                    // 100 MB threshold compares against on-disk size (the
+                                    // RAM cost when IN_RAM is on), not Process RSS.
+                                    let disk_bytes = disk_size_bytes();
+                                    let disk = disk_size_human();
                                     spawn(async move {
                                         match api::set_index_in_ram(enabled).await {
                                             Ok(()) => {
                                                 index_in_ram.set(enabled);
-                                                if enabled && sz_bytes > 100_000_000 {
+                                                if enabled && disk_bytes > 100_000_000 {
                                                     ram_msg.set(Some(format!(
-                                                        "Saved — index is {} and will be fully heap-allocated. Restart to apply.",
-                                                        sz
+                                                        "Saved — index is {} on disk and will be fully heap-allocated. Restart to apply.",
+                                                        disk
                                                     )));
                                                 } else {
                                                     ram_msg.set(Some("Saved — restart to apply.".into()));
@@ -678,9 +687,14 @@ pub fn ConfigChunker() -> Element {
                                 span { class: "text-xs text-gray-400", "Inactive" }
                             }
                         }
-                        div { class: "flex items-center gap-2 text-xs text-gray-400",
-                            span { class: "text-gray-300", "{memory_label()}:" }
-                            span { "{index_size_human()}" }
+                        div { class: "flex items-center gap-2 text-xs text-gray-400 flex-wrap",
+                            span { class: "text-gray-300", "On disk:" }
+                            span { "{disk_size_human()}" }
+                            if index_in_ram() {
+                                span { class: "text-gray-300", "·" }
+                                span { class: "text-gray-300", "Process RSS:" }
+                                span { "{index_size_human()}" }
+                            }
                             span { class: "text-gray-300", "·" }
                             span { "{index_doc_count()} chunks" }
                             span { class: "text-gray-300", "·" }
@@ -1492,6 +1506,16 @@ pub fn ConfigChunker() -> Element {
                 "Example: '[Source: quarterly_report_2024.pdf] Revenue increased by 12%...'",
                 "The prefix token budget is controlled by CHUNK_CONTEXT_PREFIX_TOKENS. Chunks with the prefix are slightly shorter in content to stay within max_size.",
                 "Default: false.",
+                "",
+                "Why the default is off",
+                "• Reindex required to flip it. Turning the prefix on or off changes the chunk strings, so embeddings differ — existing index becomes inconsistent with new uploads until you reindex. A conservative default avoids baking in a hard-to-reverse choice on a fresh install.",
+                "• Net win is conditional. The improvement only appears when (a) you have multiple documents covering overlapping topics, (b) filenames are informative — not auto-generated UUIDs or 'untitled.pdf' — and (c) the embedding model picks up metadata-style prefixes. If any of those fails, the prefix is neutral or actively harmful (every chunk leans toward the filename token cluster).",
+                "• It's a cheap proxy for the real technique. Anthropic's contextual retrieval generates a situated context line per chunk via an LLM call — expensive but information-bearing. ag's filename-only variant is a no-LLM-cost approximation that helps in the easy disambiguation case and not in the hard ones.",
+                "• The prefix eats your token budget. max_size is fixed, so the prefix's tokens come out of body content — slightly more chunks per document, slightly less context per chunk. The trade is positive only when the prefix carries enough signal to outweigh the lost text.",
+                "• ag is a learning platform. Defaulting features to off makes them visible knobs the user turns on after reading this modal, rather than invisible behaviour baked into the system.",
+                "",
+                "Quick decision rule",
+                "Turn it on for corpora with many distinct, well-named sources (papers from different authors, quarterly reports, corporate docs across departments). Leave it off for single-domain corpora, one large work split into many chunks, or anywhere filenames are auto-generated.",
             ]) }
         }
         if show_prefix_tokens_info() {

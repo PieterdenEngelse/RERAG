@@ -237,6 +237,7 @@ impl AgentMemory {
             "INSERT INTO rag_memory (agent_id, memory_type, content, timestamp, vector) VALUES (?1, ?2, ?3, ?4, ?5)",
             (agent_id, memory_type, content, timestamp, &vector_json),
         )?;
+        crate::agent::invalidate_memory_cache(agent_id);
         Ok(())
     }
 
@@ -254,6 +255,7 @@ impl AgentMemory {
             "INSERT INTO rag_memory (agent_id, memory_type, content, timestamp, vector) VALUES (?1, ?2, ?3, ?4, ?5)",
             (agent_id, memory_type, content, timestamp, &vector_bytes),
         )?;
+        crate::agent::invalidate_memory_cache(agent_id);
         Ok(())
     }
 
@@ -263,6 +265,7 @@ impl AgentMemory {
             "DELETE FROM rag_memory WHERE agent_id = ?1 AND content LIKE ?2",
             (agent_id, &pattern),
         )?;
+        crate::agent::invalidate_memory_cache(agent_id);
         Ok(affected)
     }
 
@@ -281,6 +284,7 @@ impl AgentMemory {
 
         drop(stmt);
         tx.commit()?;
+        crate::agent::invalidate_memory_cache(agent_id);
         Ok(deleted)
     }
 
@@ -307,6 +311,7 @@ impl AgentMemory {
             "INSERT INTO rag_memory (agent_id, memory_type, content, timestamp, vector) VALUES (?1, 'note', ?2, ?3, '[]')",
             (agent_id, note, timestamp),
         )?;
+        crate::agent::invalidate_memory_cache(agent_id);
         Ok(())
     }
 

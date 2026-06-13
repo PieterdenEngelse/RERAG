@@ -40,6 +40,7 @@ pub fn ConfigRuntime() -> Element {
     let mut restart_pending = use_signal(|| false);
     let mut restarting = use_signal(|| false);
     let mut show_info = use_signal(|| false);
+    let mut category_info_open = use_signal::<Option<String>>(|| None);
 
     use_future(move || async move {
         let _ = reload_tick();
@@ -84,11 +85,11 @@ pub fn ConfigRuntime() -> Element {
     };
 
     rsx! {
-        div { class: "space-y-6",
+        div { class: "space-y-3",
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Config", Some(Route::Config {})),
+                    BreadcrumbItem::new("Config", Some(Route::ConfigRuntime {})),
                     BreadcrumbItem::new("Runtime", None),
                 ],
             }
@@ -145,8 +146,29 @@ pub fn ConfigRuntime() -> Element {
                 if category == "embedder-ort" {
                     {onnx_vs_ort_banner()}
                 }
-                Panel { title: Some(format_category(&category)), refresh: None,
-                    div { class: "space-y-3",
+                Panel { refresh: None,
+                    div { class: "flex items-center gap-2 mb-3",
+                        h3 { class: "text-sm font-semibold text-gray-200", "{format_category(&category)}" }
+                        button {
+                            class: PARAM_ICON_BUTTON_CLASS,
+                            style: PARAM_ICON_BUTTON_STYLE,
+                            title: "What this category is",
+                            onclick: {
+                                let cat = category.clone();
+                                move |_| category_info_open.set(Some(cat.clone()))
+                            },
+                            svg {
+                                class: INFO_ICON_SVG_CLASS,
+                                view_box: "0 0 20 20",
+                                fill: "none",
+                                stroke: "currentColor",
+                                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+                            }
+                        }
+                    }
+                    div { class: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2",
                         for entry in items {
                             SettingRow {
                                 key: "{entry.key}",
@@ -160,6 +182,10 @@ pub fn ConfigRuntime() -> Element {
                 }
             }
 
+            if let Some(cat) = category_info_open() {
+                {category_info_modal(cat, category_info_open)}
+            }
+
             if !unregistered.is_empty() {
                 Panel {
                     title: Some("Unregistered overrides".to_string()),
@@ -167,7 +193,7 @@ pub fn ConfigRuntime() -> Element {
                     div { class: "text-xs text-gray-400 mb-3",
                         "Overrides for keys that ag does not currently recognise. They may have been set by an older version, or they are not yet in the known-keys registry."
                     }
-                    div { class: "space-y-3",
+                    div { class: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2",
                         for entry in unregistered {
                             SettingRow {
                                 key: "{entry.key}",
@@ -282,34 +308,31 @@ fn SettingRow(
     };
 
     rsx! {
-        div { class: "border border-gray-700 bg-gray-800/40 rounded p-3 space-y-2",
-            div { class: "flex flex-wrap items-center gap-2",
-                span { class: "font-mono text-sm text-gray-100", "{entry.key}" }
-                span { class: "px-2 py-0.5 rounded text-[10px] uppercase tracking-wide {source_color}",
+        div { class: "border border-gray-700 bg-gray-800/40 rounded p-2 space-y-1 h-full flex flex-col",
+            div { class: "flex flex-wrap items-center gap-1",
+                span { class: "font-mono text-xs text-gray-100 break-all", "{entry.key}" }
+                span { class: "px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide {source_color}",
                     "{source_label}"
                 }
                 if restart_required {
-                    span { class: "px-2 py-0.5 rounded text-[10px] uppercase tracking-wide bg-orange-900/40 text-orange-300",
+                    span { class: "px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide bg-orange-900/40 text-orange-300",
                         "restart"
                     }
                 }
                 if !entry.registered {
-                    span { class: "px-2 py-0.5 rounded text-[10px] uppercase tracking-wide bg-purple-900/40 text-purple-300",
+                    span { class: "px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide bg-purple-900/40 text-purple-300",
                         "unregistered"
                     }
                 }
-                if let Some(cat) = &entry.category {
-                    span { class: "text-[10px] text-gray-400", "{cat}" }
-                }
             }
             if let Some(desc) = &entry.description {
-                p { class: "text-xs text-gray-300", "{desc}" }
+                p { class: "text-[11px] text-gray-300", "{desc}" }
             }
 
-            div { class: "flex flex-wrap items-center gap-2",
+            div { class: "flex flex-wrap items-center gap-1 mt-auto",
                 {render_control(entry.kind.clone(), input)}
                 button {
-                    class: "btn btn-sm",
+                    class: "btn btn-xs",
                     style: "background-color:#7C2A02;color:white;border:1px solid #7C2A02;",
                     disabled: saving() || !dirty,
                     onclick: move |_| {
@@ -320,13 +343,13 @@ fn SettingRow(
                 }
                 if has_override {
                     button {
-                        class: "btn btn-sm btn-ghost",
+                        class: "btn btn-xs btn-ghost",
                         disabled: saving(),
                         onclick: clear,
-                        "Clear override"
+                        "Clear"
                     }
                 }
-                div { class: "text-[10px] text-gray-400 ml-auto",
+                div { class: "text-[9px] text-gray-400 ml-auto truncate max-w-[40%]",
                     "env: "
                     span { class: "font-mono text-gray-300",
                         "{entry.env_value.clone().unwrap_or_else(|| \"—\".to_string())}"
@@ -335,7 +358,7 @@ fn SettingRow(
             }
 
             if let Some(err) = row_error() {
-                div { class: "text-xs text-red-400", "Error: {err}" }
+                div { class: "text-[11px] text-red-400", "Error: {err}" }
             }
         }
     }
@@ -455,6 +478,49 @@ fn group_by_category(
         groups.entry(cat).or_default().push(e.clone());
     }
     groups
+}
+
+/// Per-category explanation rendered by the info button on each Panel title.
+fn category_explanation(cat: &str) -> &'static str {
+    match cat {
+        "agent" => "Settings the agent uses to make retrieval-routing decisions — when Auto-mode hands a query off to PointerRag (full-section hydration) versus Strict/Hybrid retrieval, and similar choices that depend on observed corpus shape (fragmentation ratios, section-vs-doc spread, etc.). These are tuning knobs for how the agent picks between retrieval strategies, not the model or memory subsystem. Generally hot-reloaded.",
+        "cache" => "L1/L2/L3 cache behavior: in-process LRU size, DashMap toggles, Redis URL/TTL/enabled. L1/L2 changes hot-reload; the Redis connection knobs are restart-required because the client pool is built once at startup.",
+        "chunker" => "How uploaded documents are split into searchable chunks: chunker mode (fixed/semantic/lightweight), token sizes, semantic threshold, preprocessing flags. These keys hot-swap in process, but the dedicated Chunker config page persists its values to the database — and DB-saved values win at next startup.",
+        "embedder" => "The embedding model and how it's invoked: model id/path, dimensions, batch size, normalization. Most of these are restart-required because the model is loaded once and held in memory; changing them rebuilds the session.",
+        "embedder-ort" => "ONNX Runtime (ort) engine knobs for the embedder: thread counts, optimization passes, memory planning, execution provider selection. These configure the C++ engine, not the .onnx file format. All restart-required — the Session is built once at startup. See /docu/index/onnx for the longer write-up.",
+        "graph" => "GraphRAG / FalkorDB knobs: connection URL, host/port, retrieval depth, entity-reconciler thresholds. Connection changes are restart-required; tuning knobs hot-reload.",
+        "inference" => "LLM inference layer: backend selection (Ollama / llama-server), model name, max tokens, temperature defaults, request timeouts. Backend swaps need a restart; per-request defaults hot-reload.",
+        "ingest" => "Document ingestion pipeline: file-watcher paths, OCR enable/disable, native PDF extraction toggles, auto-export on upload. File-watcher root is restart-required; the rest hot-reload.",
+        "network" => "HTTP-server knobs: bind host, ports, proxy trust, request size limits, CORS. All restart-required — the Actix HttpServer binds once at boot.",
+        "observability" => "Tracing, metrics, and logging: OTel endpoint, RUST_LOG level, Prometheus toggle, log file paths. RUST_LOG hot-reloads; OTel/Prometheus/log-file changes are restart-required because exporters are wired during startup.",
+        "pdf" => "Native PDF extraction pipeline: DETR layout-detection thresholds, model paths (TableFormer / DocLayNet), tier selection. All restart-required — models are loaded once into the inference graph.",
+        "search" => "Tantivy search knobs: BM25 parameters, RRF weights, hybrid fusion, result limits, score cutoffs. Most hot-reload; a few that touch the index schema are restart-required.",
+        _ => "No description available for this category yet.",
+    }
+}
+
+fn category_info_modal(cat: String, mut open: Signal<Option<String>>) -> Element {
+    let title = format_category(&cat);
+    let body = category_explanation(&cat);
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| open.set(None),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-5 w-[90vw] max-w-lg max-h-[85vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-base font-semibold text-gray-100", "Category · {title}" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| open.set(None),
+                        "×"
+                    }
+                }
+                p { class: "text-sm text-gray-300 leading-relaxed", "{body}" }
+            }
+        }
+    }
 }
 
 fn format_category(cat: &str) -> String {

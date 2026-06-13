@@ -637,12 +637,24 @@ pub fn MonitorIndex() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("Index", None),
                 ],
             }
 
             NavTabs { active: Route::MonitorIndex {} }
+
+            // Concept references — what's actually running underneath the
+            // numbers on this page.
+            p { class: "text-xs text-gray-400 px-1",
+                "Concept references: "
+                a { href: "/docu/index/tantivy", class: "text-blue-400 hover:text-blue-300 underline", "Tantivy" }
+                " (full-text engine) · "
+                a { href: "/docu/index/bm25", class: "text-blue-400 hover:text-blue-300 underline", "BM25" }
+                " (its keyword scoring) · "
+                a { href: "/docu/index/rkyv", class: "text-blue-400 hover:text-blue-300 underline", "rkyv" }
+                " (how vectors are serialized in memory)."
+            }
 
             // Corpus selector — scopes upload and reindex to a named corpus
             if !corpora.read().is_empty() {

@@ -144,7 +144,7 @@ pub fn MonitorRequests() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("Requests", None),
                 ],
             }
@@ -284,7 +284,8 @@ pub fn MonitorRequests() -> Element {
                             }
                         }
                     }
-                    div { class: "grid grid-cols-1 gap-4 md:grid-cols-3",
+                    // 3 stat cards + Request Volume chart in one row
+                    div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4",
                         StatCard {
                             title: "Request Rate".into(),
                             value: format!("{:.2}", snapshot.request_rate_rps).into(),
@@ -300,9 +301,21 @@ pub fn MonitorRequests() -> Element {
                             value: format!("{:.2}", snapshot.error_rate_percent).into(),
                             unit: Some("%".into()),
                         }
+                        Panel { title: Some("Request Volume".into()), refresh: Some("5s".into()),
+                            if request_counts.is_empty() {
+                                div { class: "text-gray-300 text-xs", "No recent samples yet." }
+                            } else {
+                                ChartPlaceholder {
+                                    values: request_counts.clone(),
+                                    label: "Requests per second".to_string(),
+                                    unit: " req".to_string(),
+                                }
+                            }
+                        }
                     }
 
-                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-4 mt-4",
+                    // Latency / Status / Raw Samples — 3-col
+                    div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4",
                         Panel { title: Some("Latency Breakdown".into()), refresh: None,
                             DataTable {
                                 headers: vec!["Percentile".into(), "Latency".into()],
@@ -323,6 +336,15 @@ pub fn MonitorRequests() -> Element {
                                 ],
                             }
                         }
+                        Panel { title: Some("Raw Samples".into()), refresh: Some("5s".into()),
+                            DataTable {
+                                headers: vec!["Timestamp".into(), "Latency".into()],
+                                rows: snapshot.points.iter().rev().take(5).map(|p| vec![
+                                    format_timestamp(p.ts),
+                                    format!("{:.1} ms", p.latency_ms),
+                                ]).collect(),
+                            }
+                        }
                     }
 
                     div { class: "flex flex-wrap gap-2 text-xs mt-4",
@@ -337,28 +359,6 @@ pub fn MonitorRequests() -> Element {
                             }
                         }
                     }
-                }
-            }
-
-            Panel { title: Some("Request Volume".into()), refresh: Some("5s".into()),
-                if request_counts.is_empty() {
-                    div { class: "text-gray-300 text-sm", "No recent samples yet." }
-                } else {
-                    ChartPlaceholder {
-                        values: request_counts.clone(),
-                        label: "Requests per second".to_string(),
-                        unit: " req".to_string(),
-                    }
-                }
-            }
-
-            Panel { title: Some("Raw Samples".into()), refresh: Some("5s".into()),
-                DataTable {
-                    headers: vec!["Timestamp".into(), "Latency".into()],
-                    rows: snapshot.points.iter().rev().take(5).map(|p| vec![
-                        format_timestamp(p.ts),
-                        format!("{:.1} ms", p.latency_ms),
-                    ]).collect(),
                 }
             }
         }

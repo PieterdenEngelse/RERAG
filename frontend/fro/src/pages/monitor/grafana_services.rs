@@ -88,7 +88,7 @@ pub fn MonitorGrafanaServices() -> Element {
 
             Breadcrumb {
                 items: vec![
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("Systemd", Some(Route::MonitorAgSystemd {})),
                     BreadcrumbItem::new("Grafana Services", None),
                 ]

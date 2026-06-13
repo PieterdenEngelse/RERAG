@@ -1,0 +1,203 @@
+# Linux installer for `ag`
+
+## Context
+
+`installers/` currently holds two mis-named scripts: `install.sh` is a Windows
+PowerShell installer, and `install-windows-v1.0.0.ps1` is a Linux bash
+installer. The bash installer is also out of date — it targets a stale
+"Agentic RAG / fro" layout (binary `target/release/fro`, prefix
+`~/.agentic-rag`, health probe on `localhost:3000/monitoring/health`) that
+does not match the current project. Today the real shape is:
+
+- Backend crate: `ag` (`backend/Cargo.toml` name=`ag`), binary at
+  `target/release/ag`.
+- Runtime base dir: `PathManager` (`backend/src/path_manager.rs:50`) uses
+  `$AG_HOME`, falling back to `dirs::data_local_dir()/ag` → on Linux
+  `~/.local/share/ag`. PathManager creates `data/`, `index/`, `db/`,
+  `logs/`, `cache/`, `locks/` under that base dir.
+- Process entrypoint: `start-ag.sh` (brings up the docker stack, fixes
+  `LD_LIBRARY_PATH` for `libtika_native.so`, execs the binary).
+- Systemd unit: `systemd/ag-full-stack.service` (user unit, hard-codes
+  `/home/pde/ag`).
+- Docker compose stack: `docker-compose.yml` with profiles `core`
+  (Redis, Ollama) and `observability` (Prometheus, Grafana, Loki, Tempo,
+  OTel collector).
+- Health endpoint: `/health` on `BACKEND_PORT` (default `3010`)
+  (`backend/src/api/mod.rs:705`, :796, :951).
+- Config: `.env.example` is the canonical template — 200+ keys.
+
+Goal: produce one correct, well-named Linux installer (`install-linux.sh`)
+that builds `ag`, wires the existing `start-ag.sh` + systemd unit to the
+caller's actual paths, optionally brings up the docker stack and optionally
+builds the frontend. Also clean up the file-name swap and remove the stale
+v1.1.0 bash script.
+
+## Defaults chosen (these are the redirect points)
+
+- **Scope**: per the user's reply ("all the points you mentioned"), the
+  installer runs **all four** steps by default — build backend, build
+  frontend, bring up the docker stack, install + enable the systemd user
+  service. Each step has a `--no-*` flag to skip it (`--no-frontend`,
+  `--no-stack`, `--no-systemd`), and `--with-stack=PROFILE` selects a
+  compose profile.
+- **Layout**: **in-place**. Binary stays at `./target/release/ag`,
+  `start-ag.sh` runs from the repo. The systemd unit gets templated to the
+  repo's actual `WorkingDirectory` (replacing the hard-coded `/home/pde/ag`)
+  and installed to `~/.config/systemd/user/ag.service`. State lives at
+  `${AG_HOME:-~/.local/share/ag}`.
+- **No copy to `~/.local/bin`** and **no `sudo`**. The existing systemd unit
+  is a `--user` unit; nothing here needs root.
+
+## Shape
+
+```
+install-linux.sh
+   │
+   ├─ parse flags ──────────────────────────────────────────────┐
+   │                                                            │
+   ├─ preflight  (rustc, cargo, gcc, optional: docker, dx,     │
+   │              npm — only when their flag is set)            │
+   │                                                            │
+   ├─ ensure AG_HOME tree                                       │
+   │     ~/.local/share/ag/{data,index,db,logs,cache,locks,    │
+   │                        config}                             │
+   │                                                            │
+   ├─ seed config                                              │
+   │     ${AG_HOME}/config/.env  ← copied from repo .env.example│
+   │     (only if absent — never overwrite user edits)          │
+   │                                                            │
+   ├─ build backend  (cargo build --release in repo root)       │
+   │                                                            │
+   ├─ build frontend  [skip: --no-frontend]                     │
+   │     cd frontend/fro                                        │
+   │     ├─ npm ci + npm run css:build                          │
+   │     └─ trunk build --release                               │
+   │                                                            │
+   ├─ docker stack  [skip: --no-stack;                          │
+   │                 select: --with-stack=PROFILE]              │
+   │     docker compose up -d for PROFILE                       │
+   │     (core | observability | "" = all)                      │
+   │                                                            │
+   ├─ systemd user service  [skip: --no-systemd]                │
+   │     ├─ render systemd/ag-full-stack.service:               │
+   │     │     /home/pde/ag → $(pwd)  (or --project-path)       │
+   │     │     install to ~/.config/systemd/user/ag.service     │
+   │     ├─ systemctl --user daemon-reload                      │
+   │     └─ systemctl --user enable --now ag.service            │
+   │                                                            │
+   ├─ post-install health check                                 │
+   │     curl http://127.0.0.1:${BACKEND_PORT}/health           │
+   │     up to ~20s, warning-only if --no-systemd was passed    │
+   │                                                            │
+   └─ summary  (paths, endpoints, next-step commands)
+```
+
+## Files to change
+
+| Path | Action |
+|------|--------|
+| `installers/install-linux.sh` | **new** — the real installer. |
+| `installers/uninstall-linux.sh` | **new** — small symmetry: stop+disable systemd unit, remove `~/.config/systemd/user/ag.service`, optionally `docker compose down`, optionally delete `$AG_HOME` (behind `--purge`). |
+| `installers/install-windows.ps1` | **rename** from `installers/install.sh` (file is PowerShell, was mis-named). |
+| `installers/install-windows-v1.0.0.ps1` | **delete** — file is actually the broken legacy bash installer; nothing else references it. |
+| `systemd/README.md` | Add one line pointing at `installers/install-linux.sh --with-systemd`; fix the stale `cp ag.service` step (the file is `ag-full-stack.service`). |
+
+## Implementation notes for the new `install-linux.sh`
+
+Keep the shape of the old script (set -euo pipefail, color logger,
+`--help`/`--version`, log file). Differences from the v1.1.0 file that
+matter:
+
+- `INSTALL_PREFIX` default → `${AG_HOME:-$HOME/.local/share/ag}`. Match
+  `PathManager::get_base_dir` exactly so the installer's directories are
+  the ones the running binary actually uses. Drop the
+  `documents.db`/`memory.db` touch — those aren't real schemas; let the
+  app create what it needs on first boot.
+- Subdirs: `data index db logs cache locks config` (mirror PathManager,
+  plus a `config/` slot for `.env`).
+- Don't touch `~/.bashrc`/`.zshrc`. Instead write `${AG_HOME}/config/.env`
+  by copying `.env.example` and overwriting `BACKEND_HOST`/`BACKEND_PORT`
+  and `AG_HOME` if `--backend-port`/`--prefix` are passed. Print a one-
+  liner telling the user how to `export AG_HOME=...` for their shell.
+- Backend build: `cargo build --release` from the repo root (workspace
+  default-member is `backend`, so this builds `ag`). Verify
+  `target/release/ag` exists; print its size.
+- Frontend build (default; skip with `--no-frontend`): `cd frontend/fro &&
+  npm ci && npm run css:build && trunk build --release`. Refuse with a
+  clear error if `trunk` or `npm` is missing — don't try to install them.
+- Docker stack (default; skip with `--no-stack`, select with
+  `--with-stack=PROFILE`): require `docker` on PATH. Run
+  `docker compose -f docker-compose.yml --profile "$PROFILE" up -d`. Empty
+  profile (the default) = all services (matches the compose file's
+  `profiles: ["", ...]` convention).
+- Systemd (default; skip with `--no-systemd`): use `sed` to template
+  `systemd/ag-full-stack.service`:
+  - `WorkingDirectory=/home/pde/ag` → `WorkingDirectory=$PROJECT_PATH`
+  - `ExecStart=/home/pde/ag/start-ag.sh` → `ExecStart=$PROJECT_PATH/start-ag.sh`
+  Add `Environment=AG_HOME=$INSTALL_PREFIX` and
+  `Environment=BACKEND_PORT=$BACKEND_PORT` so the unit picks up the
+  installer's choices. Install as `~/.config/systemd/user/ag.service`,
+  then `daemon-reload`, `enable --now`. Don't enable lingering — that's a
+  separate user decision.
+- Health check: poll `http://127.0.0.1:${BACKEND_PORT}/health` up to 10x
+  at 2s intervals. Treat "no response" as a warning, not a hard failure,
+  because the user might have passed `--no-systemd` and not started the
+  service themselves yet.
+- Don't run `cargo test` as part of install. That's what the
+  user's quality-gate (`cargo fmt && cargo clippy`) is for and it doubles
+  install time. The old script did this; we drop it.
+- Don't try to start a verification `cargo run` and then `kill` it (the
+  old script's "post-build verification"). It's fragile, it racially
+  fights with systemd if `--with-systemd` is in play, and the health
+  check covers the same need.
+
+## Flags
+
+```
+./installers/install-linux.sh [OPTIONS]
+
+  --project-path PATH    Repo path (default: $PWD)
+  --prefix PATH          AG_HOME (default: $AG_HOME or ~/.local/share/ag)
+  --backend-port PORT    BACKEND_PORT (default: 3010)
+  --mode release|debug   cargo build profile (default: release)
+  --no-systemd           Skip installing ~/.config/systemd/user/ag.service
+  --no-stack             Skip docker compose up
+  --with-stack=PROFILE   Compose profile (core | observability | "" = all,
+                         default "")
+  --no-frontend          Skip npm ci + css:build + trunk build in frontend/fro
+  --skip-checks          Skip preflight tool checks
+  --verbose              set -x
+  --version, --help
+
+By default (no flags): does all four — backend build, frontend build,
+docker compose up -d (all profiles), and systemd --user enable --now.
+```
+
+## Verification
+
+After implementation, sanity-check on this machine:
+
+1. `bash installers/install-linux.sh --help` prints the new help.
+2. `bash installers/install-linux.sh` (no flags) from the repo root —
+   the full path:
+   - creates `~/.local/share/ag/{data,index,db,logs,cache,locks,config}`
+   - writes `~/.local/share/ag/config/.env` if absent
+   - builds `target/release/ag`
+   - builds frontend at `frontend/fro/dist/`
+   - `docker ps` shows ag-redis (and the observability containers) up
+   - installs `~/.config/systemd/user/ag.service` with the templated
+     `WorkingDirectory` matching `$PWD`
+   - `systemctl --user status ag.service` reports active
+   - health probe to `http://127.0.0.1:3010/health` returns 200 within
+     ~20s
+3. `bash installers/install-linux.sh --no-stack --no-systemd --no-frontend`
+   reduces to "build only": creates dirs + .env, builds the backend, does
+   NOT touch docker or systemd or `frontend/fro/dist/`.
+4. `bash installers/install-linux.sh --with-stack=core --no-systemd
+   --no-frontend` brings only Redis + Ollama up.
+5. `bash installers/uninstall-linux.sh` reverses (2): stops + disables
+   `ag.service`, removes the unit file, optionally `docker compose down`.
+   `--purge` also deletes `~/.local/share/ag`.
+6. `cargo fmt && cargo clippy --all-targets -- -D warnings` still pass
+   (no Rust code touched, but run it as the project's quality gate
+   demands).

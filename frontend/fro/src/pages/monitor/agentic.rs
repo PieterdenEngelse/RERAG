@@ -372,111 +372,163 @@ pub fn MonitorAgentic() -> Element {
     let rig_stats = snapshot.rig_stats.clone().unwrap_or_default();
 
     rsx! {
-        div { class: "space-y-6",
+        div { class: "space-y-3",
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("Agentic", None),
                 ],
             }
 
             NavTabs { active: Route::MonitorAgentic {} }
 
-            // Error display
+            p { class: "text-xs text-gray-400",
+                "The agentic loop here is driven by "
+                a { href: "/docu/index/rig", class: "text-blue-400 hover:text-blue-300 underline", "Rig" }
+                " — the tool-calling framework that orchestrates retrieval, memory, and LLM calls across turns."
+            }
+
             if let Some(err) = snapshot.error.clone() {
-                div { class: "bg-red-900/50 border border-red-500 rounded p-3 text-red-200 text-sm",
+                div { class: "bg-red-900/50 border border-red-500 rounded p-2 text-red-200 text-xs",
                     "Error loading data: {err}"
                 }
             }
 
-            // Agent Activity Section
-            RowHeader {
-                title: "Agent Activity".into(),
-            }
+            // Row 1: Agent Activity | Memory | Goal Tracking (half-width on lg+)
+            div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 lg:w-1/2",
+                Panel { title: Some("Agent Activity".into()), refresh: Some("5s".into()),
+                    if snapshot.loading {
+                        div { class: "text-gray-400 text-xs", "Loading agent stats…" }
+                    } else {
+                        div { class: "flex flex-wrap items-stretch gap-1.5 mb-2",
+                            for name in &agent_stats.agent_names {
+                                div { class: "rounded px-2 py-0.5 bg-gray-800 border border-teal-700/50 flex items-center gap-1.5",
+                                    div { class: "w-2 h-2 rounded-full bg-teal-400 shrink-0" }
+                                    span { class: "text-xs font-mono text-teal-300", "{name}" }
+                                }
+                            }
+                        }
 
-            Panel { title: Some("Agent Overview".into()), refresh: Some("5s".into()),
-                if snapshot.loading {
-                    div { class: "text-gray-400 text-sm", "Loading agent stats…" }
-                } else {
-                    // Active Agents — one card per agent, expands as more are added
-                    div { class: "flex flex-wrap gap-3 mb-4",
-                        for name in &agent_stats.agent_names {
-                            div { class: "rounded p-3 bg-gray-800 border border-teal-700/50 flex items-center gap-2",
-                                div { class: "w-2 h-2 rounded-full bg-teal-400 shrink-0" }
-                                span { class: "text-sm font-mono text-teal-300", "{name}" }
-                                span { class: "text-xs text-gray-300", "agent" }
+                        div { class: "grid grid-cols-2 gap-2",
+                            div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                                div { class: "flex items-center gap-1",
+                                    span { class: "text-[10px] text-gray-400", "Episodes/hr" }
+                                    EpisodeInfoButton {}
+                                }
+                                div { class: "text-lg font-bold text-gray-100", "{agent_stats.episodes_last_hour}" }
+                            }
+                            div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                                div { class: "text-[10px] text-gray-400", "Success Rate" }
+                                div { class: "text-lg font-bold text-gray-100", "{agent_stats.success_rate:.1}%" }
+                            }
+                            div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                                div { class: "flex items-center gap-1",
+                                    span { class: "text-[10px] text-gray-400", "Active Goals" }
+                                    GoalInfoButton {}
+                                }
+                                div { class: "text-lg font-bold text-gray-100", "{agent_stats.active_goals}" }
+                            }
+                            div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                                div { class: "text-[10px] text-gray-400", "Reflections" }
+                                div { class: "text-lg font-bold text-gray-100", "{agent_stats.total_reflections}" }
                             }
                         }
                     }
+                }
 
-                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
-                        // Episodes/hr with Success Rate below
-                        div { class: "rounded p-4 bg-gray-800 border border-gray-700",
-                            div { class: "flex items-center gap-2 mb-2",
-                                span { class: "text-sm font-semibold text-gray-200",
-                                    "{agent_stats.episodes_last_hour} Episodes/hr"
-                                }
-                                EpisodeInfoButton {}
-                            }
-                            div { class: "text-xs text-gray-400",
-                                "Success Rate: "
-                                span { class: "text-gray-200 font-medium",
-                                    "{agent_stats.success_rate:.1}%"
-                                }
-                            }
+                Panel { title: Some("Memory".into()), refresh: Some("10s".into()),
+                    div { class: "grid grid-cols-3 gap-2",
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Episodes" }
+                            div { class: "text-lg font-bold text-gray-100", "{memory_stats.total_episodes}" }
                         }
-                        StatCard {
-                            title: "Active Goals".into(),
-                            value: agent_stats.active_goals.to_string().into(),
-                            unit: None,
-                            info_tooltip: Some(GOAL_INFO_TOOLTIP.into()),
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "RAG Mems" }
+                            div { class: "text-lg font-bold text-gray-100", "{memory_stats.total_rag_memories}" }
+                        }
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Agents" }
+                            div { class: "text-lg font-bold text-gray-100", "{memory_stats.unique_agents}" }
+                        }
+                    }
+                }
+
+                Panel { title: Some("Goal Tracking".into()), refresh: Some("10s".into()),
+                    div { class: "grid grid-cols-3 gap-2",
+                        div { class: "bg-gray-800/50 rounded px-2 py-1.5",
+                            div { class: "text-[10px] text-gray-400", "Active" }
+                            div { class: "text-lg font-bold text-teal-400", "{goals.active}" }
+                        }
+                        div { class: "bg-gray-800/50 rounded px-2 py-1.5",
+                            div { class: "text-[10px] text-gray-400", "Completed" }
+                            div { class: "text-lg font-bold text-green-400", "{goals.completed}" }
+                        }
+                        div { class: "bg-gray-800/50 rounded px-2 py-1.5",
+                            div { class: "text-[10px] text-gray-400", "Failed" }
+                            div { class: "text-lg font-bold text-red-400", "{goals.failed}" }
+                        }
+                    }
+
+                    if !goals.goals.is_empty() {
+                        div { class: "mt-2",
+                            div { class: "text-[10px] text-gray-400 mb-1", "Recent" }
+                            div { class: "space-y-1",
+                                for goal in goals.goals.iter().take(5) {
+                                    div { class: "bg-gray-900/50 rounded px-2 py-1 flex items-center gap-2",
+                                        span {
+                                            class: match goal.status.as_str() {
+                                                "active" => "w-2 h-2 rounded-full bg-teal-400 shrink-0",
+                                                "completed" => "w-2 h-2 rounded-full bg-green-400 shrink-0",
+                                                "failed" => "w-2 h-2 rounded-full bg-red-400 shrink-0",
+                                                _ => "w-2 h-2 rounded-full bg-gray-400 shrink-0",
+                                            }
+                                        }
+                                        span { class: "text-xs text-gray-200 flex-1 truncate", "{goal.goal}" }
+                                        span { class: "text-[10px] text-gray-300", "{goal.status}" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Rig Agentic Mode Section
-            RowHeader {
-                title: "Rig Agentic Mode".into(),
-            }
+            // Row 2: Rig Agentic Mode | Tool Performance
+            div { class: "grid grid-cols-1 lg:grid-cols-2 gap-3",
+                Panel { title: Some("Rig Agentic Mode".into()), refresh: Some("5s".into()),
+                    div { class: "grid grid-cols-2 gap-2",
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "flex items-center gap-1",
+                                span { class: "text-[10px] text-gray-400", "Total Calls" }
+                                RigModeInfoButton {}
+                            }
+                            div { class: "text-lg font-bold text-gray-100", "{rig_stats.agentic_calls_total}" }
+                        }
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "flex items-center gap-1",
+                                span { class: "text-[10px] text-gray-400", "Fallbacks" }
+                                RigFallbackInfoButton {}
+                            }
+                            div { class: "text-lg font-bold text-gray-100", "{rig_stats.agentic_fallbacks_total}" }
+                        }
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Tool Calls" }
+                            div { class: "text-lg font-bold text-gray-100", "{rig_stats.rig_tool_calls_total}" }
+                        }
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Fallback Rate" }
+                            div { class: "text-lg font-bold text-gray-100", "{rig_stats.fallback_rate_pct:.1}%" }
+                        }
+                    }
 
-            Panel { title: Some("Agentic Sessions".into()), refresh: Some("5s".into()),
-                div { class: "grid grid-cols-2 md:grid-cols-4 gap-4",
-                    StatCard {
-                        title: "Total Calls".into(),
-                        value: rig_stats.agentic_calls_total.to_string().into(),
-                        unit: None,
-                        info_tooltip: Some(RIG_MODE_INFO_TOOLTIP.into()),
-                    }
-                    StatCard {
-                        title: "Fallbacks".into(),
-                        value: rig_stats.agentic_fallbacks_total.to_string().into(),
-                        unit: None,
-                        info_tooltip: Some(RIG_FALLBACK_INFO_TOOLTIP.into()),
-                    }
-                    StatCard {
-                        title: "Tool Calls".into(),
-                        value: rig_stats.rig_tool_calls_total.to_string().into(),
-                        unit: None,
-                        info_tooltip: Some(RIG_MODE_INFO_TOOLTIP.into()),
-                    }
-                    StatCard {
-                        title: "Fallback Rate".into(),
-                        value: format!("{:.1}", rig_stats.fallback_rate_pct).into(),
-                        unit: Some("%".into()),
-                        info_tooltip: Some(RIG_FALLBACK_INFO_TOOLTIP.into()),
-                    }
-                }
-
-                // Token budget section
-                div { class: "mt-4 bg-gray-800/50 rounded p-4 space-y-3",
-                    div { class: "flex items-center justify-between mb-1",
-                        div { class: "flex items-center gap-2",
-                            span { class: "text-xs font-semibold text-gray-300", "Context Budget (avg)" }
+                div { class: "mt-2 bg-gray-800/50 rounded p-2 space-y-1",
+                    div { class: "flex items-center justify-between",
+                        div { class: "flex items-center gap-1.5",
+                            span { class: "text-[10px] font-semibold text-gray-300", "Context Budget (avg)" }
                             TokenBudgetInfoButton {}
                         }
-                        span { class: "text-xs text-gray-400",
+                        span { class: "text-[10px] text-gray-400",
                             "Counter: "
                             span {
                                 class: if rig_stats.counter_type.starts_with("exact") {
@@ -491,7 +543,6 @@ pub fn MonitorAgentic() -> Element {
                         }
                     }
 
-                    // Context utilization bar
                     {
                         let pct = rig_stats.avg_ctx_utilization_pct.min(100.0);
                         let bar_color = if pct > 80.0 {
@@ -502,238 +553,137 @@ pub fn MonitorAgentic() -> Element {
                             "bg-teal-500"
                         };
                         rsx! {
-                            div { class: "space-y-1",
-                                div { class: "flex items-center gap-2",
-                                    div { class: "flex-1 h-4 bg-gray-700 rounded overflow-hidden",
-                                        div {
-                                            class: "h-full {bar_color} transition-all",
-                                            style: "width: {pct:.1}%"
-                                        }
-                                    }
-                                    span { class: "text-xs text-gray-300 w-12 text-right",
-                                        "{pct:.1}%"
+                            div { class: "flex items-center gap-2",
+                                div { class: "flex-1 h-3 bg-gray-700 rounded overflow-hidden",
+                                    div {
+                                        class: "h-full {bar_color} transition-all",
+                                        style: "width: {pct:.1}%"
                                     }
                                 }
+                                span { class: "text-[10px] text-gray-300 w-10 text-right", "{pct:.1}%" }
                             }
                         }
                     }
 
-                    div { class: "grid grid-cols-3 gap-4 mt-2",
+                    div { class: "grid grid-cols-3 gap-2",
                         div { class: "text-center",
-                            div { class: "text-xs text-gray-300", "Avg tokens/session" }
-                            div { class: "text-sm font-medium text-gray-200",
-                                "{rig_stats.avg_tokens_in:.0}"
-                            }
+                            div { class: "text-[10px] text-gray-300", "Avg tokens/session" }
+                            div { class: "text-xs font-medium text-gray-200", "{rig_stats.avg_tokens_in:.0}" }
                         }
                         div { class: "text-center",
-                            div { class: "text-xs text-gray-300", "Max tokens seen" }
-                            div { class: "text-sm font-medium text-gray-200",
-                                "{rig_stats.max_tokens_in}"
-                            }
+                            div { class: "text-[10px] text-gray-300", "Max tokens seen" }
+                            div { class: "text-xs font-medium text-gray-200", "{rig_stats.max_tokens_in}" }
                         }
                         div { class: "text-center",
-                            div { class: "text-xs text-gray-300", "Avg session" }
-                            div { class: "text-sm font-medium text-gray-200",
-                                "{rig_stats.avg_session_ms:.0} ms"
-                            }
+                            div { class: "text-[10px] text-gray-300", "Avg session" }
+                            div { class: "text-xs font-medium text-gray-200", "{rig_stats.avg_session_ms:.0} ms" }
                         }
                     }
 
                     if rig_stats.token_sample_count == 0 {
-                        div { class: "text-xs text-gray-300 italic mt-2",
-                            "No agentic sessions recorded yet. Token stats appear after the first agentic query."
+                        div { class: "text-[10px] text-gray-300 italic",
+                            "No agentic sessions yet. Token stats appear after the first agentic query."
                         }
                     } else {
-                        div { class: "text-xs text-gray-300 mt-1",
+                        div { class: "text-[10px] text-gray-300",
                             "Based on {rig_stats.token_sample_count} session(s)"
                         }
                     }
                 }
             }
 
-            // Decision Engine Section
-            RowHeader {
-                title: "Decision Engine".into(),
-            }
-
-            Panel { title: Some("Tool Performance".into()), refresh: Some("10s".into()),
-                div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
-                    StatCard {
-                        title: "Tool Executions".into(),
-                        value: tool_stats.tool_executions.to_string().into(),
-                        unit: None,
-                    }
-                    StatCard {
-                        title: "Avg Confidence".into(),
-                        value: format!("{:.1}", tool_stats.avg_confidence).into(),
-                        unit: Some("%".into()),
-                    }
-                    StatCard {
-                        title: "Fallback Rate".into(),
-                        value: format!("{:.1}", tool_stats.fallback_rate).into(),
-                        unit: Some("%".into()),
-                    }
-                }
-
-                // Tool Usage Distribution
-                div { class: "mt-4",
-                    RowHeader {
-                        title: "Tool Usage Distribution".into(),
-                    }
-                    div { class: "bg-gray-800/50 rounded p-4 space-y-2",
-                        for tool in tool_stats.tool_distribution.iter() {
-                            div { class: "flex items-center gap-3",
-                                span { class: "text-xs text-gray-400 w-32", "{tool.tool_name}" }
-                                div { class: "flex-1 h-4 bg-gray-700 rounded overflow-hidden",
-                                    div {
-                                        class: "h-full bg-teal-500",
-                                        style: "width: {tool.percentage}%"
-                                    }
-                                }
-                                span { class: "text-xs text-gray-300 w-12 text-right", "{tool.percentage:.0}%" }
-                            }
+                Panel { title: Some("Tool Performance".into()), refresh: Some("10s".into()),
+                    div { class: "grid grid-cols-3 gap-2",
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Executions" }
+                            div { class: "text-lg font-bold text-gray-100", "{tool_stats.tool_executions}" }
                         }
-                        if tool_stats.tool_distribution.is_empty() {
-                            div { class: "text-gray-300 text-sm italic", "No tool usage data yet" }
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Avg Conf." }
+                            div { class: "text-lg font-bold text-gray-100", "{tool_stats.avg_confidence:.1}%" }
+                        }
+                        div { class: "rounded px-2 py-1.5 bg-gray-800/50 border border-gray-700",
+                            div { class: "text-[10px] text-gray-400", "Fallback" }
+                            div { class: "text-lg font-bold text-gray-100", "{tool_stats.fallback_rate:.1}%" }
                         }
                     }
-                }
-            }
 
-            // Memory Health Section
-            RowHeader {
-                title: "Agent Memory".into(),
-            }
-
-            Panel { title: Some("Memory Statistics".into()), refresh: Some("10s".into()),
-                div { class: "grid grid-cols-1 md:grid-cols-4 gap-4",
-                    StatCard {
-                        title: "Total Episodes".into(),
-                        value: memory_stats.total_episodes.to_string().into(),
-                        unit: None,
-                    }
-                    StatCard {
-                        title: "RAG Memories".into(),
-                        value: memory_stats.total_rag_memories.to_string().into(),
-                        unit: None,
-                    }
-                    StatCard {
-                        title: "Unique Agents".into(),
-                        value: memory_stats.unique_agents.to_string().into(),
-                        unit: None,
-                    }
-                    StatCard {
-                        title: "Reflections".into(),
-                        value: agent_stats.total_reflections.to_string().into(),
-                        unit: None,
-                    }
-                }
-            }
-
-            // Goals Section
-            Panel { title: Some("Goal Tracking".into()), refresh: Some("10s".into()),
-                div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
-                    // Active Goals
-                    div { class: "bg-gray-800/50 rounded p-4",
-                        div { class: "text-xs text-gray-400 mb-2", "Active" }
-                        div { class: "text-2xl font-bold text-teal-400", "{goals.active}" }
-                    }
-                    // Completed Goals
-                    div { class: "bg-gray-800/50 rounded p-4",
-                        div { class: "text-xs text-gray-400 mb-2", "Completed" }
-                        div { class: "text-2xl font-bold text-green-400", "{goals.completed}" }
-                    }
-                    // Failed Goals
-                    div { class: "bg-gray-800/50 rounded p-4",
-                        div { class: "text-xs text-gray-400 mb-2", "Failed" }
-                        div { class: "text-2xl font-bold text-red-400", "{goals.failed}" }
-                    }
-                }
-
-                // Goals list
-                if !goals.goals.is_empty() {
-                    div { class: "mt-4",
-                        div { class: "text-xs text-gray-400 mb-2", "Recent Goals" }
-                        div { class: "space-y-2",
-                            for goal in goals.goals.iter().take(5) {
-                                div { class: "bg-gray-900/50 rounded p-2 flex items-center gap-3",
-                                    span {
-                                        class: match goal.status.as_str() {
-                                            "active" => "w-2 h-2 rounded-full bg-teal-400",
-                                            "completed" => "w-2 h-2 rounded-full bg-green-400",
-                                            "failed" => "w-2 h-2 rounded-full bg-red-400",
-                                            _ => "w-2 h-2 rounded-full bg-gray-400",
+                    div { class: "mt-2",
+                        div { class: "text-[10px] text-gray-400 mb-1", "Tool Usage Distribution" }
+                        div { class: "bg-gray-800/50 rounded p-2 space-y-1",
+                            for tool in tool_stats.tool_distribution.iter() {
+                                div { class: "flex items-center gap-2",
+                                    span { class: "text-[10px] text-gray-400 w-28 truncate", "{tool.tool_name}" }
+                                    div { class: "flex-1 h-3 bg-gray-700 rounded overflow-hidden",
+                                        div {
+                                            class: "h-full bg-teal-500",
+                                            style: "width: {tool.percentage}%"
                                         }
                                     }
-                                    span { class: "text-sm text-gray-200 flex-1", "{goal.goal}" }
-                                    span { class: "text-xs text-gray-300", "{goal.status}" }
+                                    span { class: "text-[10px] text-gray-300 w-10 text-right", "{tool.percentage:.0}%" }
                                 }
+                            }
+                            if tool_stats.tool_distribution.is_empty() {
+                                div { class: "text-gray-300 text-xs italic", "No tool usage data yet" }
                             }
                         }
                     }
                 }
             }
 
-            // Recent Reflections Section
-            Panel { title: Some("Recent Reflections".into()), refresh: Some("30s".into()),
-                if reflections.reflections.is_empty() {
-                    div { class: "text-gray-300 text-sm italic",
-                        "No reflections recorded yet. Reflections appear after agent interactions."
-                    }
-                } else {
-                    div { class: "space-y-2",
-                        for reflection in reflections.reflections.iter() {
-                            div { class: "bg-gray-900/50 rounded p-3",
-                                div { class: "flex items-center gap-2 mb-1",
-                                    span {
-                                        class: match reflection.reflection_type.as_str() {
-                                            "success" => "text-xs px-2 py-0.5 rounded bg-green-900/50 text-green-300",
-                                            "failure" => "text-xs px-2 py-0.5 rounded bg-red-900/50 text-red-300",
-                                            "pattern" => "text-xs px-2 py-0.5 rounded bg-blue-900/50 text-blue-300",
-                                            "improvement" => "text-xs px-2 py-0.5 rounded bg-purple-900/50 text-purple-300",
-                                            _ => "text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300",
-                                        },
-                                        "{reflection.reflection_type}"
+            // Row 3: Recent Reflections + Recent Episodes side-by-side
+            div { class: "grid grid-cols-1 lg:grid-cols-2 gap-3",
+                if !reflections.reflections.is_empty() {
+                    Panel { title: Some("Recent Reflections".into()), refresh: Some("30s".into()),
+                        div { class: "space-y-1",
+                            for reflection in reflections.reflections.iter() {
+                                div { class: "bg-gray-900/50 rounded px-2 py-1.5",
+                                    div { class: "flex items-center gap-2 mb-0.5",
+                                        span {
+                                            class: match reflection.reflection_type.as_str() {
+                                                "success" => "text-[10px] px-1.5 py-0.5 rounded bg-green-900/50 text-green-300",
+                                                "failure" => "text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-300",
+                                                "pattern" => "text-[10px] px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300",
+                                                "improvement" => "text-[10px] px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300",
+                                                _ => "text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-300",
+                                            },
+                                            "{reflection.reflection_type}"
+                                        }
+                                        span { class: "text-[10px] text-gray-300", "{format_timestamp(reflection.created_at)}" }
                                     }
-                                    span { class: "text-xs text-gray-300", "{format_timestamp(reflection.created_at)}" }
+                                    div { class: "text-xs text-gray-200", "{reflection.insight}" }
                                 }
-                                div { class: "text-sm text-gray-200", "{reflection.insight}" }
                             }
                         }
                     }
                 }
-            }
 
-            // Recent Episodes Section
-            Panel { title: Some("Recent Episodes".into()), refresh: Some("5s".into()),
-                if episodes.episodes.is_empty() {
-                    div { class: "text-gray-300 text-sm italic",
-                        "No episodes recorded yet. Episodes appear after agent queries."
-                    }
-                } else {
-                    div { class: "space-y-2",
-                        for episode in episodes.episodes.iter().take(5) {
-                            div { class: "bg-gray-900/50 rounded p-3",
-                                div { class: "flex items-center gap-2 mb-1",
-                                    span {
-                                        class: if episode.success {
-                                            "text-xs px-2 py-0.5 rounded bg-green-900/50 text-green-300"
-                                        } else {
-                                            "text-xs px-2 py-0.5 rounded bg-red-900/50 text-red-300"
-                                        },
-                                        if episode.success { "✓ success" } else { "✗ failed" }
+                if !episodes.episodes.is_empty() {
+                    Panel { title: Some("Recent Episodes".into()), refresh: Some("5s".into()),
+                        div { class: "space-y-1",
+                            for episode in episodes.episodes.iter().take(5) {
+                                div { class: "bg-gray-900/50 rounded px-2 py-1.5",
+                                    div { class: "flex items-center gap-2 mb-0.5",
+                                        span {
+                                            class: if episode.success {
+                                                "text-[10px] px-1.5 py-0.5 rounded bg-green-900/50 text-green-300"
+                                            } else {
+                                                "text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-300"
+                                            },
+                                            if episode.success { "\u{2713} success" } else { "\u{2717} failed" }
+                                        }
+                                        span { class: "text-[10px] text-gray-300", "{format_timestamp(episode.created_at)}" }
+                                        span { class: "text-[10px] text-gray-300", "\u{2022} {episode.context_chunks_used} chunks" }
                                     }
-                                    span { class: "text-xs text-gray-300", "{format_timestamp(episode.created_at)}" }
-                                    span { class: "text-xs text-gray-300", "• {episode.context_chunks_used} chunks" }
+                                    div { class: "text-xs text-gray-200 truncate", "Q: {episode.query}" }
+                                    div { class: "text-[10px] text-gray-400 truncate", "A: {truncate_text(&episode.response, 100)}" }
                                 }
-                                div { class: "text-sm text-gray-200 truncate", "Q: {episode.query}" }
-                                div { class: "text-xs text-gray-400 truncate mt-1", "A: {truncate_text(&episode.response, 100)}" }
                             }
-                        }
-                    }
-                    if episodes.total > 5 {
-                        div { class: "text-xs text-gray-300 mt-2 text-center",
-                            "Showing 5 of {episodes.total} episodes"
+                            if episodes.total > 5 {
+                                div { class: "text-[10px] text-gray-300 text-center",
+                                    "Showing 5 of {episodes.total} episodes"
+                                }
+                            }
                         }
                     }
                 }
@@ -799,6 +749,108 @@ fn EpisodeInfoButton() -> Element {
                         class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed",
                         {EPISODE_INFO_TOOLTIP}
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Info button for Goals
+#[component]
+fn GoalInfoButton() -> Element {
+    let mut show = use_signal(|| false);
+    rsx! {
+        button {
+            class: PARAM_ICON_BUTTON_CLASS,
+            style: PARAM_ICON_BUTTON_STYLE,
+            onclick: move |_| show.set(!show()),
+            title: "Goal info",
+            svg { class: INFO_ICON_SVG_CLASS, view_box: "0 0 20 20", fill: "none", stroke: "currentColor",
+                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+            }
+        }
+        if *show.read() {
+            div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show.set(false),
+                div { class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[95vh] overflow-y-auto shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "Goal Info" }
+                        button { class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show.set(false), "×"
+                        }
+                    }
+                    div { class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed", {GOAL_INFO_TOOLTIP} }
+                }
+            }
+        }
+    }
+}
+
+/// Info button for Rig mode total/tool calls
+#[component]
+fn RigModeInfoButton() -> Element {
+    let mut show = use_signal(|| false);
+    rsx! {
+        button {
+            class: PARAM_ICON_BUTTON_CLASS,
+            style: PARAM_ICON_BUTTON_STYLE,
+            onclick: move |_| show.set(!show()),
+            title: "Rig Agentic Mode",
+            svg { class: INFO_ICON_SVG_CLASS, view_box: "0 0 20 20", fill: "none", stroke: "currentColor",
+                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+            }
+        }
+        if *show.read() {
+            div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show.set(false),
+                div { class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[95vh] overflow-y-auto shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "Rig Agentic Mode" }
+                        button { class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show.set(false), "×"
+                        }
+                    }
+                    div { class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed font-mono", {RIG_MODE_INFO_TOOLTIP} }
+                }
+            }
+        }
+    }
+}
+
+/// Info button for Rig fallbacks
+#[component]
+fn RigFallbackInfoButton() -> Element {
+    let mut show = use_signal(|| false);
+    rsx! {
+        button {
+            class: PARAM_ICON_BUTTON_CLASS,
+            style: PARAM_ICON_BUTTON_STYLE,
+            onclick: move |_| show.set(!show()),
+            title: "Rig fallback info",
+            svg { class: INFO_ICON_SVG_CLASS, view_box: "0 0 20 20", fill: "none", stroke: "currentColor",
+                circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+                line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+            }
+        }
+        if *show.read() {
+            div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+                onclick: move |_| show.set(false),
+                div { class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[95vh] overflow-y-auto shadow-xl",
+                    onclick: move |evt| evt.stop_propagation(),
+                    div { class: "flex items-center justify-between mb-4",
+                        h2 { class: "text-lg font-semibold text-gray-100", "Rig Fallbacks" }
+                        button { class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                            onclick: move |_| show.set(false), "×"
+                        }
+                    }
+                    div { class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed font-mono", {RIG_FALLBACK_INFO_TOOLTIP} }
                 }
             }
         }

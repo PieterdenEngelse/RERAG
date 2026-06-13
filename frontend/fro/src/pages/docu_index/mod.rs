@@ -6,8 +6,10 @@ mod bias;
 mod bm25;
 mod bpe_unigram;
 mod canonicalization;
+mod detr_layout;
 mod embeddings;
 mod entities_production;
+mod file_watcher;
 mod io_uring;
 mod knowledge_graphs;
 mod lora_export;
@@ -25,8 +27,10 @@ pub use bias::DocuBias;
 pub use bm25::DocuBm25;
 pub use bpe_unigram::DocuBpeUnigram;
 pub use canonicalization::DocuCanonicalization;
+pub use detr_layout::DocuDetrLayout;
 pub use embeddings::DocuEmbeddings;
 pub use entities_production::DocuEntitiesProduction;
+pub use file_watcher::DocuFileWatcher;
 pub use io_uring::DocuIoUring;
 pub use knowledge_graphs::DocuKnowledgeGraphs;
 pub use lora_export::DocuLoraExport;
@@ -59,14 +63,69 @@ pub fn DocuIndex() -> Element {
 
                 div { class: "space-y-2",
                     Link {
+                        to: Route::DocuAgPipeline {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "AG Pipeline"
+                    }
+                    Link {
+                        to: Route::DocuAgglutinative {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "Agglutinative Languages"
+                    }
+                    Link {
+                        to: Route::DocuBias {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "Bias"
+                    }
+                    Link {
+                        to: Route::DocuBm25 {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "BM25"
+                    }
+                    Link {
+                        to: Route::DocuBpeUnigram {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "BPE Unigram"
+                    }
+                    Link {
+                        to: Route::DocuCanonicalization {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "Canonicalization"
+                    }
+                    Link {
+                        to: Route::DocuDetrLayout {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "DETR-style image-based layout model"
+                    }
+                    Link {
                         to: Route::DocuEmbeddings {},
                         class: "text-primary hover:underline text-lg font-semibold block",
                         "Embeddings"
                     }
                     Link {
+                        to: Route::DocuEntitiesProduction {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "Entities Production"
+                    }
+                    Link {
+                        to: Route::DocuFileWatcher {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "File Watcher"
+                    }
+                    Link {
+                        to: Route::DocuIoUring {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "io_uring"
+                    }
+                    Link {
                         to: Route::DocuKnowledgeGraphs {},
                         class: "text-primary hover:underline text-lg font-semibold block",
                         "Knowledge Graphs"
+                    }
+                    Link {
+                        to: Route::DocuLoraExport {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "LoRA Export"
                     }
                     Link {
                         to: Route::DocuOnnx {},
@@ -79,44 +138,9 @@ pub fn DocuIndex() -> Element {
                         "ONNX Parameters"
                     }
                     Link {
-                        to: Route::DocuIoUring {},
+                        to: Route::DocuRig {},
                         class: "text-primary hover:underline text-lg font-semibold block",
-                        "io_uring"
-                    }
-                    Link {
-                        to: Route::DocuBias {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "Bias"
-                    }
-                    Link {
-                        to: Route::DocuThreads {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "Threads"
-                    }
-                    Link {
-                        to: Route::DocuEntitiesProduction {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "Entities Production"
-                    }
-                    Link {
-                        to: Route::DocuAgPipeline {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "AG Pipeline"
-                    }
-                    Link {
-                        to: Route::DocuLoraExport {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "LoRA Export"
-                    }
-                    Link {
-                        to: Route::DocuTantivy {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "Tantivy"
-                    }
-                    Link {
-                        to: Route::DocuBm25 {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "BM25"
+                        "Rig (Agentic Framework)"
                     }
                     Link {
                         to: Route::DocuRkyv {},
@@ -124,19 +148,19 @@ pub fn DocuIndex() -> Element {
                         "rkyv"
                     }
                     Link {
-                        to: Route::DocuRig {},
+                        to: Route::DocuTantivy {},
                         class: "text-primary hover:underline text-lg font-semibold block",
-                        "Rig (Agentic Framework)"
+                        "Tantivy"
+                    }
+                    Link {
+                        to: Route::DocuThreads {},
+                        class: "text-primary hover:underline text-lg font-semibold block",
+                        "Threads"
                     }
                     Link {
                         to: Route::DocuTokenizersGeneral {},
                         class: "text-primary hover:underline text-lg font-semibold block",
                         "Tokenizers General"
-                    }
-                    Link {
-                        to: Route::DocuAgglutinative {},
-                        class: "text-primary hover:underline text-lg font-semibold block",
-                        "Agglutinative Languages"
                     }
                 }
             }

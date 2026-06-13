@@ -372,24 +372,50 @@ mod tests {
         use crate::embedder::{self, similarity::cosine};
 
         let pairs: &[(&str, &str, &str)] = &[
-            ("identity",         "Hitachi Energy",       "Hitachi Energy"),
-            ("bare names",       "Hitachi Energy",       "Hitachi Energy Ltd"),
-            ("name + type",      "Hitachi Energy (ORG)", "Hitachi Energy Ltd (ORG)"),
-            ("current qtext",
-             "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
-             "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo."),
-            ("Sony Corp/Corp",   "Sony Corp (ORG)",      "Sony Corporation (ORG)"),
-            ("Sony Corp/SIE",    "Sony Corp (ORG)",      "Sony Interactive Entertainment (ORG)"),
+            ("identity", "Hitachi Energy", "Hitachi Energy"),
+            ("bare names", "Hitachi Energy", "Hitachi Energy Ltd"),
+            (
+                "name + type",
+                "Hitachi Energy (ORG)",
+                "Hitachi Energy Ltd (ORG)",
+            ),
+            (
+                "current qtext",
+                "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
+                "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo.",
+            ),
+            (
+                "Sony Corp/Corp",
+                "Sony Corp (ORG)",
+                "Sony Corporation (ORG)",
+            ),
+            (
+                "Sony Corp/SIE",
+                "Sony Corp (ORG)",
+                "Sony Interactive Entertainment (ORG)",
+            ),
             // Cross-format: new bare-name query lookup against old stored-with-snippet vectors.
-            ("xfmt same name",   "Hitachi Energy (ORG)",
-             "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results."),
-            ("xfmt diff name",   "Hitachi Energy (ORG)",
-             "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo."),
+            (
+                "xfmt same name",
+                "Hitachi Energy (ORG)",
+                "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
+            ),
+            (
+                "xfmt diff name",
+                "Hitachi Energy (ORG)",
+                "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo.",
+            ),
         ];
         for (label, a, b) in pairs {
             let va = embedder::embed(a);
             let vb = embedder::embed(b);
-            println!("{:>20}  cosine={:.4}  a={:?}  b={:?}", label, cosine(&va, &vb), a, b);
+            println!(
+                "{:>20}  cosine={:.4}  a={:?}  b={:?}",
+                label,
+                cosine(&va, &vb),
+                a,
+                b
+            );
         }
     }
 }

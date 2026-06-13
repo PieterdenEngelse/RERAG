@@ -20,9 +20,13 @@
 // Output: "logits"        [1, Q, C+1]   f32  class logits (C classes + background)
 //         "pred_boxes"    [1, Q, 4]     f32  (cx, cy, w, h) normalised 0–1
 //
-// cmarkea/detr-layout-detection (C=11): 0=Caption 1=Footnote 2=Formula 3=List-item 4=Page-footer
-//   5=Page-header 6=Picture 7=Section-header 8=Table 9=Text 10=Title  (11=no-object)
-// Model: cmarkea/detr-layout-detection  →  models/layout_detr/model.onnx
+// DocLayNet canonical 11-class order (C=11): 0=Caption 1=Footnote 2=Formula
+//   3=List-item 4=Page-footer 5=Page-header 6=Picture 7=Section-header
+//   8=Table 9=Text 10=Title  (11=no-object). Both cmarkea/detr-layout-detection
+//   (PyTorch only) and neka-nat/rfdetr-doclaynet-onnx (ONNX) train on this
+//   ordering, so the same class→RegionTag map below works for either.
+// PubLayNet's 5-class scheme (Text/Title/List/Table/Figure) needs a different
+//   map; LAYOUT_DETR_NUM_CLASSES must be lowered to 5 if you point Tier 0 there.
 // Confidence threshold: LAYOUT_DETR_THRESHOLD (default 0.7)
 
 use super::word_extractor::WordSpan;
@@ -281,7 +285,7 @@ impl DetrLayoutModel {
 
         let threshold = crate::settings::effective_f64("LAYOUT_DETR_THRESHOLD", 0.7) as f32;
 
-        // cmarkea/detr-layout-detection: 11 classes
+        // DocLayNet 11-class scheme; PubLayNet variants need num_classes=5.
         let num_classes = crate::settings::effective_u64("LAYOUT_DETR_NUM_CLASSES", 11) as usize;
 
         Ok(DetrLayoutModel {
@@ -465,7 +469,10 @@ struct DetectedRegion {
     confidence: f32,
 }
 
-/// Map cmarkea/detr-layout-detection class index to RegionTag.
+/// Map a DETR class index to a RegionTag using DocLayNet's canonical 11-class
+/// ordering. Works for any DocLayNet-trained head (cmarkea/detr-layout-detection,
+/// neka-nat/rfdetr-doclaynet-onnx, etc.). PubLayNet's 5-class scheme has a
+/// different order and would need its own mapping.
 /// Labels: 0=Caption 1=Footnote 2=Formula 3=List-item 4=Page-footer
 ///         5=Page-header 6=Picture 7=Section-header 8=Table 9=Text 10=Title
 ///         11=no-object (filtered before this call)

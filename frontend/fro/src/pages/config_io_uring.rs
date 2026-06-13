@@ -4,7 +4,10 @@ use crate::pages::hardware::constants::{
 use crate::{
     api,
     app::PageErrors,
-    components::config_nav::{ConfigNav, ConfigTab},
+    components::{
+        config_nav::{ConfigNav, ConfigTab},
+        monitor::HealthCard,
+    },
 };
 use dioxus::prelude::*;
 
@@ -103,6 +106,8 @@ pub fn ConfigIoUring() -> Element {
     let stats_writes = use_signal(|| 0u64);
     let stats_bytes_read = use_signal(|| 0u64);
     let stats_bytes_written = use_signal(|| 0u64);
+    let stats_total_errors = use_signal(|| 0u64);
+    let stats_loaded = use_signal(|| false);
 
     let loading = use_signal(|| true);
     let error = use_signal(|| Option::<String>::None);
@@ -206,6 +211,8 @@ pub fn ConfigIoUring() -> Element {
         let mut stats_writes = stats_writes;
         let mut stats_bytes_read = stats_bytes_read;
         let mut stats_bytes_written = stats_bytes_written;
+        let mut stats_total_errors = stats_total_errors;
+        let mut stats_loaded = stats_loaded;
         let mut loading = loading;
         let mut error = error;
 
@@ -249,6 +256,8 @@ pub fn ConfigIoUring() -> Element {
                     stats_writes.set(resp.io_uring.stats.writes);
                     stats_bytes_read.set(resp.io_uring.stats.bytes_read);
                     stats_bytes_written.set(resp.io_uring.stats.bytes_written);
+                    stats_total_errors.set(resp.io_uring.stats.total_errors);
+                    stats_loaded.set(true);
                     // Clear global error on success
                     page_errors.with_mut(|e| e.clear_error("io_uring"));
                 }
@@ -338,10 +347,37 @@ pub fn ConfigIoUring() -> Element {
         }
     };
 
+    // File I/O health card (mirrors the card that used to live on /monitor overview)
+    let health_status: &'static str = if !stats_loaded() {
+        "Unknown"
+    } else if stats_total_errors() > 0 {
+        "Unhealthy"
+    } else if backend() == "io_uring" {
+        "Healthy"
+    } else {
+        "Degraded"
+    };
+    let health_detail = if !stats_loaded() {
+        "API unreachable".to_string()
+    } else {
+        format!("{} | {}", backend(), format_bytes(stats_bytes_read()))
+    };
+
     rsx! {
         div { class: "p-6 space-y-6 w-full",
             // Navigation
             ConfigNav { active: ConfigTab::IoUring }
+
+            // File I/O health summary
+            div { class: "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4",
+                HealthCard {
+                    name: "File I/O".to_string().into(),
+                    status: health_status.to_string().into(),
+                    detail: Some(health_detail.into()),
+                    info: Some("Async file I/O backend. 'io_uring' (Linux 5.1+) provides 2-3x faster reads. Falls back to 'tokio::fs' on older systems. 'Unhealthy' means I/O errors have been recorded since startup.".to_string().into()),
+                    link: Some("/docu/index/io-uring".to_string().into()),
+                }
+            }
 
             if loading() {
                 div { class: "flex items-center justify-center py-8",

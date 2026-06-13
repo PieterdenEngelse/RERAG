@@ -572,6 +572,10 @@ pub fn load_categorized_memories(
     agent_id: &str,
     limit: usize,
 ) -> Vec<CategorizedMemory> {
+    if let Some(hit) = MEMORY_CACHE.lookup(agent_id, limit) {
+        return hit;
+    }
+
     let resolved_path = path_resolver::resolve_db_path(db_path);
     let resolved_string = resolved_path.to_string_lossy().into_owned();
     let mut memories = Vec::new();
@@ -594,8 +598,79 @@ pub fn load_categorized_memories(
         }
     }
 
+    MEMORY_CACHE.insert(agent_id, limit, memories.clone());
     memories
 }
+
+/// Bump the cache so the next `load_categorized_memories` call re-reads
+/// SQLite. Cheap to call from any write path; cache misses are O(1).
+pub fn invalidate_memory_cache(agent_id: &str) {
+    MEMORY_CACHE.invalidate(agent_id);
+}
+
+// In-process cache for categorized memories, keyed by agent_id. Loading
+// these used to open a fresh SQLite connection and run ~6 CREATE TABLE
+// IF NOT EXISTS statements on every chat turn (see AgentMemory::new) —
+// this collapses that work to a single Mutex<HashMap> read for the
+// repeated case. Invalidation is comprehensive (every rag_memory writer
+// calls `invalidate_memory_cache`), so the TTL only exists as a backstop
+// in case a future writer is added and forgets the invalidate call.
+const MEMORY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+struct MemoryCacheEntry {
+    inserted_at: std::time::Instant,
+    limit: usize,
+    memories: Vec<CategorizedMemory>,
+}
+
+struct MemoryCacheInner {
+    map: std::sync::Mutex<std::collections::HashMap<String, MemoryCacheEntry>>,
+}
+
+impl MemoryCacheInner {
+    // Note: cache key is agent_id only, not (agent_id, db_path). Safe
+    // because every caller resolves the path through
+    // `path_resolver::agent_db_path_str()` and gets the same value.
+    // If a future caller passes a different db_path for the same
+    // agent_id, this cache will return rows from the original db.
+    fn lookup(&self, agent_id: &str, limit: usize) -> Option<Vec<CategorizedMemory>> {
+        let map = self.map.lock().ok()?;
+        let entry = map.get(agent_id)?;
+        // A request with a larger limit may legitimately want more rows
+        // than the cached entry contains; force a refresh in that case.
+        if entry.limit < limit {
+            return None;
+        }
+        if entry.inserted_at.elapsed() > MEMORY_CACHE_TTL {
+            return None;
+        }
+        Some(entry.memories.clone())
+    }
+
+    fn insert(&self, agent_id: &str, limit: usize, memories: Vec<CategorizedMemory>) {
+        if let Ok(mut map) = self.map.lock() {
+            map.insert(
+                agent_id.to_string(),
+                MemoryCacheEntry {
+                    inserted_at: std::time::Instant::now(),
+                    limit,
+                    memories,
+                },
+            );
+        }
+    }
+
+    fn invalidate(&self, agent_id: &str) {
+        if let Ok(mut map) = self.map.lock() {
+            map.remove(agent_id);
+        }
+    }
+}
+
+static MEMORY_CACHE: once_cell::sync::Lazy<MemoryCacheInner> =
+    once_cell::sync::Lazy::new(|| MemoryCacheInner {
+        map: std::sync::Mutex::new(std::collections::HashMap::new()),
+    });
 
 pub struct Agent<'a> {
     pub agent_id: &'a str,

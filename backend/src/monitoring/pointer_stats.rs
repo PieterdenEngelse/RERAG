@@ -80,7 +80,7 @@ pub fn record_auto_route(route: AutoRoute) {
 /// returns. Adds to the lifetime hydration totals and pushes a fresh
 /// ring-buffer entry. `record_auto_route` is expected to have already
 /// fired for the same query — do NOT increment route counters here.
-pub fn record_pointer_hydration(
+pub(crate) fn record_pointer_hydration(
     chunks_in: usize,
     hydration: &PointerHydration,
     gap: f64,

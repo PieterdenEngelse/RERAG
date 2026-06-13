@@ -1,6 +1,6 @@
 use crate::api;
 use crate::app::RuntimeSuspended;
-use crate::app::{ClearChat, PageErrors, Route, ShowHelpCommands, ShowRagInfo};
+use crate::app::{BoardsHidden, ClearChat, PageErrors, Route, ShowHelpCommands, ShowRagInfo};
 use crate::components::dark_mode_toggle::DarkModeToggle;
 use crate::components::nav_dropdown::{DropdownActionItem, DropdownItem, NavDropdown};
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
@@ -38,6 +38,7 @@ pub fn Header() -> Element {
     let mut show_help = use_context::<Signal<ShowHelpCommands>>();
     let mut show_rag_info = use_context::<Signal<ShowRagInfo>>();
     let mut clear_chat = use_context::<Signal<ClearChat>>();
+    let mut boards_hidden = use_context::<Signal<BoardsHidden>>();
     let mut page_errors = use_context::<Signal<PageErrors>>();
     let runtime_suspended = use_context::<Signal<RuntimeSuspended>>();
     let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
@@ -49,6 +50,20 @@ pub fn Header() -> Element {
     let mut last_upload_health_response: Signal<Option<api::HealthResponse>> = use_signal(|| None);
     // Track consecutive timeouts to show "checking" state
     let mut timeout_count: Signal<u32> = use_signal(|| 0);
+
+    // Ollama thread-count drift. True between save of num_thread and the
+    // moment the live runner reloads with the new value. Polled every 10s
+    // by a background future; the backend clears the flag autonomously
+    // once it sees a matching /proc cmdline for the ollama runner.
+    let mut ollama_drift: Signal<Option<api::OllamaDrift>> = use_signal(|| None);
+    use_future(move || async move {
+        loop {
+            if let Ok(snap) = api::fetch_ollama_drift().await {
+                ollama_drift.set(Some(snap));
+            }
+            gloo_timers::future::TimeoutFuture::new(10_000).await;
+        }
+    });
 
     // Main health check loop
     use_future(move || async move {
@@ -350,12 +365,24 @@ pub fn Header() -> Element {
                 }
             }
 
+            // "Show Boards" — only on Home, only when the boards are hidden
+            // (i.e. the user has already sent at least one message).
+            if matches!(current_route, Route::Home {}) && boards_hidden().0 {
+                button {
+                    class: "ml-3 text-sm font-medium cursor-pointer hover:text-white transition-colors",
+                    style: "color: #026B7C;",
+                    onclick: move |_| boards_hidden.set(BoardsHidden(false)),
+                    title: "Restore the Runtime / Mode / Corpus / RAG / KV boards",
+                    "Show Boards"
+                }
+            }
+
             // Title and status — flex-1 center column, truncates on small screens
             div { class: "flex-1 min-w-0 flex justify-center items-center gap-2",
                 h1 {
                     class: "font-medium truncate",
                     style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem; color: #026B7C;",
-                    "Rust Agentic Retrieval Augumented Generation"
+                    "Rust RAG Learning Platform"
                 }
                 div { class: "flex items-center gap-1 flex-shrink-0",
                     div {
@@ -429,7 +456,7 @@ pub fn Header() -> Element {
                                 }
                             })
                     },
-                    div { class: "bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3 max-w-md select-text",
+                    div { class: "bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3 w-[98vw] select-text",
                         pre { class: "whitespace-pre-wrap text-xs text-gray-100", "{tooltip_text}" }
                     }
                 }
@@ -467,7 +494,7 @@ pub fn Header() -> Element {
                     {
                         let monitor_color = if matches!(
                             current_route,
-                            Route::MonitorOverview {}
+                            Route::MonitorTip {}
                             | Route::MonitorAgentic {}
                             | Route::MonitorRequests {}
                             | Route::MonitorCache {}
@@ -487,7 +514,7 @@ pub fn Header() -> Element {
                         };
                         rsx! {
                             Link {
-                                to: Route::MonitorOverview {},
+                                to: Route::MonitorTip {},
                                 class: "py-2 px-3 rounded-lg transition-colors font-medium",
                                 style: format!("color: {};", monitor_color),
                                 "Monitor"
@@ -497,10 +524,9 @@ pub fn Header() -> Element {
                     {
                         let config_color = if matches!(
                             current_route,
-                            Route::Config {}
+                            Route::ConfigRuntime {}
                             | Route::ConfigHardware {}
-                            | Route::ConfigSampling {}
-                            | Route::ConfigPrompt {}
+                            | Route::ConfigHardware {}
                             | Route::ConfigOther {}
                             | Route::Parameters {}
                         ) {
@@ -512,7 +538,7 @@ pub fn Header() -> Element {
                         };
                         rsx! {
                             Link {
-                                to: Route::Config {},
+                                to: Route::ConfigRuntime {},
                                 class: "py-2 px-3 rounded-lg transition-colors font-medium",
                                 style: format!("color: {};", config_color),
                                 "Config"
@@ -537,7 +563,7 @@ pub fn Header() -> Element {
                         }
                     }
                     {
-                        let docu_color = if matches!(current_route, Route::Docu {}) {
+                        let docu_color = if matches!(current_route, Route::DocuIndex {}) {
                             "#7C2A02"
                         } else if is_dark() {
                             "white"
@@ -546,10 +572,10 @@ pub fn Header() -> Element {
                         };
                         rsx! {
                             Link {
-                                to: Route::Docu {},
+                                to: Route::DocuAgPipeline {},
                                 class: "py-2 px-3 rounded-lg transition-colors font-medium",
                                 style: format!("color: {};", docu_color),
-                                "Docu"
+                                "Pipe"
                             }
                         }
                     }
@@ -588,13 +614,13 @@ pub fn Header() -> Element {
                         "Home"
                     }
                     Link {
-                        to: Route::MonitorOverview {},
+                        to: Route::MonitorTip {},
                         class: "text-teal-100 hover:text-white transition-colors",
                         onclick: move |_| menu_open.set(false),
                         "Monitor"
                     }
                     Link {
-                        to: Route::Config {},
+                        to: Route::ConfigRuntime {},
                         class: "text-teal-100 hover:text-white transition-colors",
                         onclick: move |_| menu_open.set(false),
                         "Config"
@@ -606,10 +632,10 @@ pub fn Header() -> Element {
                         "Train"
                     }
                     Link {
-                        to: Route::Docu {},
+                        to: Route::DocuAgPipeline {},
                         class: "text-teal-100 hover:text-white transition-colors",
                         onclick: move |_| menu_open.set(false),
-                        "Docu"
+                        "Pipe"
                     }
                     Link {
                         to: Route::About {},
@@ -636,7 +662,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_initial_status_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-white", "Initial status details" }
@@ -693,7 +719,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_green_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-green-400", "Healthy (Green)" }
@@ -767,7 +793,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_yellow_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-yellow-400", "Degraded (Yellow)" }
@@ -821,7 +847,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_red_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-red-400", "Offline / Unhealthy (Red)" }
@@ -903,7 +929,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_orange_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-orange-400",
@@ -959,7 +985,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1120;",
                 onclick: move |_| show_tantivy_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     h3 { class: "text-lg font-semibold text-blue-300", "Tantivy" }
                     p { class: "text-gray-200 leading-relaxed",
@@ -996,7 +1022,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1130;",
                 onclick: move |_| show_inverted_index_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     h3 { class: "text-lg font-semibold text-blue-300", "Inverted Index" }
                     p { class: "text-gray-200 leading-relaxed",
@@ -1026,7 +1052,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1140;",
                 onclick: move |_| show_indices_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4 max-h-[85vh] overflow-y-auto",
                     onclick: move |evt| evt.stop_propagation(),
                     h3 { class: "text-lg font-semibold text-green-300", "All Indices Are In Bounds" }
                     p { class: "text-gray-200 leading-relaxed",
@@ -1053,7 +1079,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_busy_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-pink-400", "Healthy but Busy (Pink)" }
@@ -1166,7 +1192,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1110;",
                 onclick: move |_| show_checking_details.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl p-6 shadow-2xl text-sm space-y-4",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm space-y-4",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-2",
                         h3 { class: "text-lg font-semibold text-purple-400",
@@ -1241,7 +1267,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1100;",
                 onclick: move |_| show_status_info.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-md shadow-xl",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-4",
                         h2 { class: "text-lg font-semibold text-gray-100", "Backend Status Indicator" }
@@ -1423,7 +1449,7 @@ pub fn Header() -> Element {
                 style: "z-index: 1200;",
                 onclick: move |_| show_log_modal.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[95vw] max-w-4xl p-6 shadow-2xl text-sm max-h-[85vh] flex flex-col",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] p-6 shadow-2xl text-sm max-h-[85vh] flex flex-col",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-4",
                         h3 { class: "text-lg font-semibold text-blue-400",
@@ -1460,6 +1486,23 @@ pub fn Header() -> Element {
                         class: "btn btn-primary btn-sm mt-4 w-full",
                         onclick: move |_| show_log_modal.set(false),
                         "Close"
+                    }
+                }
+            }
+        }
+
+        // Ollama thread-count drift banner. Ollama bakes num_thread into
+        // the runner at model-load time, so a config change made while the
+        // model is resident is silently ignored until the runner reloads.
+        // The backend flips this flag on save and clears it once the live
+        // runner PID changes (i.e. Ollama actually reloaded the model).
+        if let Some(snap) = ollama_drift() {
+            if snap.drift {
+                div {
+                    class: "sticky top-10 z-50 bg-orange-900/40 border-b border-orange-700 text-orange-100 text-sm px-4 py-2 flex items-center gap-3",
+                    span { class: "font-semibold", "Ollama thread drift:" }
+                    span {
+                        "configured for {snap.configured} thread(s) but the live runner was loaded before this change. Restart Ollama (`systemctl --user restart ollama.service`) so the new value takes effect."
                     }
                 }
             }

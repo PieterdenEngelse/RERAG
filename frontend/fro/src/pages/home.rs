@@ -155,6 +155,12 @@ pub fn Home() -> Element {
     let mut deleting_documents = use_signal(|| false);
     let mut delete_docs_status = use_signal(|| Option::<String>::None);
 
+    // Hide the settings boards once the user actually sends a message,
+    // so chat responses get the full viewport instead of walking under
+    // the boards. /clear restores them. Lives in app context so the
+    // header can render a "Show Boards" affordance when hidden.
+    let mut boards_hidden = use_context::<Signal<crate::app::BoardsHidden>>();
+
     // Chat mode: "rag", "llm", or "hybrid"
     let chat_mode = use_signal(|| "auto".to_string());
     let show_tune_panel = use_signal(|| false);
@@ -452,8 +458,21 @@ pub fn Home() -> Element {
         if user_input.trim() == "/clear" {
             messages.write().clear();
             input_text.set(String::new());
+            boards_hidden.set(crate::app::BoardsHidden(false));
             return;
         }
+
+        web_sys::console::log_1(
+            &"[boards-debug] send_message: setting boards_hidden=true".into(),
+        );
+        boards_hidden.set(crate::app::BoardsHidden(true));
+        web_sys::console::log_1(
+            &format!(
+                "[boards-debug] send_message: after set, boards_hidden().0 = {}",
+                boards_hidden().0
+            )
+            .into(),
+        );
 
         messages.write().push(ChatMessage {
             role: "user".to_string(),
@@ -578,6 +597,11 @@ pub fn Home() -> Element {
                             .unwrap();
                         let mut accumulated_text = String::new();
                         let mut chunks_used = 0usize;
+                        // Batch streamed-token writes to the messages signal: each
+                        // write triggers a Dioxus rerender of the whole chat list,
+                        // so push at most ~60 fps instead of once per Ollama token.
+                        let mut last_render_ms: f64 = 0.0;
+                        let mut dirty = false;
 
                         loop {
                             if cancel_flag() {
@@ -620,13 +644,19 @@ pub fn Home() -> Element {
                                                                 .and_then(|v| v.as_str())
                                                             {
                                                                 accumulated_text.push_str(content);
-                                                                // Update the message in place
-                                                                if let Some(msg) = messages
-                                                                    .write()
-                                                                    .get_mut(msg_index)
-                                                                {
-                                                                    msg.content =
-                                                                        accumulated_text.clone();
+                                                                dirty = true;
+                                                                let now = js_sys::Date::now();
+                                                                if now - last_render_ms >= 16.0 {
+                                                                    if let Some(msg) = messages
+                                                                        .write()
+                                                                        .get_mut(msg_index)
+                                                                    {
+                                                                        msg.content =
+                                                                            accumulated_text
+                                                                                .clone();
+                                                                    }
+                                                                    last_render_ms = now;
+                                                                    dirty = false;
                                                                 }
                                                             }
                                                         }
@@ -652,6 +682,7 @@ pub fn Home() -> Element {
                                                                     msg.content =
                                                                         accumulated_text.clone();
                                                                 }
+                                                                dirty = false;
                                                             }
                                                         }
                                                         "error" => {
@@ -671,6 +702,14 @@ pub fn Home() -> Element {
                                     }
                                 }
                                 Err(_) => break,
+                            }
+                        }
+
+                        // Flush any tokens buffered since the last 16 ms commit
+                        // so the user sees the trailing characters of the reply.
+                        if dirty {
+                            if let Some(msg) = messages.write().get_mut(msg_index) {
+                                msg.content = accumulated_text.clone();
                             }
                         }
 
@@ -718,8 +757,21 @@ pub fn Home() -> Element {
             if user_input.trim() == "/clear" {
                 messages.write().clear();
                 input_text.set(String::new());
+                boards_hidden.set(crate::app::BoardsHidden(false));
                 return;
             }
+
+            web_sys::console::log_1(
+                &"[boards-debug] on_keypress: setting boards_hidden=true".into(),
+            );
+            boards_hidden.set(crate::app::BoardsHidden(true));
+            web_sys::console::log_1(
+                &format!(
+                    "[boards-debug] on_keypress: after set, boards_hidden().0 = {}",
+                    boards_hidden().0
+                )
+                .into(),
+            );
 
             messages.write().push(ChatMessage {
                 role: "user".to_string(),
@@ -841,6 +893,10 @@ pub fn Home() -> Element {
                                 .unwrap();
                             let mut accumulated_text = String::new();
                             let mut chunks_used = 0usize;
+                            // Same per-frame batching as send_message: rerender
+                            // the chat list at most ~60 fps during streaming.
+                            let mut last_render_ms: f64 = 0.0;
+                            let mut dirty = false;
 
                             loop {
                                 if cancel_flag() {
@@ -889,13 +945,20 @@ pub fn Home() -> Element {
                                                                 {
                                                                     accumulated_text
                                                                         .push_str(content);
-                                                                    if let Some(msg) = messages
-                                                                        .write()
-                                                                        .get_mut(msg_index)
+                                                                    dirty = true;
+                                                                    let now = js_sys::Date::now();
+                                                                    if now - last_render_ms >= 16.0
                                                                     {
-                                                                        msg.content =
-                                                                            accumulated_text
-                                                                                .clone();
+                                                                        if let Some(msg) = messages
+                                                                            .write()
+                                                                            .get_mut(msg_index)
+                                                                        {
+                                                                            msg.content =
+                                                                                accumulated_text
+                                                                                    .clone();
+                                                                        }
+                                                                        last_render_ms = now;
+                                                                        dirty = false;
                                                                     }
                                                                 }
                                                             }
@@ -921,6 +984,7 @@ pub fn Home() -> Element {
                                                                             accumulated_text
                                                                                 .clone();
                                                                     }
+                                                                    dirty = false;
                                                                 }
                                                             }
                                                             "error" => {
@@ -941,6 +1005,13 @@ pub fn Home() -> Element {
                                         }
                                     }
                                     Err(_) => break,
+                                }
+                            }
+
+                            // Flush trailing buffered tokens before exit.
+                            if dirty {
+                                if let Some(msg) = messages.write().get_mut(msg_index) {
+                                    msg.content = accumulated_text.clone();
                                 }
                             }
 
@@ -1016,8 +1087,20 @@ pub fn Home() -> Element {
         error_msg.set(Some("[INFO] Request cancelled.".to_string()));
     };
 
+    // Per-render log to verify the rsx scope re-runs and sees the
+    // updated boards_hidden value after a send. Reading the signal here
+    // also re-subscribes the render scope to its changes.
+    {
+        let v = boards_hidden().0;
+        web_sys::console::log_1(
+            &format!("[boards-debug] render: boards_hidden().0 = {}", v).into(),
+        );
+    }
+
     rsx! {
-        // Settings boards — always visible
+        // Settings boards — visible until the user sends the first message,
+        // restored on /clear or via the header's "Show Boards" affordance.
+        if !boards_hidden().0 {
         HomeSettingsBoards {
             current_backend: current_backend,
             on_backend_changed: {
@@ -1055,6 +1138,7 @@ pub fn Home() -> Element {
             rag_priority_override: rag_priority_override,
             pointer_gap_threshold: pointer_gap_threshold,
             selected_model: selected_model,
+        }
         }
 
 
@@ -1380,9 +1464,20 @@ pub fn Home() -> Element {
                 }
 
                 // Messages area - scrollable, takes remaining space
-                // pb-32 provides space for the fixed input box at bottom
+                // pb-32 provides space for the fixed input box at bottom.
+                // When the settings boards overlay is visible, push messages
+                // down so the latest reply doesn't render behind the boards.
                 div {
                     class: "flex-1 overflow-y-auto min-h-0 p-2 sm:p-4 pb-32",
+                    style: if !boards_hidden().0 {
+                        if show_tune_panel() {
+                            "padding-top: 36rem;"
+                        } else {
+                            "padding-top: 24rem;"
+                        }
+                    } else {
+                        ""
+                    },
 
                     // Messages container
                     div {
@@ -2092,11 +2187,11 @@ pub fn Home() -> Element {
                                     li {
                                         "Lower "
                                         Link {
-                                            to: Route::ConfigSampling {},
+                                            to: Route::ConfigHardware {},
                                             class: "text-blue-500 hover:text-blue-400 no-underline hover:underline",
                                             "temperature"
                                         }
-                                        " (0.3) for more deterministic answers — can be set on the Sampling board on the page that shows when you click temperature"
+                                        " (0.3) for more deterministic answers — can be set on the Hardware page that shows when you click temperature"
                                     }
                                 }
                             }

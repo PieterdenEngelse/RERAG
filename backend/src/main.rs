@@ -235,6 +235,10 @@ async fn main() -> std::io::Result<()> {
             ag::monitoring::flush_canon_stats();
             ag::monitoring::flush_chunking_stats();
             ag::perf::io_uring::flush_stats();
+            // /proc walk for the live Ollama runner — clears the drift
+            // flag once the user actually restarts Ollama and the runner
+            // reloads with the configured num_thread.
+            ag::monitoring::ollama_drift::poll_once();
         }
     });
 
@@ -296,6 +300,29 @@ async fn main() -> std::io::Result<()> {
                 .map(|h| h.is_exact())
                 .unwrap_or(false)
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PHASE 3.6: Start the configured local runtime (idempotent)
+    // ─────────────────────────────────────────────────────────────
+    {
+        use ag::db::param_hardware::{self, BackendType};
+        let service = match param_hardware::global_config().backend_type {
+            BackendType::Ollama => Some("ollama.service"),
+            BackendType::LlamaCpp => Some("llama-server.service"),
+            _ => None,
+        };
+        if let Some(svc) = service {
+            match tokio::process::Command::new("systemctl")
+                .args(["--user", "start", svc])
+                .status()
+                .await
+            {
+                Ok(s) if s.success() => info!("🚀 Configured runtime started: {}", svc),
+                Ok(s) => warn!("systemctl start {} exited with {}", svc, s),
+                Err(e) => warn!("Failed to start configured runtime {}: {}", svc, e),
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -801,8 +828,26 @@ async fn main() -> std::io::Result<()> {
 
     let db_path_str = pm.db_path("documents").to_string_lossy().to_string();
 
-    // Start file watcher for the default corpus
-    let file_watcher_dir = ag::api::default_upload_dir();
+    // Look up the default corpus' DB-stored watch_dir override (if any) so we
+    // can fall back to it when FILE_WATCHER_DIR is not set.
+    let default_corpus_watch_dir: Option<String> = rusqlite::Connection::open(&db_path_str)
+        .ok()
+        .and_then(|conn| ag::db::corpora::get_corpus_by_slug(&conn, "default").ok().flatten())
+        .and_then(|c| c.watch_dir);
+
+    // Precedence for the default corpus: FILE_WATCHER_DIR (env/override) →
+    // corpora.watch_dir → PathManager-derived default_upload_dir().
+    let file_watcher_dir = {
+        let env_override = ag::settings::effective_or("FILE_WATCHER_DIR", "");
+        if !env_override.trim().is_empty() {
+            env_override
+        } else if let Some(db_override) = default_corpus_watch_dir.as_deref() {
+            db_override.to_string()
+        } else {
+            ag::api::default_upload_dir()
+        }
+    };
+
     let mut file_watcher_config = ag::file_watcher::FileWatcherConfig::from_env();
     file_watcher_config.corpus_slug = "default".to_string();
     file_watcher_config.db_path = db_path_str.clone();
@@ -812,12 +857,15 @@ async fn main() -> std::io::Result<()> {
         file_watcher_config.clone(),
     );
 
-    // Start file watchers for non-default corpora
+    // Start file watchers for non-default corpora — each one prefers its
+    // own DB-stored watch_dir over the PathManager-derived default.
     if let Ok(conn) = rusqlite::Connection::open(&db_path_str) {
         if let Ok(corpora) = ag::db::corpora::list_corpora(&conn) {
             for corpus in corpora.into_iter().filter(|c| c.slug != "default") {
                 let slug = corpus.slug.clone();
-                let corpus_dir = pm.corpus_upload_dir(&slug).to_string_lossy().to_string();
+                let corpus_dir = corpus.watch_dir.clone().unwrap_or_else(|| {
+                    pm.corpus_upload_dir(&slug).to_string_lossy().to_string()
+                });
                 if let Some(handle) = ag::corpus_registry::get_registry()
                     .and_then(|reg| reg.get_or_create(&slug).ok())
                 {

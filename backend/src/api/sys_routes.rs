@@ -203,17 +203,21 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
             match reqwest::get(&url).await {
                 Ok(response) => match response.json::<OllamaTagsResponse>().await {
                     Ok(tags) => {
+                        // The "active" model is whatever's in hardware_config —
+                        // surface it so the UI can flag the dropdown row with ⚡.
+                        let configured_model =
+                            crate::db::param_hardware::global_config().model;
                         let models: Vec<ModelInfo> = tags
                             .models
                             .into_iter()
                             .map(|m| ModelInfo {
+                                is_active: m.name == configured_model,
                                 name: m.name,
                                 size: m.size,
                                 modified_at: m.modified_at,
                                 family: m.details.and_then(|d| d.family),
                                 description: None,
                                 is_custom: false,
-                                is_active: false,
                             })
                             .collect();
                         HttpResponse::Ok().json(models)
@@ -516,13 +520,19 @@ pub async fn runtime_health() -> impl Responder {
         .map(|r| r.status().is_success())
         .unwrap_or(false);
 
-    // Determine active backend (prefer configured, fallback to available)
-    let active_backend = if llama_cpp_available {
-        Some("llama_cpp".to_string())
-    } else if ollama_available {
-        Some("ollama".to_string())
-    } else {
-        None
+    // Determine active backend (prefer configured if its probe succeeds,
+    // otherwise report whichever is actually up).
+    let configured = crate::db::param_hardware::global_config().backend_type;
+    let active_backend = match configured {
+        crate::db::param_hardware::BackendType::Ollama if ollama_available => {
+            Some("ollama".to_string())
+        }
+        crate::db::param_hardware::BackendType::LlamaCpp if llama_cpp_available => {
+            Some("llama_cpp".to_string())
+        }
+        _ if llama_cpp_available => Some("llama_cpp".to_string()),
+        _ if ollama_available => Some("ollama".to_string()),
+        _ => None,
     };
 
     HttpResponse::Ok().json(RuntimeHealth {
@@ -657,6 +667,17 @@ struct LlamaServerProps {
 struct LlamaGenSettings {
     #[serde(default)]
     model: Option<String>,
+}
+
+/// GET /sys/ollama-drift
+///
+/// Reports whether the live Ollama runner is using a different `--threads`
+/// value than the configured `num_thread`. Ollama bakes thread count into
+/// the runner at model-load time, so a config change made while the model
+/// is already resident is silently ignored until the model reloads. The
+/// frontend polls this endpoint and surfaces a banner when drift is true.
+pub async fn ollama_drift() -> impl Responder {
+    HttpResponse::Ok().json(crate::monitoring::ollama_drift::snapshot())
 }
 
 /// GET /sys/loaded-model
@@ -1041,6 +1062,7 @@ pub fn sys_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/runtime-health").route(web::get().to(runtime_health)));
     cfg.service(web::resource("/runtime/action").route(web::post().to(runtime_action)));
     cfg.service(web::resource("/loaded-model").route(web::get().to(loaded_model)));
+    cfg.service(web::resource("/ollama-drift").route(web::get().to(ollama_drift)));
     cfg.service(web::resource("/tokenizer-info").route(web::get().to(tokenizer_info)));
     cfg.service(web::resource("/tokenizer/swap").route(web::post().to(swap_tokenizer)));
     cfg.service(web::resource("/llama-model").route(web::post().to(set_llama_model)));

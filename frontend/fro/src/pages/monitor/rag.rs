@@ -79,10 +79,11 @@ fn has_issues(entry: &ChunkingStatsSnapshot) -> bool {
         if detection.detection_method == "fallback" {
             return true;
         }
-        // Issue: extension-only detection (less reliable)
-        if detection.detection_method == "extension" {
-            return true;
-        }
+        // Note: detection_method == "extension" is NOT flagged. For formats
+        // without a MIME type or magic bytes (.md, .txt, .csv, .log, source
+        // code), extension is the canonical detection path — flagging it
+        // buried real issues under a wall of false positives. A successful
+        // chunking run (chunks > 0) is the signal that matters.
         // Issue: unknown format
         if detection.detected_format.to_lowercase() == "unknown" {
             return true;
@@ -158,7 +159,7 @@ pub fn MonitorRag() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("RAG", None::<Route>),
                 ],
             }

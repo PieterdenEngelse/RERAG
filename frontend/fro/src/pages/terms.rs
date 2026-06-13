@@ -173,7 +173,7 @@ pub fn ConfigTerms() -> Element {
         .collect();
 
     rsx! {
-        div { class: "p-4 max-w-5xl mx-auto",
+        div { class: "p-4 w-full",
             ConfigNav { active: ConfigTab::Terms }
 
             div { class: "mt-6",

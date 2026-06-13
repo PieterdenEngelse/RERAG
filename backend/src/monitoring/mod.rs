@@ -22,6 +22,7 @@ pub mod health;
 pub mod histogram_config;
 pub mod metrics;
 pub mod metrics_config;
+pub mod ollama_drift;
 pub mod onnx_metrics;
 pub mod otel_config;
 pub mod performance_analysis;

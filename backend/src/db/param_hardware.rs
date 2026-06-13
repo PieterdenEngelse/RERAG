@@ -482,6 +482,7 @@ mod tests {
             numa: true,
             num_ctx: 4096,
             num_batch: 256,
+            num_ubatch: 128,
             logits_all: true,
             vocab_only: false,
             use_mmap: true,

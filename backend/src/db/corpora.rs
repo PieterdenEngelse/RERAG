@@ -23,6 +23,12 @@ pub struct Corpus {
     pub name: String,
     pub description: String,
     pub created_at: String,
+    /// Per-corpus override for the directory the file watcher monitors.
+    /// `None` means "fall back to the PathManager-derived default
+    /// (`{data_dir}/corpora/{slug}/documents/`)". For the default corpus,
+    /// the `FILE_WATCHER_DIR` env/override takes precedence over this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch_dir: Option<String>,
 }
 
 /// Per-corpus settings stored as JSON in `corpora.settings`.
@@ -250,7 +256,7 @@ pub fn create_corpus(
 
 pub fn list_corpora(conn: &Connection) -> Result<Vec<Corpus>> {
     let mut stmt = conn.prepare(
-        "SELECT id, slug, name, COALESCE(description, ''), created_at FROM corpora ORDER BY created_at ASC",
+        "SELECT id, slug, name, COALESCE(description, ''), created_at, watch_dir FROM corpora ORDER BY created_at ASC",
     )?;
     let corpora = stmt
         .query_map([], |row| {
@@ -260,6 +266,7 @@ pub fn list_corpora(conn: &Connection) -> Result<Vec<Corpus>> {
                 name: row.get(2)?,
                 description: row.get(3)?,
                 created_at: row.get(4)?,
+                watch_dir: row.get::<_, Option<String>>(5)?.filter(|s| !s.is_empty()),
             })
         })?
         .filter_map(|r| r.ok())
@@ -269,7 +276,7 @@ pub fn list_corpora(conn: &Connection) -> Result<Vec<Corpus>> {
 
 pub fn get_corpus_by_slug(conn: &Connection, slug: &str) -> Result<Option<Corpus>> {
     match conn.query_row(
-        "SELECT id, slug, name, COALESCE(description, ''), created_at FROM corpora WHERE slug = ?1",
+        "SELECT id, slug, name, COALESCE(description, ''), created_at, watch_dir FROM corpora WHERE slug = ?1",
         params![slug],
         |row| {
             Ok(Corpus {
@@ -278,6 +285,7 @@ pub fn get_corpus_by_slug(conn: &Connection, slug: &str) -> Result<Option<Corpus
                 name: row.get(2)?,
                 description: row.get(3)?,
                 created_at: row.get(4)?,
+                watch_dir: row.get::<_, Option<String>>(5)?.filter(|s| !s.is_empty()),
             })
         },
     ) {
@@ -285,6 +293,29 @@ pub fn get_corpus_by_slug(conn: &Connection, slug: &str) -> Result<Option<Corpus
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(CorporaError::Db(e)),
     }
+}
+
+/// Set or clear the per-corpus watched directory. Pass `None` (or an empty
+/// string) to clear the override and fall back to the PathManager-derived
+/// default. The change is **restart-required** — running watchers are not
+/// torn down and respawned here.
+pub fn set_corpus_watch_dir(
+    conn: &Connection,
+    slug: &str,
+    watch_dir: Option<&str>,
+) -> Result<()> {
+    let normalized = watch_dir
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let updated = conn.execute(
+        "UPDATE corpora SET watch_dir = ?1 WHERE slug = ?2",
+        params![normalized, slug],
+    )?;
+    if updated == 0 {
+        return Err(CorporaError::NotFound(slug.to_string()));
+    }
+    Ok(())
 }
 
 pub fn rename_corpus(conn: &Connection, slug: &str, new_name: &str) -> Result<()> {
@@ -358,6 +389,7 @@ mod tests {
             "ALTER TABLE corpora ADD COLUMN settings TEXT",
             "ALTER TABLE corpora ADD COLUMN build_meta TEXT",
             "ALTER TABLE corpora ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE corpora ADD COLUMN watch_dir TEXT",
         ] {
             let _ = conn.execute_batch(ddl);
         }

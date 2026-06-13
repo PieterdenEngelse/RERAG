@@ -1,0 +1,310 @@
+# Plan: monitor section reassembly (Auto → PointerRag) inside existing monitoring
+
+## Context
+
+Auto mode searches documents and then picks a per-query strategy. One of those
+decisions, gated by the **Pointer-trigger** slider on the chat bar
+(`POINTERRAG_AUTO_GAP_THRESHOLD`), routes the query to **section reassembly**:
+instead of feeding the LLM the raw matched chunks, the agent groups them by
+`section_id`, calls `Retriever::fetch_section` for each unique section, and
+hands those reassembled sections to a strict-grounded LLM call.
+
+Today this routing decision is only visible in three places:
+
+- `tracing::info!("Auto mode: routing to PointerRag …")` and the matching
+  `Strict`/`Hybrid` log lines in `backend/src/agent.rs:980-1043`.
+- The Auto step-trace message returned to the chat UI per response.
+- The Auto info modal in the home page that *explains* the feature.
+
+There are no counters, no histograms, no snapshots, no monitoring-page tiles.
+A user tuning the slider can read the message of the last response but cannot
+see "of my last 100 Auto queries, how many routed to PointerRag, how often
+hydration succeeded vs fell back, what the gap distribution looks like." This
+plan adds exactly that, reusing the `rig_stats` blueprint already in the
+codebase (atomic counters + ring buffer + snapshot + `/monitoring/agents/...`
+endpoint + tile on a monitor page).
+
+## Shape
+
+```mermaid
+flowchart LR
+  A[agent.rs Auto arm] -->|auto_route → AutoRoute| B[monitoring::pointer_stats::record_route]
+  A -->|PointerHydration result| C[monitoring::pointer_stats::record_hydration]
+  B --> D[(atomic counters)]
+  C --> D
+  C --> E[(VecDeque ring buffer<br/>last 100 hydrations)]
+  D --> F[snapshot]
+  E --> F
+  F --> G[GET /monitoring/agents/pointer-stats]
+  G --> H[frontend: api::fetch_pointer_stats]
+  H --> I[MonitorRag page<br/>Section Reassembly panel]
+```
+
+New module is the only writer; agent.rs only `record_*` calls. Snapshot is
+read-only and exposed alongside the existing `rig-stats` route. Frontend wires
+the snapshot into a new panel on `MonitorRag` (the page where the user is
+already looking when they think about RAG behavior).
+
+## Backend changes
+
+### 1. New module: `backend/src/monitoring/pointer_stats.rs`
+
+Model on `backend/src/monitoring/rig_stats.rs` (same atomic + ring-buffer +
+`snapshot()` shape). One file, no Prometheus registration needed for v1 —
+keep it parallel to `rig_stats` (which is also Prometheus-free).
+
+Atomic session counters:
+
+- `AUTO_QUERIES_TOTAL: AtomicUsize` — every Auto query that reached the
+  routing decision (i.e. found chunks).
+- `AUTO_ROUTE_POINTER: AtomicUsize`
+- `AUTO_ROUTE_STRICT: AtomicUsize`
+- `AUTO_ROUTE_HYBRID: AtomicUsize`
+- `POINTER_SECTIONS_HYDRATED: AtomicUsize` — sum of `hydrated` across all
+  Pointer routes (sections successfully reassembled).
+- `POINTER_FB_NO_SECTION_ID: AtomicUsize`
+- `POINTER_FB_FETCH_EMPTY: AtomicUsize`
+- `POINTER_FB_LOCK_FAILED: AtomicUsize`
+- `POINTER_CHUNKS_IN_TOTAL: AtomicUsize` — sum of input chunk counts to
+  hydration (denominator for "hydration success ratio").
+
+Ring buffer (last 100 Pointer-routed queries), each entry:
+
+```rust
+struct PointerHistoryEntry {
+    recorded_at_ms: u64,          // epoch millis, for sort/age
+    chunks_in: usize,             // input chunk count
+    sections_hydrated: usize,
+    fb_no_section_id: usize,
+    fb_fetch_empty: usize,
+    fb_lock_failed: usize,
+    gap: f32,                     // section_ratio − doc_ratio at decision
+    threshold: f32,               // gap threshold in effect
+}
+```
+
+Public API (called from agent.rs):
+
+```rust
+pub fn record_auto_route(route: AutoRoute, gap: f32, threshold: f32);
+pub fn record_pointer_hydration(
+    chunks_in: usize,
+    hydration: &PointerHydration,
+    gap: f32,
+    threshold: f32,
+);
+```
+
+`PointerHydration` is currently `struct PointerHydration` (private to
+agent.rs). Make its visibility `pub(crate)` and add `pub(crate)` to its
+fields so `pointer_stats::record_pointer_hydration` can read them without
+re-introducing a duplicate type. The struct already has `hydrated`,
+`fb_no_section_id`, `fb_fetch_empty`, `fb_lock_failed` — perfect fit.
+Likewise expose `AutoRoute` if not already (it is already `pub`).
+
+`snapshot()` returns:
+
+```rust
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct PointerStatsSnapshot {
+    pub auto_queries_total: usize,
+    pub route_pointer_total: usize,
+    pub route_strict_total: usize,
+    pub route_hybrid_total: usize,
+    pub pointer_route_pct: f64,        // pointer / auto_queries * 100
+
+    pub sections_hydrated_total: usize,
+    pub chunks_in_total: usize,
+    pub hydration_success_rate_pct: f64, // hydrated / chunks_in * 100, deduped
+    pub fb_no_section_id_total: usize,
+    pub fb_fetch_empty_total: usize,
+    pub fb_lock_failed_total: usize,
+
+    pub recent: Vec<PointerHistoryEntry>, // newest-first, ≤100
+    pub avg_gap: f32,                     // over recent
+    pub avg_threshold: f32,               // over recent (reveals threshold churn)
+}
+```
+
+Re-export ringbuffer entry as `pub` so it serializes for the frontend.
+
+### 2. Register the module: `backend/src/monitoring/mod.rs`
+
+Add `pub mod pointer_stats;` to the module list. No `pub use` re-export needed
+— callers will use the full path `crate::monitoring::pointer_stats::...`
+exactly like `crate::monitoring::rig_stats::...` does today (see
+`backend/src/api/agent_chat.rs:1834`).
+
+### 3. Instrument the routing decision: `backend/src/agent.rs`
+
+In `run_with_mode`'s `AgentMode::Auto` arm (around lines 977–1044):
+
+- Right after `let route = auto_route(...)` and before the `match route`,
+  call `crate::monitoring::pointer_stats::record_auto_route(route, frag_gap as f32, gap_threshold as f32);`
+- Inside `AutoRoute::PointerHydration` arm, after `let h = self.hydrate_pointer_sections(&used_chunks);`,
+  call `crate::monitoring::pointer_stats::record_pointer_hydration(used_chunks.len(), &h, frag_gap as f32, gap_threshold as f32);`
+
+Make `struct PointerHydration` and its fields `pub(crate)` so the monitoring
+module can read them. Don't move the type — it stays in agent.rs next to its
+producer.
+
+### 4. Expose via existing agentic monitor scope
+
+Edit `backend/src/api/agentic_monitor_routes.rs`:
+
+- Add handler mirroring `get_rig_stats` (lines 1021–1026):
+  ```rust
+  pub async fn get_pointer_stats() -> ActixResult<HttpResponse> {
+      let snap = crate::monitoring::pointer_stats::snapshot();
+      Ok(HttpResponse::Ok().json(snap))
+  }
+  ```
+- In `configure_agentic_monitor_routes` (line 1030) add
+  `.route("/pointer-stats", web::get().to(get_pointer_stats))` next to the
+  existing `rig-stats` route.
+
+Also register the route on the central registry: `backend/src/api/mod.rs`
+around lines 824–895. The existing scope already has the `/agents/*` routes
+inline; add one matching the rig-stats entry:
+
+```rust
+.route(
+    "/agents/pointer-stats",
+    web::get().to(agentic_monitor_routes::get_pointer_stats),
+)
+```
+
+(Both registrations exist for `rig-stats` today — match the same pattern.)
+
+### 5. Unit tests in `pointer_stats.rs`
+
+A single `#[cfg(test)] mod tests` block, three tests:
+
+- `snapshot_starts_empty` — fresh module → all-zero snapshot.
+- `route_counts_partition_auto_queries` — record one of each route, assert
+  totals + pointer_route_pct.
+- `hydration_records_history_and_aggregates` — feed two synthetic
+  `PointerHydration` values, verify `sections_hydrated_total`, fallbacks,
+  recent length, avg_gap.
+
+Counters are process-globals, so guard the tests with a `Mutex<()>` at file
+scope (same trick as `chunking_stats` and most other monitoring tests in the
+tree); no need to reset between tests as long as deltas are asserted.
+
+## Frontend changes
+
+### 6. API binding: `frontend/fro/src/api.rs`
+
+Add a `PointerStatsResponse` mirroring `RigStatsResponse` (line 2653) plus
+the `recent: Vec<PointerHistoryEntry>` ring buffer:
+
+```rust
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PointerHistoryEntry {
+    pub recorded_at_ms: u64,
+    pub chunks_in: usize,
+    pub sections_hydrated: usize,
+    pub fb_no_section_id: usize,
+    pub fb_fetch_empty: usize,
+    pub fb_lock_failed: usize,
+    pub gap: f32,
+    pub threshold: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PointerStatsResponse {
+    pub auto_queries_total: usize,
+    pub route_pointer_total: usize,
+    pub route_strict_total: usize,
+    pub route_hybrid_total: usize,
+    pub pointer_route_pct: f64,
+    pub sections_hydrated_total: usize,
+    pub chunks_in_total: usize,
+    pub hydration_success_rate_pct: f64,
+    pub fb_no_section_id_total: usize,
+    pub fb_fetch_empty_total: usize,
+    pub fb_lock_failed_total: usize,
+    pub recent: Vec<PointerHistoryEntry>,
+    pub avg_gap: f32,
+    pub avg_threshold: f32,
+}
+
+pub async fn fetch_pointer_stats() -> Result<PointerStatsResponse, String> {
+    fetch_json("/monitoring/agents/pointer-stats").await
+}
+```
+
+### 7. Surface on `MonitorRag`: `frontend/fro/src/pages/monitor/rag.rs`
+
+This is the RAG page; section reassembly is a RAG decision; the user is
+already here when thinking about RAG. Don't add a new top-level tab.
+
+- Extend `RagState` with `pointer_stats: Option<api::PointerStatsResponse>`.
+- In the `use_future` mount loop alongside the existing `rag_result` /
+  `chunking_result`, add `let pointer_result = api::fetch_pointer_stats().await;`
+  and store it on the new state field (treat error as "feature not yet
+  reporting" — show "no data yet" tile rather than an error banner).
+- Add a new `Panel` titled **"Section reassembly (Auto → PointerRag)"** under
+  the existing chunking panel. Use the same `StatCard` component the
+  `MonitorAgentic` page uses (`frontend/fro/src/pages/monitor/agentic.rs`
+  lines 446–469) for these tiles in a 4-column grid:
+  1. **Auto queries** — `auto_queries_total`
+  2. **Routed to PointerRag** — `route_pointer_total` (with
+     `{pointer_route_pct:.1}%` as subtitle)
+  3. **Sections hydrated** — `sections_hydrated_total`
+  4. **Hydration success** — `{hydration_success_rate_pct:.1}%`
+- Below the tiles, a small table (8–10 rows) of the most recent
+  `recent[..]` entries: time-ago, chunks_in, sections_hydrated, gap,
+  threshold, and a one-character fallback flag column ('—' on clean,
+  '!' on any fallback). Reuse the table styling already in `rag.rs` for
+  the chunking history (look at the `<table>` block around the
+  `chunking_history` rendering for the exact classes).
+- One info-button modal (`PARAM_ICON_BUTTON_CLASS` / `INFO_ICON_SVG_CLASS`
+  per CLAUDE.md "Info Buttons" spec) on the panel header. Copy explains:
+  "Auto picks PointerRag when section_ratio − doc_ratio ≥ Pointer-trigger.
+  Hydrated counts unique sections the index actually reassembled;
+  fallbacks counted when the chunk had no section_id, fetch came back
+  empty, or the retriever lock was busy. Drives the slider on the chat bar."
+  Use `text-gray-300` for body (CLAUDE.md UI Color Rules: never
+  `text-gray-500` for readable text).
+
+No new route, no nav-tab change.
+
+## Verification
+
+1. `cd backend && cargo fmt && cargo clippy --all-targets -- -D warnings` —
+   must pass.
+2. `cd backend && cargo test pointer_stats` — three new tests green.
+3. `cd backend && cargo test --all` — no regressions (especially
+   `agent.rs` Auto-route tests around lines 1836–2330; they only assert
+   routing decisions, not monitoring side effects, so they should stay
+   green once `pub(crate)` visibility is sorted).
+4. End-to-end check by hand:
+   - Restart `ag.service`.
+   - From the chat UI, send three queries in Auto mode against a corpus
+     where the Pointer-trigger is reachable (set slider to **Eager / 0.00**
+     so every Auto query routes to PointerRag).
+   - `curl -s http://127.0.0.1:3010/monitoring/agents/pointer-stats | jq`
+     and confirm `auto_queries_total == 3`, `route_pointer_total == 3`,
+     `recent` length 3, gap/threshold populated.
+   - Open **Monitor → RAG** in the UI, scroll to the new "Section
+     reassembly" panel, confirm the four tiles populate and the recent
+     table shows the three queries.
+   - Move the chat-bar slider to **Never / 1.00**, send another query;
+     confirm `route_pointer_total` does not increment but
+     `route_hybrid_total` or `route_strict_total` does, and the panel
+     updates within its 5 s refresh.
+5. Cannot exercise the Auto modal copy here — leave it untouched; the
+   plan does not modify it.
+
+## Files touched
+
+- `backend/src/monitoring/pointer_stats.rs` — new.
+- `backend/src/monitoring/mod.rs` — one `pub mod pointer_stats;` line.
+- `backend/src/agent.rs` — two `record_*` calls in Auto arm, visibility
+  bump on `PointerHydration`.
+- `backend/src/api/agentic_monitor_routes.rs` — handler + route entry.
+- `backend/src/api/mod.rs` — one `/agents/pointer-stats` route line.
+- `frontend/fro/src/api.rs` — two structs + one fetch helper.
+- `frontend/fro/src/pages/monitor/rag.rs` — extend `RagState`, add panel +
+  info modal.

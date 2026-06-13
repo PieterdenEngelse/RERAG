@@ -917,6 +917,10 @@ pub fn start_api_server(
                         web::patch().to(update_corpus_description_handler),
                     )
                     .route(
+                        "/{slug}/watch-dir",
+                        web::patch().to(update_corpus_watch_dir_handler),
+                    )
+                    .route(
                         "/{slug}/documents",
                         web::get().to(corpus_list_documents_handler),
                     )

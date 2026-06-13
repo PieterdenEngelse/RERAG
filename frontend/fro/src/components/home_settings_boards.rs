@@ -876,12 +876,8 @@ pub fn HomeSettingsBoards(
                                 }
                             }
                         }
-                    }
 
-                    // Row 3: KV Cache
-                    div {
-                        class: "flex justify-center gap-4 w-full pointer-events-auto",
-                        style: "margin-top: 1cm;",
+                        // KV Cache board (moved from Row 3)
                         div {
                             class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-2",
                             label {

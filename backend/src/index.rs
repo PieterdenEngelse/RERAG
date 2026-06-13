@@ -1285,11 +1285,7 @@ fn flat_text_ir(
 /// which silently neuters PointerRag hydration and any cross-page
 /// observability. See `flat_text_ir` for the legacy single-block path
 /// that all non-PDF binary formats still use.
-fn pdf_paged_ir(
-    path: &Path,
-    bytes: Vec<u8>,
-    corpus: &str,
-) -> Option<crate::doc_ir::DocIR> {
+fn pdf_paged_ir(path: &Path, bytes: Vec<u8>, corpus: &str) -> Option<crate::doc_ir::DocIR> {
     use crate::doc_ir::{DocBlock, DocIR};
     let filename = path
         .file_name()

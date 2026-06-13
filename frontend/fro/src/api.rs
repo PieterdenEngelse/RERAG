@@ -451,6 +451,12 @@ pub struct IndexInfoResponse {
     pub index_size_bytes: Option<u64>,
     pub index_size_human: Option<String>,
     pub memory_label: Option<String>,
+    /// On-disk Tantivy size — always populated regardless of INDEX_IN_RAM.
+    /// This is the figure the ~100 MB threshold compares against.
+    #[serde(default)]
+    pub disk_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub disk_size_human: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1210,6 +1216,22 @@ pub struct MemoryInfo {
 /// Fetch system memory information
 pub async fn fetch_memory() -> Result<MemoryInfo, String> {
     fetch_json::<MemoryInfo>("/sys/memory").await
+}
+
+/// Drift snapshot returned by `/sys/ollama-drift`. `drift` is true between
+/// the moment the user saved a new num_thread for the Ollama backend and
+/// the moment the live runner reloads (PID change) with the new value.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct OllamaDrift {
+    pub drift: bool,
+    pub configured: usize,
+    /// PID of the currently observed `ollama runner`, or `None` when no
+    /// model is loaded. Exposed for debugging; the banner doesn't read it.
+    pub runner_pid: Option<u32>,
+}
+
+pub async fn fetch_ollama_drift() -> Result<OllamaDrift, String> {
+    fetch_json::<OllamaDrift>("/sys/ollama-drift").await
 }
 
 /// Fetch detailed GPU information
@@ -4277,6 +4299,11 @@ pub struct CorpusEntry {
     pub created_at: String,
     #[serde(default)]
     pub doc_count: usize,
+    /// Absolute path of the directory the watcher monitors for this corpus.
+    /// `None` = the corpus is using the PathManager-derived default
+    /// (`{data_dir}/corpora/{slug}/documents/`).
+    #[serde(default)]
+    pub watch_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -4364,6 +4391,33 @@ pub async fn update_corpus_description(slug: &str, description: &str) -> Result<
     let url = api_url(&format!("/corpora/{}/description", slug));
     let body =
         serde_json::to_string(&Body { description }).map_err(|e| format!("Encode error: {}", e))?;
+    let response = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("HTTP {} {}", status, text.trim()))
+    }
+}
+
+/// Set the per-corpus watched directory. Pass an empty string (or `None`) to
+/// clear the override and fall back to the PathManager-derived default.
+/// The change is restart-required — the running watcher is not respawned.
+pub async fn update_corpus_watch_dir(slug: &str, watch_dir: Option<&str>) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        watch_dir: Option<&'a str>,
+    }
+    let url = api_url(&format!("/corpora/{}/watch-dir", slug));
+    let body = serde_json::to_string(&Body { watch_dir })
+        .map_err(|e| format!("Encode error: {}", e))?;
     let response = reqwest::Client::new()
         .patch(&url)
         .header("Content-Type", "application/json")

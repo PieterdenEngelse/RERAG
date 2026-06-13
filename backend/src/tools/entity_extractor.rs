@@ -732,7 +732,9 @@ impl EntityExtractorTool {
                         });
                     }
                 }
-                i = j;
+                // Guarantee outer-loop progress: when words[start] is a known
+                // org/loc/tech, the inner loop breaks with j == start.
+                i = j.max(start + 1);
             } else {
                 i += 1;
             }
