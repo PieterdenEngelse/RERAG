@@ -81,6 +81,11 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # wasm32-unknown-unknown is required for the frontend (Dioxus web →
+          # trunk build --release). Without it, the frontend build errors
+          # with E0463 "can't find crate for std".
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry + target/
         uses: actions/cache@v4
