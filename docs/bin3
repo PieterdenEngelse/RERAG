@@ -99,7 +99,7 @@ pre-extracts these at AppImage build time and bundles them. Benefits:
 - One less failure mode (musl/glibc mismatch can't surface at install
   time; we already know the bundled binaries work)
 - Saves the user ~640 MB of network on first install
-- AppImage is built on a known glibc baseline (Ubuntu 22.04), so
+- AppImage is built on a known glibc baseline (Ubuntu 24.04), so
   compat is determined at build time not install time
 
 The bundled FalkorDB version is pinned per AppImage release. Upgrading
@@ -383,7 +383,7 @@ Pipeline stages:
                                 ├─ cargo build -p installer --release
                                 │      (Dioxus desktop binary)
                                 │
-release.yml on Ubuntu 22.04 ─────┤
+release.yml on Ubuntu 24.04 ─────┤
                                 │
                                 ├─ Assemble AppDir/
                                 │      AppRun, ag-installer, usr/{bin,lib,share/ag}/
@@ -398,19 +398,36 @@ release.yml on Ubuntu 22.04 ─────┤
                                         sha256sums.txt
 ```
 
-### Why Ubuntu 22.04 specifically
+### Why Ubuntu 24.04 specifically
 
-- Provides glibc 2.35, which is old enough that the resulting binary
-  runs on:
-  - Ubuntu 22.04 LTS, 24.04 LTS
-  - Debian 12 (bookworm)
-  - Fedora 38+
-  - Arch (rolling)
-  - RHEL 9 / Alma 9 / Rocky 9
-- Older than Ubuntu 24.04 (glibc 2.39), so we don't lock out 22.04
-  users
-- Newer than Ubuntu 20.04 (glibc 2.31), which is EOL April 2025
-- AppImage tooling (`appimagetool`) is well-tested on this baseline
+Originally bin3 picked Ubuntu 22.04 (glibc 2.35) for maximum
+backward-compat. That decision was revised on the first CI run
+(`v0.1.0-dev2`, 2026-06-13) because ag's `onnx` default feature pulls
+the `ort` crate, which **downloads prebuilt ONNX Runtime C++ binaries
+that require glibc 2.39+** (they reference ISO C 23 symbols like
+`__isoc23_strtol`). Building on 22.04 surfaced the mismatch at link
+time; even with a workaround, the resulting AppImage wouldn't *run*
+on 22.04 because the embedded ONNX binaries need 2.39.
+
+Ubuntu 24.04 (glibc 2.39) is the actual baseline the codebase
+already required. Distros covered:
+
+- Ubuntu 24.04 LTS, 24.10
+- Debian 13 (trixie) — releases mid-2026
+- Fedora 39+
+- Arch (rolling, current)
+- RHEL 10 / Alma 10 / Rocky 10 — released mid-2026
+
+**Distros explicitly NOT supported by the AppImage:**
+Ubuntu 22.04 LTS, Debian 12 (bookworm), Fedora 38 and below, RHEL 9
+and below. Users on those distros either upgrade or use the bash
+installer (which builds from source against their local glibc).
+
+This compatibility loss is bounded — Ubuntu 22.04's EOL is April 2027.
+
+The decision could be reverted if ag drops the `onnx` default feature
+or if the `ort` crate ships glibc-2.35-compatible prebuilts. Until
+then, glibc 2.39 is honest.
 
 For now: x86_64 only. arm64 is a Phase 2 addition (cross-compile or
 self-hosted ARM runner; both add complexity worth deferring until
@@ -438,7 +455,7 @@ finally adding `build.rs`).
 ```
 ag 0.1.0
 git: a1b2c3d
-built: 2026-06-13T12:34:56Z (ubuntu-22.04)
+built: 2026-06-13T12:34:56Z (ubuntu-24.04)
 ```
 
 The installer compares against `ag-installer --version` on launch to
@@ -593,10 +610,12 @@ pipeline before H tags v1.0.0.
 - **GitHub Actions minutes.** Tag-driven builds on a public repo are
   free; if the repo goes private, ~$0.008/min adds up at ~30 min per
   build. Track usage.
-- **glibc compatibility.** Ubuntu 22.04 build (glibc 2.35) should run
-  on Ubuntu 22.04+, Debian 12+, Fedora 38+, RHEL 9+. RHEL 8
-  (glibc 2.28) is almost certainly out — document, don't try to
-  support.
+- **glibc compatibility.** Ubuntu 24.04 build (glibc 2.39) runs on
+  Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10+. Ubuntu 22.04 /
+  Debian 12 / Fedora 38 / RHEL 9 are NOT supported by the AppImage
+  because ag's `onnx` feature requires glibc 2.39 via prebuilt
+  ONNX Runtime binaries. Document, don't try to support older
+  glibc — users on older distros use the bash installer.
 - **AppImage user-experience pitfalls.** First-time AppImage users
   often miss the `chmod +x` step. README needs to cover it clearly;
   the `.desktop` integration on the last screen helps.
@@ -619,7 +638,7 @@ implement against.
 | Decision | Pinned value | Artifact written in |
 |---|---|---|
 | FalkorDB image SHA | `falkordb/falkordb@sha256:e93fcd753fe612fb0a222166a0620a1ae31b826a12f223c3b6d06038d9d7a364` (human tag: `v4.2.0`; Redis 8.6.3; image dated 2026-05-14) | `installer/falkordb.pin` |
-| Ubuntu runner image | `ubuntu-22.04` — glibc 2.35; covers Ubuntu 22.04+, Debian 12+, Fedora 38+, RHEL 9+. 20.04 is EOL on Actions; 24.04 (glibc 2.39) would lock out 22.04 users. | `.github/workflows/release.yml` (`runs-on: ubuntu-22.04`) |
+| Ubuntu runner image | `ubuntu-24.04` — glibc 2.39; covers Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10+. **Revised from `ubuntu-22.04` on first CI run** (2026-06-13): ag's `onnx` feature pulls `ort` crate's prebuilt ONNX binaries which require glibc 2.39, so 22.04 was never actually viable. | `.github/workflows/release.yml` (`runs-on: ubuntu-24.04`) |
 | Semver starting version | `v0.1.0`. No pre-release tags (`-alpha` / `-beta` / `-rc`) — iterate `0.1.0 → 0.1.1 → 0.1.2 → … → 0.x.0 → 1.0.0`. `v1.0.0` only when Phase H acceptance is met. | `Cargo.toml` workspace `version` + `installer/Cargo.toml` |
 | GitHub Releases publish mode | **Public** from day one with `prerelease=true` on every tag before `v1.0.0`. Lets early testers discover and report; the auto-update channel policy can correctly filter stable vs pre-release. | repo settings + `release.yml` step `gh release create … --prerelease` |
 | `.desktop` `Categories=` and `MimeType=` | `Categories=Development;Database;`. **No `MimeType=`** — ag ingests through the web UI, not OS file association. Skipped `Office` / `Education` / `Science` as misleading. | `installer/assets/ag-installer.desktop` |
@@ -683,7 +702,7 @@ AppImage on every tag push.
 **Dependencies:** Phase 0 complete (especially FalkorDB pin).
 
 **Risks:**
-- `appimagetool` not preinstalled on `ubuntu-22.04` runner. Mitigate
+- `appimagetool` not preinstalled on `ubuntu-24.04` runner. Mitigate
   by installing it via `apt` or downloading from
   `github.com/AppImage/AppImageKit/releases`.
 - libtika's build-hash path inside `target/release/build/extractous-*/out/libs/`
@@ -696,7 +715,7 @@ AppImage on every tag push.
 - `gh release view v0.1.0-test` shows `ag-installer-v0.1.0-test-x86_64.AppImage`
   attached
 - Downloading + `chmod +x` + running it opens a "Hello ag installer"
-  Dioxus window on a fresh Ubuntu 22.04 VM
+  Dioxus window on a fresh Ubuntu 24.04 VM
 
 **End-of-phase commit:** `feat(installer): foundation — Dioxus crate +
 AppImage CI`. Single commit, or one commit per task if PR review is
@@ -978,7 +997,7 @@ supports.
 
 1. Spin up fresh VMs (or use a service like `distrowatch.com` /
    `lxc` / QEMU) for:
-   - Ubuntu 22.04 LTS (CI baseline; sanity)
+   - Ubuntu 24.04 LTS (CI baseline; sanity)
    - Ubuntu 24.04 LTS
    - Debian 12 (bookworm)
    - Fedora 39

@@ -12,7 +12,9 @@ on:
         default: "v0.1.0-dev"
 
 # Phase 0 lock-ins implemented here:
-#   - runs-on: ubuntu-22.04 (glibc 2.35 baseline)
+#   - runs-on: ubuntu-24.04 (glibc 2.39 baseline; revised from 22.04 on
+#     first CI run — ag's onnx feature pulls ort crate's prebuilt ONNX
+#     binaries which require glibc 2.39)
 #   - gh release create --prerelease for any v0.x.y tag (stripped for v1.0.0+)
 #   - FalkorDB image SHA pinned via installer/falkordb.pin
 #
@@ -24,7 +26,7 @@ permissions:
 jobs:
   appimage:
     name: Build AppImage (linux-x86_64)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -53,7 +55,7 @@ jobs:
           echo "Building $TAG (version=$VERSION, prerelease=${{ steps.tag.outputs.prerelease }})"
 
       - name: Install build-time system deps
-        # Dioxus desktop (0.7.x) uses webkit2gtk under the hood. Ubuntu 22.04
+        # Dioxus desktop (0.7.x) uses webkit2gtk under the hood. Ubuntu
         # runners don't ship the -dev packages by default.
         # mold: backend/.cargo/config.toml passes -C link-arg=-fuse-ld=mold
         # to rustc; without mold installed, the linker step fails with

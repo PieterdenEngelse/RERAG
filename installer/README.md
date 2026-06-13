@@ -15,7 +15,7 @@ rules — different driver.
   image SHA, Ubuntu runner, semver start, release publish mode,
   `.desktop` categories, auto-update channel).
 - **Build pipeline**: `.github/workflows/release.yml` — tag-driven
-  CI builds the AppImage on `ubuntu-22.04`.
+  CI builds the AppImage on `ubuntu-24.04` (glibc 2.39 baseline).
 - **AppImage bundle script**: `installer/build-appimage.sh` — assembles
   `AppDir/`, runs `appimagetool`. Called by CI; runnable locally.
 - **FalkorDB image pin**: `installer/falkordb.pin` — pinned
