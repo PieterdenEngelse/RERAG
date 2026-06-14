@@ -123,12 +123,13 @@ pub fn ConfigOnnx() -> Element {
     let mut corpora_list = use_signal(Vec::<api::CorpusEntry>::new);
     let mut selected_corpus = use_signal(|| "default".to_string());
     let mut selected_corpus_settings = use_signal::<Option<api::CorpusSettings>>(|| None);
-    // LAYOUT_ML_MODEL_ID editor — Tier 0 HF Hub spec (e.g. "cmarkea/detr-layout-detection")
+    // LAYOUT_ML_MODEL_ID editor — Tier 0 HF Hub spec (e.g. "neka-nat/rfdetr-doclaynet-onnx:checkpoint_best_total.onnx")
     let mut model_id_draft = use_signal::<String>(String::new);
     let mut model_id_saving = use_signal(|| false);
     let mut model_id_message = use_signal::<Option<String>>(|| None);
     let mut show_model_id_info = use_signal(|| false);
     let mut show_chunker_mode_info = use_signal(|| false);
+    let mut show_chunker_warning_info = use_signal(|| false);
     // Session Options (read-only / advanced)
     let mut show_exec_order_info = use_signal(|| false);
     let mut show_create_thread_info = use_signal(|| false);
@@ -252,7 +253,7 @@ pub fn ConfigOnnx() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Config", Some(Route::Config {})),
+                    BreadcrumbItem::new("Config", Some(Route::ConfigRuntime {})),
                     BreadcrumbItem::new("ONNX", Some(Route::ConfigOnnx {})),
                 ],
             }
@@ -350,9 +351,9 @@ pub fn ConfigOnnx() -> Element {
                                     span { class: eff_class,
                                         if effective { "on" } else { "off" }
                                     }
-                                    span { class: "text-gray-500", "·" }
+                                    span { class: "text-gray-400", "·" }
                                     span { class: "text-gray-400", "{override_label}" }
-                                    span { class: "text-gray-500", "·" }
+                                    span { class: "text-gray-400", "·" }
                                     span { class: "text-gray-400",
                                         "global default: "
                                         span { class: if global { "text-green-400" } else { "text-gray-300" },
@@ -500,12 +501,12 @@ pub fn ConfigOnnx() -> Element {
                                 input {
                                     r#type: "text",
                                     class: "bg-gray-700 text-gray-100 text-xs rounded px-2 py-1 w-72 font-mono border border-gray-600 focus:border-blue-400 focus:outline-none",
-                                    placeholder: "owner/repo[:filename] — e.g. cmarkea/detr-layout-detection",
+                                    placeholder: "owner/repo[:filename] — e.g. neka-nat/rfdetr-doclaynet-onnx:checkpoint_best_total.onnx",
                                     value: "{model_id_draft}",
                                     oninput: move |evt| model_id_draft.set(evt.value()),
                                 }
                                 button {
-                                    class: "btn btn-xs bg-blue-700 hover:bg-blue-600 text-white border-none disabled:bg-gray-700 disabled:text-gray-500",
+                                    class: "btn btn-xs bg-blue-700 hover:bg-blue-600 text-white border-none disabled:bg-gray-700 disabled:text-gray-400",
                                     disabled: model_id_saving(),
                                     onclick: move |_| {
                                         let val = model_id_draft.read().clone();
@@ -689,18 +690,27 @@ pub fn ConfigOnnx() -> Element {
                             );
                             if !is_recommended {
                                 rsx! {
-                                    div { class: "text-xs text-yellow-300 mt-1",
-                                        "⚠ "
-                                        span { class: "font-mono", "{mode}" }
-                                        " is suboptimal for native PDF output — prefer "
-                                        span { class: "font-mono", "lightweight" }
-                                        " or "
-                                        span { class: "font-mono", "semantic" }
-                                        ". "
-                                        Link {
-                                            to: Route::ConfigChunker {},
-                                            class: "text-blue-400 hover:text-blue-300 underline",
-                                            "Change on /config/chunker"
+                                    div { class: "text-xs text-yellow-300 mt-1 flex items-center gap-2 flex-wrap",
+                                        span {
+                                            "⚠ "
+                                            span { class: "font-mono", "{mode}" }
+                                            " is suboptimal for native PDF output — prefer "
+                                            span { class: "font-mono", "lightweight" }
+                                            " or "
+                                            span { class: "font-mono", "semantic" }
+                                            ". "
+                                            Link {
+                                                to: Route::ConfigChunker {},
+                                                class: "text-blue-400 hover:text-blue-300 underline",
+                                                "Change on /config/chunker"
+                                            }
+                                        }
+                                        button {
+                                            class: PARAM_ICON_BUTTON_CLASS,
+                                            style: PARAM_ICON_BUTTON_STYLE,
+                                            onclick: move |_| show_chunker_warning_info.set(true),
+                                            title: "Why this is flagged",
+                                            InfoIcon {}
                                         }
                                     }
                                 }
@@ -1847,7 +1857,7 @@ pub fn ConfigOnnx() -> Element {
                 class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                 onclick: move |_| show_defaults_info.set(false),
                 div {
-                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                    class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] max-h-[85vh] overflow-y-auto shadow-xl",
                     onclick: move |evt| evt.stop_propagation(),
                     div { class: "flex items-center justify-between mb-4",
                         h2 { class: "text-lg font-semibold text-gray-100", "ONNX Default Values" }
@@ -2132,6 +2142,10 @@ pub fn ConfigOnnx() -> Element {
         if show_chunker_mode_info() {
             {chunker_mode_for_native_pdf_modal(show_chunker_mode_info)}
         }
+
+        if show_chunker_warning_info() {
+            {chunker_mode_warning_info_modal(show_chunker_warning_info)}
+        }
     }
 }
 
@@ -2161,6 +2175,10 @@ fn onnx_vs_ort_page_banner() -> Element {
                     "Each board below carries a layer tag so it's visible at the parameter level which layer owns the knob. Longer write-up at "
                     a { href: "/docu/index/onnx", class: "text-blue-400 hover:text-blue-300 underline",
                         "/docu/index/onnx"
+                    }
+                    "; per-knob reference at "
+                    a { href: "/docu/index/onnx-params", class: "text-blue-400 hover:text-blue-300 underline",
+                        "/docu/index/onnx-params"
                     }
                     "."
                 }
@@ -2478,7 +2496,7 @@ fn enabled_info_modal(mut show: Signal<bool>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| show.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] max-h-[85vh] overflow-y-auto shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-4",
                     h2 { class: "text-lg font-semibold text-gray-100",
@@ -2539,7 +2557,7 @@ fn layout_enabled_toggle_info_modal(mut show: Signal<bool>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| show.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] max-h-[85vh] overflow-y-auto shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-4",
                     h2 { class: "text-lg font-semibold text-gray-100",
@@ -2719,7 +2737,7 @@ fn extractous_info_modal(mut show: Signal<bool>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| show.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] max-h-[85vh] overflow-y-auto shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-4",
                     h2 { class: "text-lg font-semibold text-gray-100",
@@ -2792,7 +2810,7 @@ fn lopdf_info_modal(mut show: Signal<bool>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| show.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] max-h-[85vh] overflow-y-auto shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-4",
                     h2 { class: "text-lg font-semibold text-gray-100",
@@ -2863,7 +2881,7 @@ fn layout_ml_model_id_info_modal(mut show: Signal<bool>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| show.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-3xl max-h-[90vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-5 w-[98vw] shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-3",
                     h2 { class: "text-lg font-semibold text-gray-100", "LAYOUT_ML_MODEL_ID — Tier 0 auto-download" }
@@ -2873,30 +2891,33 @@ fn layout_ml_model_id_info_modal(mut show: Signal<bool>) -> Element {
                         "×"
                     }
                 }
-                div { class: "text-sm text-gray-300 space-y-4",
+                div { class: "text-sm text-gray-300 space-y-3",
                     // ── What it is ──
                     p {
-                        "HuggingFace Hub spec for a DETR-style image-based layout model. When set, ag downloads the file via "
+                        "HuggingFace Hub spec for a "
+                        Link {
+                            to: Route::DocuDetrLayout {},
+                            class: "text-blue-400 hover:text-blue-300 underline",
+                            "DETR-style image-based layout model"
+                        }
+                        ". On first boot ag downloads the file via "
                         span { class: "font-mono text-gray-100", "hf-hub" }
                         " into "
                         span { class: "font-mono text-gray-100", "~/.cache/huggingface/hub/" }
-                        " on first boot and reuses it on subsequent restarts — no network call once cached."
+                        " and reuses it on later restarts — no network call once cached."
                     }
                     p {
                         "Format: "
                         span { class: "font-mono text-gray-100", "owner/repo" }
                         " (defaults to "
                         span { class: "font-mono text-gray-100", "model.onnx" }
-                        " inside the repo) or "
+                        ") or "
                         span { class: "font-mono text-gray-100", "owner/repo:filename.onnx" }
-                        " if the model file is named something else."
-                    }
-                    p {
-                        "Example: "
-                        span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
-                        " — 11-class PubLayNet model. Pair with "
+                        " when the file is named differently. Example that actually works today: "
+                        span { class: "font-mono text-gray-100", "neka-nat/rfdetr-doclaynet-onnx:checkpoint_best_total.onnx" }
+                        " — RF-DETR trained on DocLayNet's 11-class scheme; pair with "
                         span { class: "font-mono text-gray-100", "LAYOUT_DETR_NUM_CLASSES=11" }
-                        " (the default)."
+                        " (the default). ~116 MB."
                     }
 
                     // ── Hard constraints ──
@@ -2920,215 +2941,19 @@ fn layout_ml_model_id_info_modal(mut show: Signal<bool>) -> Element {
                             strong { class: "text-gray-100", "Class count must match " }
                             span { class: "font-mono text-gray-100", "LAYOUT_DETR_NUM_CLASSES" }
                             strong { class: "text-gray-100", "." }
-                            " Default is 11 (matches the current Tier 1 cmarkea model). Switching to a 5-class PubLayNet or 13-class DocLayNet variant requires updating num_classes too — otherwise the argmax over class scores points at the wrong column and every region gets the wrong tag."
+                            " Default is 11 — DocLayNet's canonical order, used by both "
+                            span { class: "font-mono text-gray-100", "cmarkea/detr-layout-detection" }
+                            " and "
+                            span { class: "font-mono text-gray-100", "neka-nat/rfdetr-doclaynet-onnx" }
+                            ". Drop to 5 for a PubLayNet model (Text/Title/List/Figure/Table). Wrong count makes argmax over class scores hit the wrong column and every region gets the wrong tag."
                         }
                     }
 
-                    // ── Soft considerations ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Soft considerations" }
-                    div { class: "overflow-x-auto",
-                        table { class: "w-full text-xs border-collapse",
-                            thead {
-                                tr { class: "border-b border-gray-600",
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Factor" }
-                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Trade-off" }
-                                }
-                            }
-                            tbody {
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Training corpus" }
-                                    td { class: "py-1 text-gray-300",
-                                        "PubLayNet ≈ scientific papers (text-heavy, tables, figures, captions). DocLayNet ≈ broader business documents (forms, slides, financial, patents). Pick whichever matches your PDF mix."
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Backbone size" }
-                                    td { class: "py-1 text-gray-300",
-                                        "DETR-Lite / nano variants run faster but classify worse on small regions. Full DETR / Deformable-DETR are slower but more accurate on complex layouts. Inference runs per-page during upload, so this matters at scale."
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "License" }
-                                    td { class: "py-1 text-gray-300",
-                                        "DocLayNet is CC-BY (commercial OK). Some PubLayNet derivatives inherit IBM's research license. Check the repo before deploying."
-                                    }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Filename convention" }
-                                    td { class: "py-1 text-gray-300",
-                                        "If the repo's ONNX file is "
-                                        span { class: "font-mono text-gray-100", "model.onnx" }
-                                        ", use "
-                                        span { class: "font-mono text-gray-100", "owner/repo" }
-                                        ". If named "
-                                        span { class: "font-mono text-gray-100", "detr.onnx" }
-                                        ", "
-                                        span { class: "font-mono text-gray-100", "quantized.onnx" }
-                                        ", etc., use "
-                                        span { class: "font-mono text-gray-100", "owner/repo:filename.onnx" }
-                                        "."
-                                    }
-                                }
-                                tr {
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Quantization" }
-                                    td { class: "py-1 text-gray-300",
-                                        "Some repos ship "
-                                        span { class: "font-mono text-gray-100", "model_quantized.onnx" }
-                                        " alongside "
-                                        span { class: "font-mono text-gray-100", "model.onnx" }
-                                        " — smaller and ~2-3× faster but with measurable accuracy loss. Worth trying for high-volume ingestion."
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Verification workflow ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Verification workflow" }
-                    ol { class: "list-decimal pl-5 space-y-1 text-gray-300",
-                        li {
-                            "Pick a candidate — search HF Hub for layout-detection models that have ONNX in the "
-                            em { "Files and versions" }
-                            " tab. Filter by task = Object Detection or browse the "
-                            span { class: "font-mono text-gray-100", "layout-analysis" }
-                            " tag."
-                        }
-                        li {
-                            "Set "
-                            span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID = owner/repo[:file]" }
-                            " in the input above. Save. Restart."
-                        }
-                        li {
-                            "Watch the journal for "
-                            span { class: "font-mono text-gray-100", "Layout model loaded from HF Hub (via LAYOUT_ML_MODEL_ID)" }
-                            " vs the warn fallthrough "
-                            span { class: "font-mono text-gray-100", "LAYOUT_ML_MODEL_ID set but download failed" }
-                            " or "
-                            span { class: "font-mono text-gray-100", "HF Hub model downloaded but failed to load" }
-                            ". If either warns, the Layout model chip on /config/onnx will flip back to Tier 1 / heuristic."
-                        }
-                        li {
-                            "Upload a representative PDF, then check "
-                            a { href: "/monitor/tip", class: "text-blue-400 hover:text-blue-300 underline", "/monitor/tip" }
-                            " — block-type tags should distribute reasonably across Title / Body / Table / Figure rather than collapsing everything to one class."
-                        }
-                        li {
-                            "If quality is worse than Tier 1, fall back: clear the override (Save with the input empty), restart — you're back to "
-                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
-                            "."
-                        }
-                    }
-
-                    // ── Default recommendation ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Default recommendation" }
-                    p {
-                        "If you don't have specific requirements, "
-                        strong { class: "text-gray-100", "keep this empty" }
-                        " and rely on Tier 1 ("
+                    // ── Operational footer (compact) ──
+                    p { class: "text-gray-400 pt-1",
+                        "Save is restart-required — the override is written immediately, but the model loads at boot. On download or load failure ag warns and falls through to Tier 1 ("
                         span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
-                        ") which is already working. Tier 0 is most useful when:"
-                    }
-                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
-                        li { "Deploying to a fresh machine and you don't want to pre-stage the model file." }
-                        li { "Comparing different layout models without managing local files manually." }
-                        li { "Tracking upstream model updates — hf-hub respects revision pins; without one you get the latest commit." }
-                    }
-
-                    // ── Effect on quality of skipping Tier 0 ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Effect on quality of skipping Tier 0" }
-                    p {
-                        strong { class: "text-gray-100", "The tier number is operational, not quality." }
-                        " Classification quality depends on "
-                        em { "which model file" }
-                        " is loaded, not on which tier mechanism loaded it. Skipping Tier 0 has zero quality impact "
-                        em { "if" }
-                        " Tier 1 points at the same model."
-                    }
-                    h4 { class: "text-gray-200 font-semibold text-xs pt-1", "What changes when Tier 0 → Tier 1 (same model file)" }
-                    div { class: "overflow-x-auto",
-                        table { class: "w-full text-xs border-collapse",
-                            thead {
-                                tr { class: "border-b border-gray-600",
-                                    th { class: "text-left py-1 pr-3 text-gray-400 font-semibold", "Aspect" }
-                                    th { class: "text-left py-1 text-gray-400 font-semibold", "Result" }
-                                }
-                            }
-                            tbody {
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Bounding-box accuracy" }
-                                    td { class: "py-1 text-green-400", "Identical — same ONNX bytes, same weights" }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Class assignment" }
-                                    td { class: "py-1 text-green-400", "Identical — same softmax over same logits" }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Per-page latency" }
-                                    td { class: "py-1 text-green-400", "Identical — same compute graph" }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "First-boot delay" }
-                                    td { class: "py-1 text-gray-300", "Faster — no HF Hub download (Tier 0 incurs a one-time ~100 MB pull)" }
-                                }
-                                tr { class: "border-b border-gray-700/50",
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Offline behaviour" }
-                                    td { class: "py-1 text-gray-300", "Works — Tier 0 needs a populated cache or network on first boot" }
-                                }
-                                tr {
-                                    td { class: "py-1 pr-3 text-gray-200 align-top", "Upstream updates" }
-                                    td { class: "py-1 text-gray-300", "Frozen at the staged file (Tier 0 pulls latest unless revision-pinned)" }
-                                }
-                            }
-                        }
-                    }
-                    h4 { class: "text-gray-200 font-semibold text-xs pt-2", "Where quality actually changes" }
-                    ul { class: "list-disc pl-5 space-y-1 text-gray-300",
-                        li {
-                            "Tier 1 also misses → "
-                            strong { class: "text-yellow-400", "Tier 2" }
-                            " ("
-                            span { class: "font-mono text-gray-100", "LAYOUT_ORT_MODEL_PATH" }
-                            ", word-feature ONNX). "
-                            em { "Notable drop." }
-                            " Word-feature ORT classifies from text + geometry only — it cannot see page pixels. Tables and figures get misclassified more often, especially in sparse documents."
-                        }
-                        li {
-                            "Tier 2 also misses → "
-                            strong { class: "text-yellow-400", "heuristic" }
-                            " (pure-Rust rules). "
-                            em { "Big drop on complex layouts." }
-                            " Font-size + position rules work on single-column prose, struggle on multi-column papers, mixed text/figures, dense tables."
-                        }
-                        li {
-                            strong { class: "text-yellow-400", "You point Tier 0 at a different DETR model than Tier 1. " }
-                            "Variable — depends on the model. A model trained on the wrong corpus (PubLayNet for business docs, DocLayNet for papers) underperforms. A mismatched "
-                            span { class: "font-mono text-gray-100", "LAYOUT_DETR_NUM_CLASSES" }
-                            " returns gibberish."
-                        }
-                    }
-                    p { class: "text-gray-400",
-                        "Quality concerns kick in only if Tier 1 itself fails to load. The "
-                        em { "Layout model:" }
-                        " chip on this page tells you which tier is currently active — as long as it shows "
-                        span { class: "font-mono text-gray-100", "DETR (local: …)" }
-                        " or "
-                        span { class: "font-mono text-gray-100", "DETR (HF Hub: …)" }
-                        ", classification quality is identical between the two."
-                    }
-
-                    // ── Fallthrough behaviour ──
-                    h3 { class: "text-gray-100 font-semibold pt-2", "Fallthrough behaviour" }
-                    p { class: "text-gray-400",
-                        "Tier 0 expects a DETR-style ONNX with a "
-                        span { class: "font-mono text-gray-100", "pixel_values" }
-                        " input. Pointing this at a word-feature checkpoint will fail at classify time. On download or load failure, ag warns and falls through to Tier 1 ("
-                        span { class: "font-mono text-gray-100", "LAYOUT_DETR_MODEL_PATH" }
-                        ") and Tier 2 ("
-                        span { class: "font-mono text-gray-100", "LAYOUT_ORT_MODEL_PATH" }
-                        ")."
-                    }
-                    p { class: "text-gray-400",
-                        "Save is restart-required — the override is written immediately, but the model loads at boot."
+                        "). Empty value skips Tier 0 entirely. The Layout-model chip on this page shows which tier is live."
                     }
                 }
                 button {
@@ -3151,7 +2976,7 @@ fn chunker_mode_for_native_pdf_modal(mut show: Signal<bool>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| show.set(false),
             div {
-                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[90vw] max-w-3xl max-h-[90vh] overflow-y-auto shadow-xl",
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-6 w-[98vw] max-h-[90vh] overflow-y-auto shadow-xl",
                 onclick: move |evt| evt.stop_propagation(),
                 div { class: "flex items-center justify-between mb-3",
                     h2 { class: "text-lg font-semibold text-gray-100", "Chunker mode — picking one for Native PDF output" }
@@ -3212,6 +3037,89 @@ fn chunker_mode_for_native_pdf_modal(mut show: Signal<bool>) -> Element {
                             "Chunker configuration page"
                         }
                         " — either as the global default or per-corpus."
+                    }
+                }
+                button {
+                    class: "btn btn-sm w-full mt-4",
+                    style: "background-color:#7C2A02;",
+                    onclick: move |_| show.set(false),
+                    "Got it"
+                }
+            }
+        }
+    }
+}
+
+/// Info modal for the "⚠ fixed is suboptimal" warning that appears under the
+/// Chunker-mode chip when the active mode isn't one of the recommended four
+/// for Native PDF output. Focused on *why* — the broader "when to pick which"
+/// matrix lives in `chunker_mode_for_native_pdf_modal`.
+fn chunker_mode_warning_info_modal(mut show: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| show.set(false),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-5 w-[98vw] shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-lg font-semibold text-gray-100", "Why this chunker mode is flagged" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| show.set(false),
+                        "×"
+                    }
+                }
+                div { class: "text-sm text-gray-300 space-y-3",
+                    p {
+                        "The Native PDF pipeline produces a "
+                        span { class: "font-mono text-gray-100", "DocIR" }
+                        " — pages segmented into typed blocks (Title, SectionHeader, Body, Table, Figure, Caption, List, …) with reading order. The point of running Native is to "
+                        em { "use" } " that structure when chunking."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "What the recommended modes do with it" }
+                    ul { class: "list-disc pl-5 space-y-1",
+                        li {
+                            strong { class: "text-gray-100", "lightweight " }
+                            "— in-text heading detection (lines starting with "
+                            span { class: "font-mono text-gray-100", "#" } ", ALL-CAPS, "
+                            span { class: "font-mono text-gray-100", ":" }
+                            "-suffixed) flushes inside long body sections, on top of the DocIR section-header flushes the IR walker already does. No embeddings — cheap."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "semantic " }
+                            "— one embedding per candidate split; cuts on topic shifts where headings are sparse."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "sentence " }
+                            "— sentence-first split with overlap. Useful when the document is one long narrative flow."
+                        }
+                        li {
+                            strong { class: "text-gray-100", "pipeline " }
+                            "— composes lightweight + semantic. Most expensive, best on mixed prose / tables / figures."
+                        }
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "What "
+                        span { class: "font-mono text-gray-100", "fixed" }
+                        " does with it"
+                    }
+                    p {
+                        "Atomic blocks (Table, Code, Formula) are single chunks regardless of mode, and section-header flushes still happen — those are IR-walker behaviour, not chunker-mode behaviour. After that, "
+                        span { class: "font-mono text-gray-100", "fixed" }
+                        " ignores the rest: body text accumulations are sliced purely by size with sentence-boundary snap. No in-text heading detection, no semantic boundaries. You paid the layout-detection cost (rasterize → DETR → table model) and then threw away the heading hints it produced."
+                    }
+                    h3 { class: "text-gray-100 font-semibold pt-1", "When it's actually fine" }
+                    p {
+                        "Table- or list-heavy PDFs where body text is short. The atomic-block + header-flush logic already does the heavy lifting; how the leftover short body text gets sliced barely matters. Ignore the warning for those corpora."
+                    }
+                    p { class: "text-gray-400 pt-1",
+                        "Hot-reloaded — no restart. See the chunker chip's info button for the full \"when to pick which\" matrix, or jump straight to "
+                        Link {
+                            to: Route::ConfigChunker {},
+                            class: "text-blue-400 hover:text-blue-300 underline",
+                            "/config/chunker"
+                        }
+                        "."
                     }
                 }
                 button {

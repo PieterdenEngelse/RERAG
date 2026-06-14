@@ -22,6 +22,7 @@ impl SchemaInitializer {
         Self::run_v15_migration(db_conn)?;
         Self::run_v16_migration(db_conn)?;
         Self::run_v17_migration(db_conn)?;
+        Self::run_v18_migration(db_conn)?;
         info!("Database schema initialized with WAL mode");
         Ok(())
     }
@@ -113,6 +114,17 @@ impl SchemaInitializer {
                 "ALTER TABLE corpora ADD COLUMN description TEXT NOT NULL DEFAULT ''",
             )?;
             info!("corpus migration v17: added corpora.description column");
+        }
+        Ok(())
+    }
+
+    /// Add `watch_dir` TEXT column to `corpora` — per-corpus override for the
+    /// directory the file watcher monitors. NULL means "fall back to the
+    /// PathManager-derived default".
+    fn run_v18_migration(conn: &Connection) -> SqlResult<()> {
+        if !Self::column_exists(conn, "corpora", "watch_dir")? {
+            conn.execute_batch("ALTER TABLE corpora ADD COLUMN watch_dir TEXT")?;
+            info!("corpus migration v18: added corpora.watch_dir column");
         }
         Ok(())
     }

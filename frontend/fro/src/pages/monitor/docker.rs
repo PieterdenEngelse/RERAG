@@ -69,7 +69,7 @@ pub fn MonitorDocker() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("Docker", None),
                 ],
             }
@@ -541,6 +541,17 @@ fn ContainerCard(container: api::DockerContainer, grid_index: usize) -> Element 
             }
 
             div { class: "space-y-1",
+                if display_name == "grafana" {
+                    div { class: "flex justify-center",
+                        a {
+                            href: "http://localhost:3001",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            class: "text-blue-400 hover:text-blue-300 text-xs",
+                            "View \u{2197}"
+                        }
+                    }
+                }
                 div { class: "flex justify-between",
                     span { class: LABEL_CLASS, "State:" }
                     span { class: "text-xs font-medium", style: "{state_style}", "{state_text}" }

@@ -1,6 +1,5 @@
 // src/pages/mod.rs
 pub mod about;
-pub mod config;
 pub mod config_chunker;
 pub mod config_corpus;
 pub mod config_embedding;
@@ -19,15 +18,12 @@ pub mod onnx;
 pub mod onnx_help;
 pub mod other;
 pub mod parameters;
-pub mod prompt;
 pub mod redis;
-pub mod sampling;
 pub mod terms;
 pub mod train;
 
 // Re-export so they can be used as `pages::Home`
 pub use about::About;
-pub use config::Config;
 pub use config_chunker::ConfigChunker;
 pub use config_corpus::ConfigCorpus;
 pub use config_embedding::ConfigEmbedding;
@@ -37,8 +33,9 @@ pub use docu::Docu;
 pub use docu_index::DocuIndex;
 pub use docu_index::{
     DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram, DocuCanonicalization,
-    DocuEmbeddings, DocuEntitiesProduction, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport,
-    DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads, DocuTokenizersGeneral,
+    DocuDetrLayout, DocuEmbeddings, DocuEntitiesProduction, DocuFileWatcher, DocuIoUring,
+    DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy,
+    DocuThreads, DocuTokenizersGeneral,
 };
 pub use falkordb::ConfigFalkorDb;
 pub use hardware::ConfigHardware;
@@ -47,16 +44,14 @@ pub use memories::ConfigMemories;
 pub use monitor::{
     MonitorAgSystemd, MonitorAgentic, MonitorCache, MonitorChunks, MonitorDatastores,
     MonitorDocker, MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs,
-    MonitorObservations, MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag,
-    MonitorRateLimits, MonitorRequests, MonitorTip, MonitorTools,
+    MonitorObservations, MonitorOnnx, MonitorOnnxStatus, MonitorRag, MonitorRateLimits,
+    MonitorRequests, MonitorTip, MonitorTools,
 };
 pub use ner::ConfigNer;
 pub use not_found::PageNotFound;
 pub use onnx::ConfigOnnx;
 pub use other::ConfigOther;
 pub use parameters::Parameters;
-pub use prompt::ConfigPrompt;
 pub use redis::ConfigRedis;
-pub use sampling::ConfigSampling;
 pub use terms::ConfigTerms;
 pub use train::Train;

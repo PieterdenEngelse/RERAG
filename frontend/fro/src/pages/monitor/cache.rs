@@ -2,6 +2,9 @@ use crate::{
     api,
     app::{PageErrors, Route},
     components::monitor::*,
+    pages::hardware::constants::{
+        PARAM_ICON_BUTTON_STYLE, QUICK_ACTION_INFO_BUTTON_CLASS, QUICK_ACTION_INFO_ICON_CLASS,
+    },
 };
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
@@ -24,6 +27,23 @@ pub fn MonitorCache() -> Element {
         ..Default::default()
     });
     let mut deep_dive_more_info = use_signal(|| false);
+
+    // Clear Cache action state
+    let mut cache_loading = use_signal(|| false);
+    let mut cache_result = use_signal(|| Option::<String>::None);
+    let mut show_cache_info = use_signal(|| false);
+
+    let on_clear_cache = move |_| {
+        cache_loading.set(true);
+        cache_result.set(None);
+        spawn(async move {
+            match api::clear_cache().await {
+                Ok(_) => cache_result.set(Some("\u{2713} Cache cleared".to_string())),
+                Err(e) => cache_result.set(Some(format!("\u{2717} {}", e))),
+            }
+            cache_loading.set(false);
+        });
+    };
 
     {
         let mut state = state;
@@ -63,7 +83,7 @@ pub fn MonitorCache() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("Cache", None),
                 ],
             }
@@ -100,7 +120,7 @@ pub fn MonitorCache() -> Element {
                         div { class: "text-[11px] text-slate-400 mt-2",
                             "Use this to validate cache behaviour when traffic changes or whenever hit rate drifts below expected targets."
                         }
-                        div { class: "mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-100 leading-relaxed", role: "list",
+                        div { class: "mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs text-slate-100 leading-relaxed", role: "list",
                             div { role: "listitem",
                                 p { class: "font-semibold text-slate-50", "L1 / L2 hygiene" }
                                 ul { class: "list-disc ml-5 space-y-1",
@@ -211,7 +231,8 @@ pub fn MonitorCache() -> Element {
                         }
                     }
 
-                    div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
+                    // Stats + Hit Ratio chart — 4-col so the chart sits beside the rates
+                    div { class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4",
                         StatCard {
                             title: "L1 Hit Rate".into(),
                             value: format!("{:.1}", data.l1.hit_rate * 100.0).into(),
@@ -230,21 +251,21 @@ pub fn MonitorCache() -> Element {
                             unit: Some("s".into()),
                             info_tooltip: Some("Redis — L3 Remote Cache & TTL\n\nRedis is the third and outermost cache tier (L3). Unlike L1 and L2, which live inside the backend process and are lost on restart, Redis is an external in-memory store that survives process restarts and can be shared across multiple backend instances.\n\nWhat TTL means\nEvery key written to Redis is given a Time-To-Live (TTL). After that many seconds the key expires and Redis deletes it automatically. The next request for that key will be a cache miss — ag will recompute the result from Tantivy + the embedding model and write a fresh entry back to Redis.\n\nWhy TTL matters\n• Too short (e.g. < 60 s): entries expire before they can be reused, Redis provides almost no benefit, and Tantivy/embedder load stays high.\n• Too long (e.g. > 24 h): stale results accumulate. After a corpus re-index or an embedding model change, users may receive outdated answers until their key expires.\n• Single-digit TTL values are a red flag — they usually indicate eviction pressure (Redis maxmemory policy kicking in), clock drift between the backend and Redis, or a misconfigured TTL env variable.\n\nThe value shown here is the configured default TTL — the actual remaining lifetime of any individual key depends on when it was written. Use redis-cli TTL <key> to inspect a specific entry.\n\nConnection health\nThe Redis Connection panel below shows whether Redis is reachable. If Connected = No, ag falls back to L1/L2 only — all writes and reads to L3 are silently skipped. The system remains functional but loses the persistence and sharing benefits of Redis.\n\nKey env variables\n  REDIS_ENABLED=true       — toggles L3 entirely\n  REDIS_URL                — connection string (default redis://127.0.0.1:6379)\n  CACHE_TTL_SECONDS        — sets the default TTL written here\n\nHow to tune TTL\nStart with a TTL that comfortably exceeds your average re-index interval. If you re-index every hour, a TTL of 3 600 s (1 h) ensures Redis entries never outlive the index. After a manual re-index, flush the Redis keyspace (redis-cli FLUSHDB) rather than waiting for natural expiry to avoid serving stale answers.".into()),
                         }
-                    }
-
-                    Panel { title: Some("Hit Ratio".into()), refresh: Some("10s".into()),
-                        ChartPlaceholder {
-                            values: vec![
-                                data.l1.hit_rate * 100.0,
-                                data.l2.hit_rate * 100.0,
-                                if data.redis.enabled && data.redis.connected { 100.0 } else { 0.0 },
-                            ],
-                            label: "L1/L2 hit % & Redis".to_string(),
-                            unit: "%".to_string(),
+                        Panel { title: Some("Hit Ratio".into()), refresh: Some("10s".into()),
+                            ChartPlaceholder {
+                                values: vec![
+                                    data.l1.hit_rate * 100.0,
+                                    data.l2.hit_rate * 100.0,
+                                    if data.redis.enabled && data.redis.connected { 100.0 } else { 0.0 },
+                                ],
+                                label: "L1/L2 hit % & Redis".to_string(),
+                                unit: "%".to_string(),
+                            }
                         }
                     }
 
-                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-4 mt-4",
+                    // L1 Details + L2 Details + Redis Connection — 3-col
+                    div { class: "grid grid-cols-1 md:grid-cols-3 gap-4 mt-4",
                         Panel { title: Some("L1 Details".into()), refresh: None,
                             DataTable {
                                 headers: vec!["Metric".into(), "Value".into()],
@@ -269,22 +290,95 @@ pub fn MonitorCache() -> Element {
                                 ],
                             }
                         }
-                    }
-
-                    Panel { title: Some("Redis Connection".into()), refresh: Some("10s".into()),
-                        DataTable {
-                            headers: vec!["Field".into(), "Value".into()],
-                            rows: vec![
-                                vec!["Enabled".into(), yes_no(data.redis.enabled)],
-                                vec!["Connected".into(), yes_no(data.redis.connected)],
-                                vec!["TTL".into(), format!("{}s", data.redis.ttl_seconds)],
-                                vec!["L1 Hits".into(), data.counters.hits_total.to_string()],
-                                vec!["L1 Misses".into(), data.counters.misses_total.to_string()],
-                            ],
+                        Panel { title: Some("Redis Connection".into()), refresh: Some("10s".into()),
+                            DataTable {
+                                headers: vec!["Field".into(), "Value".into()],
+                                rows: vec![
+                                    vec!["Enabled".into(), yes_no(data.redis.enabled)],
+                                    vec!["Connected".into(), yes_no(data.redis.connected)],
+                                    vec!["TTL".into(), format!("{}s", data.redis.ttl_seconds)],
+                                    vec!["L1 Hits".into(), data.counters.hits_total.to_string()],
+                                    vec!["L1 Misses".into(), data.counters.misses_total.to_string()],
+                                ],
+                            }
                         }
                     }
                 } else {
                     div { class: "text-gray-400 text-sm", "No cache stats available" }
+                }
+            }
+
+            div { class: "lg:max-w-md",
+            Panel { title: Some("Actions".into()), refresh: None,
+                div { class: "flex items-center gap-3 flex-wrap",
+                    button {
+                        class: "px-4 py-2 rounded bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors",
+                        disabled: cache_loading(),
+                        onclick: on_clear_cache,
+                        if cache_loading() { "Clearing\u{2026}" } else { "Clear Cache" }
+                    }
+                    button {
+                        class: QUICK_ACTION_INFO_BUTTON_CLASS,
+                        style: PARAM_ICON_BUTTON_STYLE,
+                        onclick: move |_| show_cache_info.set(true),
+                        title: "What this action does",
+                        ActionInfoIcon {}
+                    }
+                    if let Some(result) = cache_result() {
+                        span {
+                            class: if result.starts_with('\u{2713}') { "text-green-400 text-sm" } else { "text-red-400 text-sm" },
+                            "{result}"
+                        }
+                    }
+                }
+            }
+            }
+
+            if show_cache_info() {
+                ClearCacheInfoModal {
+                    on_close: move |_| show_cache_info.set(false),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ActionInfoIcon() -> Element {
+    rsx! {
+        svg {
+            class: QUICK_ACTION_INFO_ICON_CLASS,
+            view_box: "0 0 20 20",
+            fill: "none",
+            stroke: "currentColor",
+            circle { cx: "10", cy: "10", r: "9", stroke_width: "1" }
+            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+            circle { cx: "10", cy: "6.3", r: "1", fill: "currentColor", stroke: "none" }
+        }
+    }
+}
+
+#[component]
+fn ClearCacheInfoModal(on_close: EventHandler<()>) -> Element {
+    let content = "Clears all search result caches:\n\n\u{2022} L1 Cache: In-memory cache (fastest, lost on restart)\n\u{2022} L2 Cache: Disk-based cache (persists across restarts)\n\nNote: Redis (L3) cache is not cleared by this action.\n\nUse this when:\n\u{2022} Search results seem stale after document updates\n\u{2022} Testing cache performance\n\u{2022} Debugging cache-related issues\n\nCache will rebuild automatically as new searches are performed.";
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "bg-gray-800 border border-gray-600 rounded-lg p-5 w-[90vw] max-w-lg max-h-[90vh] overflow-y-auto shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-base font-semibold text-gray-100", "Clear Cache" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-200 text-xl font-bold",
+                        onclick: move |_| on_close.call(()),
+                        "\u{00d7}"
+                    }
+                }
+                div {
+                    class: "text-sm text-gray-300 whitespace-pre-line leading-relaxed",
+                    "{content}"
                 }
             }
         }

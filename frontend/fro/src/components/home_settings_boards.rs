@@ -31,6 +31,7 @@ pub fn HomeSettingsBoards(
     show_tune_panel: Signal<bool>,
     show_tune_info: Signal<bool>,
     rag_priority_override: Signal<Option<f64>>,
+    pointer_gap_threshold: Signal<f64>,
     selected_model: Signal<String>,
 ) -> Element {
     let navigator = use_navigator();
@@ -127,6 +128,7 @@ pub fn HomeSettingsBoards(
                         // Mode board
                         div {
                             class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
+                            style: "padding-right: calc(1.25rem + 1.5cm);",
                             div {
                                 class: "flex items-center gap-3 w-full",
                                 label {
@@ -288,12 +290,9 @@ pub fn HomeSettingsBoards(
                                         }
                                     }
 
-                                    // TODO(proxy-pointer-rag): add PointerRag mode button here.
-                                    // Backend wired in c23ba40 — ChatMode::PointerRag + alias
-                                    // "pointer_rag" both route to AgentMode::PointerRag (grounded,
-                                    // pointer-style citations). Currently only reachable via direct
-                                    // API call with mode=pointer_rag. Copy the RAG Strict button
-                                    // pattern above. See docs/proxy-pointer-rag-followups.md.
+                                    // (Pointer mode button removed — its behavior is
+                                    // reachable via Auto with the Pointer-trigger
+                                    // slider at 0.0 / "Always Pointer".)
 
                                     // Tune button
                                     div {
@@ -394,9 +393,92 @@ pub fn HomeSettingsBoards(
                                         }
                                     }
                                     button {
-                                        class: "btn btn-ghost btn-xs",
-                                        style: "color: #9ca3af;",
+                                        class: "btn btn-xs rounded-lg px-3",
+                                        style: "background-color:#1D6B9A; border: 1px solid #1D6B9A; color:white; box-shadow:none;",
                                         onclick: move |_| rag_priority_override.set(None),
+                                        "Reset"
+                                    }
+                                }
+                            }
+                            // Pointer-trigger slider — surfaced when Auto is selected
+                            // because Auto is the only branch that actually consults
+                            // the threshold (gates `Auto → PointerRag` routing).
+                            // Persists to POINTERRAG_AUTO_GAP_THRESHOLD via the runtime
+                            // overrides API; hot-reloaded by the agent on next query.
+                            // The info button opens the Auto modal — same shared content.
+                            if chat_mode() == "auto" {
+                                div {
+                                    class: "flex items-center gap-2 mt-2 px-2 py-2 rounded-lg",
+                                    style: "background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);",
+                                    span {
+                                        class: "text-xs font-medium shrink-0",
+                                        style: "color: #9ca3af;",
+                                        "Eager"
+                                    }
+                                    input {
+                                        r#type: "range",
+                                        min: "0",
+                                        max: "100",
+                                        step: "5",
+                                        value: format!("{}", (pointer_gap_threshold() * 100.0) as i32),
+                                        class: "flex-1",
+                                        style: "accent-color: #7C2A02; height: 6px;",
+                                        oninput: move |evt| {
+                                            if let Ok(v) = evt.value().parse::<f64>() {
+                                                let f = v / 100.0;
+                                                pointer_gap_threshold.set(f);
+                                                let value_str = format!("{f:.2}");
+                                                spawn(async move {
+                                                    let _ = crate::api::put_runtime_setting(
+                                                        "POINTERRAG_AUTO_GAP_THRESHOLD",
+                                                        Some(value_str),
+                                                    ).await;
+                                                });
+                                            }
+                                        },
+                                    }
+                                    span {
+                                        class: "text-xs font-medium shrink-0",
+                                        style: "color: #e5e7eb; min-width: 6.5rem; text-align: right;",
+                                        {
+                                            let v = pointer_gap_threshold();
+                                            let label = if v < 0.35 {
+                                                "Eager"
+                                            } else if v < 1.0 {
+                                                "Balanced"
+                                            } else {
+                                                "Never"
+                                            };
+                                            format!("Pointer trigger: {label} ({:.2})", v)
+                                        }
+                                    }
+                                    button {
+                                        class: "shrink-0 rounded flex items-center justify-center cursor-pointer",
+                                        style: "width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; background-color: transparent; border: 1.5px solid #026B7C;",
+                                        onclick: move |_| show_auto_info.set(true),
+                                        title: "Info on Auto mode and the Pointer trigger threshold",
+                                        svg {
+                                            class: INFO_ICON_SVG_CLASS,
+                                            view_box: "0 0 20 20",
+                                            fill: "none",
+                                            stroke: "#026B7C",
+                                            circle { cx: "10", cy: "10", r: "9", stroke_width: "1.5" }
+                                            line { x1: "10", y1: "8", x2: "10", y2: "14", stroke_width: "1.5" }
+                                            circle { cx: "10", cy: "6.3", r: "1", fill: "#026B7C", stroke: "none" }
+                                        }
+                                    }
+                                    button {
+                                        class: "btn btn-xs rounded-lg px-3",
+                                        style: "background-color:#1D6B9A; border: 1px solid #1D6B9A; color:white; box-shadow:none;",
+                                        onclick: move |_| {
+                                            pointer_gap_threshold.set(0.5);
+                                            spawn(async move {
+                                                let _ = crate::api::put_runtime_setting(
+                                                    "POINTERRAG_AUTO_GAP_THRESHOLD",
+                                                    Some("0.50".to_string()),
+                                                ).await;
+                                            });
+                                        },
                                         "Reset"
                                     }
                                 }
@@ -794,12 +876,8 @@ pub fn HomeSettingsBoards(
                                 }
                             }
                         }
-                    }
 
-                    // Row 3: KV Cache
-                    div {
-                        class: "flex justify-center gap-4 w-full pointer-events-auto",
-                        style: "margin-top: 1cm;",
+                        // KV Cache board (moved from Row 3)
                         div {
                             class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-2",
                             label {

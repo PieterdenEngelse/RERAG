@@ -1,0 +1,80 @@
+# Speed up the chat reply
+
+## Context
+
+The chat path (`POST /agent/stream` → `run_agent_stream` in `backend/src/api/agent_chat.rs:1689`) does several pieces of synchronous work on the actix executor *before* the first token is requested from the LLM, and rebuilds a fresh `reqwest::Client` per request. On the frontend, every SSE token mutates the global `messages` signal, which re-renders the entire chat list per token. The fixes below target time-to-first-token (TTFT) and token cadence, in priority order. No new abstractions — reuse what already exists (`tools::connection_pool`, `web::block`).
+
+## Where the time goes today
+
+```
+[browser] POST /agent/stream
+   │
+   ▼
+[actix thread] run_agent_stream                            ── runs on async runtime
+   ├─ get_current_chat_settings()                          ◀ SQLite Connection::open
+   │     └─ AgentMemory::new() runs CREATE TABLE IF NOT      + 6× DDL + SELECT,
+   │        EXISTS × ~6, then recall_rag SELECT              every single request
+   ├─ retriever.lock() + hybrid_search()                   ◀ blocks executor thread
+   │                                                         (tantivy search, sync)
+   ├─ tracing::warn!("DEBUG: Full system prompt …")        ◀ formats + emits full
+   │     + loop logging each memory at warn level            prompt every request
+   ├─ reqwest::Client::new()                               ◀ no keep-alive reuse →
+   │                                                         new TCP+TLS to Ollama
+   ▼
+[Ollama] /api/chat or /api/generate (stream)
+   │
+   ▼
+[actix thread] bytes_stream().map(…) → SSE
+   │
+   ▼
+[browser] for each token: messages.write()[i].content = accumulated.clone()
+                                                        ◀ Dioxus rerenders the
+                                                          whole chat list per token
+```
+
+## Changes
+
+### 1. Reuse a single `reqwest::Client` across LLM calls
+
+`backend/src/api/agent_chat.rs:2065` creates `reqwest::Client::new()` per request, so every chat turn opens a new TCP connection to Ollama. `stream_openai_response`, `stream_openai_compatible_response`, and `stream_anthropic_response` (lines 1365, 1388, 1517) all accept a client argument and are called from the same handler, so they inherit the same fix.
+
+- Add a `static LLM_HTTP_CLIENT: OnceLock<reqwest::Client>` in `agent_chat.rs` (or a small module next to it). Initialise it with the `ConnectionPool::create_client()` builder pattern from `backend/src/tools/connection_pool.rs:10` (`pool_max_idle_per_host(10)`, `connect_timeout(10s)`, `timeout(30s)`).
+- Replace `let client = reqwest::Client::new();` at `agent_chat.rs:2065` with `let client = llm_http_client().clone();`.
+- The three `stream_*_response` helpers already take the client by value; no signature change needed.
+
+### 2. Move RAG + settings load off the async executor
+
+Both run on the actix worker thread today and block it before the LLM request is even sent.
+
+- `get_current_chat_settings()` at `agent_chat.rs:1991` calls `load_categorized_memories` → `AgentMemory::new()` which executes ~6 `CREATE TABLE IF NOT EXISTS` statements every request (`backend/src/agent_memory.rs:129-200+`). Wrap the call in `web::block(move || get_current_chat_settings()).await?`.
+- The Hybrid/Auto pre-LLM RAG block (`agent_chat.rs:1962-1988`) does `retriever.lock()` then `hybrid_search()` — synchronous tantivy work on the executor. Move it into the same `web::block` (or a second one) so it cannot stall other in-flight requests, and so request-body parsing for concurrent chats keeps progressing.
+
+Optional follow-up if the SQLite DDL is still visible in flamegraphs: cache the categorized-memories vector in a `OnceLock<Mutex<(Instant, Vec<CategorizedMemory>)>>` keyed by `agent_id`, TTL ~1s. Invalidate from the existing memory-write paths (`agent_chat.rs` mutators that touch chat_state already lock a Mutex — add an `INVALIDATE_MEMORY_CACHE.store(true)` next to them). Skip if step 2's `web::block` is enough.
+
+### 3. Stop logging the full system prompt at WARN per request
+
+`agent_chat.rs:1995-2010` formats and emits the entire system prompt + a `tracing::warn!` per memory on every chat turn. With `RUST_LOG=info` (the default in `CLAUDE.md`) this still allocates the message and runs through the subscriber.
+
+- Replace the two `tracing::warn!` blocks with a single `tracing::debug!` carrying `system_prompt_len` and `memories_count` only.
+- Delete the per-memory loop. If a developer needs the full dump they can set `RUST_LOG=ag=trace` and re-add it locally — it shouldn't ship in the hot path.
+
+### 4. Batch frontend token updates
+
+`frontend/fro/src/pages/home.rs:633-639` (and the duplicate at `~895` in `on_keypress`) writes the entire growing string to `messages[msg_index].content` on every `"token"` SSE event, which triggers a full Dioxus re-render of the chat list per token.
+
+- Inside the SSE loop, track `last_flush_at: f64` (use `web_sys::window().unwrap().performance().unwrap().now()`). Push the token into a local `String` buffer every event, but only commit `messages.write()...content = buffer.clone()` when `now - last_flush_at >= 16.0` ms — or on `"done"` / `"complete"`.
+- Apply the same change in both `send_message` and `on_keypress` since they duplicate the streaming logic. (Don't deduplicate the handlers — out of scope; just patch both.)
+
+### 5. (Skip unless 1–4 aren't enough) Overlap RAG and LLM warmup
+
+Once `web::block` is in place for RAG, the LLM request body still has to wait for the search to return because `context` goes into the prompt. Real parallelism here requires restructuring the prompt (system stays cacheable, context streams in as a second turn) and is a bigger change. Measure first.
+
+## Verification
+
+1. `cd backend && cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test --all`
+2. Restart the backend (`systemctl --user restart ag.service` per `CLAUDE.md`). Open the chat UI.
+3. **TTFT**: in DevTools Network, time `/agent/stream` from request start to first SSE `data:` event chunk. Run 5 turns, take the median. Compare before/after — connection reuse + off-thread settings should drop TTFT noticeably on warm Ollama.
+4. **No DDL spam**: enable SQLite tracing once (`PRAGMA compile_options;` is fine, or attach `sqlite3_trace_v2`) and confirm `CREATE TABLE IF NOT EXISTS` no longer fires per chat turn — only at startup. (Skip this if step 2's cache wasn't added.)
+5. **Log volume**: with `RUST_LOG=info`, confirm a chat turn emits at most a one-line debug summary rather than the full prompt + per-memory dump.
+6. **UI smoothness**: send a prompt that produces a long answer. Tokens should still appear continuously, but the chat list should not visibly jank as the message grows. Check Dioxus dev tools / browser perf panel: rerender count per second should be ≤ ~60 instead of one per token.
+7. **Regressions**: run `cargo test --all` again with the changes; the rate-limit + retriever integration tests exercise the same handlers and will catch a broken streaming response shape.

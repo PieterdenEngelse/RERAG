@@ -1,0 +1,58 @@
+# Present situation and arguments raised
+
+## Where we are right now
+
+You're verifying the proxy-pointer-RAG bundle (branch `feat/proxy-pointer-rag`, commit `732badf`) end-to-end before merging. Today's arc went through these phases:
+
+1. **Three-feature bundle built and committed** — breadcrumb-prefixed chunk embeddings (#1), entity reconciler (#2, default off), PointerRag agent mode (#3). 12 files modified + 1 new (`entity_reconciler.rs`).
+2. **Tests passed locally** — 2/2 reconciler unit tests, 23/23 graph module tests, build succeeds.
+3. **Upload-hang debugging** — first end-to-end smoke hung at 95% CPU. After a long bisect (reconciler off → still hung, chunker revert build failed, gdb on stripped binary, eventually `strip=false` debug rebuild) the hang stopped reproducing. Verdict: stale Tantivy segments from before the new `section_id_field` schema. The schema-recovery patch local Claude added at `retriever.rs:539-558` wiped them on first post-bundle open. Bundle was never structurally broken.
+4. **Reconciler smoke test caught a real bug** — with `RECONCILER_ENABLED=true`, FalkorDB rejected the reconciler's `$qvec` and `$embedding` bind parameters: "to parse query parameter value." Root cause: my `lit::vecf32` produces a `vecf32(…)` constructor, which FalkorDB doesn't accept as a bind value — must be inlined into the Cypher text. Fixed in two functions (`top_k_neighbours`, `create_entity`), both now use `format!()` to inline the literal.
+5. **Reconciler is now wired end-to-end** — debug logs fire, entity nodes are created with `aliases`, `embedding`, `definition_snippet`. But the Sony Corp / Sony Corporation pair didn't merge — cosine came in at 0.217, below the LLM-tiebreak threshold (0.75) and miles below the auto-merge threshold (0.92).
+6. **Second real bug** identified by inspection: my reconciler embeds `"{name} ({type}): {snippet}"`. The snippet dominates the embedding — two docs with the same entity but different surrounding sentences produce divergent vectors. The cosine of 0.217 is *correct* for those embedded strings; the embedding format is what's wrong. Fix is one-line: embed `"{name} ({type})"` instead.
+7. **Next step queued** — confirm the snippet hypothesis via a `#[test]` probe that prints cosines for several name/type/snippet formats. No need for a temp HTTP route; the test runner can call `crate::embedder::embed` directly.
+
+That's the operational picture. Branch is in clean state, bundle plus three diagnostic/fix commits ready for the merge decision.
+
+## Arguments raised through the session
+
+### On the bundle's three changes
+
+- **#1 breadcrumb prefix is the highest-ROI item.** Half a day's work, no architectural change. Retrieval quality on TOC-bearing docs improves immediately because the embedding model sees the full ancestor chain instead of just the leaf header.
+- **#2 reconciler is the biggest correctness win.** Without it, "Sony Corp" / "Sony Corporation" / "Sony Interactive Entertainment" become three separate `:Entity` nodes — the graph sprawls as soon as you ingest anything non-trivial. The article was right that this is the bug that matters most. Default-off ships safely; you opt in once tuned.
+- **#3 PointerRag is the speculative one.** The article had no quantitative evidence for the "throw the chunk away, return the section" trick. Useful only because #1 already exists (section boundaries become meaningful). Worth shipping behind a mode flag, not pushed as default.
+
+### On the architectural split that today exposed
+
+- **The cost of three vector layers (Tantivy + rkyv + FalkorDB).** Today's step 3 of the bisect — "compare reconciler embeddings against chunk embeddings via Cypher" — was blocked because chunk vectors live in rkyv, not FalkorDB. That awkwardness is a direct consequence of the split. My bundle also added a second vector store (FalkorDB `:Entity.embedding`) alongside the existing rkyv chunk vectors; that's a small wart introduced by this PR.
+- **The split is defensible for ag's stage.** Each store does what it's best at: Tantivy for BM25, rkyv for tunable dense vectors (FP16/PQ/SIMD via `perf/` modules), FalkorDB for graph traversal. The `perf/` modules also serve ag's stated educational mission — they're learning artifacts, not just engineering.
+- **Costs of the split:** sync burden (chunk_id must match across three layers), three-place schema migrations, no single point of recovery, hard RAM ceiling for rkyv at very large scales.
+- **Stage 2 recommendation (drop rkyv, use Tantivy-native vectors).** Cleaner ops, one sync surface, BM25 + vector in one query. Loses `perf/` knobs (Tantivy is HNSW-only, fixed-precision). Not memory-driven — at ag's likely scale (100K–1M chunks) the memory profiles are equivalent. The case rests on operational simplicity, not memory savings.
+- **Memory numbers:** rkyv f32 at 1M chunks = ~1.5 GB RAM; Tantivy native = ~1.5 GB disk + ~500MB–1.5 GB working set. Numbers diverge meaningfully only at 10M+ chunks, where rkyv has to PQ-compress (lossy) while Tantivy mmap stays disk-resident.
+- **Don't redesign for this PR.** Ship the bundle, flag the second-vector-store wart in the PR body, leave architectural consolidation to a future cycle.
+
+### On reconciler embedding format (the active bug)
+
+- **Snippet dominates the vector signal.** Two divergent sentences produce divergent embeddings even when the entity name is identical. Cosine 0.217 is the *correct* answer to the wrong question — we asked "are these two sentences similar?" instead of "are these two entities similar?"
+- **Fix is one line:** `let qtext = format!("{} ({})", candidate.name, candidate.entity_type);`. Snippet stays on the node as `definition_snippet` for LLM tiebreak context, but it doesn't enter the vector representation.
+- **Same-embedder concern dismissed by construction.** Reconciler and chunk-embedding paths both call `crate::embedder::embed`, which routes through `global_runtime()` — one `OnceCell`, shared. There aren't two paths to compare.
+- **Threshold is provisional.** Default `auto_merge_threshold = 0.92` was a guess, not corpus-tuned. If the name-only embedding still doesn't hit 0.92 on the Hitachi pair, drop the default to 0.85 in the same PR and flag tuning as a follow-up — don't ship a feature that never fires.
+- **Acceptance ladder:** ≥0.92 ships as-is. 0.85–0.92 ships with threshold lowered. 0.75–0.85 ships with LLM tiebreak as default path and a note. <0.75 means the fix was incomplete; expand investigation.
+
+### On test methodology
+
+- **`cargo test --nocapture` probe is the right tool**, not a temp HTTP route. Direct access to `crate::embedder::embed`, no plumbing, no cleanup. One invocation answers the embedder-consistency, qtext-effect, and identity-sanity questions simultaneously.
+- **Keep the Hitachi test pair.** It's the *canonical* case the reconciler exists for. Switching to richer inputs would mask the problem you're trying to surface.
+
+### On commit / merge hygiene
+
+- **The schema-recovery patch is load-bearing.** Local Claude's `retriever.rs:539-558` is what kept the bundle from being a breaking change for any existing ag installation. Belongs in the same PR as my bundle, not a follow-up.
+- **PR body needs to call out:** (1) the schema migration on first deploy, (2) `RECONCILER_ENABLED=false` default keeps behavior identical for non-opt-in users, (3) threshold-tuning is a known follow-up, (4) the second-vector-store wart for future consolidation work.
+
+### Loose ends not yet resolved
+
+- **Whether `RECONCILER_ENABLED=true` propagates from `overrides.json` reliably** — surfaced earlier when `RUST_LOG` didn't propagate, raising the question whether `effective_bool` is reading the same way. Not fully verified yet; could merit a separate investigation if the smoke probe shows the flag isn't being honored.
+- **Frontend UI toggle for PointerRag mode** — backend mode is wired (`AgentMode::PointerRag`, `ChatMode::PointerRag` with `pointer_rag` alias), but no chat-UI button was added. User has to dispatch via API directly with `mode=pointer_rag`. Flagged as a follow-up.
+- **The runtime-overrides → process-env propagation gap** is its own bug worth fixing — `docs/runtime-config.md` advertises `RUST_LOG` as hot-reloadable but the override didn't reach `EnvFilter::try_from_default_env()` at startup. Separate from this PR but documented in the bisect notes.
+
+That's the whole picture: a three-feature bundle that survived a hard end-to-end shakedown, surfaced two real bugs (vector-binding + embedding-format), is one one-line fix and a single test probe away from a clean merge, with a quietly accumulating architecture-debt conversation about how many vector stores ag should have in the long run.

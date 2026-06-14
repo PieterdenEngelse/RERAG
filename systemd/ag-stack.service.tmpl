@@ -1,0 +1,24 @@
+# ag-stack.service — rendered by installers/install-linux.sh
+# Wraps `docker compose up -d` / `down` as a oneshot user unit so the
+# compose stack has the same journalctl/systemctl ergonomics as ag and
+# falkordb, and so ag.service can depend on it via a drop-in.
+#
+# Placeholders ({{COMPOSE_FILE}}, {{COMPOSE_PROFILE}}) are replaced with
+# literal values at install time.
+
+[Unit]
+Description=ag — docker compose stack (observability, cache, …)
+Documentation=https://github.com/qodo-ai/ag
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=COMPOSE_PROJECT_NAME=ag
+ExecStart=/usr/bin/docker compose -f {{COMPOSE_FILE}} --profile "{{COMPOSE_PROFILE}}" up -d
+ExecStop=/usr/bin/docker compose -f {{COMPOSE_FILE}} --profile "{{COMPOSE_PROFILE}}" down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -1038,6 +1038,11 @@ pub fn ConfigFalkorDb() -> Element {
                                     li { "The graph is exported to a snapshot and loaded into the petgraph runtime." }
                                     li { "Queries do vector/keyword search AND walk the runtime graph, then fuse the results." }
                                 }
+                                p { class: "text-gray-400 pt-2",
+                                    "Background: "
+                                    a { href: "/docu/index/knowledge-graphs", class: "text-blue-400 hover:text-blue-300 underline", "Knowledge Graphs" }
+                                    " — what a knowledge graph is, why GraphRAG layers one on top of vector retrieval, and the trade-offs."
+                                }
                             }
                         }
                     }

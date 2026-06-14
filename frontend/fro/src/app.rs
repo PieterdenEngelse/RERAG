@@ -2,16 +2,17 @@ use crate::components::global_error_bar::GlobalErrorBar;
 use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
-    About, Config, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigFalkorDb, ConfigHardware,
-    ConfigIoUring, ConfigMemories, ConfigNer, ConfigOnnx, ConfigOther, ConfigPrompt, ConfigRedis,
-    ConfigRuntime, ConfigSampling, ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias,
-    DocuBm25, DocuBpeUnigram, DocuCanonicalization, DocuEmbeddings, DocuEntitiesProduction,
-    DocuIndex, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig,
-    DocuRkyv, DocuTantivy, DocuThreads, DocuTokenizersGeneral, Home, MonitorAgSystemd,
+    About, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigFalkorDb, ConfigHardware,
+    ConfigIoUring, ConfigMemories, ConfigNer, ConfigOnnx, ConfigOther, ConfigRedis,
+    ConfigRuntime, ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias,
+    DocuBm25, DocuBpeUnigram, DocuCanonicalization, DocuDetrLayout, DocuEmbeddings,
+    DocuEntitiesProduction, DocuFileWatcher, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
+    DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads,
+    DocuTokenizersGeneral, Home, MonitorAgSystemd,
     MonitorAgentic, MonitorCache, MonitorChunks, MonitorDatastores, MonitorDocker,
     MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
-    MonitorOnnx, MonitorOnnxStatus, MonitorOverview, MonitorRag, MonitorRateLimits,
-    MonitorRequests, MonitorTip, MonitorTools, PageNotFound, Parameters, Train,
+    MonitorOnnx, MonitorOnnxStatus, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip,
+    MonitorTools, PageNotFound, Parameters, Train,
 };
 use dioxus::prelude::*;
 
@@ -44,19 +45,11 @@ pub enum Route {
         #[route("/about")]
         About {},
         #[route("/monitor")]
-        MonitorOverview {},
-        #[route("/monitor/tip")]
         MonitorTip {},
         #[route("/monitor/agentic")]
         MonitorAgentic {},
-        #[route("/config")]
-        Config {},
         #[route("/config/parameters")]
         Parameters {},
-        #[route("/config/sampling")]
-        ConfigSampling {},
-        #[route("/config/prompt")]
-        ConfigPrompt {},
         #[route("/config/hardware")]
         ConfigHardware {},
         #[route("/config/actix")]
@@ -81,7 +74,7 @@ pub enum Route {
         ConfigRedis {},
         #[route("/config/terms")]
         ConfigTerms {},
-        #[route("/config/runtime")]
+        #[route("/config")]
         ConfigRuntime {},
         #[route("/monitor/requests")]
         MonitorRequests {},
@@ -139,6 +132,8 @@ pub enum Route {
         DocuEntitiesProduction {},
         #[route("/docu/index/ag-pipeline")]
         DocuAgPipeline {},
+        #[route("/docu/index/file-watcher")]
+        DocuFileWatcher {},
         #[route("/docu/index/lora-export")]
         DocuLoraExport {},
         #[route("/docu/index/tantivy")]
@@ -155,6 +150,8 @@ pub enum Route {
         DocuBpeUnigram {},
         #[route("/docu/index/canonicalization")]
         DocuCanonicalization {},
+        #[route("/docu/index/detr-layout")]
+        DocuDetrLayout {},
         #[route("/docu/index/agglutinative-languages")]
         DocuAgglutinative {},
     #[end_layout]
@@ -174,6 +171,12 @@ pub struct ShowRagInfo(pub bool);
 /// Signal for clearing chat messages (triggered by Home link)
 #[derive(Clone, Copy, Default)]
 pub struct ClearChat(pub bool);
+
+/// Whether the Home settings boards (Runtime/Mode/Corpus/RAG/KV) are hidden.
+/// Set true on first chat send so responses get the full viewport; restored
+/// on /clear or via the "Show Boards" header affordance.
+#[derive(Clone, Copy, Default)]
+pub struct BoardsHidden(pub bool);
 
 /// Signal indicating the LLM runtime is intentionally stopped (e.g., during bulk uploads)
 #[derive(Clone, Copy, Default)]
@@ -309,6 +312,7 @@ pub fn App() -> Element {
     use_context_provider(|| Signal::new(ShowRagInfo(false))); // RAG info panel
     use_context_provider(|| Signal::new(ActiveDropdown(None))); // Active dropdown tracker
     use_context_provider(|| Signal::new(ClearChat(false))); // Clear chat trigger
+    use_context_provider(|| Signal::new(BoardsHidden(false))); // Home boards visibility
     use_context_provider(|| Signal::new(RuntimeSuspended(false))); // LLM runtime suspended flag
     use_context_provider(|| Signal::new(PageErrors::default())); // Global page errors state
     use_context_provider(|| Signal::new(RuntimeContext::new())); // Shared runtime context

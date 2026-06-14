@@ -330,7 +330,7 @@ pub(crate) struct OnnxConfigInfo {
     pub layout_ml_enabled: bool,
     pub layout_model_ready: bool,
     /// Human-readable description of the active layout-model tier
-    /// (e.g. "DETR (HF Hub: cmarkea/...)", "DETR (local: /path)",
+    /// (e.g. "DETR (HF Hub: owner/repo:file)", "DETR (local: /path)",
     /// "Word-ORT (local: /path)", "heuristic", or "not compiled").
     pub layout_model_tier: String,
     /// Current effective value of LAYOUT_ML_MODEL_ID — empty string when unset.
@@ -1322,6 +1322,8 @@ pub(crate) async fn commit_hardware_config(
     }
 
     let params = crate::db::param_hardware::HardwareParams::from(body.clone());
+    // Capture pre-save num_thread so we can detect Ollama drift below.
+    let prev_num_thread = crate::db::param_hardware::global_config().num_thread;
     match crate::db::param_hardware::save_default_db(&params) {
         Ok(_) => {
             tracing::info!(
@@ -1336,6 +1338,16 @@ pub(crate) async fn commit_hardware_config(
                 rope_frequency_scale = params.rope_frequency_scale,
                 "Hardware config committed"
             );
+            // Ollama bakes num_thread into the runner at model load time;
+            // a live change won't take effect until the model reloads.
+            // Flag drift so the UI banner tells the user to restart Ollama.
+            if matches!(
+                params.backend_type,
+                crate::db::param_hardware::BackendType::Ollama
+            ) && params.num_thread != prev_num_thread
+            {
+                crate::monitoring::ollama_drift::mark_config_change(params.num_thread);
+            }
             crate::api::sys_routes::reload_token_counter();
             Ok(HttpResponse::Ok().json(HardwareConfigResponse {
                 status: "ok".into(),

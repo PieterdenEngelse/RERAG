@@ -41,6 +41,11 @@ pub struct ReconcilerStats {
     pub auto_news: AtomicUsize,
     pub llm_calls: AtomicUsize,
     pub fallbacks: AtomicUsize,
+    /// LLM tiebreak calls that failed to return a usable answer (timeout,
+    /// connection error, malformed JSON). Distinct from `llm_news` (a real
+    /// "NEW" answer) — these are silent degradations to NEW, worth knowing
+    /// about when Ollama is under pressure.
+    pub llm_timeouts: AtomicUsize,
 }
 
 impl ReconcilerStats {
@@ -52,6 +57,7 @@ impl ReconcilerStats {
             auto_news: self.auto_news.load(Ordering::Relaxed),
             llm_calls: self.llm_calls.load(Ordering::Relaxed),
             fallbacks: self.fallbacks.load(Ordering::Relaxed),
+            llm_timeouts: self.llm_timeouts.load(Ordering::Relaxed),
         }
     }
 }
@@ -64,6 +70,7 @@ pub struct ReconcilerStatsSnapshot {
     pub auto_news: usize,
     pub llm_calls: usize,
     pub fallbacks: usize,
+    pub llm_timeouts: usize,
 }
 
 pub struct EntityReconciler {
@@ -217,7 +224,7 @@ impl EntityReconciler {
             "normalized" => lit::str(&candidate.name.trim().to_lowercase()),
             "type" => lit::str(&candidate.entity_type),
             "snippet" => lit::str(&snippet_trimmed),
-            "aliases" => lit::str_list(&[candidate.name.clone()]),
+            "aliases" => lit::str_list(std::slice::from_ref(&candidate.name)),
             "now" => lit::int(now_millis()),
         };
         // vecf32(...) must be inlined — see lit::vecf32 docs.
@@ -292,7 +299,10 @@ impl EntityReconciler {
             .build()
         {
             Ok(c) => c,
-            Err(_) => return false,
+            Err(_) => {
+                self.stats.llm_timeouts.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
         };
         let resp = match client
             .post(format!("{url}/api/generate"))
@@ -303,12 +313,16 @@ impl EntityReconciler {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "reconciler LLM call failed; treating as NEW");
+                self.stats.llm_timeouts.fetch_add(1, Ordering::Relaxed);
                 return false;
             }
         };
         let json: serde_json::Value = match resp.json().await {
             Ok(j) => j,
-            Err(_) => return false,
+            Err(_) => {
+                self.stats.llm_timeouts.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
         };
         let answer = json
             .get("response")
@@ -358,24 +372,50 @@ mod tests {
         use crate::embedder::{self, similarity::cosine};
 
         let pairs: &[(&str, &str, &str)] = &[
-            ("identity",         "Hitachi Energy",       "Hitachi Energy"),
-            ("bare names",       "Hitachi Energy",       "Hitachi Energy Ltd"),
-            ("name + type",      "Hitachi Energy (ORG)", "Hitachi Energy Ltd (ORG)"),
-            ("current qtext",
-             "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
-             "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo."),
-            ("Sony Corp/Corp",   "Sony Corp (ORG)",      "Sony Corporation (ORG)"),
-            ("Sony Corp/SIE",    "Sony Corp (ORG)",      "Sony Interactive Entertainment (ORG)"),
+            ("identity", "Hitachi Energy", "Hitachi Energy"),
+            ("bare names", "Hitachi Energy", "Hitachi Energy Ltd"),
+            (
+                "name + type",
+                "Hitachi Energy (ORG)",
+                "Hitachi Energy Ltd (ORG)",
+            ),
+            (
+                "current qtext",
+                "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
+                "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo.",
+            ),
+            (
+                "Sony Corp/Corp",
+                "Sony Corp (ORG)",
+                "Sony Corporation (ORG)",
+            ),
+            (
+                "Sony Corp/SIE",
+                "Sony Corp (ORG)",
+                "Sony Interactive Entertainment (ORG)",
+            ),
             // Cross-format: new bare-name query lookup against old stored-with-snippet vectors.
-            ("xfmt same name",   "Hitachi Energy (ORG)",
-             "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results."),
-            ("xfmt diff name",   "Hitachi Energy (ORG)",
-             "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo."),
+            (
+                "xfmt same name",
+                "Hitachi Energy (ORG)",
+                "Hitachi Energy (ORG): Hitachi Energy reported strong Q3 results.",
+            ),
+            (
+                "xfmt diff name",
+                "Hitachi Energy (ORG)",
+                "Hitachi Energy Ltd (ORG): Hitachi Energy Ltd expanded operations in Tokyo.",
+            ),
         ];
         for (label, a, b) in pairs {
             let va = embedder::embed(a);
             let vb = embedder::embed(b);
-            println!("{:>20}  cosine={:.4}  a={:?}  b={:?}", label, cosine(&va, &vb), a, b);
+            println!(
+                "{:>20}  cosine={:.4}  a={:?}  b={:?}",
+                label,
+                cosine(&va, &vb),
+                a,
+                b
+            );
         }
     }
 }

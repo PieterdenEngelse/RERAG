@@ -1067,4 +1067,39 @@ mod chunk_ir_tests {
             "expected at least 2 section_ids across headers, got {ids:?}"
         );
     }
+
+    #[test]
+    fn section_id_and_page_change_across_pagebreak_boundary() {
+        // Mirrors pdf_paged_ir's actual emission shape for a 3-page PDF:
+        // Text(page=1), PageBreak(page=2), Text(page=2), PageBreak(page=3),
+        // Text(page=3). Each PageBreak is a strong boundary, so the chunker
+        // should create three distinct section_ids and stamp the page on each.
+        let mut ir = DocIR::new("t.pdf", "pdf");
+        let mut b1 = DocBlock::text("page one content");
+        b1.page = Some(1);
+        ir.push(b1);
+        ir.push(DocBlock::page_break(2));
+        let mut b2 = DocBlock::text("page two content");
+        b2.page = Some(2);
+        ir.push(b2);
+        ir.push(DocBlock::page_break(3));
+        let mut b3 = DocBlock::text("page three content");
+        b3.page = Some(3);
+        ir.push(b3);
+
+        let chunks = chunk_ir(&ir, &chunker());
+        let ids: std::collections::HashSet<_> =
+            chunks.iter().map(|(_, m)| m.section_id.clone()).collect();
+        assert!(
+            ids.len() >= 3,
+            "expected >=3 section_ids across pagebreaks, got {ids:?} from {} chunks",
+            chunks.len()
+        );
+        let pages: std::collections::HashSet<_> =
+            chunks.iter().filter_map(|(_, m)| m.page).collect();
+        assert!(
+            pages.contains(&1) && pages.contains(&2) && pages.contains(&3),
+            "expected pages 1,2,3 across chunks, got {pages:?}"
+        );
+    }
 }

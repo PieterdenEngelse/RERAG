@@ -451,6 +451,12 @@ pub struct IndexInfoResponse {
     pub index_size_bytes: Option<u64>,
     pub index_size_human: Option<String>,
     pub memory_label: Option<String>,
+    /// On-disk Tantivy size — always populated regardless of INDEX_IN_RAM.
+    /// This is the figure the ~100 MB threshold compares against.
+    #[serde(default)]
+    pub disk_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub disk_size_human: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1210,6 +1216,22 @@ pub struct MemoryInfo {
 /// Fetch system memory information
 pub async fn fetch_memory() -> Result<MemoryInfo, String> {
     fetch_json::<MemoryInfo>("/sys/memory").await
+}
+
+/// Drift snapshot returned by `/sys/ollama-drift`. `drift` is true between
+/// the moment the user saved a new num_thread for the Ollama backend and
+/// the moment the live runner reloads (PID change) with the new value.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct OllamaDrift {
+    pub drift: bool,
+    pub configured: usize,
+    /// PID of the currently observed `ollama runner`, or `None` when no
+    /// model is loaded. Exposed for debugging; the banner doesn't read it.
+    pub runner_pid: Option<u32>,
+}
+
+pub async fn fetch_ollama_drift() -> Result<OllamaDrift, String> {
+    fetch_json::<OllamaDrift>("/sys/ollama-drift").await
 }
 
 /// Fetch detailed GPU information
@@ -2667,6 +2689,44 @@ pub struct RigStatsResponse {
 /// Fetch Rig agentic-mode stats
 pub async fn fetch_rig_stats() -> Result<RigStatsResponse, String> {
     fetch_json("/monitoring/agents/rig-stats").await
+}
+
+/// One ring-buffer entry for a single Pointer-routed query.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PointerHistoryEntry {
+    pub recorded_at_ms: u64,
+    pub chunks_in: usize,
+    pub sections_hydrated: usize,
+    pub fb_no_section_id: usize,
+    pub fb_fetch_empty: usize,
+    pub fb_lock_failed: usize,
+    pub gap: f64,
+    pub threshold: f64,
+}
+
+/// Auto-mode routing + section-reassembly hydration counters.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PointerStatsResponse {
+    pub auto_queries_total: usize,
+    pub route_pointer_total: usize,
+    pub route_strict_total: usize,
+    pub route_hybrid_total: usize,
+    pub pointer_route_pct: f64,
+    pub sections_hydrated_total: usize,
+    pub chunks_in_total: usize,
+    pub clean_rate_pct: f64,
+    pub fb_no_section_id_total: usize,
+    pub fb_fetch_empty_total: usize,
+    pub fb_lock_failed_total: usize,
+    pub recent: Vec<PointerHistoryEntry>,
+    pub avg_gap: f64,
+    pub avg_threshold: f64,
+    pub clean_pointer_route_pct: f64,
+}
+
+/// Fetch Auto → PointerRag routing + hydration stats
+pub async fn fetch_pointer_stats() -> Result<PointerStatsResponse, String> {
+    fetch_json("/monitoring/agents/pointer-stats").await
 }
 
 pub async fn fetch_runtime_health() -> Result<RuntimeHealth, String> {
@@ -4239,6 +4299,11 @@ pub struct CorpusEntry {
     pub created_at: String,
     #[serde(default)]
     pub doc_count: usize,
+    /// Absolute path of the directory the watcher monitors for this corpus.
+    /// `None` = the corpus is using the PathManager-derived default
+    /// (`{data_dir}/corpora/{slug}/documents/`).
+    #[serde(default)]
+    pub watch_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -4326,6 +4391,33 @@ pub async fn update_corpus_description(slug: &str, description: &str) -> Result<
     let url = api_url(&format!("/corpora/{}/description", slug));
     let body =
         serde_json::to_string(&Body { description }).map_err(|e| format!("Encode error: {}", e))?;
+    let response = reqwest::Client::new()
+        .patch(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("HTTP {} {}", status, text.trim()))
+    }
+}
+
+/// Set the per-corpus watched directory. Pass an empty string (or `None`) to
+/// clear the override and fall back to the PathManager-derived default.
+/// The change is restart-required — the running watcher is not respawned.
+pub async fn update_corpus_watch_dir(slug: &str, watch_dir: Option<&str>) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        watch_dir: Option<&'a str>,
+    }
+    let url = api_url(&format!("/corpora/{}/watch-dir", slug));
+    let body = serde_json::to_string(&Body { watch_dir })
+        .map_err(|e| format!("Encode error: {}", e))?;
     let response = reqwest::Client::new()
         .patch(&url)
         .header("Content-Type", "application/json")

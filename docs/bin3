@@ -1,0 +1,1083 @@
+# GUI installer + AppImage distribution for `ag`
+
+## Contents
+
+- **§Context** — how this doc relates to `bin2`; decisions already made; the user's end-to-end flow.
+- **§What's in the AppImage** — bundle layout and what's *not* bundled (Docker, Ollama, compose images).
+- **§Screen flow** — the six screens the user walks through.
+- **§Architecture** — `installer/` crate layout, async/blocking model, relationship to the bash installer.
+- **§CI release pipeline** — GitHub Actions, glibc baseline, versioning, auto-update.
+- **§What goes in `ag.env` after first-run** — the few keys the GUI writes.
+- **§Detection rules** — reused from `bin2`, listed for the implementer.
+- **§Things deferred out of v1** — arm64, macOS/Windows, Flathub/Snap, signing.
+- **§Open questions for review** — 4 design questions to confirm before code.
+- **§Detailed execution plan** — Phase 0–H with DAG, key risks, per-phase detail, acceptance criteria.
+
+## Context
+
+`docs/bin2` covers the terminal installer (`installers/install-linux.sh`)
+— that's the developer / contributor path. This doc covers the
+end-user path: a graphical installer distributed as an AppImage, with
+first-run configuration handled inside the GUI before the installer
+exits.
+
+The terminal installer stays. The two paths share the same XDG layout,
+the same three systemd user units, the same reuse policy, the same
+underlying ag binary. They differ only in **how the user drives the
+install** and **whether ag is built from source or shipped pre-built**.
+
+### Decisions already made
+
+| Question | Choice | Reason |
+|---|---|---|
+| UI toolkit | **Dioxus desktop** | Single Rust + RSX skill across installer and dashboard; reused widget patterns; one hot-reload story. |
+| Distribution channel | **AppImage** | One file, no install, no maintainer accounts. Easy to add Flatpak later. |
+| Build model | **Pre-built ag binaries** | Drops install time from ~30 min to ~30 sec; user doesn't need rustc / cargo / npm / trunk. The thing that actually makes Tier 4 deliver on "easier for non-CLI users." |
+| First-run config | **Inside the GUI installer** | Cohesive UX — installer collects the few settings the user needs before first run; dashboard handles everything else later. |
+
+### What the user does, end to end
+
+```
+1. Download ag-installer-vX.Y.Z-x86_64.AppImage from GitHub Releases
+2. chmod +x ag-installer-*.AppImage   (or use a file manager)
+3. Double-click  →  GUI opens
+4. Click through screens: Welcome → Detection → Prompts → Install → First-run config → Done
+5. Click "Open ag dashboard"  →  browser opens http://127.0.0.1:3010
+```
+
+Cold install on a fresh box: ~30 seconds, dominated by the file
+copies + FalkorDB binary extraction + first compose-stack image
+pulls (if not cached). No build step.
+
+## What's in the AppImage
+
+```
+ag-installer-vX.Y.Z-x86_64.AppImage  (squashfs container)
+├── AppRun                          (entrypoint shim)
+├── ag-installer                    (Dioxus desktop binary)
+├── usr/
+│   ├── bin/
+│   │   └── ag                      (release build of the backend, ~63 MB)
+│   ├── lib/
+│   │   └── libtika_native.so       (~110 MB — extractous JNI lib)
+│   └── share/
+│       ├── ag/
+│       │   ├── web/                (frontend dist: wasm + JS, ~10 MB)
+│       │   ├── falkordb/
+│       │   │   ├── redis-server    (~19 MB — pre-extracted from falkordb/falkordb image)
+│       │   │   ├── redis-cli       (~7 MB)
+│       │   │   └── falkordb.so     (~49 MB)
+│       │   ├── docker-compose.yml  (copied from repo)
+│       │   ├── .env.example        (copied from repo)
+│       │   └── systemd/
+│       │       ├── ag.service.tmpl
+│       │       ├── ag-stack.service.tmpl
+│       │       ├── falkordb.service.tmpl
+│       │       └── ag.service.d/
+│       │           ├── falkordb.conf
+│       │           └── stack.conf
+│       └── applications/
+│           └── ag-installer.desktop
+├── ag-installer.desktop            (top-level for AppImage)
+└── ag-installer.png                (top-level icon)
+```
+
+**Total AppImage size: ~270 MB** uncompressed → ~120 MB compressed
+(squashfs zstd). All artifacts the bash installer would have built or
+extracted are bundled, so the GUI installer's job at runtime is
+**file-copy + systemd-unit-render + first-run-config**, not build +
+extract.
+
+### Pre-extracted FalkorDB — why not extract at runtime?
+
+The bash installer pulls `falkordb/falkordb:latest` and `docker cp`s
+the binaries out (~640 MB image pull + extraction). The GUI installer
+pre-extracts these at AppImage build time and bundles them. Benefits:
+
+- Installer doesn't need Docker just for FalkorDB binaries — only for
+  the compose stack
+- One less failure mode (musl/glibc mismatch can't surface at install
+  time; we already know the bundled binaries work)
+- Saves the user ~640 MB of network on first install
+- AppImage is built on a known glibc baseline (Ubuntu 24.04), so
+  compat is determined at build time not install time
+
+The bundled FalkorDB version is pinned per AppImage release. Upgrading
+FalkorDB = new release tag, new AppImage build.
+
+### What's NOT bundled
+
+- Docker itself (still a runtime dependency; same `--install-docker`
+  prompt as the bash installer)
+- Ollama (same — user sets it up separately, per the
+  `reference-ollama-setup` memory)
+- Compose stack images (grafana, loki, prometheus, tempo, otelcol,
+  redis) — too big to bundle responsibly (~1.5 GB combined), and they
+  already have a perfectly good distribution mechanism: `docker pull`
+
+## Screen flow
+
+The Dioxus desktop window opens at ~900×650 px and walks the user
+through six screens, in order:
+
+```
+Welcome → Detection → Prompts → Install Progress → First-Run Config → Done
+   ▲                                                                    │
+   └─────────  (back navigation allowed only between Welcome           │
+                and the start of Install Progress)  ◄───────────────────┘
+```
+
+Back navigation is **not allowed** once Install Progress starts —
+files are being written to disk. Same one-way-after-writes promise the
+bash installer makes.
+
+### Screen 1: Welcome
+
+Static. Branding (ag logo, version number from AppImage), one-paragraph
+description of what's about to happen, and an "About what gets
+installed" expand-collapse showing the XDG paths that will be written
+(same as the bash installer's banner + summary preview).
+
+Buttons: **Cancel** (closes window, no writes), **Next** (→ Detection).
+
+### Screen 2: Detection
+
+Runs the same detections the bash installer does, displayed as a
+table with green checkmarks / yellow warning icons:
+
+```
+✓ Disk:                   22 GB free on $HOME           (≥ 20 GB recommended)
+✓ Docker:                 present (28.0.1)
+✓ Ollama:                 running on :11434              (8 models available)
+✓ FalkorDB unit:          not present                    (will install)
+✓ Compose stack:          not running                    (will start)
+✓ Backend port 3010:      free
+⚠ RAM:                    7 GB total                     (compose stack uses ~3 GB)
+✓ Existing ag.service:    not present
+```
+
+Each row is the same detection rule as bash `detect_*` functions.
+Yellow rows are "you might want to adjust" — they drive the next
+screen (prompts) if they require a user choice.
+
+Buttons: **Back**, **Next** (→ Prompts).
+
+### Screen 3: Prompts
+
+Conditional — only renders if Detection found something that requires
+a choice. The set of possible prompts:
+
+| Trigger | Question | Form |
+|---|---|---|
+| Disk 10–20 GB | "Install peaks ~3 GB on AppImage path. Continue?" | Y/N radio |
+| Docker missing | "Install Docker via get.docker.com? (requires sudo)" | Y/N radio |
+| Backend port busy | "Port 3010 is in use. Pick a different port:" | Number input (1024–65535) with re-validation on submit |
+| Low RAM (<8 GB) | "Pick a compose profile:" | Dropdown: core (default) / observability / full / skip |
+| Native obs active | "Native loki/tempo/otelcol active. Use them or compose?" | Radio: natives (default) / compose / abort |
+| System Redis on 6379 | "Detected a Redis on 6379. Use it or install a parallel one?" | Radio: use system (default) / install parallel / abort |
+| Existing ag.service | "ag.service already exists and differs from our template." | Radio: keep (default) / backup + replace / replace |
+
+If Detection turned up no triggers, this screen is skipped entirely.
+
+Buttons: **Back**, **Next** (→ Install Progress). "Abort" choices on
+specific prompts route directly to a close-window action without
+writing anything.
+
+### Screen 4: Install Progress
+
+Live during the actual install. Two panes:
+
+- **Left:** the step list with check/x/spinner indicators, mirroring
+  the bash installer's `[N/TOTAL] ► <step>` sequence:
+  ```
+  ✓ Ensure XDG tree           (0s)
+  ✓ Seed config               (0s)
+  ✓ Install artifacts         (3s)
+  ⟳ FalkorDB native service   (4s — extracting binaries...)
+    Systemd user units
+    Health check
+  ```
+- **Right:** scrolling log view showing the install's structured log
+  output (the same color-coded lines the bash installer writes to the
+  log file). Auto-scrolls; user can scroll up to pin position.
+
+A persistent footer shows elapsed time and a single line of "current
+operation" status for users who don't want to read the log.
+
+On step failure: the log auto-scrolls to the error, the left pane's
+spinner becomes an X, and a modal opens with "Install failed — see
+log. Open log file? / Retry? / Cancel?"
+
+No "Back" button during this screen — writes are happening.
+
+### Screen 5: First-Run Config
+
+The new bit. Runs **after** all install steps complete (binary copied,
+FalkorDB up, compose stack up, ag.service rendered + enabled but
+**not yet started**). The form collects the few settings the user
+needs to pick before ag's first boot. Everything else is left at
+default and remains editable in the running dashboard's Config pages.
+
+**Three knobs, all optional (defaults work):**
+
+#### Ollama model
+
+Only shown if Ollama is detected. Queries
+`http://127.0.0.1:11434/api/tags` to populate a dropdown of models the
+user has pulled. Default selection:
+1. `phi:latest` if present
+2. otherwise the first model returned
+3. if no models: dropdown disabled, link to "ollama pull phi" docs
+
+Writes the choice to `~/.config/ag/ag.env` as `OLLAMA_MODEL=<choice>`.
+
+#### FalkorDB password
+
+Text input, prefilled with `agpassword123` (the default). A yellow
+warning chip below: "This is the default password — change it if this
+host is ever exposed beyond localhost."
+
+If the user changes it:
+- Update `~/.config/ag/ag.env` `FALKOR_PASSWORD=<new>`
+- Re-render `~/.config/systemd/user/falkordb.service` with the new
+  `{{FDB_PASS}}` value
+- `systemctl --user daemon-reload && systemctl --user restart falkordb.service`
+- Validate with `redis-cli -p $FDB_PORT -a $new_pass ping` before
+  proceeding
+
+If they keep the default: no change.
+
+#### Agent mode
+
+Dropdown with the five modes from `backend/src/agent.rs`:
+
+- `Hybrid` *(default)* — search + LLM fallback. The "just works" choice.
+- `Rag` — retrieval only (no LLM; works without Ollama)
+- `Llm` — LLM only (no retrieval; Ollama required)
+- `RagStrict` — grounded retrieval only
+- `Agentic` — Rig framework tool-calling loop
+
+A one-line description per mode is shown below the dropdown when
+hovered. Writes `AGENT_MODE=<choice>` to `ag.env`.
+
+**After the form:** "Start ag now" button at the bottom right. On
+click: `systemctl --user start ag.service`, then poll `/health` up to
+~20s. Then → Screen 6.
+
+### Screen 6: Done / Summary
+
+The four-bucket summary from the bash installer, plus the launch
+buttons:
+
+```
+✓ Reused silently        docker, ollama, ~/.cargo, target/, ag.env, libtika
+✓ Reused confirmed       system-redis at :6379
++ Installed fresh        ag.service, ag-stack.service, falkordb.service,
+                         ~/.local/bin/ag, web/, libtika
+⚠ Reused with assumption system-redis auth not verified
+                         — set REDIS_PASSWORD in ag.env if required
+```
+
+Plus the configured first-run settings:
+```
+Configured for first run:
+   Ollama model     : phi:latest
+   FalkorDB password: (default — consider changing)
+   Agent mode       : Hybrid
+   Backend port     : 3010
+```
+
+Buttons:
+- **Open ag dashboard** → opens `http://127.0.0.1:3010` in the system
+  browser
+- **View install log** → opens the log file in the system editor
+- **Close** → exits
+
+## Architecture
+
+```
+ag/
+  backend/                       (unchanged)
+  frontend/fro/                  (unchanged)
+  tools/memory_cli/              (unchanged)
+  installer/                     ← new workspace member
+    Cargo.toml                   (binary crate)
+    src/
+      main.rs                    Dioxus desktop entrypoint
+      app.rs                     router + global state
+      detection.rs               mirrors bash installer's detect_* fns,
+                                 returns a typed DetectionResult
+      install_steps.rs           sequential steps that actually write
+                                 files (uses tokio::process for systemctl,
+                                 std::fs for copies)
+      first_run.rs               first-run config logic
+                                 (Ollama API probe, env file writes,
+                                 falkordb restart on password change)
+      summary.rs                 builds the four-bucket summary from
+                                 detection + step results
+      bundled.rs                 declares include_bytes!-style references
+                                 to the bundled assets (the AppImage's
+                                 squashfs paths are visible at runtime
+                                 via std::env::current_exe + ../usr/share)
+      ui/
+        welcome.rs               Screen 1
+        detection_screen.rs      Screen 2
+        prompts.rs               Screen 3
+        progress.rs              Screen 4 (left pane + log view)
+        first_run_form.rs        Screen 5
+        summary_screen.rs        Screen 6
+        components/              shared: buttons, list, log viewer,
+                                 progress indicator
+    assets/
+      icon.png                   AppImage icon
+      ag-installer.desktop       freedesktop entry for the AppImage
+      style.css                  global app styles (mirrors the
+                                 dashboard's color tokens)
+  .github/
+    workflows/
+      release.yml                ← new
+```
+
+### `installer` ↔ bash installer ↔ ag relationship
+
+- **bash installer** is the source-of-truth for the design (XDG layout,
+  detection rules, prompt logic, three systemd units, reuse policy).
+  Always works on a developer's machine with the repo checked out.
+  Test-bed for new install behaviors before they land in the GUI.
+- **GUI installer** is a parallel binary that **reimplements** the
+  install logic in Rust. Same XDG layout, same detection rules
+  (probably 1:1 ports of each `detect_*` function), same three systemd
+  units. Does **not** shell out to `install-linux.sh` — too brittle to
+  pipe progress.
+- **ag itself** is the same binary either way. The GUI installer ships
+  it pre-built; the bash installer builds it from source. The XDG
+  install location is identical.
+
+### Async / blocking model
+
+Dioxus desktop is single-threaded for UI updates. All blocking I/O
+(file copies, subprocess invocations, HTTP probes) runs on
+`tokio::task::spawn_blocking` or `tokio::process::Command`, posts
+progress via Dioxus signals, and never blocks the render thread.
+
+The install-progress screen's log view is fed by a `tokio::sync::mpsc`
+channel that step functions write to and the UI drains in a
+`use_future` loop.
+
+## CI release pipeline
+
+A new workflow at `.github/workflows/release.yml`. Triggers:
+
+- `push` of a tag matching `v*.*.*`
+- Manual `workflow_dispatch` (for debugging)
+
+Pipeline stages:
+
+```
+                                ┌─ cargo build --release --target x86_64-unknown-linux-gnu
+                                │      (ag binary)
+                                ├─ npm ci + npm run css:build + trunk build --release
+                                │      (frontend dist)
+                                ├─ docker pull falkordb/falkordb:<pinned> + extract
+                                │      (FalkorDB binaries)
+                                ├─ cargo build -p installer --release
+                                │      (Dioxus desktop binary)
+                                │
+release.yml on Ubuntu 24.04 ─────┤
+                                │
+                                ├─ Assemble AppDir/
+                                │      AppRun, ag-installer, usr/{bin,lib,share/ag}/
+                                │
+                                ├─ appimagetool AppDir/  →  ag-installer-vX.Y.Z-x86_64.AppImage
+                                │
+                                ├─ sha256sum the AppImage
+                                │
+                                └─ gh release create vX.Y.Z
+                                        --notes-from-tag
+                                        ag-installer-*.AppImage
+                                        sha256sums.txt
+```
+
+### Why Ubuntu 24.04 specifically
+
+Originally bin3 picked Ubuntu 22.04 (glibc 2.35) for maximum
+backward-compat. That decision was revised on the first CI run
+(`v0.1.0-dev2`, 2026-06-13) because ag's `onnx` default feature pulls
+the `ort` crate, which **downloads prebuilt ONNX Runtime C++ binaries
+that require glibc 2.39+** (they reference ISO C 23 symbols like
+`__isoc23_strtol`). Building on 22.04 surfaced the mismatch at link
+time; even with a workaround, the resulting AppImage wouldn't *run*
+on 22.04 because the embedded ONNX binaries need 2.39.
+
+Ubuntu 24.04 (glibc 2.39) is the actual baseline the codebase
+already required. Distros covered:
+
+- Ubuntu 24.04 LTS, 24.10
+- Debian 13 (trixie) — releases mid-2026
+- Fedora 39+
+- Arch (rolling, current)
+- RHEL 10 / Alma 10 / Rocky 10 — released mid-2026
+
+**Distros explicitly NOT supported by the AppImage:**
+Ubuntu 22.04 LTS, Debian 12 (bookworm), Fedora 38 and below, RHEL 9
+and below. Users on those distros either upgrade or use the bash
+installer (which builds from source against their local glibc).
+
+This compatibility loss is bounded — Ubuntu 22.04's EOL is April 2027.
+
+The decision could be reverted if ag drops the `onnx` default feature
+or if the `ort` crate ships glibc-2.35-compatible prebuilts. Until
+then, glibc 2.39 is honest.
+
+For now: x86_64 only. arm64 is a Phase 2 addition (cross-compile or
+self-hosted ARM runner; both add complexity worth deferring until
+demand exists).
+
+### Versioning
+
+Semver. Tags are `vMAJOR.MINOR.PATCH`. **Starting version: `v0.1.0`**
+(Phase 0 decision — no pre-release tags; ship `v1.0.0` only when Phase H
+acceptance criteria are met). Each successive release bumps PATCH for
+bug fixes, MINOR for new features, MAJOR only when behavior changes
+break existing installs.
+
+The installer binary surfaces its version via:
+- `ag-installer --version` (CLI flag for sanity-checking the AppImage)
+- A footer on every screen
+- The Welcome screen explicitly
+
+The ag binary inside the AppImage gets the same version embedded via
+`build.rs` (this is **the** Phase 2 deferral from `bin2` made
+concrete — the GUI installer's release pipeline is what justifies
+finally adding `build.rs`).
+
+`ag --version` will print:
+```
+ag 0.1.0
+git: a1b2c3d
+built: 2026-06-13T12:34:56Z (ubuntu-24.04)
+```
+
+The installer compares against `ag-installer --version` on launch to
+confirm the bundle is consistent.
+
+### Auto-update check
+
+The installer queries
+`https://api.github.com/repos/<owner>/ag/releases/latest` on launch
+(default — stable releases only; pre-releases are filtered out by the
+endpoint), compares against its own version, and shows a non-blocking
+banner if a newer AppImage exists. Click → opens the GitHub Release
+page. We do NOT auto-download/install — too much trust to ask for in
+v1.
+
+Opt-in `--include-prereleases` flag instead polls `/releases` and
+takes the topmost tag with `draft=false`. Useful for early testers
+who want to track development builds.
+
+The check result is cached in `~/.cache/ag-installer/last-check.json`
+for 4 hours so the launch doesn't always pay the network round-trip
+(and to stay well under the 60-req/hour unauthenticated rate limit on
+api.github.com).
+
+## What goes in `~/.config/ag/ag.env` after first-run
+
+The bash installer seeds `ag.env` from `.env.example` and applies
+flag-driven overrides. The GUI installer does the same plus the
+first-run config form's choices. Concretely, after the first-run
+config screen has been submitted, these lines are guaranteed to
+reflect the user's choices:
+
+```
+BACKEND_HOST=127.0.0.1
+BACKEND_PORT=<from port prompt or default 3010>
+OLLAMA_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=<from first-run dropdown>
+FALKOR_URI=redis://localhost:<port>
+FALKOR_PASSWORD=<from first-run input or default>
+AGENT_MODE=<from first-run dropdown>
+REDIS_URL=<from system-redis prompt or default>
+```
+
+Every other env key is left at the `.env.example` default. They're
+editable in the dashboard's Config → Runtime page (`/config/runtime`)
+afterward — the runtime settings layer (`docs/runtime-config.md`)
+handles those without restart for the 13 hot-reloadable keys.
+
+## Detection rules — reuse from `bin2`
+
+The GUI installer's `detection.rs` implements the same set of
+detections as the bash installer's `detect_existing_state`. Listed
+here for the implementer's convenience; full rationale in `bin2`:
+
+| Detection | How |
+|---|---|
+| Docker present | `which docker` (Rust: `std::process::Command::new("which").arg("docker")`) |
+| Ollama active | `systemctl --user is-active ollama` + `GET http://127.0.0.1:11434/api/tags` returns 200 |
+| Compose stack up | `docker compose ls` parses to JSON, look for `name=ag` |
+| FalkorDB healthy | `systemctl --user is-active falkordb.service` + `redis-cli ping` returns `PONG` |
+| `ag.env` exists | `Path::new("~/.config/ag/ag.env").exists()` |
+| Backend port busy | parse `ss -tln` output, look for `:$PORT` listener |
+| System Redis on 6379 | `redis-cli -p 6379 ping` returns `PONG` AND no `ag-redis` docker container running |
+| Native observability | `systemctl --user is-active loki|tempo|otelcol` for each |
+| `ag.service` drift | file exists, hash differs from rendered template |
+| Low RAM | `/proc/meminfo` `MemTotal` < 8 GB |
+| Disk free | `statfs` on `$HOME` and the AppImage's mount point |
+
+All detections run on the **Detection** screen in parallel
+(`tokio::join!`) and complete in well under a second on a normal box.
+A loading spinner shows during.
+
+## Phasing (summary)
+
+8 weeks total: A Foundation → B GUI scaffold → C Detection+prompts →
+D Real install → E First-run config → F Release pipeline polish →
+G Multi-distro verify → H Polish+a11y. **See §Detailed execution
+plan** below for the dependency DAG, key risks, and per-phase tasks /
+acceptance criteria.
+
+## Things we're deferring out of v1
+
+- **arm64 builds.** Need either cross-compile or a self-hosted ARM
+  runner. Wait until someone asks.
+- **macOS / Windows.** Same toolchain choices (Dioxus desktop works
+  cross-platform), but ag itself needs work to run on those — not the
+  installer's problem to solve.
+- **Auto-update that downloads + installs.** Just notify in v1.
+- **Code signing.** Sigstore / GPG signing of the AppImage. Worth doing
+  before any real user adoption; not before v1.
+- **Flathub / Snap / .deb / .rpm.** Add later if AppImage isn't
+  enough. The AppImage approach doesn't preclude these.
+- **Telemetry / phone-home.** Don't.
+
+## Open questions for review
+
+1. Is "First-Run Config inside the GUI" the right UX, or would a
+   separate `ag-setup` CLI tool be cleaner? (Current take: inside the
+   GUI is right because it's the one screen the user will visit
+   exactly once. A separate tool re-introduces a CLI step.)
+2. Should the installer offer to install desktop-environment
+   integration (a `.desktop` file under `~/.local/share/applications/`
+   pointing at `xdg-open http://127.0.0.1:3010`) on the last screen?
+   Useful for "click an icon to open ag" but trivial. (Lean: yes,
+   minor.)
+3. Should `ag-installer --uninstall` be a thing, or does the user run
+   `installers/uninstall-linux.sh`? AppImage convention says the
+   AppImage itself manages uninstall. (Lean: add an `--uninstall`
+   flag that drives the same logic as the bash uninstaller.)
+4. The first-run config screen is described as "three knobs." Are
+   there others that genuinely need to be set before first run?
+   Candidates: `TRUST_PROXY` (no — leave at false), `RUST_LOG` (no —
+   info is fine), `OTEL_TRACES_ENABLED` (no — observability stack
+   handles it). Confirm the three-knob scope is right.
+
+## Detailed execution plan (8 weeks)
+
+The phasing table above is the sketch; this section is the plan. Each
+phase lists concrete tasks (with file paths), dependencies, risks, and
+the commit shape at end-of-phase. Treat as the working punch list —
+update it as work proceeds.
+
+### Dependency graph
+
+```mermaid
+graph LR
+  P0[Phase 0: Pre-flight] --> A[A: Foundation<br/>installer crate + AppImage CI]
+  A --> B[B: GUI scaffold<br/>six screens, mock data]
+  A --> C[C: Detection + prompts]
+  B --> D[D: Real install]
+  C --> D
+  D --> E[E: First-run config]
+  D --> G[G: Multi-distro verify]
+  E --> F[F: Release pipeline polish]
+  G --> H[H: Polish + a11y]
+  F --> H
+```
+
+**Critical path** = P0 → A → B → D → E → F → H (~7 weeks if walked
+serially). Phase C is in parallel with B once Phase A is done. Phase G
+can begin partway through D (verify bash installer on the five distros
+as a baseline; re-verify with the AppImage path once E lands). Phase F
+gates final ship because the auto-update banner needs the release
+pipeline before H tags v1.0.0.
+
+### Key risks across all phases
+
+- **Dioxus desktop maturity.** As of early 2026 it's usable but less
+  battle-tested than Tauri. Track Dioxus releases; if a serious bug
+  blocks Phase B or C, the fallback is to swap to Tauri at the cost
+  of ~1 week of port work.
+- **GitHub Actions minutes.** Tag-driven builds on a public repo are
+  free; if the repo goes private, ~$0.008/min adds up at ~30 min per
+  build. Track usage.
+- **glibc compatibility.** Ubuntu 24.04 build (glibc 2.39) runs on
+  Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10+. Ubuntu 22.04 /
+  Debian 12 / Fedora 38 / RHEL 9 are NOT supported by the AppImage
+  because ag's `onnx` feature requires glibc 2.39 via prebuilt
+  ONNX Runtime binaries. Document, don't try to support older
+  glibc — users on older distros use the bash installer.
+- **AppImage user-experience pitfalls.** First-time AppImage users
+  often miss the `chmod +x` step. README needs to cover it clearly;
+  the `.desktop` integration on the last screen helps.
+
+The per-phase risks below are *specific* risks unique to that phase;
+these four cut across all of them and inform the cross-phase fallback
+plan (swap toolkit, cap CI use, drop a distro from support, refine
+the README).
+
+### Phase 0 — Pre-flight (~2 days, before Phase A)
+
+<details>
+<summary>Lock-in decisions table — DECIDED</summary>
+
+
+Six choices that gate the rest of the work. **All six decided
+2026-06-13** — values below are the contract Phase A and onward
+implement against.
+
+| Decision | Pinned value | Artifact written in |
+|---|---|---|
+| FalkorDB image SHA | `falkordb/falkordb@sha256:e93fcd753fe612fb0a222166a0620a1ae31b826a12f223c3b6d06038d9d7a364` (human tag: `v4.2.0`; Redis 8.6.3; image dated 2026-05-14) | `installer/falkordb.pin` |
+| Ubuntu runner image | `ubuntu-24.04` — glibc 2.39; covers Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10+. **Revised from `ubuntu-22.04` on first CI run** (2026-06-13): ag's `onnx` feature pulls `ort` crate's prebuilt ONNX binaries which require glibc 2.39, so 22.04 was never actually viable. | `.github/workflows/release.yml` (`runs-on: ubuntu-24.04`) |
+| Semver starting version | `v0.1.0`. No pre-release tags (`-alpha` / `-beta` / `-rc`) — iterate `0.1.0 → 0.1.1 → 0.1.2 → … → 0.x.0 → 1.0.0`. `v1.0.0` only when Phase H acceptance is met. | `Cargo.toml` workspace `version` + `installer/Cargo.toml` |
+| GitHub Releases publish mode | **Public** from day one with `prerelease=true` on every tag before `v1.0.0`. Lets early testers discover and report; the auto-update channel policy can correctly filter stable vs pre-release. | repo settings + `release.yml` step `gh release create … --prerelease` |
+| `.desktop` `Categories=` and `MimeType=` | `Categories=Development;Database;`. **No `MimeType=`** — ag ingests through the web UI, not OS file association. Skipped `Office` / `Education` / `Science` as misleading. | `installer/assets/ag-installer.desktop` |
+| Auto-update channel policy | Stable-only default: GET `https://api.github.com/repos/<owner>/<repo>/releases/latest` (excludes pre-releases by definition). Opt-in `--include-prereleases` flag polls `/releases` and filters `draft=false`. Cache result in `~/.cache/ag-installer/last-check.json` for 4 hours. | `installer/src/update_check.rs` |
+
+**Outcome:** every following phase can start without re-litigating
+these. The `installer/` paths above are referenced but not yet
+written — Phase A creates the crate skeleton and lays these files
+down with the values from this table.
+
+</details>
+
+---
+
+### Phase A — Foundation (week 1)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** `installer/` exists as a workspace member; CI builds an
+AppImage on every tag push.
+
+**Tasks:**
+
+1. Add `installer/` as a workspace member.
+   - `Cargo.toml` (root): add `"installer"` to `[workspace] members`
+   - `installer/Cargo.toml`: binary crate, deps:
+     `dioxus`, `dioxus-desktop`, `tokio` (full), `serde`, `serde_json`,
+     `tracing`, `tracing-subscriber`, `anyhow`
+   - `installer/src/main.rs`: minimal Dioxus desktop window
+     ("Hello ag installer v…")
+2. Add the icon and `.desktop` file under `installer/assets/`.
+   - 256×256 PNG (use the existing ag favicon as a starting point;
+     scale up via `convert`)
+   - `ag-installer.desktop` per freedesktop spec with the categories
+     decided in Phase 0
+3. Add `.github/workflows/release.yml`.
+   - Trigger: `push` of tag matching `v*.*.*` + `workflow_dispatch`
+   - Steps in order:
+     1. Checkout
+     2. Install rustup + cache `~/.cargo/registry`
+     3. Install Node + cache `frontend/fro/node_modules`
+     4. `cargo build --release -p ag` (produces `target/release/ag`)
+     5. `(cd frontend/fro && npm ci && npm run css:build && trunk build --release)`
+     6. `docker pull falkordb/falkordb@$(cat installer/falkordb.pin)`
+     7. Extract FalkorDB binaries via `docker create` + `docker cp`
+        into a staging dir
+     8. `cargo build --release -p installer`
+     9. Run `installer/build-appimage.sh` (new) to assemble AppDir/
+        and call `appimagetool`
+    10. `sha256sum` the AppImage
+    11. `gh release create "$TAG" ... ag-installer-*.AppImage sha256sums.txt`
+4. Write `installer/build-appimage.sh`.
+   - Assemble AppDir/ skeleton (AppRun, .desktop, icon)
+   - Copy ag binary, libtika, frontend dist, FalkorDB binaries,
+     compose file, env.example, systemd templates into `usr/share/ag/`
+   - Run `appimagetool AppDir/ ag-installer-vX.Y.Z-x86_64.AppImage`
+   - Verify exit code, print sha256
+
+**Dependencies:** Phase 0 complete (especially FalkorDB pin).
+
+**Risks:**
+- `appimagetool` not preinstalled on `ubuntu-24.04` runner. Mitigate
+  by installing it via `apt` or downloading from
+  `github.com/AppImage/AppImageKit/releases`.
+- libtika's build-hash path inside `target/release/build/extractous-*/out/libs/`
+  varies. The script must `find` the newest, same logic as the bash
+  installer.
+
+**Acceptance:**
+- `git tag v0.1.0-test && git push --tags` triggers the workflow
+- Workflow completes green in <30 min on the runner
+- `gh release view v0.1.0-test` shows `ag-installer-v0.1.0-test-x86_64.AppImage`
+  attached
+- Downloading + `chmod +x` + running it opens a "Hello ag installer"
+  Dioxus window on a fresh Ubuntu 24.04 VM
+
+**End-of-phase commit:** `feat(installer): foundation — Dioxus crate +
+AppImage CI`. Single commit, or one commit per task if PR review is
+needed.
+
+</details>
+
+---
+
+### Phase B — GUI scaffold (week 2)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** all six screens render with mocked data; navigation works.
+
+**Tasks:**
+
+1. Create the screen modules under `installer/src/ui/`:
+   - `welcome.rs`, `detection_screen.rs`, `prompts.rs`, `progress.rs`,
+     `first_run_form.rs`, `summary_screen.rs`
+2. Create shared components under `installer/src/ui/components/`:
+   - `button.rs`, `nav_footer.rs`, `log_view.rs`, `progress_indicator.rs`,
+     `step_list.rs`, `prompt_radio.rs`
+3. Define the app's global state in `installer/src/app.rs`:
+   - `enum Screen { Welcome, Detection, Prompts, Progress, FirstRun, Done }`
+   - `struct AppState { screen, detection: Option<DetectionResult>, prompt_answers, install_progress, first_run_choices, ... }`
+   - Wrap in `dioxus::signals::Signal`
+4. Write `installer/src/main.rs` to host the screen dispatcher.
+5. Mock data for each screen:
+   - Detection screen reads from a hardcoded `DetectionResult`
+     constant so the screen can be designed without real I/O
+   - Progress screen plays a 5-second fake animation when `Next` is
+     clicked
+6. Reuse the dashboard's color tokens — pull `#1D6B9A` brand blue and
+   the dark-tile palette from `frontend/fro/assets/styling/index.css`
+   into `installer/assets/style.css`. Keep visual continuity.
+
+**Dependencies:** Phase A complete (Dioxus skeleton runs).
+
+**Risks:**
+- Dioxus desktop in early 2026 still has rough edges around
+  multi-platform CSS; lock in a version that works in CI and pin it.
+- `log_view.rs` needs to render fast even with 10k+ lines. Virtualize
+  if perf is bad (use Dioxus's `VirtualList` if landed by then).
+
+**Acceptance:**
+- `cd installer && dx serve --platform desktop` opens the window;
+  clicking through Welcome → Done completes with mocked data
+- All six screens render at 900×650 without overflow
+- Brand colors match the dashboard
+
+**End-of-phase commit:** `feat(installer): GUI scaffold — six screens
+with mock data`. Plus a screenshot for the PR description.
+
+</details>
+
+---
+
+### Phase C — Detection + prompts (week 3)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** Detection mirrors the bash installer 1:1; prompts wire to
+the real state and feed the next screen.
+
+**Tasks:**
+
+1. Implement `installer/src/detection.rs`:
+   - `pub struct DetectionResult { docker_present, ollama_active,
+     compose_up, falkordb_healthy, ag_env_exists, backend_port_busy,
+     system_redis, native_obs, ag_service_drift, disk_free_gb,
+     ram_gb }`
+   - `pub async fn run() -> DetectionResult` — runs all probes in
+     parallel via `tokio::join!`
+   - Each probe in its own private fn; mirrors the bash `detect_*` body
+2. Implement the prompt models:
+   - `enum PromptId { DiskLow, DockerMissing, PortBusy, LowRam,
+     NativeObs, SystemRedis, AgServiceDrift }`
+   - `fn required_prompts(d: &DetectionResult) -> Vec<PromptId>`
+3. Wire Detection screen to call `detection::run()` on enter; spinner
+   while pending; populate the table on completion.
+4. Wire Prompts screen to render the right form per `PromptId`
+   returned by `required_prompts`. Default-selected values match the
+   bash installer's conservative defaults.
+5. Validate Prompts → next-screen on submit (port number range check,
+   etc.).
+
+**Dependencies:** Phase B complete.
+
+**Risks:**
+- Some detections need to shell out (`ss`, `redis-cli`, `docker`,
+  `systemctl`). Errors must be classified as "not present" vs
+  "present but failed" without panic. Use `anyhow::Context` and treat
+  "not present" as `false`, not as an error.
+- The `system_redis` probe needs to skip when our `ag-redis`
+  container is the one listening. Same logic as
+  `detect_system_redis` in bash.
+
+**Acceptance:**
+- GUI Detection screen on this dev box shows: docker ✓, ollama ✓,
+  compose ✓, falkordb ✓, ag.env ✓, port 3010 busy ⚠, RAM 7 GB ⚠,
+  ag.service drift ⚠ — same set as `install-linux.sh --dry-run`
+- Prompts fire only for the ⚠ rows
+- Form submissions land in `AppState.prompt_answers` for Phase D to
+  consume
+
+**End-of-phase commit:** `feat(installer): real detection + prompt
+forms`.
+
+</details>
+
+---
+
+### Phase D — Real install (week 4)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** Install Progress screen drives actual file writes and
+systemd setup. By end of phase the GUI produces a working ag install.
+
+**Tasks:**
+
+1. Implement `installer/src/install_steps.rs`:
+   - `pub async fn run(state: &AppState, tx: ProgressSender) -> Result<InstallResult>`
+   - Steps mirror bash one-for-one:
+     `ensure_xdg`, `seed_config`, `install_artifacts`, `falkordb`,
+     `systemd`, `health_check`
+   - Each step takes a `ProgressSender` (`tokio::sync::mpsc::UnboundedSender<ProgressEvent>`)
+     and emits start/log-line/done events
+2. Implement `installer/src/bundled.rs`:
+   - `pub fn ag_binary_path() -> PathBuf` — finds the AppImage's
+     `usr/bin/ag` via `std::env::current_exe`
+   - same for libtika, frontend dist, FalkorDB binaries, compose
+     file, env.example, systemd templates
+3. Template renderer for the three systemd units — same placeholder
+   substitution as the bash installer, in Rust.
+4. Progress screen wires the mpsc receiver to update the step list
+   and log view.
+5. Failure modal: opens on any step error; "Open log" button opens
+   `${AG_HOME}/logs/install-<ts>.log` in the default editor.
+
+**Dependencies:** Phase C complete; AppImage bundle structure
+finalized (Phase A produces it; this phase reads from it).
+
+**Risks:**
+- `systemctl --user` from a Dioxus app: should work because the
+  process inherits the user session. Verify on a system without
+  `XDG_RUNTIME_DIR` set (rare but possible).
+- File copies with progress reporting need to chunk large files
+  (libtika is 110 MB). Use a 64KB read loop emitting bytes-copied
+  events.
+
+**Acceptance:**
+- Fresh VM: GUI install completes end-to-end, no errors
+- Output identical to `installers/install-linux.sh` (same files
+  written, same systemd state)
+- `systemctl --user status ag.service` reports active after install
+- `curl http://127.0.0.1:3010/health` returns 200
+
+**End-of-phase commit:** `feat(installer): real install steps —
+artifact copy, FalkorDB extract, systemd setup`.
+
+</details>
+
+---
+
+### Phase E — First-run config (week 5)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** Screen 5 collects Ollama model, FalkorDB password, agent
+mode; writes the env file; starts ag.service.
+
+**Tasks:**
+
+1. Implement `installer/src/first_run.rs`:
+   - `pub async fn probe_ollama_models() -> Result<Vec<String>>`
+     — GETs `http://127.0.0.1:11434/api/tags`, parses model names
+   - `pub fn write_first_run_settings(env_path: &Path, choices: &FirstRunChoices) -> Result<()>`
+     — atomic write: read existing ag.env, replace lines for the
+     keys in scope, write to temp + rename
+   - `pub async fn change_falkordb_password(new: &str) -> Result<()>`
+     — re-render falkordb.service.tmpl, `daemon-reload`,
+     `restart falkordb.service`, verify with ping
+2. First-Run form UI:
+   - Ollama model dropdown (disabled with a hint if no models)
+   - Password input with toggle-visible
+   - Agent mode dropdown with per-option description
+3. "Start ag now" button:
+   - Calls `systemctl --user start ag.service`
+   - Polls `/health` up to 20s
+   - Transitions to Done screen on success
+   - Shows in-form error if `/health` doesn't come up
+
+**Dependencies:** Phase D complete.
+
+**Risks:**
+- Atomic env file writes are fiddly with newline preservation and
+  comments. Test against `.env.example` to make sure the file remains
+  readable after modification.
+- FalkorDB password change while the service is running: depends on
+  whether redis-server reloads `--requirepass` on restart. It does,
+  but the running connections need to be drained. Acceptable since
+  ag.service isn't started yet at this point.
+
+**Acceptance:**
+- On a fresh VM with Ollama running, the dropdown lists the user's
+  models; default selection lands in ag.env
+- Changing the FalkorDB password restarts the unit and `redis-cli
+  ping` with the new password returns PONG
+- "Start ag now" lights up the Done screen with `/health: 200`
+
+**End-of-phase commit:** `feat(installer): first-run config — Ollama
+model, FalkorDB password, agent mode`.
+
+</details>
+
+---
+
+### Phase F — Release pipeline polish (week 6)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** A non-developer can download the AppImage and install ag
+without touching the repo.
+
+**Tasks:**
+
+1. README install section:
+   - "Quick install (GUI)" — three steps: download, chmod, double-click
+   - "Developer install (terminal)" — link to `installers/install-linux.sh`
+2. Auto-update check on launch:
+   - `installer/src/update_check.rs` — GET `api.github.com/repos/.../releases/latest`
+   - Compare against `env!("CARGO_PKG_VERSION")`
+   - Non-blocking banner on the Welcome screen if newer exists
+3. About screen (small modal): version, git SHA, build date, links to
+   docs/bin2 and bin3.
+4. Verify the AppImage on multiple distros (Phase G actually does
+   this, but a smoke-pass here catches anything obvious).
+
+**Dependencies:** Phase E complete.
+
+**Risks:**
+- Rate limiting on api.github.com for the update check (60 req/hr
+  unauth). Cache the result in `~/.cache/ag-installer/` for 4 hours.
+
+**Acceptance:**
+- New user can install ag in under 5 minutes following the README
+- Auto-update banner correctly shows nothing on current version,
+  shows a banner when a newer tag exists
+
+**End-of-phase commit:** `feat(installer): auto-update check + README
+quick install`.
+
+</details>
+
+---
+
+### Phase G — Multi-distro verify (week 7)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** AppImage works on the five Linux distros the project
+supports.
+
+**Tasks:**
+
+1. Spin up fresh VMs (or use a service like `distrowatch.com` /
+   `lxc` / QEMU) for:
+   - Ubuntu 24.04 LTS (CI baseline; sanity)
+   - Ubuntu 24.04 LTS
+   - Debian 12 (bookworm)
+   - Fedora 39
+   - Arch (rolling)
+2. On each: download the AppImage, run end-to-end install, verify
+   ag.service runs and `/health` responds.
+3. Document any distro-specific quirks in a new
+   `docs/distro-notes.md` (e.g., "Fedora: `xattr` is required for the
+   AppImage to remember the user's `chmod +x`").
+4. Fix any showstoppers; if a fix isn't possible, document the distro
+   as "unsupported in v1" with a path to support.
+
+**Dependencies:** Phase F complete.
+
+**Risks:**
+- Wayland-vs-X11 issues for Dioxus desktop's window. WebView under
+  the hood usually handles this transparently; verify.
+- Some distros' `notify-send` differs in arg parsing. The bash
+  installer already uses `|| true` for this; mirror in Rust.
+
+**Acceptance:**
+- All five distros install successfully end-to-end
+- Any failures are documented with a clear "won't fix in v1" or
+  "blocked on upstream X" status
+
+**End-of-phase commit:** `docs: distro support matrix` (covering
+verification results).
+
+</details>
+
+---
+
+### Phase H — Polish + accessibility (week 8)
+
+<details>
+<summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
+
+
+**Goal:** ship-quality v1.0.0.
+
+**Tasks:**
+
+1. Final app icon (delegate or commission if needed). 512×512 PNG
+   plus 64/32/16 sizes for taskbar.
+2. Tab-key navigation: every interactive element reachable via
+   keyboard; focus indicator visible.
+3. Screen-reader labels on all form fields and progress widgets
+   (Dioxus → WebView → ARIA).
+4. `ag-installer --help` CLI fallback that prints usage and the same
+   info the About screen shows.
+5. `ag-installer --uninstall` flag that drives the same logic as
+   `installers/uninstall-linux.sh`.
+6. Final docs sweep: README, bin2 cross-references, bin3 status to
+   "shipped".
+7. Tag v1.0.0; trigger CI; verify the release artifact.
+
+**Dependencies:** Phase G clean.
+
+**Risks:**
+- Icon may need an external designer if no one on the team has the
+  graphic skills. Budget half a week for procurement if so.
+
+**Acceptance:**
+- Keyboard-only install completes end-to-end
+- Screen reader (Orca) announces every form field correctly
+- `v1.0.0` AppImage exists on GitHub Releases with correct version
+  metadata in the binary
+- README's "Quick install" section is the recommended path
+
+**End-of-phase commit:** `release: v1.0.0`. Tag, release notes, done.
+
+</details>
+
+---
+
+## See also
+
+- `docs/bin2` — the terminal installer (parent design; shared layout,
+  detection rules, reuse policy, three systemd units)
+- `docs/falkordb-native-service.md` — rationale for FalkorDB-as-systemd
+  (and the binary-extraction approach the AppImage build inherits)
+- `docs/runtime-config.md` — the runtime settings layer that handles
+  every env key the first-run config doesn't touch

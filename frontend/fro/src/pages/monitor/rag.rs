@@ -1,5 +1,5 @@
 use crate::api;
-use crate::api::{ChunkingStatsSnapshot, RagMemoryItem};
+use crate::api::{ChunkingStatsSnapshot, PointerStatsResponse, RagMemoryItem};
 use crate::app::Route;
 use crate::components::monitor::*;
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
@@ -11,6 +11,60 @@ struct RagState {
     error: Option<String>,
     rag_memories: Vec<RagMemoryItem>,
     chunking_history: Vec<ChunkingStatsSnapshot>,
+    /// Auto-mode routing + section-reassembly stats. `None` when the
+    /// endpoint hasn't reported yet or returned an error — treat as
+    /// "no data yet", not a page-level failure.
+    pointer_stats: Option<PointerStatsResponse>,
+}
+
+/// Info-modal copy for the Section Reassembly panel — explained once,
+/// reached from any tile.
+const SECTION_REASSEMBLY_INFO: &str = r#"SECTION REASSEMBLY (Auto → PointerRag)
+
+Auto picks PointerRag when within-doc fragmentation
+(section_ratio − doc_ratio) ≥ the Pointer-trigger threshold from the
+slider on the chat bar.
+
+WHAT THE TILES MEAN
+• Auto queries           — total Auto-mode queries that reached the
+                           routing decision (i.e. found chunks)
+• Routed to PointerRag   — how many of those Auto queries triggered
+                           section reassembly; the % is the share
+• Sections hydrated      — unique sections the index reassembled and
+                           handed to the LLM (lifetime total). Lower
+                           than chunks_in is expected: multiple chunks
+                           often share a section, so dedup compresses.
+• Clean rate             — fraction of input chunks whose section was
+                           successfully hydrated. Falls when chunks
+                           drop back to raw text — no section_id on
+                           the chunk, the section fetch came back
+                           empty, or the retriever lock was busy.
+                           Healthy pipeline trends toward 100 %.
+
+THE RECENT TABLE
+One row per Pointer-routed query, newest first. Gap and threshold
+are the values in effect at decision time, so churn here usually
+means a user is moving the slider mid-session."#;
+
+/// Render an epoch-millis timestamp as a compact age relative to "now".
+/// Used by the Section Reassembly recent-routes table — absolute clock
+/// time isn't useful there, but "12s ago" tells the reader whether the
+/// activity is live.
+fn format_age_ms(then_ms: u64) -> String {
+    let now_ms = js_sys::Date::now() as u64;
+    if then_ms == 0 || then_ms > now_ms {
+        return "—".to_string();
+    }
+    let delta_s = (now_ms - then_ms) / 1000;
+    if delta_s < 60 {
+        format!("{}s ago", delta_s)
+    } else if delta_s < 3600 {
+        format!("{}m ago", delta_s / 60)
+    } else if delta_s < 86_400 {
+        format!("{}h ago", delta_s / 3600)
+    } else {
+        format!("{}d ago", delta_s / 86_400)
+    }
 }
 
 /// Check if a chunking entry has issues
@@ -25,10 +79,11 @@ fn has_issues(entry: &ChunkingStatsSnapshot) -> bool {
         if detection.detection_method == "fallback" {
             return true;
         }
-        // Issue: extension-only detection (less reliable)
-        if detection.detection_method == "extension" {
-            return true;
-        }
+        // Note: detection_method == "extension" is NOT flagged. For formats
+        // without a MIME type or magic bytes (.md, .txt, .csv, .log, source
+        // code), extension is the canonical detection path — flagging it
+        // buried real issues under a wall of false positives. A successful
+        // chunking run (chunks > 0) is the signal that matters.
         // Issue: unknown format
         if detection.detected_format.to_lowercase() == "unknown" {
             return true;
@@ -56,10 +111,13 @@ pub fn MonitorRag() -> Element {
                 error: None,
                 rag_memories: vec![],
                 chunking_history: vec![],
+                pointer_stats: None,
             });
 
             let rag_result = api::fetch_rag_memories(50).await;
             let chunking_result = api::fetch_chunking_stats(20, None).await;
+            let pointer_result = api::fetch_pointer_stats().await;
+            let pointer_stats = pointer_result.ok();
 
             match (rag_result, chunking_result) {
                 (Ok(r), Ok(c)) => {
@@ -68,6 +126,7 @@ pub fn MonitorRag() -> Element {
                         error: None,
                         rag_memories: r.memories,
                         chunking_history: c.snapshots,
+                        pointer_stats,
                     });
                 }
                 (Ok(r), Err(_)) => {
@@ -77,6 +136,7 @@ pub fn MonitorRag() -> Element {
                         error: None,
                         rag_memories: r.memories,
                         chunking_history: vec![],
+                        pointer_stats,
                     });
                 }
                 (Err(e), _) => {
@@ -85,6 +145,7 @@ pub fn MonitorRag() -> Element {
                         error: Some(e),
                         rag_memories: vec![],
                         chunking_history: vec![],
+                        pointer_stats,
                     });
                 }
             }
@@ -98,7 +159,7 @@ pub fn MonitorRag() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Monitor", Some(Route::MonitorOverview {})),
+                    BreadcrumbItem::new("Monitor", Some(Route::MonitorTip {})),
                     BreadcrumbItem::new("RAG", None::<Route>),
                 ],
             }
@@ -380,6 +441,129 @@ pub fn MonitorRag() -> Element {
                                 span { class: "text-orange-300 font-semibold", "heuristic" }
                             }
                             div { class: "text-gray-400 text-xs", "Last resort. Analyzes content patterns when no metadata available. Least reliable." }
+                        }
+                    }
+                }
+
+                // ═══════════════════════════════════════════════════════════
+                // SECTION REASSEMBLY (Auto → PointerRag)
+                // ═══════════════════════════════════════════════════════════
+                RowHeader {
+                    title: "Section Reassembly".into(),
+                    description: Some("When Auto detects within-doc fragmentation it routes the query to PointerRag — hydrate the full section behind each matched chunk and ground the LLM on those instead of the raw chunks. Tuned via the Pointer-trigger slider on the chat bar.".into()),
+                }
+
+                Panel { title: Some("Auto routing & hydration".into()), refresh: Some("on load".into()),
+                    if let Some(p) = snapshot.pointer_stats.clone() {
+                        div { class: "grid grid-cols-2 md:grid-cols-4 gap-4",
+                            StatCard {
+                                title: "Auto queries".into(),
+                                value: p.auto_queries_total.to_string().into(),
+                                unit: None,
+                                info_tooltip: Some(SECTION_REASSEMBLY_INFO.into()),
+                            }
+                            StatCard {
+                                title: "Routed to PointerRag".into(),
+                                value: p.route_pointer_total.to_string().into(),
+                                unit: None,
+                                trend: Some(format!("{:.1}% of Auto", p.pointer_route_pct).into()),
+                            }
+                            StatCard {
+                                title: "Sections hydrated".into(),
+                                value: p.sections_hydrated_total.to_string().into(),
+                                unit: None,
+                                trend: Some(
+                                    format!(
+                                        "fallbacks: no_id {}, empty {}, lock {}",
+                                        p.fb_no_section_id_total,
+                                        p.fb_fetch_empty_total,
+                                        p.fb_lock_failed_total,
+                                    ).into(),
+                                ),
+                            }
+                            StatCard {
+                                title: "Clean rate".into(),
+                                value: format!("{:.1}", p.clean_rate_pct).into(),
+                                unit: Some("%".into()),
+                                trend: Some(
+                                    format!(
+                                        "{:.0}% of recent routes had zero fallbacks",
+                                        p.clean_pointer_route_pct,
+                                    ).into(),
+                                ),
+                            }
+                        }
+
+                        // Auto/Strict/Hybrid split — a tiny secondary row.
+                        div { class: "text-xs text-gray-300 mt-3",
+                            "Auto split: "
+                            span { class: "font-mono", "PointerRag " }
+                            span { class: "text-orange-300 font-semibold", "{p.route_pointer_total}" }
+                            "  |  "
+                            span { class: "font-mono", "Strict " }
+                            span { class: "text-gray-200 font-semibold", "{p.route_strict_total}" }
+                            "  |  "
+                            span { class: "font-mono", "Hybrid " }
+                            span { class: "text-gray-200 font-semibold", "{p.route_hybrid_total}" }
+                            "  |  "
+                            "avg gap "
+                            span { class: "font-mono text-gray-200", "{p.avg_gap:.3}" }
+                            "  |  "
+                            "avg threshold "
+                            span { class: "font-mono text-gray-200", "{p.avg_threshold:.3}" }
+                        }
+
+                        // Recent table — ≤10 newest Pointer routes.
+                        if p.recent.is_empty() {
+                            div { class: "text-gray-400 text-sm py-4",
+                                "No Pointer-routed queries yet. Send an Auto query against a corpus where retrieval spans multiple sections, or set the Pointer-trigger slider to Eager (0.00) so every Auto query reassembles."
+                            }
+                        } else {
+                            div { class: "overflow-x-auto mt-4",
+                                table { class: "w-full text-sm text-left",
+                                    thead { class: "text-gray-400 uppercase tracking-wide border-b border-gray-800 text-xs",
+                                        tr {
+                                            th { class: "py-2 px-2", "When" }
+                                            th { class: "py-2 px-2", "Chunks in" }
+                                            th { class: "py-2 px-2", "Hydrated" }
+                                            th { class: "py-2 px-2", "Gap" }
+                                            th { class: "py-2 px-2", "Threshold" }
+                                            th { class: "py-2 px-2", "Fallbacks" }
+                                        }
+                                    }
+                                    tbody {
+                                        for entry in p.recent.iter().take(10) {
+                                            tr { class: "border-b border-gray-800 last:border-0 hover:bg-gray-800/50",
+                                                td { class: "py-2 px-2 text-gray-300 text-xs font-mono",
+                                                    "{format_age_ms(entry.recorded_at_ms)}"
+                                                }
+                                                td { class: "py-2 px-2 text-gray-200", "{entry.chunks_in}" }
+                                                td { class: "py-2 px-2 text-gray-200", "{entry.sections_hydrated}" }
+                                                td { class: "py-2 px-2 font-mono text-gray-200", "{entry.gap:.3}" }
+                                                td { class: "py-2 px-2 font-mono text-gray-300", "{entry.threshold:.3}" }
+                                                td { class: "py-2 px-2 text-xs",
+                                                    {
+                                                        let total_fb = entry.fb_no_section_id + entry.fb_fetch_empty + entry.fb_lock_failed;
+                                                        if total_fb == 0 {
+                                                            rsx! { span { class: "text-green-300", "clean" } }
+                                                        } else {
+                                                            rsx! {
+                                                                span { class: "text-yellow-300",
+                                                                    "no_id {entry.fb_no_section_id} / empty {entry.fb_fetch_empty} / lock {entry.fb_lock_failed}"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        div { class: "text-gray-400 text-sm py-4",
+                            "No section-reassembly stats yet. The endpoint reports as soon as the first Auto-mode query runs."
                         }
                     }
                 }

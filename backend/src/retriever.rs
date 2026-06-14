@@ -532,8 +532,12 @@ impl Retriever {
         let mut schema_builder = Schema::builder();
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let content_field = schema_builder.add_text_field("content", TEXT | STORED);
-        let doc_id_field = schema_builder.add_text_field("doc_id", TEXT | STORED);
-        // STRING (not TEXT) → no tokenization; UUIDs match exactly via TermQuery.
+        // STRING (not TEXT): no tokenization; the compound chunk-id
+        // ("{filename}#{i}") must match exactly via TermQuery so that
+        // `delete_document_by_filename`'s `writer.delete_term(...)`
+        // actually clears the entry instead of being a no-op on the
+        // tokenized term dictionary.
+        let doc_id_field = schema_builder.add_text_field("doc_id", STRING | STORED);
         let section_id_field = schema_builder.add_text_field("section_id", STRING | STORED);
         let schema = schema_builder.build();
         let index = if index_in_ram {
@@ -1232,6 +1236,20 @@ impl Retriever {
     pub fn meta_for_content(&self, content: &str) -> Option<&crate::doc_ir::ChunkMeta> {
         let chunk_id = self.content_to_chunk_id.get(&content_hash(content))?;
         self.doc_id_to_meta.get(chunk_id)
+    }
+
+    /// Look up the source document name for a content string. Strips the
+    /// trailing `#{position}` from the stored chunk_id (format
+    /// `"{filename}#{i}"`, see `index.rs`). Returns `None` when the
+    /// content isn't in the reverse map.
+    pub fn doc_id_for_content(&self, content: &str) -> Option<String> {
+        let chunk_id = self.content_to_chunk_id.get(&content_hash(content))?;
+        Some(
+            chunk_id
+                .rsplit_once('#')
+                .map(|(name, _)| name.to_string())
+                .unwrap_or_else(|| chunk_id.clone()),
+        )
     }
 
     /// Aggregate block-type and extractor distribution across all indexed chunks.
@@ -2103,7 +2121,17 @@ impl Retriever {
         let term = Term::from_field_text(self.section_id_field, section_id);
         let query = TermQuery::new(term, IndexRecordOption::Basic);
         // Cap at 1k chunks/section — sections that large are pathological.
-        let top = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        const FETCH_SECTION_CAP: usize = 1000;
+        let top = searcher.search(&query, &TopDocs::with_limit(FETCH_SECTION_CAP))?;
+        if top.len() == FETCH_SECTION_CAP {
+            // Hit the cap — section may be truncated. Surface so the
+            // pathological case doesn't degrade PointerRag silently.
+            tracing::warn!(
+                section_id = %section_id,
+                cap = FETCH_SECTION_CAP,
+                "fetch_section: hit chunk cap; section may be truncated"
+            );
+        }
 
         // (chunk_position_in_doc, content) — sort by position so we reassemble
         // in original order. Position is encoded after '#' in doc_id (see

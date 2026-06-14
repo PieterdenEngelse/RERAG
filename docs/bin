@@ -1,0 +1,105 @@
+# Plan: Build a self-contained binary tarball of `ag`
+
+## Context
+
+The repo ships the backend (`backend/` crate, `name = "ag"`) and the Dioxus
+frontend (`frontend/fro`) as separate build steps. There is no single
+command today that produces a portable artifact: `start-ag.sh` assumes a
+hard-coded `/home/pde/ag/...` checkout, the `Justfile` `build-backend-release`
+target points at the wrong path (`backend/ag` instead of `backend`), and
+the existing `release-bundle` target copies a binary + frontend dist but
+does not include the native runtime libraries (`libtika_native.so`,
+`libpdfium.so`) the binary loads at runtime, and does not produce a
+tarball that can be dropped onto another machine.
+
+Goal: produce `dist/ag-<version>-<arch>.tar.gz` containing the backend
+binary, the built frontend, all required dynamic libraries, a sample
+`.env`, and a portable launcher script that resolves `LD_LIBRARY_PATH`
+relative to its own location.
+
+## Shape
+
+```
+scripts/package-bin.sh
+   │
+   ├── (1) cd backend && cargo build --release            ── target/release/ag
+   ├── (2) cd frontend/fro && npm run css:build           ── assets/styling/index.css
+   │        && dx build --release --platform web          ── frontend/fro/dist/
+   ├── (3) collect runtime libs
+   │        ├── backend/target/release/build/extractous-*/out/libs/libtika_native.so
+   │        └── backend/libpdfium.so   (only if built with --features layout_ml)
+   ├── (4) stage into dist/staging/ag-<version>/
+   │        ├── bin/ag
+   │        ├── lib/*.so
+   │        ├── web/        (frontend dist contents)
+   │        ├── start.sh    (new launcher, see below)
+   │        └── .env.example
+   └── (5) tar czf dist/ag-<version>-<arch>.tar.gz -C dist/staging ag-<version>/
+```
+
+## Files to change / add
+
+### 1. `Justfile` — fix path, add packaging target
+- Change `BACKEND_DIR := "backend/ag"` → `BACKEND_DIR := "backend"` (current value is wrong; `[package].name = "ag"` lives at `backend/Cargo.toml`).
+- Add a `package-bin` target that just calls `scripts/package-bin.sh "$@"`. Keep the existing `release-bundle` target but rewrite it to delegate to the script so there is one source of truth.
+
+### 2. `scripts/package-bin.sh` (new)
+Plain bash, modeled on the existing `start-ag.sh` style (`set -euo pipefail`, top-level `ROOT_DIR`). Behavior:
+
+1. Parse args: `--features <list>` (default `default`), `--skip-frontend`, `--out <dir>` (default `dist/`).
+2. `ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"` — no hard-coded `/home/pde/ag`.
+3. Read the version from `backend/Cargo.toml` with `grep -m1 '^version' backend/Cargo.toml | cut -d'"' -f2` (avoids a `cargo metadata` dependency).
+4. Detect arch: `ARCH="$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]')"`.
+5. Build backend: `cd "$ROOT_DIR/backend" && cargo build --release ${FEATURES:+--features "$FEATURES"}`.
+6. Build frontend unless `--skip-frontend`:
+   - `cd "$ROOT_DIR/frontend/fro" && npm install --no-audit --no-fund` (idempotent; node_modules already exists in repo)
+   - `npm run css:build`
+   - `dx build --release --platform web` (writes to `frontend/fro/dist/` per `Dioxus.toml`)
+7. Stage layout under `$OUT_DIR/staging/ag-$VERSION/`:
+   - `bin/ag` ← `backend/target/release/ag`
+   - `lib/libtika_native.so` ← newest match of `backend/target/release/build/extractous-*/out/libs/libtika_native.so` (use the same `ls -td ... | head -n1` pattern already in `start-ag.sh`). If not found and the build did not include `extractous`, skip silently; if the user asked for `layout_ml` and the file is missing, fail with a clear error.
+   - `lib/libpdfium.so` ← `backend/libpdfium.so` if present (same conditional as above; only required for `layout_ml`).
+   - `web/` ← contents of `frontend/fro/dist/` (skipped if `--skip-frontend`).
+   - `.env.example` ← copy from repo root.
+   - `start.sh` ← generated launcher (see below).
+8. Tar: `tar -C "$OUT_DIR/staging" -czf "$OUT_DIR/ag-$VERSION-$ARCH.tar.gz" "ag-$VERSION"`.
+9. Print final path + size + SHA256 to stdout.
+
+### 3. Embedded launcher `start.sh` (written by the packaging script)
+Mirrors the runtime wiring of the existing `start-ag.sh` but rooted at the tarball, not `/home/pde/ag`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+[ -f "$HERE/.env" ] || cp "$HERE/.env.example" "$HERE/.env"
+exec "$HERE/bin/ag" "$@"
+```
+
+Notes:
+- The Docker stack startup that `start-ag.sh` does (`docker compose up -d ...`) is intentionally **not** in the launcher — a portable tarball can't assume a compose file at a known path. Keep that as the responsibility of the operator. Document this in the script's `--help` output.
+- The launcher does not touch `ORT_DYLIB_PATH`. With the default feature set (`onnx`, `io_uring`, `graph`), `fastembed` is pulled in with `ort-download-binaries`, which bundles ONNX Runtime via the `ort` crate's loader — no separate `libonnxruntime.so` needs to live in `lib/`. If a future change switches `ort` to dyn-link mode, add `libonnxruntime.so` to step 7 alongside the others.
+
+### 4. `.gitignore`
+- Add `/dist/` so packaging output doesn't get committed.
+
+## What is intentionally out of scope
+- Cross-compilation (`x86_64-unknown-linux-musl`, Windows). The `Justfile` already has a stub `build-backend-multi`; leave it alone.
+- Bundling Ollama, FalkorDB, Redis, or the observability stack. Those remain external services brought up via `docker-compose.yml`.
+- A native installer. The `backend/src/installer/` module's `ci_cd_builder.rs` is a stub (`ArtifactType::LinuxTar` exists but does nothing); not worth wiring through for this task.
+
+## Verification
+
+1. From a clean tree: `just package-bin` (or `scripts/package-bin.sh`). Expect `dist/ag-13.1.2-x86_64-linux.tar.gz` and a printed SHA256.
+2. Smoke-test in an isolated dir:
+   ```
+   mkdir /tmp/agtest && tar -xzf dist/ag-13.1.2-x86_64-linux.tar.gz -C /tmp/agtest
+   /tmp/agtest/ag-13.1.2/start.sh &
+   sleep 5
+   curl -fsS http://127.0.0.1:3010/health    # backend up
+   curl -fsS http://127.0.0.1:3010/metrics | head    # Prometheus exposed
+   ```
+   Both `curl`s should return 200. Kill the backend.
+3. Confirm portability: `ldd /tmp/agtest/ag-13.1.2/bin/ag | grep -E 'tika|pdfium'` should resolve via the bundled `lib/` (no `not found`), and the start.sh-set `LD_LIBRARY_PATH` should be the reason — re-run without `start.sh` (direct `./bin/ag`) and confirm it fails the same way the current `start-ag.sh` setup does without `LD_LIBRARY_PATH`.
+4. `cargo fmt && cargo clippy --all-targets -- -D warnings` from `backend/` — the packaging change touches no Rust source, so this is a sanity check that the release build still passes the quality gate.

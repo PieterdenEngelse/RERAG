@@ -1,0 +1,40 @@
+# ag.service — rendered by installers/install-linux.sh
+# Placeholders ({{AG_BIN}}, {{AG_HOME}}, {{AG_ENV}}, {{AG_LIB_DIR}},
+# {{BACKEND_PORT}}) are replaced with literal values so
+# `systemctl --user cat ag.service` shows the user where things live.
+
+[Unit]
+Description=Agentic RAG API Server (user)
+Documentation=https://github.com/qodo-ai/ag
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory={{AG_HOME}}
+EnvironmentFile=-{{AG_ENV}}
+Environment=LD_LIBRARY_PATH={{AG_LIB_DIR}}
+
+# Clear any stale process on the backend port before starting.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 10); do ss -tlnp 2>/dev/null | grep -q :{{BACKEND_PORT}} || exit 0; sleep 1; done; fuser -k {{BACKEND_PORT}}/tcp 2>/dev/null; sleep 1'
+ExecStart={{AG_BIN}}
+StandardOutput=journal
+StandardError=journal
+
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=15
+
+# Resource/FD limits
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=default.target

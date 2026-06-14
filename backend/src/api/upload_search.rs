@@ -570,23 +570,26 @@ pub async fn index_info_handler() -> Result<HttpResponse, Error> {
         let retriever = retriever.lock().unwrap();
         let doc_count = retriever.metrics.total_documents_indexed;
 
+        // Always include the on-disk Tantivy size — that's the figure the
+        // ~100 MB threshold refers to, regardless of whether IN_RAM is on.
+        let disk_bytes = retriever.metrics.get_index_size_bytes().unwrap_or(0);
+        let disk_human = retriever
+            .metrics
+            .get_index_size_human()
+            .unwrap_or_else(|_| "?".into());
+
         let (mem_bytes, mem_human, mem_label) = if in_ram {
             let rss = process_rss_bytes();
             (rss, human_bytes(rss), "Process RSS")
         } else {
-            let bytes = retriever.metrics.get_index_size_bytes().unwrap_or(0);
-            let human = retriever
-                .metrics
-                .get_index_size_human()
-                .unwrap_or_else(|_| "?".into());
-            (bytes, human, "Est. RAM if active")
+            (disk_bytes, disk_human.clone(), "Est. RAM if active")
         };
 
         Ok(HttpResponse::Ok().json(json!({
             "index_in_ram": in_ram,
             "mode": if in_ram { "RAM (fast)" } else { "Disk (standard)" },
-            "warning": if in_ram && mem_bytes > 100_000_000 {
-                json!(format!("High memory usage: process RSS is {}.", mem_human))
+            "warning": if in_ram && disk_bytes > 100_000_000 {
+                json!(format!("High memory usage: index is {} on disk.", disk_human))
             } else if in_ram {
                 json!("INDEX_IN_RAM active. Avoid when index exceeds ~100 MB on disk.")
             } else {
@@ -597,6 +600,8 @@ pub async fn index_info_handler() -> Result<HttpResponse, Error> {
             "index_size_bytes": mem_bytes,
             "index_size_human": mem_human,
             "memory_label": mem_label,
+            "disk_size_bytes": disk_bytes,
+            "disk_size_human": disk_human,
             "request_id": request_id
         })))
     } else {

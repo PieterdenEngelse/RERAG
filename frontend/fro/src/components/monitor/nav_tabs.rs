@@ -10,23 +10,21 @@ pub struct NavTabsProps {
 #[component]
 pub fn NavTabs(props: NavTabsProps) -> Element {
     let tabs = vec![
-        ("Overview", Route::MonitorOverview {}),
         ("Tip", Route::MonitorTip {}),
-        ("Agentic", Route::MonitorAgentic {}),
-        ("Tools", Route::MonitorTools {}),
-        ("Requests", Route::MonitorRequests {}),
-        ("Cache", Route::MonitorCache {}),
-        ("Datastores", Route::MonitorDatastores {}),
-        ("Chunks", Route::MonitorChunks {}),
-        ("Index", Route::MonitorIndex {}),
         ("RAG", Route::MonitorRag {}),
-        ("Agent", Route::MonitorObservations {}),
+        ("Index", Route::MonitorIndex {}),
+        ("Chunks", Route::MonitorChunks {}),
+        ("Datastores", Route::MonitorDatastores {}),
+        ("Knowledge Graph", Route::MonitorKnowledgeGraph {}),
+        ("Cache", Route::MonitorCache {}),
+        ("Requests", Route::MonitorRequests {}),
         ("Rate Limits", Route::MonitorRateLimits {}),
         ("Logs", Route::MonitorLogs {}),
-        ("Systemd", Route::MonitorAgSystemd {}),
         ("Docker", Route::MonitorDocker {}),
-        ("Knowledge Graph", Route::MonitorKnowledgeGraph {}),
         ("ONNX", Route::MonitorOnnx {}),
+        ("Agentic", Route::MonitorAgentic {}),
+        ("Tools", Route::MonitorTools {}),
+        ("Agent", Route::MonitorObservations {}),
     ];
 
     rsx! {

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ag installer
+GenericName=Agentic RAG installer
+Comment=Install ag — the agentic RAG stack — to ~/.local
+Exec=AppRun
+Icon=ag-installer
+Categories=Development;Database;
+Terminal=false
+StartupNotify=true
+X-AppImage-Version=0.1.0

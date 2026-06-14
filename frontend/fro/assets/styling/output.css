@@ -2515,6 +2515,9 @@
   .top-2 {
     top: calc(var(--spacing) * 2);
   }
+  .top-10 {
+    top: calc(var(--spacing) * 10);
+  }
   .top-12 {
     top: calc(var(--spacing) * 12);
   }
@@ -2730,6 +2733,12 @@
   }
   .z-\[10000\] {
     z-index: 10000;
+  }
+  .col-span-1 {
+    grid-column: span 1 / span 1;
+  }
+  .col-span-2 {
+    grid-column: span 2 / span 2;
   }
   .col-span-3 {
     grid-column: span 3 / span 3;
@@ -2959,6 +2968,9 @@
   }
   .mt-6 {
     margin-top: calc(var(--spacing) * 6);
+  }
+  .mt-auto {
+    margin-top: auto;
   }
   .-mr-1 {
     margin-right: calc(var(--spacing) * -1);
@@ -3511,6 +3523,9 @@
   .w-24 {
     width: calc(var(--spacing) * 24);
   }
+  .w-28 {
+    width: calc(var(--spacing) * 28);
+  }
   .w-32 {
     width: calc(var(--spacing) * 32);
   }
@@ -3622,6 +3637,9 @@
   .max-w-\[15rem\] {
     max-width: 15rem;
   }
+  .max-w-\[40\%\] {
+    max-width: 40%;
+  }
   .max-w-\[90vw\] {
     max-width: 90vw;
   }
@@ -3705,6 +3723,9 @@
   }
   .min-w-64 {
     min-width: calc(var(--spacing) * 64);
+  }
+  .min-w-\[24rem\] {
+    min-width: 24rem;
   }
   .min-w-\[200px\] {
     min-width: 200px;
@@ -3812,6 +3833,15 @@
   }
   .grid-cols-4 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .grid-cols-\[1fr_auto\] {
+    grid-template-columns: 1fr auto;
+  }
+  .grid-cols-\[4rem_1fr\] {
+    grid-template-columns: 4rem 1fr;
+  }
+  .grid-cols-\[5rem_1fr\] {
+    grid-template-columns: 5rem 1fr;
   }
   .flex-col {
     flex-direction: column;
@@ -4116,6 +4146,12 @@
   .border-blue-400 {
     border-color: var(--color-blue-400);
   }
+  .border-blue-400\/40 {
+    border-color: color-mix(in srgb, oklch(70.7% 0.165 254.624) 40%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-blue-400) 40%, transparent);
+    }
+  }
   .border-blue-600 {
     border-color: var(--color-blue-600);
   }
@@ -4262,9 +4298,6 @@
   }
   .border-slate-700 {
     border-color: var(--color-slate-700);
-  }
-  .border-teal-400 {
-    border-color: var(--color-teal-400);
   }
   .border-teal-500 {
     border-color: var(--color-teal-500);
@@ -4516,6 +4549,12 @@
     background-color: color-mix(in srgb, oklch(21% 0.034 264.665) 60%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-gray-900) 60%, transparent);
+    }
+  }
+  .bg-gray-900\/80 {
+    background-color: color-mix(in srgb, oklch(21% 0.034 264.665) 80%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-gray-900) 80%, transparent);
     }
   }
   .bg-gray-950 {
@@ -5082,6 +5121,9 @@
   .text-\[8px\] {
     font-size: 8px;
   }
+  .text-\[9px\] {
+    font-size: 9px;
+  }
   .text-\[10px\] {
     font-size: 10px;
   }
@@ -5273,9 +5315,6 @@
   }
   .text-gray-400 {
     color: var(--color-gray-400);
-  }
-  .text-gray-500 {
-    color: var(--color-gray-500);
   }
   .text-green-200 {
     color: var(--color-green-200);
@@ -5564,11 +5603,6 @@
   }
   .transition-colors {
     transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to;
-    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
-    transition-duration: var(--tw-duration, var(--default-transition-duration));
-  }
-  .transition-opacity {
-    transition-property: opacity;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
@@ -5997,16 +6031,6 @@
       }
     }
   }
-  .hover\:bg-teal-500\/10 {
-    &:hover {
-      @media (hover: hover) {
-        background-color: color-mix(in srgb, oklch(70.4% 0.14 182.503) 10%, transparent);
-        @supports (color: color-mix(in lab, red, red)) {
-          background-color: color-mix(in oklab, var(--color-teal-500) 10%, transparent);
-        }
-      }
-    }
-  }
   .hover\:bg-transparent {
     &:hover {
       @media (hover: hover) {
@@ -6074,6 +6098,13 @@
     &:hover {
       @media (hover: hover) {
         color: var(--color-indigo-400);
+      }
+    }
+  }
+  .hover\:text-indigo-600 {
+    &:hover {
+      @media (hover: hover) {
+        color: var(--color-indigo-600);
       }
     }
   }
@@ -6282,9 +6313,9 @@
       background-color: var(--color-gray-700);
     }
   }
-  .disabled\:text-gray-500 {
+  .disabled\:text-gray-400 {
     &:disabled {
-      color: var(--color-gray-500);
+      color: var(--color-gray-400);
     }
   }
   .disabled\:opacity-40 {
@@ -6343,11 +6374,6 @@
       width: calc(var(--spacing) * 64);
     }
   }
-  .md\:w-\[18rem\] {
-    @media (width >= 48rem) {
-      width: 18rem;
-    }
-  }
   .md\:grid-cols-2 {
     @media (width >= 48rem) {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6368,24 +6394,9 @@
       flex-direction: row;
     }
   }
-  .md\:flex-wrap {
-    @media (width >= 48rem) {
-      flex-wrap: wrap;
-    }
-  }
   .md\:items-start {
     @media (width >= 48rem) {
       align-items: flex-start;
-    }
-  }
-  .md\:gap-x-\[1cm\] {
-    @media (width >= 48rem) {
-      column-gap: 1cm;
-    }
-  }
-  .md\:gap-y-6 {
-    @media (width >= 48rem) {
-      row-gap: calc(var(--spacing) * 6);
     }
   }
   .md\:border-t-0 {
@@ -6399,9 +6410,19 @@
       padding-top: calc(var(--spacing) * 0);
     }
   }
+  .lg\:w-1\/2 {
+    @media (width >= 64rem) {
+      width: calc(1/2 * 100%);
+    }
+  }
   .lg\:w-72 {
     @media (width >= 64rem) {
       width: calc(var(--spacing) * 72);
+    }
+  }
+  .lg\:max-w-md {
+    @media (width >= 64rem) {
+      max-width: var(--container-md);
     }
   }
   .lg\:columns-3 {
@@ -6429,11 +6450,6 @@
       grid-template-columns: repeat(6, minmax(0, 1fr));
     }
   }
-  .lg\:grid-cols-7 {
-    @media (width >= 64rem) {
-      grid-template-columns: repeat(7, minmax(0, 1fr));
-    }
-  }
   .xl\:grid-cols-3 {
     @media (width >= 80rem) {
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -6442,6 +6458,20 @@
   .xl\:grid-cols-4 {
     @media (width >= 80rem) {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .\32 xl\:grid-cols-4 {
+    @media (width >= 96rem) {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .dark\:hover\:text-indigo-400 {
+    &:where(.dark &) {
+      &:hover {
+        @media (hover: hover) {
+          color: var(--color-indigo-400);
+        }
+      }
     }
   }
   .\[\&\>\*\]\:mb-3 {

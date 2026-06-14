@@ -58,6 +58,22 @@ pub(crate) fn chat_state() -> Arc<Mutex<AgentChatState>> {
         .clone()
 }
 
+// Shared HTTP client for outbound LLM calls. Rebuilding `reqwest::Client` per
+// request loses Ollama keep-alive and re-pays TCP+TLS on every chat turn, so
+// we keep one with the same pool settings as `tools::connection_pool`.
+static LLM_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+pub(crate) fn llm_http_client() -> &'static reqwest::Client {
+    LLM_HTTP_CLIENT.get_or_init(|| {
+        // No request-level timeout: streamed LLM responses can run for minutes.
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(10)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("failed to build shared LLM HTTP client")
+    })
+}
+
 pub(crate) fn update_last_agent_run(query: String, response: &AgentResponse) {
     let state_arc = chat_state();
     let mut state = state_arc.lock().expect("chat state lock");
@@ -148,7 +164,14 @@ pub(crate) fn snapshots_for_debug() -> (Option<String>, Option<String>, Verbosit
     )
 }
 
-/// Get current chat settings for the agent, including RAG memories
+/// Get current chat settings for the agent, including RAG memories.
+///
+/// Follow-up (deferred, waiting on profiling): the remaining direct call
+/// sites of this function (~lines 1156, 1332, 1876, 1925, in non-stream
+/// /agent and command paths) still run on the actix async executor.
+/// The first call per agent_id pays the SQLite open + DDL there; cache
+/// hits cover everything after, so this only matters if those endpoints
+/// turn out to be on a hot path.
 pub(crate) fn get_current_chat_settings() -> crate::agent::ChatSettings {
     use crate::agent::{load_categorized_memories, ChatSettings, Verbosity as AgentVerbosity};
 
@@ -1695,6 +1718,9 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
 
     let request_id = generate_request_id();
     let stream_corpus_slug = req.corpus.as_deref().unwrap_or("default").to_string();
+    // TTFT baseline: stamp request entry so we can log how long prep took
+    // and how long until Ollama's first byte reaches our streaming map.
+    let entry_t = std::time::Instant::now();
 
     // For commands, redirect to non-streaming endpoint (commands don't benefit from streaming)
     if parse_chat_command(&req.query).is_some() {
@@ -1955,11 +1981,16 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         }
     }
 
-    // For LLM and Hybrid modes, stream from Ollama
+    // For LLM and Hybrid modes, stream from Ollama.
+    //
+    // Prep runs inline (no web::block hop): the memory cache makes
+    // get_current_chat_settings() ~free after the first request per
+    // process, and hybrid_search() is cheap on warm Tantivy. Wrapping
+    // these in a threadpool hand-off added pure latency on the warm
+    // path before the LLM request even left.
     let mut context = String::new();
     let mut used_chunks: Vec<String> = Vec::new();
 
-    // For Hybrid/Auto mode, first get RAG context
     if matches!(
         agent_mode,
         crate::agent::AgentMode::Hybrid | crate::agent::AgentMode::Auto
@@ -1977,7 +2008,6 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                         context = results.join("\n\n");
                         used_chunks = results;
                     }
-                    // Record tool execution
                     crate::monitoring::record_tool_execution(
                         "SemanticSearch",
                         &req.query,
@@ -1992,27 +2022,17 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         }
     }
 
-    // Get chat settings for prompt building
     let chat_settings = get_current_chat_settings();
     let system_prompt = chat_settings.build_system_prompt();
 
-    // Debug: log what's in the system prompt
-    tracing::warn!(
+    tracing::info!(
         request_id = %request_id,
         system_prompt_len = system_prompt.len(),
-        system_prompt_full = %system_prompt,
         memories_count = chat_settings.memories.len(),
-        "DEBUG: Full system prompt being sent"
+        chunks_count = used_chunks.len(),
+        prep_ms = entry_t.elapsed().as_millis() as u64,
+        "chat-stream prep complete"
     );
-    for (i, mem) in chat_settings.memories.iter().enumerate() {
-        tracing::warn!(
-            request_id = %request_id,
-            memory_index = i,
-            memory_type = %mem.memory_type,
-            memory_content = %mem.content,
-            "DEBUG: Memory item"
-        );
-    }
 
     // Build prompt with settings
     // Note: System prompt/instructions are sent via the 'system' field, not in the prompt
@@ -2066,8 +2086,10 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         .with_context(&context)
         .with_user_query(&req.query);
 
-    // Create streaming request based on backend type and caching preference
-    let client = reqwest::Client::new();
+    // Create streaming request based on backend type and caching preference.
+    // Reuse a process-wide reqwest client so we keep Ollama's HTTP keep-alive
+    // connection alive across chat turns instead of paying TCP+TLS each time.
+    let client = llm_http_client().clone();
     let chunks_count = used_chunks.len();
 
     // Determine URL and request body based on backend and caching
@@ -2311,18 +2333,33 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
         }
     };
 
-    tracing::warn!(
+    tracing::debug!(
         backend = ?backend_type,
         caching = prompt_caching,
         url = %url,
-        "DEBUG Sending LLM request"
+        "sending LLM request"
     );
 
+    let request_id_for_stream = request_id.clone();
+    let first_byte_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     match client.post(&url).json(&request_body).send().await {
         Ok(response) => {
             let stream = response.bytes_stream().map(move |chunk_result| {
                 match chunk_result {
                     Ok(bytes) => {
+                        // TTFT baseline: log when the first non-empty Ollama
+                        // byte arrives so we can attribute regressions to
+                        // prep vs network vs LLM warmup.
+                        if !first_byte_flag.swap(true, std::sync::atomic::Ordering::Relaxed)
+                            && !bytes.is_empty()
+                        {
+                            tracing::info!(
+                                request_id = %request_id_for_stream,
+                                ttft_ms = entry_t.elapsed().as_millis() as u64,
+                                "chat-stream first byte from LLM"
+                            );
+                        }
+
                         // Parse Ollama's streaming response (newline-delimited JSON)
                         // Handles both /api/generate ("response" field) and /api/chat ("message.content" field)
                         let text = String::from_utf8_lossy(&bytes);

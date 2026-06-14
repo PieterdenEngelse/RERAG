@@ -22,6 +22,37 @@ pub struct UpdateDescriptionBody {
     pub description: String,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateWatchDirBody {
+    /// Absolute path the watcher should monitor for this corpus.
+    /// Empty string or `null` clears the override and falls back to the
+    /// PathManager-derived default. Restart-required.
+    #[serde(default)]
+    pub watch_dir: Option<String>,
+}
+
+pub async fn update_corpus_watch_dir_handler(
+    config: web::Data<ApiConfig>,
+    slug: web::Path<String>,
+    body: web::Json<UpdateWatchDirBody>,
+) -> Result<HttpResponse, Error> {
+    let slug = slug.into_inner();
+    let conn = open_db(&config)?;
+    let trimmed = body.watch_dir.as_deref().map(str::trim).map(str::to_string);
+    let to_store = trimmed.as_deref().filter(|s| !s.is_empty());
+    match corpora::set_corpus_watch_dir(&conn, &slug, to_store) {
+        Ok(()) => Ok(HttpResponse::Ok().json(json!({
+            "status": "ok",
+            "slug": slug,
+            "watch_dir": to_store,
+            "restart_required": true,
+        }))),
+        Err(CorporaError::NotFound(_)) => Ok(corpus_not_found(&slug)),
+        Err(e) => Ok(HttpResponse::InternalServerError()
+            .json(json!({ "status": "error", "message": e.to_string() }))),
+    }
+}
+
 pub async fn update_corpus_description_handler(
     config: web::Data<ApiConfig>,
     slug: web::Path<String>,
@@ -92,11 +123,26 @@ pub async fn list_corpora_handler(config: web::Data<ApiConfig>) -> Result<HttpRe
     let items: Vec<serde_json::Value> = corpora
         .into_iter()
         .map(|c| {
-            let dir = config.path_manager.corpus_upload_dir(&c.slug);
+            // Count documents at the effective watch dir (override → default),
+            // not the PathManager default — that way a user who points a corpus
+            // at e.g. ~/Documents/papers sees the count from there.
+            let dir = c
+                .watch_dir
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| config.path_manager.corpus_upload_dir(&c.slug));
             let doc_count = std::fs::read_dir(&dir)
                 .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
                 .unwrap_or(0);
-            json!({ "id": c.id, "slug": c.slug, "name": c.name, "description": c.description, "created_at": c.created_at, "doc_count": doc_count })
+            json!({
+                "id": c.id,
+                "slug": c.slug,
+                "name": c.name,
+                "description": c.description,
+                "created_at": c.created_at,
+                "doc_count": doc_count,
+                "watch_dir": c.watch_dir,
+            })
         })
         .collect();
     Ok(HttpResponse::Ok().json(json!({ "status": "ok", "corpora": items, "count": items.len() })))
@@ -113,7 +159,11 @@ pub async fn get_corpus_handler(
     {
         None => Ok(corpus_not_found(&slug)),
         Some(c) => {
-            let dir = config.path_manager.corpus_upload_dir(&c.slug);
+            let dir = c
+                .watch_dir
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| config.path_manager.corpus_upload_dir(&c.slug));
             let doc_count = std::fs::read_dir(&dir)
                 .map(|entries| {
                     entries
@@ -124,7 +174,15 @@ pub async fn get_corpus_handler(
                 .unwrap_or(0);
             Ok(HttpResponse::Ok().json(json!({
                 "status": "ok",
-                "corpus": { "id": c.id, "slug": c.slug, "name": c.name, "description": c.description, "created_at": c.created_at, "doc_count": doc_count }
+                "corpus": {
+                    "id": c.id,
+                    "slug": c.slug,
+                    "name": c.name,
+                    "description": c.description,
+                    "created_at": c.created_at,
+                    "doc_count": doc_count,
+                    "watch_dir": c.watch_dir,
+                }
             })))
         }
     }

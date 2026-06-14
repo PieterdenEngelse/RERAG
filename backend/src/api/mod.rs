@@ -886,6 +886,14 @@ pub fn start_api_server(
                         web::get().to(agentic_monitor_routes::get_reflections),
                     )
                     .route(
+                        "/agents/rig-stats",
+                        web::get().to(agentic_monitor_routes::get_rig_stats),
+                    )
+                    .route(
+                        "/agents/pointer-stats",
+                        web::get().to(agentic_monitor_routes::get_pointer_stats),
+                    )
+                    .route(
                         "/memory/stats",
                         web::get().to(agentic_monitor_routes::get_memory_stats),
                     )
@@ -955,6 +963,10 @@ pub fn start_api_server(
                     .route(
                         "/{slug}/description",
                         web::patch().to(update_corpus_description_handler),
+                    )
+                    .route(
+                        "/{slug}/watch-dir",
+                        web::patch().to(update_corpus_watch_dir_handler),
                     )
                     .route(
                         "/{slug}/documents",

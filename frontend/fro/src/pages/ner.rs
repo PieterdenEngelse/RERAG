@@ -141,7 +141,7 @@ pub fn ConfigNer() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Config", Some(Route::Config {})),
+                    BreadcrumbItem::new("Config", Some(Route::ConfigRuntime {})),
                     BreadcrumbItem::new("NER", Some(Route::ConfigNer {})),
                 ],
             }

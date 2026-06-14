@@ -30,3 +30,12 @@ backend/models/embedding_model.onnx
 # Editor / backup junk
 *.bak*
 *.swp
+
+# Installer release artifacts — published via GitHub Releases, not Git
+*.AppImage
+*.AppImage.sha256
+
+# FalkorDB binaries extracted from the pinned docker image (~75 MB).
+# CI's release.yml extracts these on each build via docker create + cp,
+# and build-appimage.sh reads from this path; never commit them.
+installer/stage/

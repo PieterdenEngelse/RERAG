@@ -246,8 +246,16 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
         restart_required: true,
     },
     KnownKey {
+        key: "POINTERRAG_AUTO_GAP_THRESHOLD",
+        description: "Auto-mode routing knob: when within-doc fragmentation (section_ratio - doc_ratio) is at least this value, Auto routes the query to PointerRag (full-section hydration) instead of Strict/Hybrid. 0.0 = always Pointer; 1.0 = never. Default 0.5 splits the bimodal corpus distribution from the pp4 analysis. Hot-reloaded; no restart needed.",
+        kind: Kind::F64,
+        default: Some("0.5"),
+        category: "agent",
+        restart_required: false,
+    },
+    KnownKey {
         key: "LAYOUT_DETR_NUM_CLASSES",
-        description: "Number of layout classes the active DETR model predicts (background is added automatically — set this to the count of real classes). 11 matches cmarkea/detr-layout-detection (Caption, Footnote, Formula, List-item, Page-footer, Page-header, Picture, Section-header, Table, Text, Title). Change only if you point Tier 0 or Tier 1 at a checkpoint with a different head — wrong count will make region tagging output garbage classes.",
+        description: "Number of layout classes the active DETR model predicts (background is added automatically — set this to the count of real classes). 11 is DocLayNet's canonical order (Caption, Footnote, Formula, List-item, Page-footer, Page-header, Picture, Section-header, Table, Text, Title) and works for any DocLayNet-trained DETR — both cmarkea/detr-layout-detection and neka-nat/rfdetr-doclaynet-onnx use it. Drop to 5 for a PubLayNet model (Text, Title, List, Figure, Table). Wrong count makes region tagging output garbage classes.",
         kind: Kind::U64,
         default: Some("11"),
         category: "pdf",
@@ -335,6 +343,14 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
         default: Some("500"),
         category: "ingest",
         restart_required: false,
+    },
+    KnownKey {
+        key: "FILE_WATCHER_DIR",
+        description: "Absolute path of the directory the default corpus' watcher monitors. Empty = fall back to the PathManager-derived default (~/.local/share/ag/data/corpora/default/documents/). Per-corpus watch_dir overrides still apply to non-default corpora.",
+        kind: Kind::Path,
+        default: None,
+        category: "ingest",
+        restart_required: true,
     },
     KnownKey {
         key: "AUTO_EXPORT_ON_UPLOAD",

@@ -44,6 +44,13 @@ pub fn ConfigCorpus() -> Element {
     let mut saving = use_signal(|| false);
     let mut save_msg = use_signal(|| Option::<String>::None);
 
+    // Watched directory — per-corpus override of the file watcher path.
+    // Restart-required; saved through a separate endpoint.
+    let mut watch_dir_str = use_signal(String::new);
+    let mut watch_dir_saving = use_signal(|| false);
+    let mut watch_dir_msg = use_signal(|| Option::<String>::None);
+    let mut show_watch_dir = use_signal(|| false);
+
     // Create form state
     let mut new_slug = use_signal(String::new);
     let mut create_error = use_signal(|| None::<String>);
@@ -71,6 +78,10 @@ pub fn ConfigCorpus() -> Element {
 
     use_future(move || async move {
         if let Ok(list) = api::fetch_corpora().await {
+            // Seed the watch_dir input with the selected corpus' current value.
+            if let Some(c) = list.iter().find(|c| c.slug == selected()) {
+                watch_dir_str.set(c.watch_dir.clone().unwrap_or_default());
+            }
             corpora.set(list);
         }
         if let Ok(r) = api::fetch_corpus_settings("default").await {
@@ -114,6 +125,16 @@ pub fn ConfigCorpus() -> Element {
         native_pdf_str.set(String::new());
         save_msg.set(None);
         build_meta.set(None);
+        // Seed watch_dir from the already-fetched corpora list (cheap).
+        watch_dir_str.set(
+            corpora
+                .read()
+                .iter()
+                .find(|c| c.slug == slug)
+                .and_then(|c| c.watch_dir.clone())
+                .unwrap_or_default(),
+        );
+        watch_dir_msg.set(None);
         spawn(async move {
             if let Ok(r) = api::fetch_corpus_settings(&slug).await {
                 let s = r.settings;
@@ -202,7 +223,7 @@ pub fn ConfigCorpus() -> Element {
             Breadcrumb {
                 items: vec![
                     BreadcrumbItem::new("Home", Some(Route::Home {})),
-                    BreadcrumbItem::new("Config", Some(Route::Config {})),
+                    BreadcrumbItem::new("Config", Some(Route::ConfigRuntime {})),
                     BreadcrumbItem::new("Corpus", Some(Route::ConfigCorpus {})),
                 ],
             }
@@ -338,6 +359,77 @@ pub fn ConfigCorpus() -> Element {
             }
             Panel { title: None, refresh: None,
                 div { class: "flex flex-col gap-3",
+
+                    // ── Watched directory (its own row — restart-required) ─
+                    div { class: "flex items-end gap-2 w-full flex-wrap",
+                        div { class: "flex flex-col gap-1 flex-1 min-w-[24rem]",
+                            div { class: "flex items-center gap-1",
+                                label { class: "text-xs text-gray-400 shrink-0", "Watched directory" }
+                                button {
+                                    class: BTN_CLASS, style: BTN_STYLE,
+                                    onclick: move |_| show_watch_dir.set(!show_watch_dir()),
+                                    {info_icon()}
+                                }
+                            }
+                            input {
+                                r#type: "text",
+                                class: "input input-sm input-bordered bg-gray-700 text-gray-200 w-full font-mono",
+                                placeholder: "(default — leave blank to use the PathManager-derived folder)",
+                                value: watch_dir_str(),
+                                oninput: move |evt| watch_dir_str.set(evt.value()),
+                            }
+                        }
+                        button {
+                            class: "btn btn-sm",
+                            style: "background-color:#7C2A02;border-color:#7C2A02;color:white;",
+                            disabled: watch_dir_saving(),
+                            onclick: move |_| {
+                                let slug = selected();
+                                let raw = watch_dir_str();
+                                let trimmed = raw.trim().to_string();
+                                watch_dir_saving.set(true);
+                                watch_dir_msg.set(None);
+                                spawn(async move {
+                                    let arg = if trimmed.is_empty() { None } else { Some(trimmed.as_str()) };
+                                    match api::update_corpus_watch_dir(&slug, arg).await {
+                                        Ok(()) => {
+                                            watch_dir_msg.set(Some(
+                                                "Saved — restart required for the watcher to pick up the new path.".into(),
+                                            ));
+                                            if let Ok(list) = api::fetch_corpora().await {
+                                                corpora.set(list);
+                                            }
+                                        }
+                                        Err(e) => watch_dir_msg.set(Some(format!("Error: {e}"))),
+                                    }
+                                    watch_dir_saving.set(false);
+                                });
+                            },
+                            if watch_dir_saving() { "Saving…" } else { "Save path" }
+                        }
+                    }
+                    if show_watch_dir() {
+                        div { class: "rounded bg-gray-800 border border-gray-600 p-3 text-xs text-gray-300 space-y-1",
+                            p { "Absolute path of the directory the file watcher monitors for this corpus. Drop a file into this folder and the app will parse, chunk, embed, and index it automatically." }
+                            p { class: "text-gray-400", "Leave blank to use the default: " span { class: "font-mono text-gray-200", "~/.local/share/ag/data/corpora/{selected()}/documents/" } }
+                            p { class: "text-gray-200 font-semibold mt-1", "Precedence (default corpus only)" }
+                            p { "1. " span { class: "font-mono text-gray-100", "FILE_WATCHER_DIR" } " env/runtime override" }
+                            p { "2. This corpus' watched-directory setting" }
+                            p { "3. The PathManager-derived default" }
+                            p { class: "text-yellow-600 mt-1", "Restart required. The running watcher is not respawned on save — restart ag for the new path to take effect." }
+                            p { class: "text-gray-400 mt-1",
+                                "Background: "
+                                a { href: "/docu/index/file-watcher", class: "text-blue-400 hover:text-blue-300 underline", "File Watcher" }
+                                " — how the underlying notify-based watcher works, what events it forwards, and why the debounce window matters."
+                            }
+                        }
+                    }
+                    if let Some(msg) = watch_dir_msg() {
+                        p {
+                            class: if msg.starts_with("Error") { "text-xs text-red-400" } else { "text-xs text-yellow-300" },
+                            "{msg}"
+                        }
+                    }
 
                     // ── All 6 fields on one row, labels above controls ────
                     div { class: "flex items-end gap-4 w-full flex-wrap",
@@ -549,40 +641,42 @@ pub fn ConfigCorpus() -> Element {
                 description: Some("Shared settings — shown for reference, not per-corpus.".into()),
             }
 
-            Panel { title: Some("Chunking".into()), refresh: None,
-                if let Some(cfg) = chunk_cfg() {
-                    div { class: "grid grid-cols-2 md:grid-cols-4 gap-4",
-                        HealthCard { name: "Mode".into(), status: cfg.mode.into(), detail: Some("Global".into()) }
-                        HealthCard { name: "Target size".into(), status: format!("{} tok", cfg.target_size).into(), detail: Some("Tokens".into()) }
-                        HealthCard { name: "Overlap".into(), status: format!("{} tok", cfg.overlap).into(), detail: Some("Tokens".into()) }
-                        HealthCard { name: "Semantic threshold".into(), status: format!("{:.2}", cfg.semantic_similarity_threshold).into(), detail: Some("Cosine".into()) }
+            div { class: "grid grid-cols-1 lg:grid-cols-3 gap-4",
+                Panel { title: Some("Chunking".into()), refresh: None,
+                    if let Some(cfg) = chunk_cfg() {
+                        div { class: "grid grid-cols-2 gap-2",
+                            HealthCard { name: "Mode".into(), status: cfg.mode.into(), detail: Some("Global".into()) }
+                            HealthCard { name: "Target size".into(), status: format!("{} tok", cfg.target_size).into(), detail: Some("Tokens".into()) }
+                            HealthCard { name: "Overlap".into(), status: format!("{} tok", cfg.overlap).into(), detail: Some("Tokens".into()) }
+                            HealthCard { name: "Sem. thr.".into(), status: format!("{:.2}", cfg.semantic_similarity_threshold).into(), detail: Some("Cosine".into()) }
+                        }
+                    } else {
+                        p { class: "text-sm text-gray-300", "Loading…" }
                     }
-                } else {
-                    p { class: "text-sm text-gray-300", "Loading…" }
                 }
-            }
 
-            Panel { title: Some("Embedding".into()), refresh: None,
-                if let Some(cfg) = embed_cfg() {
-                    div { class: "grid grid-cols-2 md:grid-cols-4 gap-4",
-                        HealthCard { name: "Model".into(), status: cfg.model.into(), detail: Some("Active".into()) }
-                        HealthCard { name: "Dimension".into(), status: format!("{}", cfg.dimension).into(), detail: Some("Output dim".into()) }
-                        HealthCard { name: "Provider".into(), status: cfg.provider.into(), detail: Some("Backend".into()) }
+                Panel { title: Some("Embedding".into()), refresh: None,
+                    if let Some(cfg) = embed_cfg() {
+                        div { class: "grid grid-cols-2 gap-2",
+                            HealthCard { name: "Model".into(), status: cfg.model.into(), detail: Some("Active".into()) }
+                            HealthCard { name: "Dimension".into(), status: format!("{}", cfg.dimension).into(), detail: Some("Output dim".into()) }
+                            HealthCard { name: "Provider".into(), status: cfg.provider.into(), detail: Some("Backend".into()) }
+                        }
+                    } else {
+                        p { class: "text-sm text-gray-300", "Loading…" }
                     }
-                } else {
-                    p { class: "text-sm text-gray-300", "Loading…" }
                 }
-            }
 
-            Panel { title: Some("Index".into()), refresh: None,
-                if let Some(cfg) = index_cfg() {
-                    div { class: "grid grid-cols-2 md:grid-cols-4 gap-4",
-                        HealthCard { name: "Mode".into(), status: cfg.mode.into(), detail: Some("Index type".into()) }
-                        HealthCard { name: "Documents".into(), status: format!("{}", cfg.total_documents).into(), detail: Some("Indexed".into()) }
-                        HealthCard { name: "Vectors".into(), status: format!("{}", cfg.total_vectors).into(), detail: Some("Stored".into()) }
+                Panel { title: Some("Index".into()), refresh: None,
+                    if let Some(cfg) = index_cfg() {
+                        div { class: "grid grid-cols-2 gap-2",
+                            HealthCard { name: "Mode".into(), status: cfg.mode.into(), detail: Some("Index type".into()) }
+                            HealthCard { name: "Documents".into(), status: format!("{}", cfg.total_documents).into(), detail: Some("Indexed".into()) }
+                            HealthCard { name: "Vectors".into(), status: format!("{}", cfg.total_vectors).into(), detail: Some("Stored".into()) }
+                        }
+                    } else {
+                        p { class: "text-sm text-gray-300", "Loading…" }
                     }
-                } else {
-                    p { class: "text-sm text-gray-300", "Loading…" }
                 }
             }
         }
