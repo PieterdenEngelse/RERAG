@@ -95,7 +95,7 @@ pub fn SearchBar() -> Element {
 
             // Backend status indicator
             div {
-                class: "mb-4 text-sm text-gray-300 dark:text-gray-400",
+                class: "mb-4 text-sm text-gray-400",
                 "Backend: {backend_status}"
             }
 
@@ -104,8 +104,8 @@ pub fn SearchBar() -> Element {
                 class: "flex gap-2 mb-6",
 
                 input {
-                    class: "flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                           bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                    class: "flex-1 px-4 py-2 border border-gray-600 rounded-lg
+                           bg-gray-800 text-gray-100
                            focus:outline-none focus:ring-2 focus:ring-indigo-500",
                     r#type: "text",
                     placeholder: "Search documents...",
@@ -132,8 +132,7 @@ pub fn SearchBar() -> Element {
             // Error message
             if let Some(err) = error() {
                 div {
-                    class: "mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200
-                           dark:border-red-800 rounded-lg text-red-700 dark:text-red-400",
+                    class: "mb-4 p-4 bg-red-900/20 border border-red-800 rounded-lg text-red-400",
                     "{err}"
                 }
             }
@@ -144,15 +143,14 @@ pub fn SearchBar() -> Element {
                     class: "space-y-4",
 
                     div {
-                        class: "text-sm text-gray-300 dark:text-gray-400 mb-4",
+                        class: "text-sm text-gray-400 mb-4",
                         "Found {results().len()} result(s)"
                     }
 
                     for (idx, result) in results().iter().enumerate() {
                         div {
                             key: "{idx}",
-                            class: "p-4 bg-white dark:bg-gray-800 border border-gray-200
-                                   dark:border-gray-700 rounded-lg shadow-sm hover:shadow-md
+                            class: "p-4 bg-gray-800 border border-gray-700 rounded-lg shadow-sm hover:shadow-md
                                    transition-shadow",
 
                             // Provenance row
@@ -181,7 +179,7 @@ pub fn SearchBar() -> Element {
 
                             // Text
                             p {
-                                class: "text-gray-800 dark:text-gray-200 leading-relaxed text-sm",
+                                class: "text-gray-200 leading-relaxed text-sm",
                                 "{result.text}"
                             }
                         }
@@ -189,7 +187,7 @@ pub fn SearchBar() -> Element {
                 }
             } else if !loading() && query().trim().is_empty() {
                 div {
-                    class: "text-center py-12 text-gray-300 dark:text-gray-400",
+                    class: "text-center py-12 text-gray-400",
 
                     div {
                         class: "text-4xl mb-4",
@@ -214,7 +212,7 @@ pub fn SearchBar() -> Element {
                     }
 
                     p {
-                        class: "mt-4 text-gray-300 dark:text-gray-400",
+                        class: "mt-4 text-gray-400",
                         "Searching..."
                     }
                 }

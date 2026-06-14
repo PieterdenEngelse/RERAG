@@ -1,7 +1,6 @@
 use crate::api;
 use crate::app::RuntimeSuspended;
 use crate::app::{ClearChat, PageErrors, Route, ShowHelpCommands, ShowRagInfo};
-use crate::components::dark_mode_toggle::DarkModeToggle;
 use crate::components::nav_dropdown::{DropdownActionItem, DropdownItem, NavDropdown};
 use crate::pages::hardware::constants::INFO_ICON_SVG_CLASS;
 use dioxus::prelude::*;
@@ -34,7 +33,6 @@ pub fn Header() -> Element {
     let mut log_total_lines = use_signal(|| 0usize);
     let current_route = use_route::<Route>();
 
-    let is_dark = use_context::<Signal<bool>>();
     let mut show_help = use_context::<Signal<ShowHelpCommands>>();
     let mut show_rag_info = use_context::<Signal<ShowRagInfo>>();
     let mut clear_chat = use_context::<Signal<ClearChat>>();
@@ -443,10 +441,8 @@ pub fn Header() -> Element {
                     {
                         let home_color = if matches!(current_route, Route::Home {}) {
                             "#7C2A02"
-                        } else if is_dark() {
-                            "white"
                         } else {
-                            "#111827"
+                            "white"
                         };
                         rsx! {
                             Link {
@@ -480,10 +476,8 @@ pub fn Header() -> Element {
                             | Route::MonitorAgSystemd {}
                         ) {
                             "#7C2A02"
-                        } else if is_dark() {
-                            "white"
                         } else {
-                            "#111827"
+                            "white"
                         };
                         rsx! {
                             Link {
@@ -505,10 +499,8 @@ pub fn Header() -> Element {
                             | Route::Parameters {}
                         ) {
                             "#7C2A02"
-                        } else if is_dark() {
-                            "white"
                         } else {
-                            "#111827"
+                            "white"
                         };
                         rsx! {
                             Link {
@@ -522,10 +514,8 @@ pub fn Header() -> Element {
                     {
                         let train_color = if matches!(current_route, Route::Train {}) {
                             "#7C2A02"
-                        } else if is_dark() {
-                            "white"
                         } else {
-                            "#111827"
+                            "white"
                         };
                         rsx! {
                             Link {
@@ -539,10 +529,8 @@ pub fn Header() -> Element {
                     {
                         let docu_color = if matches!(current_route, Route::Docu {}) {
                             "#7C2A02"
-                        } else if is_dark() {
-                            "white"
                         } else {
-                            "#111827"
+                            "white"
                         };
                         rsx! {
                             Link {
@@ -568,7 +556,6 @@ pub fn Header() -> Element {
                         DropdownItem { to: Route::About {}, "Contact" }
                     }
                 }
-                DarkModeToggle {}
                 button {
                     class: "md:hidden p-2 text-2xl",
                     onclick: move |_| menu_open.set(!menu_open()),
@@ -613,7 +600,7 @@ pub fn Header() -> Element {
                     }
                     Link {
                         to: Route::About {},
-                        class: "hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors",
+                        class: "hover:text-indigo-400 transition-colors",
                         onclick: move |_| menu_open.set(false),
                         "About"
                     }
@@ -625,7 +612,6 @@ pub fn Header() -> Element {
                         },
                         "/help commands"
                     }
-                    DarkModeToggle {}
                 }
             }
         }
