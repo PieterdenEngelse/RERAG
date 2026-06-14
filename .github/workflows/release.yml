@@ -36,7 +36,11 @@ jobs:
   appimage:
     name: Build AppImage (linux-x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # v0.2.5's first attempt timed out at 45 min during "Build ag-installer"
+    # — Cargo.lock changed via the PR #9 merge so the cache was invalidated
+    # and every dep recompiled cold. 90 min gives breathing room for cold
+    # builds; warm cache runs finish in ~10 min.
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -136,6 +140,12 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/fro/package-lock.json
 
+      - name: Install cargo-binstall
+        # cargo-binstall downloads prebuilt binaries instead of compiling
+        # from source. Used to install dx in the next step in ~30s instead
+        # of the ~10-15 min a `cargo install dioxus-cli` would take.
+        uses: cargo-bins/cargo-binstall@main
+
       - name: Install dioxus-cli
         # dx handles Dioxus 0.7's asset!() macro — bundles output.css and
         # other declared assets into the build dir with hashed filenames so
@@ -144,7 +154,7 @@ jobs:
         # broken-layout AppImages from v0.2.0 → v0.2.4.
         # Version pinned to match local dev (CLAUDE.md's `dx serve`
         # invocation).
-        run: cargo install dioxus-cli@0.7.9 --locked
+        run: cargo binstall dioxus-cli@0.7.9 --no-confirm --locked
 
       - name: Install appimagetool
         run: |
