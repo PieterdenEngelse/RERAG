@@ -23,6 +23,15 @@ on:
 permissions:
   contents: write  # gh release create needs this
 
+env:
+  # Override .cargo/config.toml's target-cpu=native to a portable baseline.
+  # x86-64-v3 = Haswell (2013) and later — covers AVX2, BMI2, FMA, LZCNT,
+  # MOVBE, POPCNT, XSAVE. Excludes pre-Haswell CPUs.
+  # Without this, CI builds for the runner's CPU (which may have AVX-512)
+  # and the binary SIGILLs on user CPUs without that instruction set.
+  # See docs/bin3 §Decision surface for the portability rationale.
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C target-cpu=x86-64-v3 -C link-arg=-fuse-ld=mold"
+
 jobs:
   appimage:
     name: Build AppImage (linux-x86_64)
