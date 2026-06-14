@@ -221,40 +221,7 @@ pub enum StepStatus {
     Pending,
     Running,
     Done,
-    /// Exercised by Phase D's failure modal — not in Phase B mock data.
-    #[allow(dead_code)]
     Failed,
-}
-
-pub fn mock_install_steps() -> Vec<InstallStep> {
-    vec![
-        InstallStep { name: "Ensure XDG tree", status: StepStatus::Done, duration_s: 0 },
-        InstallStep { name: "Seed config", status: StepStatus::Done, duration_s: 0 },
-        InstallStep { name: "Install artifacts", status: StepStatus::Done, duration_s: 3 },
-        InstallStep { name: "FalkorDB native service", status: StepStatus::Running, duration_s: 4 },
-        InstallStep { name: "Systemd user units", status: StepStatus::Pending, duration_s: 0 },
-        InstallStep { name: "Health check", status: StepStatus::Pending, duration_s: 0 },
-    ]
-}
-
-pub fn mock_log_lines() -> Vec<&'static str> {
-    vec![
-        "[1/6] ▶ Ensure XDG tree",
-        "  created/verified ~/.local/share/ag tree",
-        "[1/6] ✓ Ensure XDG tree  (0s)",
-        "[2/6] ▶ Seed config",
-        "  seeded ~/.config/ag/ag.env",
-        "  copied docker-compose.yml → ~/.config/ag/",
-        "[2/6] ✓ Seed config  (0s)",
-        "[3/6] ▶ Install artifacts to XDG paths",
-        "  installed ~/.local/bin/ag",
-        "  installed ~/.local/lib/libtika_native.so",
-        "  rsynced frontend/fro/dist/ → ~/.local/share/ag/web/",
-        "  binary smoke-test passed",
-        "[3/6] ✓ Install artifacts  (3s)",
-        "[4/6] ▶ FalkorDB native service",
-        "  extracting binaries from falkordb/falkordb…",
-    ]
 }
 
 // =============================================================================

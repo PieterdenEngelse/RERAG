@@ -9,7 +9,9 @@
 #![allow(non_snake_case)]
 
 mod app;
+mod bundled;
 mod detection;
+mod install_steps;
 mod prompts;
 mod ui;
 

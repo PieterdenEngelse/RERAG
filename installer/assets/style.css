@@ -651,4 +651,67 @@ html, body {
     gap: 1.25rem;
     align-items: start;
 }
+
+/* =============================================================================
+   Modal overlay + failure modal (Phase D.1)
+   ============================================================================= */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 7, 10, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+.modal-content {
+    background: #11141a;
+    border: 1px solid #1f2632;
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    min-width: 480px;
+    max-width: 720px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+.modal-title {
+    color: #ffffff;
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+.modal-step {
+    color: #9ca3af;
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+.modal-step-name {
+    color: #d1d5db;
+    font-family: ui-monospace, monospace;
+}
+.modal-message {
+    background: #0a0c10;
+    border: 1px solid #1f2632;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    color: #fbbf24;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-bottom: 1rem;
+    max-height: 320px;
+    overflow-y: auto;
+}
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
+.failure-modal {
+    border-color: #3a2a10;
+}
+.failure-modal .modal-title {
+    color: #fbbf24;
+}
 .footer-sep { color: #2d3543; }
