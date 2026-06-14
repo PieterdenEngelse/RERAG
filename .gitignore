@@ -30,3 +30,7 @@ backend/models/embedding_model.onnx
 # Editor / backup junk
 *.bak*
 *.swp
+
+# Installer release artifacts — published via GitHub Releases, not Git
+*.AppImage
+*.AppImage.sha256
