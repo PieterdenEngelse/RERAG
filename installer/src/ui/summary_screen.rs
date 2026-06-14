@@ -6,8 +6,11 @@
 //!
 //! Buttons:
 //! - Close → closes the installer window via `use_window().close()`
-//! - Open ag dashboard → `xdg-open http://127.0.0.1:$BACKEND_PORT`
-//!   (works if ag is running, harmless connection-refused in browser otherwise)
+//! - Open ag dashboard → **disabled** as of v0.2.3 with explanatory
+//!   title=. The backend currently responds with placeholder text at /,
+//!   not the frontend dist. Re-enabled in v0.2.4 once the backend has a
+//!   static-file route serving $AG_WEB_DIR/ at / (planned in the
+//!   `feat(backend): serve frontend at /` PR).
 //! - View install log → `xdg-open ~/.local/share/ag/logs/` (the dir, since
 //!   Phase D will land the specific log file path)
 
@@ -80,7 +83,8 @@ pub fn SummaryScreen() -> Element {
                     }
                     button {
                         class: "btn btn-primary",
-                        onclick: move |_| open_dashboard(),
+                        disabled: true,
+                        title: "Dashboard serving lands in v0.2.4 — backend static-file route pending. For now ag.service responds with a placeholder at /; run `dx serve` in dev mode to see the frontend.",
                         "Open ag dashboard"
                     }
                 }
@@ -117,16 +121,6 @@ fn SummaryBucket(props: SummaryBucketProps) -> Element {
             }
         }
     }
-}
-
-/// Launch the user's default browser at the local ag dashboard.
-/// No error handling: if ag isn't running, browser shows a connection
-/// error and the user closes the tab. Phase E will detect the backend
-/// port from ag.env and use it here instead of the hard-coded 3010.
-fn open_dashboard() {
-    let _ = std::process::Command::new("xdg-open")
-        .arg("http://127.0.0.1:3010")
-        .spawn();
 }
 
 /// Open the logs directory in the user's file manager. Phase D will land
