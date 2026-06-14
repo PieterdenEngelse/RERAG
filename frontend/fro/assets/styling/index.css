@@ -4,9 +4,12 @@
 /* Enable class-based dark mode for Tailwind v4 */
 @custom-variant dark (&:where(.dark &));
 
-/* DaisyUI theme configuration */
+/* DaisyUI theme configuration — dark only.
+ * Trimmed from `light, dark, synthwave, cyberpunk` as part of the
+ * cleanup/remove-light-mode pass: the app is dark-only by design,
+ * the other three themes shipped unused bytes in output.css. */
 @theme {
-  --daisyui-themes: light, dark, synthwave, cyberpunk;
+  --daisyui-themes: dark;
 }
 
 /* Control number input width to fit content + arrows snugly */

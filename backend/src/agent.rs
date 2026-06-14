@@ -259,6 +259,10 @@ pub enum AgentMode {
     RagStrict,
     /// Agentic mode: LLM decides which tools to call in a loop (Rig)
     Agentic,
+    /// Proxy-pointer RAG: use the matched chunks only to discover their
+    /// section_ids, then hand the LLM the full reassembled sections instead
+    /// of the raw chunks. Falls back to chunk text when section info missing.
+    PointerRag,
 }
 
 /// Verbosity level for responses
@@ -969,6 +973,22 @@ impl<'a> Agent<'a> {
                         used_chunks,
                     };
                 }
+                AgentMode::PointerRag => {
+                    // No chunks → no sections to hydrate; treat like strict RAG.
+                    let answer =
+                        "I don't have enough information in the knowledge base to answer this question.".to_string();
+                    steps.push(AgentStep {
+                        kind: "plan".into(),
+                        message: "No chunks found; PointerRag returns 'I don't know'".into(),
+                    });
+                    self.store_memory(query, &answer);
+                    self.store_episode(query, &answer, 0, false);
+                    return AgentResponse {
+                        answer,
+                        steps,
+                        used_chunks,
+                    };
+                }
                 AgentMode::Llm => unreachable!(), // Already handled above
                 AgentMode::Agentic => unreachable!(), // Already handled above
             }
@@ -1125,6 +1145,47 @@ impl<'a> Agent<'a> {
                     }
                 }
             }
+            AgentMode::PointerRag => {
+                // Map chunks → unique section_ids → reassembled sections.
+                // When a chunk has no section_id (older index, missing meta),
+                // fall back to using the chunk text itself.
+                let mut seen_sections: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut sections: Vec<String> = Vec::with_capacity(used_chunks.len());
+                if let Ok(r) = self.retriever.lock() {
+                    for chunk in &used_chunks {
+                        let section_id = r
+                            .meta_for_content(chunk)
+                            .map(|m| m.section_id.clone())
+                            .unwrap_or_default();
+                        if section_id.is_empty() {
+                            sections.push(chunk.clone());
+                            continue;
+                        }
+                        if !seen_sections.insert(section_id.clone()) {
+                            continue;
+                        }
+                        match r.fetch_section(&section_id) {
+                            Ok(text) if !text.is_empty() => sections.push(text),
+                            _ => sections.push(chunk.clone()),
+                        }
+                    }
+                } else {
+                    sections.clone_from(&used_chunks);
+                }
+                let context = sections.join("\n\n---\n\n");
+                steps.push(AgentStep {
+                    kind: "llm".into(),
+                    message: format!(
+                        "PointerRag: hydrated {} unique sections from {} chunks, answering with strict RAG",
+                        sections.len(),
+                        used_chunks.len()
+                    ),
+                });
+                crate::monitoring::record_tool_dependency_str("Memory", "SemanticSearch");
+                crate::monitoring::record_tool_dependency_str("SemanticSearch", "LLMGenerate");
+                self.call_llm_strict(query, &context, goal_context_opt)
+            }
             AgentMode::Llm => unreachable!(), // Already handled above
             AgentMode::Agentic => unreachable!(), // Already handled above
         };
@@ -1223,7 +1284,7 @@ impl<'a> Agent<'a> {
             AgentMode::Rag => LlmConfig::documents_only(),
             AgentMode::Llm => LlmConfig::llm_only(),
             AgentMode::Hybrid | AgentMode::Auto => LlmConfig::combined(),
-            AgentMode::RagStrict => LlmConfig::documents_only(),
+            AgentMode::RagStrict | AgentMode::PointerRag => LlmConfig::documents_only(),
             AgentMode::Agentic => LlmConfig::combined(),
         };
 

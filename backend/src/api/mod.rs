@@ -579,6 +579,10 @@ pub enum ChatMode {
     RagStrict,
     /// Agentic mode: LLM-driven tool-use loop (Rig integration)
     Agentic,
+    /// Proxy-pointer RAG: hydrate full sections from the matched chunks'
+    /// section_ids before handing the LLM context.
+    #[serde(alias = "pointer_rag")]
+    PointerRag,
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
