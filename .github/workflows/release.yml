@@ -66,6 +66,28 @@ jobs:
           fi
           echo "Building $TAG (version=$VERSION, prerelease=${{ steps.tag.outputs.prerelease }})"
 
+      - name: Verify installer/Cargo.toml version matches tag
+        # Catches the drift that v0.2.0 → v0.2.4 had: AppImage filename came
+        # from the git tag, but the binary's embedded CARGO_PKG_VERSION stayed
+        # at 0.1.0 because installer/Cargo.toml was never bumped. Fail fast
+        # here so the release process can't ship a binary that lies about its
+        # version.
+        env:
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          CARGO_VERSION="$(grep -E '^version[[:space:]]*=' installer/Cargo.toml \
+            | head -1 | cut -d'"' -f2)"
+          if [[ -z "$CARGO_VERSION" ]]; then
+            echo "::error::could not parse version from installer/Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "$CARGO_VERSION" != "$EXPECTED" ]]; then
+            echo "::error::installer/Cargo.toml version ($CARGO_VERSION) does not match tag ($EXPECTED)." >&2
+            echo "::error::Bump installer/Cargo.toml to $EXPECTED in the same commit you tag." >&2
+            exit 1
+          fi
+          echo "installer/Cargo.toml version=$CARGO_VERSION matches tag — OK"
+
       - name: Install build-time system deps
         # Dioxus desktop (0.7.x) uses webkit2gtk under the hood. Ubuntu
         # runners don't ship the -dev packages by default.

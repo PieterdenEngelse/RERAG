@@ -1,6 +1,10 @@
 [package]
 name = "ag-installer"
-version = "0.1.0"
+# Kept in lockstep with the release tag. CI's "Verify Cargo.toml version
+# matches tag" step in .github/workflows/release.yml errors before the
+# build if this drifts from ${TAG#v}. Bump this in the same commit that
+# precedes a release tag.
+version = "0.2.4"
 edition = "2021"
 authors.workspace = true
 description = "GUI installer for ag — the agentic RAG stack"
