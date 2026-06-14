@@ -276,3 +276,55 @@ fn xdg_config_dir() -> Option<std::path::PathBuf> {
         .ok()
         .map(|h| std::path::PathBuf::from(h).join(".config"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Acceptance harness for the Phase C spec: runs the real probes against
+    /// whatever host the test is invoked on and prints the result so the
+    /// developer can eyeball it against `install-linux.sh --dry-run` output.
+    ///
+    /// `#[ignore]` so it never runs in normal CI / pre-commit — the values
+    /// are host-specific and meaningless on a clean GitHub runner. Invoke
+    /// explicitly with:
+    ///     cargo test -p ag-installer --lib -- --ignored --nocapture \
+    ///         detection::tests::print_real_result
+    #[tokio::test]
+    #[ignore]
+    async fn print_real_result() {
+        let result = run().await;
+        println!("\n--- DetectionResult ---");
+        println!("docker_present     {:?}", result.docker_present);
+        println!("ollama_active      {}", result.ollama_active);
+        println!("compose_up         {}", result.compose_up);
+        println!("falkordb_healthy   {}", result.falkordb_healthy);
+        println!("ag_env_exists      {}", result.ag_env_exists);
+        println!("backend_port_busy  {}", result.backend_port_busy);
+        println!("system_redis       {}", result.system_redis);
+        println!("native_obs         {:?}", result.native_obs);
+        println!("ag_service_drift   {}", result.ag_service_drift);
+        println!("disk_free_gb       {}", result.disk_free_gb);
+        println!("ram_gb             {}", result.ram_gb);
+
+        let rows = crate::app::detection_rows(&result);
+        println!("\n--- Detection screen rows ---");
+        for row in &rows {
+            let mark = match row.status {
+                crate::app::DetectionStatus::Ok => '✓',
+                crate::app::DetectionStatus::Warn => '⚠',
+            };
+            println!("  {mark}  {:<22} {}", row.label, row.value);
+        }
+
+        let prompts = crate::prompts::required_prompts(&result);
+        println!("\n--- Prompts that will fire ---");
+        if prompts.is_empty() {
+            println!("  (none)");
+        } else {
+            for id in prompts {
+                println!("  - {:?} → default {:?}", id, id.default_choice());
+            }
+        }
+    }
+}

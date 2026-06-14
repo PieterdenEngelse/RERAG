@@ -148,6 +148,19 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             status: DetectionStatus::Ok,
         },
         DetectionRow {
+            label: "ag.env",
+            value: if d.ag_env_exists {
+                "present — install will preserve it".to_string()
+            } else {
+                "not present — install will create it".to_string()
+            },
+            // Always Ok: bash treats this as silent-reuse (the install does the
+            // right thing either way, no prompt fires). Surfacing it here is a
+            // "make the invisible visible" win — the user knows their config
+            // won't be overwritten.
+            status: DetectionStatus::Ok,
+        },
+        DetectionRow {
             label: "Backend port 3010",
             value: if d.backend_port_busy {
                 "in use by another process".to_string()
