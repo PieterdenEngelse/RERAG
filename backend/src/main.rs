@@ -952,14 +952,18 @@ fn cleanup_stale_locks() {
         format!("{}/index/*/.tantivy-writer.lock", data_dir),
         format!("{}/index/*/.tantivy-meta.lock", data_dir),
         format!("{}/index/*/.tantivy-*", data_dir),
-        // Data directory locks
-        format!("{}/*.lock", data_dir),
-        format!("{}/data/*.lock", data_dir),
+        // Data directory locks — narrow to tantivy's hidden lockfiles to
+        // avoid clobbering anything a user might intentionally place there.
+        format!("{}/.tantivy-*.lock", data_dir),
+        format!("{}/data/.tantivy-*.lock", data_dir),
         // SQLite WAL/SHM files (data dir)
         format!("{}/*.db-wal", data_dir),
         format!("{}/*.db-shm", data_dir),
-        // Project directory locks
-        format!("{}/*.lock", project_dir),
+        // Project directory locks — same narrow pattern. The previous
+        // `{project_dir}/*.lock` glob matched the workspace Cargo.lock,
+        // causing ag.service restarts to silently delete it and break
+        // subsequent cargo invocations.
+        format!("{}/.tantivy-*.lock", project_dir),
         // SQLite WAL/SHM files (project dir)
         format!("{}/*.db-wal", project_dir),
         format!("{}/*.db-shm", project_dir),
