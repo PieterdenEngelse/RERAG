@@ -22,6 +22,7 @@ use crate::tools::url_fetch::URLFetchTool;
 use crate::tools::web_search::WebSearchTool;
 use crate::tools::Tool;
 use actix_cors::Cors;
+use actix_files::Files;
 use actix_multipart::Multipart;
 use actix_web::http::header::AUTHORIZATION;
 use actix_web::{error, http::StatusCode, web, App, Error, HttpRequest, HttpResponse, HttpServer};
@@ -620,12 +621,53 @@ pub mod runtime_routes;
 pub mod sys_routes;
 pub mod tool_routes;
 
+/// Locate the directory of bundled frontend assets to serve at /.
+/// See start_api_server for the precedence rationale.
+fn resolve_web_dir() -> Option<std::path::PathBuf> {
+    if let Ok(v) = std::env::var("AG_WEB_DIR") {
+        if !v.is_empty() {
+            return Some(std::path::PathBuf::from(v));
+        }
+    }
+    if let Ok(home) = std::env::var("AG_HOME") {
+        if !home.is_empty() {
+            return Some(std::path::PathBuf::from(home).join("web"));
+        }
+    }
+    dirs::data_local_dir().map(|p| p.join("ag").join("web"))
+}
+
 pub fn start_api_server(
     config: &ApiConfig,
 ) -> impl std::future::Future<Output = std::io::Result<()>> {
     // Snapshot needed config values to satisfy 'static factory closure
     let bind_addr = config.bind_addr();
     let upload_bind_addr = config.upload_bind_addr();
+
+    // Resolve the directory of bundled frontend assets, in precedence order:
+    //   1. AG_WEB_DIR (explicit override, e.g. set by install-linux.sh)
+    //   2. AG_HOME/web/ (matches the AppImage installer's bundle layout +
+    //      the bash installer's rsync target)
+    //   3. ~/.local/share/ag/web/ (XDG fallback matching PathManager)
+    // If none of those resolve to a directory containing index.html, the
+    // backend falls back to serving the placeholder root_handler — so the
+    // /health / /ready probes keep working in dev or partial-install setups.
+    let web_dir = resolve_web_dir();
+    let serve_static_at_root = web_dir
+        .as_ref()
+        .map(|p| p.join("index.html").is_file())
+        .unwrap_or(false);
+    if serve_static_at_root {
+        info!(
+            web_dir = %web_dir.as_ref().unwrap().display(),
+            "Serving frontend dist at /"
+        );
+    } else {
+        info!(
+            "No frontend dist found at $AG_WEB_DIR / $AG_HOME/web/ / \
+             ~/.local/share/ag/web/ — root_handler placeholder will respond at /"
+        );
+    }
     let search_workers = config.search_workers;
     let upload_workers = config.upload_workers;
     let search_max_connections = config.search_max_connections;
@@ -762,11 +804,13 @@ pub fn start_api_server(
     let shared_rl_search = Arc::clone(&shared_rl);
     let search_opts_search = search_opts.clone();
     let shared_rate_limit_state_search = shared_rate_limit_state.clone();
+    let web_dir_for_search = web_dir.clone();
     let mut search_server = HttpServer::new(move || {
         let api_config = api_config_search.clone();
         let rl = Arc::clone(&shared_rl_search);
         let opts = search_opts_search.clone();
         let rate_limit_state_data = shared_rate_limit_state_search.clone();
+        let web_dir_for_app = web_dir_for_search.clone();
 
         let cors = Cors::default()
             .allow_any_origin()
@@ -937,7 +981,10 @@ pub fn start_api_server(
             // ============================================================================
             // ROOT & CORE ROUTES
             // ============================================================================
-            .route("/", web::get().to(root_handler))
+            // Note: "/" itself is registered at the END of the chain, conditionally —
+            // serves the frontend dist if web_dir is present, root_handler placeholder
+            // otherwise. See the .configure(...) block after graph_routes below.
+            //
             // Root-level aliases for /monitoring/health and /monitoring/ready so
             // Docker/k8s/uptime tooling works with its default probe paths.
             .route("/health", web::get().to(health_check))
@@ -1165,6 +1212,16 @@ pub fn start_api_server(
             .service(web::scope("/sys").configure(sys_routes::sys_routes))
             .configure(tool_routes::configure_tool_routes)
             .configure(graph_routes::configure_graph_routes)
+            // Frontend dist or placeholder, decided per-worker from the
+            // closure-captured Option<PathBuf>. Registered LAST so the
+            // catch-all Files prefix doesn't shadow any explicit route above.
+            .configure(move |cfg| {
+                if let Some(ref dir) = web_dir_for_app {
+                    cfg.service(Files::new("/", dir).index_file("index.html"));
+                } else {
+                    cfg.route("/", web::get().to(root_handler));
+                }
+            })
     });
     if force_single_worker {
         search_server = search_server.workers(1);
