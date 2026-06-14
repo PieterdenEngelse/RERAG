@@ -4,9 +4,12 @@
 //! fresh / Reused with assumption) + the configured first-run settings,
 //! mirroring the bash installer's terminal output.
 //!
-//! Buttons: Open ag dashboard / View install log / Close. Phase B wires
-//! the buttons to placeholders; Phase D/E hook them up to real `xdg-open`
-//! calls.
+//! Buttons:
+//! - Close → closes the installer window via `use_window().close()`
+//! - Open ag dashboard → `xdg-open http://127.0.0.1:$BACKEND_PORT`
+//!   (works if ag is running, harmless connection-refused in browser otherwise)
+//! - View install log → `xdg-open ~/.local/share/ag/logs/` (the dir, since
+//!   Phase D will land the specific log file path)
 
 use dioxus::prelude::*;
 
@@ -18,6 +21,7 @@ use crate::ui::components::{IconKind, StatusIcon};
 
 #[component]
 pub fn SummaryScreen() -> Element {
+    let window = dioxus::desktop::use_window();
     rsx! {
         div { class: "screen",
             div { class: "screen-header",
@@ -62,11 +66,23 @@ pub fn SummaryScreen() -> Element {
             }
             div { class: "screen-footer",
                 div { class: "screen-footer-left",
-                    button { class: "btn btn-ghost", "View install log" }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| open_logs_dir(),
+                        "View install log"
+                    }
                 }
                 div { class: "screen-footer-right",
-                    button { class: "btn btn-secondary", "Close" }
-                    button { class: "btn btn-primary", "Open ag dashboard" }
+                    button {
+                        class: "btn btn-secondary",
+                        onclick: move |_| window.close(),
+                        "Close"
+                    }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| open_dashboard(),
+                        "Open ag dashboard"
+                    }
                 }
             }
         }
@@ -101,4 +117,23 @@ fn SummaryBucket(props: SummaryBucketProps) -> Element {
             }
         }
     }
+}
+
+/// Launch the user's default browser at the local ag dashboard.
+/// No error handling: if ag isn't running, browser shows a connection
+/// error and the user closes the tab. Phase E will detect the backend
+/// port from ag.env and use it here instead of the hard-coded 3010.
+fn open_dashboard() {
+    let _ = std::process::Command::new("xdg-open")
+        .arg("http://127.0.0.1:3010")
+        .spawn();
+}
+
+/// Open the logs directory in the user's file manager. Phase D will land
+/// the specific log file path; until then this opens the parent dir.
+fn open_logs_dir() {
+    let logs = std::env::var("HOME")
+        .map(|h| format!("{h}/.local/share/ag/logs"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let _ = std::process::Command::new("xdg-open").arg(&logs).spawn();
 }
