@@ -87,13 +87,6 @@ pub fn systemd_template_dir() -> PathBuf {
     }
 }
 
-/// Returns true when running from inside an AppImage (the AppRun shim sets
-/// AG_INSTALLER_BUNDLE_ROOT). Useful for log messages that want to say
-/// "bundled at <path>" vs "dev tree at <path>".
-pub fn is_appimage() -> bool {
-    appimage_usr_dir().is_some()
-}
-
 // --- helpers --------------------------------------------------------------
 
 fn appimage_usr_dir() -> Option<PathBuf> {

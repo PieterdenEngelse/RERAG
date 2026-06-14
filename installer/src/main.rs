@@ -12,6 +12,7 @@ mod app;
 mod bundled;
 mod detection;
 mod install_steps;
+mod paths;
 mod prompts;
 mod ui;
 

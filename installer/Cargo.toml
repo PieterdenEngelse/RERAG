@@ -47,6 +47,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Diff for ag.service drift detection.
 similar = "2"
 
+# Install-log timestamps (UTC) in Phase D.2 + build-time stamping in build.rs.
+chrono = "0.4"
+
 [build-dependencies]
 # build.rs stamps the git SHA and build timestamp into the binary so the
 # update check + dry-run summary can report what was built when.
