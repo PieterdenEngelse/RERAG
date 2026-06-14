@@ -91,12 +91,17 @@ else
     log "  libtika_native.so not found — skipping (Phase D will require it)"
 fi
 
-if [[ -d "${REPO_ROOT}/frontend/fro/dist" ]]; then
+# dx build --platform web outputs to target/dx/<pkg>/release/web/public/,
+# not frontend/fro/dist/ (which was trunk's output path). The dx output
+# includes hashed asset filenames that the runtime asset!() injection
+# expects.
+FRONTEND_DIST="${REPO_ROOT}/target/dx/fro/release/web/public"
+if [[ -d "$FRONTEND_DIST" ]]; then
     mkdir -p "$APPDIR/usr/share/ag/web"
-    cp -r "${REPO_ROOT}/frontend/fro/dist/"* "$APPDIR/usr/share/ag/web/"
-    ok "bundled frontend/fro/dist/ → usr/share/ag/web/"
+    cp -r "$FRONTEND_DIST"/* "$APPDIR/usr/share/ag/web/"
+    ok "bundled $FRONTEND_DIST → usr/share/ag/web/"
 else
-    log "  frontend/fro/dist/ not found — skipping"
+    log "  $FRONTEND_DIST not found — skipping"
 fi
 
 if [[ -d "${FALKORDB_STAGE}" ]]; then

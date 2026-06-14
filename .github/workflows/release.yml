@@ -136,8 +136,15 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/fro/package-lock.json
 
-      - name: Install trunk
-        run: cargo install trunk --locked
+      - name: Install dioxus-cli
+        # dx handles Dioxus 0.7's asset!() macro — bundles output.css and
+        # other declared assets into the build dir with hashed filenames so
+        # the runtime <link> injection in app.rs resolves. trunk does not
+        # process asset!() and produces a CSS-less dist, which shipped
+        # broken-layout AppImages from v0.2.0 → v0.2.4.
+        # Version pinned to match local dev (CLAUDE.md's `dx serve`
+        # invocation).
+        run: cargo install dioxus-cli@0.7.9 --locked
 
       - name: Install appimagetool
         run: |
@@ -157,11 +164,14 @@ jobs:
         run: ./target/release/ag-installer --version
 
       - name: Build frontend dist
+        # css:build runs Tailwind first to generate assets/styling/output.css.
+        # dx build then bundles output.css + favicon + images via asset!()
+        # into target/dx/fro/release/web/public/ with hashed filenames.
         run: |
           cd frontend/fro
           npm ci
           npm run css:build
-          trunk build --release
+          dx build --package fro --platform web --release
 
       - name: Extract FalkorDB binaries from pinned image
         run: |
