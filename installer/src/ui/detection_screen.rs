@@ -1,16 +1,30 @@
 //! Screen 2 — Detection.
 //!
-//! Renders the mock detection results as a table with green checkmarks /
-//! yellow warning icons. Phase C replaces mock_detections() with real probes.
+//! Runs the real probes from `crate::detection` once on mount, then renders
+//! the result as a table. While probes are pending the screen shows a
+//! spinner — keeps the user informed when the probes take a couple of seconds
+//! on a busy docker daemon.
 
 use dioxus::prelude::*;
 
-use crate::app::{mock_detections, DetectionStatus};
+use crate::app::{detection_rows, DetectionStatus};
+use crate::detection::{self, DetectionResult};
 use crate::ui::components::{IconKind, NavFooter, StatusIcon};
 
 #[component]
 pub fn DetectionScreen() -> Element {
-    let rows = use_memo(mock_detections);
+    let mut detection_signal = use_context::<Signal<Option<DetectionResult>>>();
+
+    // Resource runs once on mount and stores the result in the shared signal
+    // so the Prompts screen (and anything else downstream) can read it.
+    let resource = use_resource(move || async move {
+        let result = detection::run().await;
+        detection_signal.set(Some(result.clone()));
+        result
+    });
+
+    let value_state = resource.value();
+    let value = value_state.read();
 
     rsx! {
         div { class: "screen",
@@ -22,22 +36,33 @@ pub fn DetectionScreen() -> Element {
                 }
             }
             div { class: "screen-body",
-                table { class: "detection-table",
-                    tbody {
-                        for row in rows.read().iter() {
-                            tr { key: "{row.label}", class: row_class(row.status),
-                                td { class: "detection-icon",
-                                    StatusIcon { kind: icon_for(row.status) }
+                match value.as_ref() {
+                    None => rsx! {
+                        div { class: "detection-pending",
+                            div { class: "detection-spinner" }
+                            p { class: "detection-pending-label",
+                                "Probing docker, systemd units, ports, disk and RAM…"
+                            }
+                        }
+                    },
+                    Some(result) => {
+                        let rows = detection_rows(result);
+                        rsx! {
+                            table { class: "detection-table",
+                                tbody {
+                                    for row in rows.iter() {
+                                        tr { key: "{row.label}", class: row_class(row.status),
+                                            td { class: "detection-icon",
+                                                StatusIcon { kind: icon_for(row.status) }
+                                            }
+                                            td { class: "detection-label", "{row.label}" }
+                                            td { class: "detection-value", "{row.value}" }
+                                        }
+                                    }
                                 }
-                                td { class: "detection-label", "{row.label}" }
-                                td { class: "detection-value", "{row.value}" }
                             }
                         }
                     }
-                }
-                p { class: "detection-footnote",
-                    "(Phase B: results are mocked. Phase C wires the same labels "
-                    "to real probes against your machine.)"
                 }
             }
             NavFooter { next_label: "Continue".to_string() }

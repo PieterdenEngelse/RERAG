@@ -9,11 +9,15 @@
 #![allow(non_snake_case)]
 
 mod app;
+mod detection;
+mod prompts;
 mod ui;
 
 use dioxus::prelude::*;
 
 use app::{use_screen, Screen};
+use detection::DetectionResult;
+use prompts::PromptAnswers;
 use ui::{DetectionScreen, FirstRunForm, ProgressScreen, PromptsScreen, SummaryScreen, Welcome};
 
 /// Bake-time constants from build.rs.
@@ -76,6 +80,12 @@ fn print_help() {
 fn App() -> Element {
     // Top-level screen signal. Every component can navigate by mutating it.
     use_context_provider(|| Signal::new(Screen::Welcome));
+    // Detection result: None until probes complete on the Detection screen;
+    // Prompts screen reads from this to decide which forms to show.
+    use_context_provider(|| Signal::new(Option::<DetectionResult>::None));
+    // Prompt answers: filled in as the user submits each form on the Prompts
+    // screen. Phase D's installer reads from this.
+    use_context_provider(|| Signal::new(PromptAnswers::default()));
     let screen = use_screen();
     let current = *screen.read();
 

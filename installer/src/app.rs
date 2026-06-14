@@ -1,11 +1,14 @@
-//! Global app state — Phase B scope: Screen enum + helpers + static mock data
-//! for Detection / Prompts / Progress / Summary screens.
+//! Global app state — Screen enum + helpers + the row/step/summary view-model
+//! types the screens render.
 //!
-//! Real detection lands in Phase C; real install in Phase D; real first-run
-//! config in Phase E. Until then, every screen reads from the mock_* functions
-//! below so we can iterate on layout and navigation without wiring I/O.
+//! Detection (Screen 2) and Prompts (Screen 3) are wired to real probes in
+//! Phase C — see `crate::detection` and `crate::prompts`. Progress (4) /
+//! Summary (6) still read from the `mock_*` helpers below; Phase D and E
+//! replace those.
 
 use dioxus::prelude::*;
+
+use crate::detection::DetectionResult;
 
 /// The six screens in fixed flow order. See docs/bin3 §Screen flow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,13 +71,13 @@ pub fn use_screen() -> Signal<Screen> {
 }
 
 // =============================================================================
-// Detection mock data
+// Detection row view-model
 // =============================================================================
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DetectionRow {
     pub label: &'static str,
-    pub value: &'static str,
+    pub value: String,
     pub status: DetectionStatus,
 }
 
@@ -84,47 +87,107 @@ pub enum DetectionStatus {
     Warn,
 }
 
-pub fn mock_detections() -> Vec<DetectionRow> {
+/// Render a `DetectionResult` as the eight-row table the screen shows.
+/// Ok / Warn classification mirrors the bash installer's reuse policy: anything
+/// that would trigger a prompt or block the install is Warn; anything safe to
+/// keep / install fresh is Ok.
+pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
     vec![
         DetectionRow {
             label: "Disk",
-            value: "22 GB free on $HOME (≥ 20 GB recommended)",
-            status: DetectionStatus::Ok,
+            value: if d.disk_free_gb == 0 {
+                "unknown".to_string()
+            } else {
+                format!("{} GB free on $HOME (≥ 20 GB recommended)", d.disk_free_gb)
+            },
+            status: if d.disk_free_gb >= 20 || d.disk_free_gb == 0 {
+                DetectionStatus::Ok
+            } else {
+                DetectionStatus::Warn
+            },
         },
         DetectionRow {
             label: "Docker",
-            value: "present (28.0.1)",
-            status: DetectionStatus::Ok,
+            value: d
+                .docker_present
+                .clone()
+                .unwrap_or_else(|| "not on PATH".to_string()),
+            status: if d.docker_present.is_some() {
+                DetectionStatus::Ok
+            } else {
+                DetectionStatus::Warn
+            },
         },
         DetectionRow {
             label: "Ollama",
-            value: "running on :11434 (8 models available)",
+            value: if d.ollama_active {
+                "user systemd service, active".to_string()
+            } else {
+                "user systemd service not active — LLM modes will return 503".to_string()
+            },
+            // Soft signal — bash logs this as a warning but doesn't prompt or
+            // abort. Surface as Ok so it doesn't look like a blocker.
             status: DetectionStatus::Ok,
         },
         DetectionRow {
             label: "FalkorDB unit",
-            value: "not present — will install",
+            value: if d.falkordb_healthy {
+                "active — will reuse".to_string()
+            } else {
+                "not active — will install".to_string()
+            },
             status: DetectionStatus::Ok,
         },
         DetectionRow {
             label: "Compose stack",
-            value: "not running — will start",
+            value: if d.compose_up {
+                "project=ag already running".to_string()
+            } else {
+                "not running — will start".to_string()
+            },
             status: DetectionStatus::Ok,
         },
         DetectionRow {
             label: "Backend port 3010",
-            value: "free",
-            status: DetectionStatus::Ok,
+            value: if d.backend_port_busy {
+                "in use by another process".to_string()
+            } else {
+                "free".to_string()
+            },
+            status: if d.backend_port_busy {
+                DetectionStatus::Warn
+            } else {
+                DetectionStatus::Ok
+            },
         },
         DetectionRow {
             label: "RAM",
-            value: "7 GB total — compose stack uses ~3 GB",
-            status: DetectionStatus::Warn,
+            value: if d.ram_gb == 0 {
+                "unknown".to_string()
+            } else {
+                format!(
+                    "{} GB total — compose stack uses ~3 GB resident",
+                    d.ram_gb
+                )
+            },
+            status: if d.ram_gb > 0 && d.ram_gb < 8 {
+                DetectionStatus::Warn
+            } else {
+                DetectionStatus::Ok
+            },
         },
         DetectionRow {
             label: "Existing ag.service",
-            value: "not present",
-            status: DetectionStatus::Ok,
+            value: if d.ag_service_drift {
+                "present but hand-edited (drift detected)".to_string()
+            } else {
+                "not present (or matches template)".to_string()
+            },
+            status: if d.ag_service_drift {
+                DetectionStatus::Warn
+            } else {
+                DetectionStatus::Ok
+            },
         },
     ]
 }

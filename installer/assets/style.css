@@ -526,4 +526,73 @@ html, body {
 }
 .footer-version { color: #6b7280; font-weight: 500; }
 .footer-dim { color: #4b5563; }
+
+/* =============================================================================
+   Detection — pending spinner (Phase C)
+   ============================================================================= */
+
+.detection-pending {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 3rem 1rem;
+    color: #9ca3af;
+}
+.detection-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid #1f2632;
+    border-top-color: #7C2A02;
+    border-radius: 50%;
+    animation: detection-spin 0.9s linear infinite;
+}
+.detection-pending-label {
+    font-size: 0.9rem;
+    color: #9ca3af;
+}
+@keyframes detection-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* =============================================================================
+   Prompt cards — sub-form for PortBusy "pick" choice (Phase C)
+   ============================================================================= */
+
+.prompt-card-subform {
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid #1f2632;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+.prompt-card-sublabel {
+    color: #d1d5db;
+    font-size: 0.85rem;
+}
+.prompt-card-input {
+    background: #0a0c10;
+    border: 1px solid #1f2632;
+    border-radius: 4px;
+    padding: 0.45rem 0.65rem;
+    color: #e5e7eb;
+    font-family: ui-monospace, monospace;
+    font-size: 0.9rem;
+    max-width: 12rem;
+}
+.prompt-card-input:focus {
+    outline: none;
+    border-color: #7C2A02;
+}
+.prompt-card-error {
+    color: #fbbf24;
+    font-size: 0.8rem;
+}
+
+/* Multiple prompt cards stack with breathing room. */
+.screen-body > .prompt-card + .prompt-card {
+    margin-top: 1rem;
+}
 .footer-sep { color: #2d3543; }
