@@ -73,11 +73,13 @@ pub fn PromptsScreen() -> Element {
                         }
                     }
                 } else {
-                    for id in prompts_to_show.iter().copied() {
-                        PromptCard {
-                            key: "{id_key(id)}",
-                            id: id,
-                            detection: detection_state.as_ref().cloned().unwrap_or_default(),
+                    div { class: "prompts-grid",
+                        for id in prompts_to_show.iter().copied() {
+                            PromptCard {
+                                key: "{id_key(id)}",
+                                id: id,
+                                detection: detection_state.as_ref().cloned().unwrap_or_default(),
+                            }
                         }
                     }
                 }

@@ -591,8 +591,64 @@ html, body {
     font-size: 0.8rem;
 }
 
-/* Multiple prompt cards stack with breathing room. */
-.screen-body > .prompt-card + .prompt-card {
-    margin-top: 1rem;
+/* =============================================================================
+   Detection groups — OK on left, Warn on right (Phase C polish)
+   ============================================================================= */
+
+.detection-groups {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    align-items: start;
+}
+.detection-group {
+    background: #11141a;
+    border: 1px solid #1f2632;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+}
+.detection-group-warn {
+    /* Subtle amber tint on the warn group's border so the eye lands here first
+       even before reading the row icons. */
+    border-color: #3a2a10;
+    background: #14110b;
+}
+.detection-group-header {
+    color: #ffffff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #1f2632;
+}
+.detection-group-warn .detection-group-header {
+    color: #fbbf24;
+    border-bottom-color: #3a2a10;
+}
+.detection-group-empty {
+    color: #6b7280;
+    font-size: 0.85rem;
+    padding: 0.5rem 0;
+}
+/* Inside a group, the detection-table loses its own padding/border so the
+   group container provides the framing. */
+.detection-group .detection-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: transparent;
+    border: none;
+}
+
+/* =============================================================================
+   Prompts grid — 2 columns of prompt cards (Phase C polish)
+   ============================================================================= */
+
+.prompts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    align-items: start;
 }
 .footer-sep { color: #2d3543; }

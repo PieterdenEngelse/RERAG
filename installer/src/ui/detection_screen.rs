@@ -1,13 +1,14 @@
 //! Screen 2 — Detection.
 //!
 //! Runs the real probes from `crate::detection` once on mount, then renders
-//! the result as a table. While probes are pending the screen shows a
-//! spinner — keeps the user informed when the probes take a couple of seconds
-//! on a busy docker daemon.
+//! the result as two side-by-side groups: OK on the left, "Need attention"
+//! (Warn) on the right. Warn-on-the-right keeps the urgent items where the
+//! eye lands first when the user is looking for what they need to act on.
+//! While probes are pending the screen shows a spinner.
 
 use dioxus::prelude::*;
 
-use crate::app::{detection_rows, DetectionStatus};
+use crate::app::{detection_rows, DetectionRow, DetectionStatus};
 use crate::detection::{self, DetectionResult};
 use crate::ui::components::{IconKind, NavFooter, StatusIcon};
 
@@ -31,8 +32,8 @@ pub fn DetectionScreen() -> Element {
             div { class: "screen-header",
                 h1 { class: "screen-title", "Detection" }
                 p { class: "screen-subtitle",
-                    "Checking what's already on this host. Anything yellow may "
-                    "need a choice on the next screen."
+                    "Checking what's already on this host. Anything in the right "
+                    "column may need a choice on the next screen."
                 }
             }
             div { class: "screen-body",
@@ -47,18 +48,18 @@ pub fn DetectionScreen() -> Element {
                     },
                     Some(result) => {
                         let rows = detection_rows(result);
+                        let (ok_rows, warn_rows): (Vec<DetectionRow>, Vec<DetectionRow>) = rows
+                            .into_iter()
+                            .partition(|r| matches!(r.status, DetectionStatus::Ok));
                         rsx! {
-                            table { class: "detection-table",
-                                tbody {
-                                    for row in rows.iter() {
-                                        tr { key: "{row.label}", class: row_class(row.status),
-                                            td { class: "detection-icon",
-                                                StatusIcon { kind: icon_for(row.status) }
-                                            }
-                                            td { class: "detection-label", "{row.label}" }
-                                            td { class: "detection-value", "{row.value}" }
-                                        }
-                                    }
+                            div { class: "detection-groups",
+                                DetectionGroup {
+                                    kind: GroupKind::Ok,
+                                    rows: ok_rows,
+                                }
+                                DetectionGroup {
+                                    kind: GroupKind::Warn,
+                                    rows: warn_rows,
                                 }
                             }
                         }
@@ -66,6 +67,62 @@ pub fn DetectionScreen() -> Element {
                 }
             }
             NavFooter { next_label: "Continue".to_string() }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GroupKind {
+    Ok,
+    Warn,
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct DetectionGroupProps {
+    kind: GroupKind,
+    rows: Vec<DetectionRow>,
+}
+
+#[component]
+fn DetectionGroup(props: DetectionGroupProps) -> Element {
+    let count = props.rows.len();
+    let (class, header) = match props.kind {
+        GroupKind::Ok => (
+            "detection-group detection-group-ok",
+            format!("{count} OK"),
+        ),
+        GroupKind::Warn => (
+            "detection-group detection-group-warn",
+            if count == 0 {
+                "All clear".to_string()
+            } else {
+                format!("{count} need attention")
+            },
+        ),
+    };
+
+    rsx! {
+        div { class: "{class}",
+            h2 { class: "detection-group-header", "{header}" }
+            if props.rows.is_empty() {
+                p { class: "detection-group-empty",
+                    "Nothing flagged. Click Continue to proceed."
+                }
+            } else {
+                table { class: "detection-table",
+                    tbody {
+                        for row in props.rows.iter() {
+                            tr { key: "{row.label}", class: row_class(row.status),
+                                td { class: "detection-icon",
+                                    StatusIcon { kind: icon_for(row.status) }
+                                }
+                                td { class: "detection-label", "{row.label}" }
+                                td { class: "detection-value", "{row.value}" }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

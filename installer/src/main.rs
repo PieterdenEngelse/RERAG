@@ -50,8 +50,12 @@ fn main() {
     let cfg = dioxus::desktop::Config::new().with_window(
         dioxus::desktop::WindowBuilder::new()
             .with_title(format!("ag installer {VERSION}"))
-            .with_inner_size(dioxus::desktop::LogicalSize::new(900.0, 650.0))
-            .with_min_inner_size(dioxus::desktop::LogicalSize::new(720.0, 500.0))
+            // 1400x900 is the fallback size if the WM rejects maximize.
+            // Min 1100x700 keeps the Detection two-column layout and the
+            // 2x2 prompts grid from collapsing onto one column.
+            .with_inner_size(dioxus::desktop::LogicalSize::new(1400.0, 900.0))
+            .with_min_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
+            .with_maximized(true)
             .with_resizable(true),
     );
     dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
