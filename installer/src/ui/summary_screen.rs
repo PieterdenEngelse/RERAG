@@ -6,11 +6,10 @@
 //!
 //! Buttons:
 //! - Close → closes the installer window via `use_window().close()`
-//! - Open ag dashboard → **disabled** as of v0.2.3 with explanatory
-//!   title=. The backend currently responds with placeholder text at /,
-//!   not the frontend dist. Re-enabled in v0.2.4 once the backend has a
-//!   static-file route serving $AG_WEB_DIR/ at / (planned in the
-//!   `feat(backend): serve frontend at /` PR).
+//! - Open ag dashboard → `xdg-open http://127.0.0.1:$BACKEND_PORT` —
+//!   works because the backend's static-file route (PR #7,
+//!   feat/backend-serve-frontend) serves frontend dist at /. Phase E
+//!   reads the actual port from ag.env instead of hard-coding 3010.
 //! - View install log → `xdg-open ~/.local/share/ag/logs/` (the dir, since
 //!   Phase D will land the specific log file path)
 
@@ -83,8 +82,7 @@ pub fn SummaryScreen() -> Element {
                     }
                     button {
                         class: "btn btn-primary",
-                        disabled: true,
-                        title: "Dashboard serving lands in v0.2.4 — backend static-file route pending. For now ag.service responds with a placeholder at /; run `dx serve` in dev mode to see the frontend.",
+                        onclick: move |_| open_dashboard(),
                         "Open ag dashboard"
                     }
                 }
@@ -121,6 +119,17 @@ fn SummaryBucket(props: SummaryBucketProps) -> Element {
             }
         }
     }
+}
+
+/// Launch the user's default browser at the local ag dashboard.
+/// Works because PR #7 (feat/backend-serve-frontend) wired actix-files
+/// to serve $AG_WEB_DIR/ at /. If ag isn't running, browser shows
+/// connection-refused — that's fine; user closes the tab. Phase E will
+/// read the actual port from ag.env instead of hard-coding 3010.
+fn open_dashboard() {
+    let _ = std::process::Command::new("xdg-open")
+        .arg("http://127.0.0.1:3010")
+        .spawn();
 }
 
 /// Open the logs directory in the user's file manager. Phase D will land
