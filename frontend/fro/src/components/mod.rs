@@ -3,7 +3,6 @@
 //! component and an Echo component for fullstack apps to be used in our app.
 
 pub mod config_nav;
-pub mod dark_mode_toggle;
 pub mod header;
 pub use header::Header;
 mod nav_dropdown;

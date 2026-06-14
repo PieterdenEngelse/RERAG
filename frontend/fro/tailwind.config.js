@@ -16,7 +16,6 @@ module.exports = {
   ],
   daisyui: {
     themes: [
-      "light",
       {
         dark: {
           ...require("daisyui/src/theming/themes")["dark"],
@@ -24,8 +23,6 @@ module.exports = {
           "primary-content": "#ffffff",
         },
       },
-      "synthwave",
-      "cyberpunk"
     ],
     darkTheme: "dark",
     base: true,

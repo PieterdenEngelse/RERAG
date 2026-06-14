@@ -305,7 +305,6 @@ fn HelpCommandRow(
 
 #[component]
 pub fn App() -> Element {
-    use_context_provider(|| Signal::new(true)); // Dark mode ON by default
     use_context_provider(|| Signal::new(ShowHelpCommands(false))); // Help commands panel
     use_context_provider(|| Signal::new(ShowRagInfo(false))); // RAG info panel
     use_context_provider(|| Signal::new(ActiveDropdown(None))); // Active dropdown tracker
@@ -326,7 +325,6 @@ pub fn App() -> Element {
 
 #[component]
 fn Layout() -> Element {
-    let is_dark = use_context::<Signal<bool>>();
     let runtime_ctx = use_context::<Signal<crate::app::RuntimeContext>>();
 
     // Initialize RuntimeContext from API on first load
@@ -362,31 +360,24 @@ fn Layout() -> Element {
         })
         .collect();
 
-    // Apply dark class on mount and when toggled
-    use_effect(use_reactive!(|is_dark| {
-        let dark_mode = is_dark();
-        web_sys::console::log_1(&format!("Dark mode effect running: {}", dark_mode).into());
-
+    // Mount-time: add `dark` class to <html> once. Required because
+    // assets/styling/index.css declares `@custom-variant dark (&:where(.dark &));`
+    // — any residual `dark:` Tailwind variant from third-party / daisyUI still
+    // resolves through the class. The toggle plumbing was removed; the class is
+    // always on. See cleanup/remove-light-mode for the rationale.
+    use_effect(move || {
         if let Some(window) = web_sys::window() {
             if let Some(document) = window.document() {
                 if let Some(html) = document.document_element() {
-                    let class_list = html.class_list();
-                    if dark_mode {
-                        web_sys::console::log_1(&"Adding dark class".into());
-                        let _ = class_list.add_1("dark");
-                    } else {
-                        web_sys::console::log_1(&"Removing dark class".into());
-                        let _ = class_list.remove_1("dark");
-                    }
-                    web_sys::console::log_1(&format!("HTML classes: {}", html.class_name()).into());
+                    let _ = html.class_list().add_1("dark");
                 }
             }
         }
-    }));
+    });
 
     rsx! {
         div {
-            class: "min-h-screen transition-colors bg-white dark:bg-gray-900 text-gray-900 dark:text-white",
+            class: "min-h-screen bg-gray-900 text-white",
 
             // Global error bar - shows API failures on any page
             GlobalErrorBar {}
