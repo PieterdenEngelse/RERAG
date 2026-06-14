@@ -16,6 +16,16 @@ use ag::retriever::Retriever;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // CLI flag handling — runs before any init so `ag --version` exits
+    // cleanly even on a box where another ag is already bound to :3010.
+    // The installer's `step_install_artifacts` smoke-test (Rust + bash)
+    // relies on this returning quickly with exit 0.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("ag {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let startup_instant = Instant::now();
 
     // ─────────────────────────────────────────────────────────────
