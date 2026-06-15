@@ -446,6 +446,90 @@ html, body {
 }
 
 /* =============================================================================
+   First-Run additions (Phase E): input+toggle, link button, sections, error
+   ============================================================================= */
+
+.field-input-with-toggle {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+}
+.field-input-with-toggle .field-input {
+    flex: 1;
+}
+.field-toggle-btn {
+    background: #1f2632;
+    color: #d1d5db;
+    border: 1px solid #2a3140;
+    border-radius: 6px;
+    padding: 0 0.85rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 120ms;
+}
+.field-toggle-btn:hover {
+    background: #2a3140;
+}
+.field-link-btn {
+    background: none;
+    border: none;
+    color: #7C2A02;
+    cursor: pointer;
+    padding: 0;
+    font-size: 0.85rem;
+    text-decoration: underline;
+    margin-top: 0.35rem;
+    text-align: left;
+}
+.field-link-btn:hover {
+    color: #d44a0e;
+}
+.first-run-section-header {
+    color: #ffffff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #1f2632;
+}
+.first-run-section-note {
+    color: #9ca3af;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+.first-run-section-note code {
+    color: #d1d5db;
+    background: #0a0c10;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+}
+.first-run-error {
+    margin-top: 1.25rem;
+    padding: 0.85rem 1rem;
+    background: #14110b;
+    border: 1px solid #3a2a10;
+    border-radius: 6px;
+    color: #fbbf24;
+}
+.first-run-error strong {
+    color: #fbbf24;
+    display: block;
+    margin-bottom: 0.4rem;
+}
+.first-run-error pre {
+    color: #d1d5db;
+    font-family: ui-monospace, monospace;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+/* =============================================================================
    Summary buckets
    ============================================================================= */
 
