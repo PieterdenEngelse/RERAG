@@ -91,7 +91,7 @@ docker compose --profile observability up -d
 - **Minimum readable text on dark tiles**: `text-gray-400` — never use `text-gray-500` or darker for any label or secondary text the user needs to read
 - **Preferred for secondary/muted labels**: `text-gray-300`
 - **When asked to increase contrast**: shift 2 Tailwind steps toward white (e.g. `text-gray-500` → `text-gray-300`)
-- **Links are always blue**: use `text-blue-400 hover:text-blue-300` for all clickable links — never orange, teal, or any other color
+- **Links are blue, secondary actions can be cyan**: primary clickable links use `text-blue-400 hover:text-blue-300` (hex `#60a5fa` / `#93c5fd`). Secondary actions — "Reset to default", "Show more", "Edit" — may use cyan `#22d3ee hover:#67e8f9` to visually separate them from primary nav. Never use orange, teal, or other colors.
 - These rules apply to all Dioxus components and pages without exception
 
 **Hex equivalents** for the installer crate (`installer/assets/style.css`) and any other raw-CSS surface — these are the Tailwind palette values for the rules above:
