@@ -66,12 +66,31 @@ services are running, and the dashboard is available at
 | `~/.config/ag/docker-compose.yml` | Observability stack definition |
 | `~/.config/systemd/user/{ag,ag-stack,falkordb}.service` | Three composable user services |
 
-No system files are modified. Removal is a single `ag-installer.AppImage
---uninstall` once Phase F lands.
+No system files are modified.
+
+### Uninstall
+
+```bash
+# Remove the binary, libraries, and systemd units. Keeps your ag.env
+# (API keys, FalkorDB password) and ~/.local/share/ag/ (data, indexes,
+# logs, FalkorDB store) — re-running the installer later restores the
+# system with your config + data intact.
+ag-installer --uninstall
+
+# Same as above, but also removes ag.env and ~/.local/share/ag/.
+# Destructive — your API keys, corpora, and indexes go with it.
+ag-installer --uninstall --purge
+```
+
+Both modes prompt for confirmation before deleting anything and print
+exactly which paths will be removed.
 
 ### Requirements
 
-- Linux x86-64 with glibc 2.39+ (Ubuntu 24.04 baseline)
+- Linux x86-64 with glibc 2.39+ (Ubuntu 24.04+, Fedora 40+, Arch,
+  openSUSE Tumbleweed). Older distros use the bash installer below
+  instead. See [`docs/distro-notes.md`](docs/distro-notes.md) for the
+  full support matrix.
 - Docker (for the optional observability stack; the installer prompts to
   install via `get.docker.com` if missing)
 - ~10 GB free disk on `$HOME`

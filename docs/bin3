@@ -625,7 +625,7 @@ these four cut across all of them and inform the cross-phase fallback
 plan (swap toolkit, cap CI use, drop a distro from support, refine
 the README).
 
-### Phase 0 — Pre-flight (~2 days, before Phase A)
+### Phase 0 — Pre-flight (~2 days, before Phase A) ✅ shipped
 
 <details>
 <summary>Lock-in decisions table — DECIDED</summary>
@@ -653,7 +653,7 @@ down with the values from this table.
 
 ---
 
-### Phase A — Foundation (week 1)
+### Phase A — Foundation (week 1) ✅ shipped
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -725,7 +725,7 @@ needed.
 
 ---
 
-### Phase B — GUI scaffold (week 2)
+### Phase B — GUI scaffold (week 2) ✅ shipped
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -776,7 +776,7 @@ with mock data`. Plus a screenshot for the PR description.
 
 ---
 
-### Phase C — Detection + prompts (week 3)
+### Phase C — Detection + prompts (week 3) ✅ shipped (v0.3.0)
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -833,7 +833,7 @@ forms`.
 
 ---
 
-### Phase D — Real install (week 4)
+### Phase D — Real install (week 4) ✅ shipped (v0.3.0)
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -888,7 +888,7 @@ artifact copy, FalkorDB extract, systemd setup`.
 
 ---
 
-### Phase E — First-run config (week 5)
+### Phase E — First-run config (week 5) ✅ shipped (v0.4.0)
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -943,7 +943,7 @@ model, FalkorDB password, agent mode`.
 
 ---
 
-### Phase F — Release pipeline polish (week 6)
+### Phase F — Release pipeline polish (week 6) ✅ shipped (v0.4.0)
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -984,7 +984,7 @@ quick install`.
 
 ---
 
-### Phase G — Multi-distro verify (week 7)
+### Phase G — Multi-distro verify (week 7) ✅ shipped (v0.4.1 + v0.4.2)
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
@@ -1030,7 +1030,7 @@ verification results).
 
 ---
 
-### Phase H — Polish + accessibility (week 8)
+### Phase H — Polish + accessibility (week 8) 🟡 in progress (v0.5.0: uninstall + docs; v1.0.0: a11y + final icon)
 
 <details>
 <summary>Tasks · Risks · Acceptance · End-of-phase commit</summary>
