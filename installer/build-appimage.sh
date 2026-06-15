@@ -59,6 +59,31 @@ cat > "$APPDIR/AppRun" <<'APPRUN_EOF'
 #!/bin/bash
 # AppRun shim: set up env and exec the installer binary.
 SELF_DIR="$(dirname "$(readlink -f "$0")")"
+
+# Pre-flight: glibc 2.39 required by the bundled ort/onnxruntime. Without
+# this check, users on older glibc just see "GLIBC_2.39 not found" from
+# the dynamic linker (or nothing at all when double-clicked) — the GUI
+# never opens. Fail politely with terminal output + a GUI dialog when
+# zenity/kdialog are available.
+GLIBC="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+if [[ -n "$GLIBC" ]] && awk "BEGIN {exit !(${GLIBC} < 2.39)}"; then
+    MSG="RERAG installer requires glibc 2.39+ (you have ${GLIBC}).
+
+Supported AppImage targets: Ubuntu 24.04+, Fedora 40+, Arch, openSUSE Tumbleweed.
+
+Older distros (Debian 12, Fedora 39, Ubuntu 22.04, RHEL/Rocky 9):
+build from source instead — clone github.com/PieterdenEngelse/RARAG
+and run installers/install-linux.sh. ag compiles against your system's
+glibc with no AppImage involved."
+    echo "$MSG" >&2
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --width=520 --title="RERAG installer" --text="$MSG" 2>/dev/null
+    elif command -v kdialog >/dev/null 2>&1; then
+        kdialog --error "$MSG" --title "RERAG installer" 2>/dev/null
+    fi
+    exit 1
+fi
+
 export PATH="${SELF_DIR}/usr/bin:${PATH}"
 # libtika lives under usr/lib/ when bundled (Phase D); harmless if absent.
 export LD_LIBRARY_PATH="${SELF_DIR}/usr/lib:${LD_LIBRARY_PATH:-}"
