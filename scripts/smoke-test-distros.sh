@@ -32,8 +32,17 @@ set -euo pipefail
 APPIMAGE="${1:-}"
 if [[ -z "$APPIMAGE" ]]; then
     echo "no AppImage given — fetching latest via gh release download…"
+    # While we're pre-1.0 every tag is marked --prerelease, so
+    # `gh release download` (no args) finds nothing — it filters out
+    # prereleases by default. Resolve the most-recent tag explicitly.
+    LATEST_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
+    if [[ -z "$LATEST_TAG" ]]; then
+        echo "ERROR: no releases found on the repo" >&2
+        exit 1
+    fi
+    echo "  latest tag: $LATEST_TAG"
     rm -f /tmp/ag-installer-*.AppImage
-    gh release download --pattern "*.AppImage" --dir /tmp/ >/dev/null
+    gh release download "$LATEST_TAG" --pattern "*.AppImage" --dir /tmp/ >/dev/null
     APPIMAGE="$(ls /tmp/ag-installer-*.AppImage | tail -n 1)"
     echo "  using: $APPIMAGE"
 fi
