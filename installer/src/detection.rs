@@ -42,6 +42,9 @@ pub struct DetectionResult {
     pub disk_free_gb: u64,
     /// `MemTotal:` from `/proc/meminfo` in GB.
     pub ram_gb: u64,
+    /// `/etc/os-release` PRETTY_NAME (e.g. "Ubuntu 24.04.1 LTS"). None if
+    /// the file is missing or unparseable.
+    pub distro: Option<String>,
 }
 
 /// Runs every probe; independent probes go in parallel via `tokio::join!`.
@@ -59,6 +62,7 @@ pub async fn run() -> DetectionResult {
         native_obs,
         ag_service_drift,
         falkordb_healthy,
+        distro,
     ) = tokio::join!(
         probe_docker(),
         probe_ollama_active(),
@@ -70,6 +74,7 @@ pub async fn run() -> DetectionResult {
         probe_native_obs(),
         probe_ag_service_drift(),
         probe_falkordb_healthy(),
+        probe_distro(),
     );
     let system_redis = probe_system_redis(compose_up).await;
 
@@ -85,6 +90,7 @@ pub async fn run() -> DetectionResult {
         ag_service_drift,
         disk_free_gb,
         ram_gb,
+        distro,
     }
 }
 
@@ -142,6 +148,38 @@ async fn probe_ram_gb() -> u64 {
         .and_then(|kb_str| kb_str.parse::<u64>().ok())
         .map(|kb| kb / 1024 / 1024)
         .unwrap_or(0)
+}
+
+async fn probe_distro() -> Option<String> {
+    // /etc/os-release is the standard since 2012 (systemd) — supported by
+    // every distro the AppImage targets. PRETTY_NAME is the human-readable
+    // form: "Ubuntu 24.04.1 LTS", "Fedora Linux 40 (Workstation Edition)",
+    // "Arch Linux", etc. Values may be quoted; strip surrounding quotes.
+    let content = tokio::fs::read_to_string("/etc/os-release").await.ok()?;
+    let pretty = content
+        .lines()
+        .find_map(|l| l.strip_prefix("PRETTY_NAME="))
+        .map(|v| v.trim_matches('"').trim_matches('\'').to_string());
+    if let Some(p) = pretty {
+        if !p.is_empty() {
+            return Some(p);
+        }
+    }
+    // Fall back to NAME + VERSION_ID if PRETTY_NAME is absent. Rare but
+    // possible on minimal/embedded distros.
+    let name = content
+        .lines()
+        .find_map(|l| l.strip_prefix("NAME="))
+        .map(|v| v.trim_matches('"').trim_matches('\'').to_string());
+    let version = content
+        .lines()
+        .find_map(|l| l.strip_prefix("VERSION_ID="))
+        .map(|v| v.trim_matches('"').trim_matches('\'').to_string());
+    match (name, version) {
+        (Some(n), Some(v)) => Some(format!("{n} {v}")),
+        (Some(n), None) => Some(n),
+        _ => None,
+    }
 }
 
 async fn probe_disk_free_gb() -> u64 {
@@ -306,6 +344,7 @@ mod tests {
         println!("ag_service_drift   {}", result.ag_service_drift);
         println!("disk_free_gb       {}", result.disk_free_gb);
         println!("ram_gb             {}", result.ram_gb);
+        println!("distro             {:?}", result.distro);
 
         let rows = crate::app::detection_rows(&result);
         println!("\n--- Detection screen rows ---");

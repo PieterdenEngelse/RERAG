@@ -94,6 +94,17 @@ pub enum DetectionStatus {
 pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
     vec![
         DetectionRow {
+            label: "Distro",
+            value: d
+                .distro
+                .clone()
+                .unwrap_or_else(|| "unknown (/etc/os-release missing)".to_string()),
+            // Always Ok — informational. By the time the GUI loads we
+            // already passed the AppRun glibc gate, so any distro that
+            // gets us here is "supported enough."
+            status: DetectionStatus::Ok,
+        },
+        DetectionRow {
             label: "Disk",
             value: if d.disk_free_gb == 0 {
                 "unknown".to_string()
