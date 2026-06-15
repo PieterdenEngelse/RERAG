@@ -13,9 +13,12 @@ layers, graph-RAG entity merges) so the reader can build a mental model of
 how RAG works under the hood. The binary, paths, and code identifiers stay
 on the short name `ag` for ergonomic reasons.
 
-> **Status:** pre-1.0. The first functional public release is
-> [`v0.2.5`](https://github.com/PieterdenEngelse/RERAG/releases/tag/v0.2.5).
-> APIs, configuration knobs, and storage layouts may still change.
+> **Status:** [`v1.0.0`](https://github.com/PieterdenEngelse/RERAG/releases/tag/v1.0.0)
+> shipped — eight-phase installer roadmap ([`docs/bin3`](docs/bin3))
+> complete. Backend / dashboard / installer all feature-complete for
+> the v1 line. Future v1.x patches focus on bug fixes and the
+> [deferred items](docs/distro-notes.md#if-broader-appimage-coverage-becomes-important-later)
+> (older-glibc AppImages, programmatic modal focus, etc.).
 
 ## Install
 
@@ -23,8 +26,10 @@ on the short name `ag` for ergonomic reasons.
 
 For end users. No terminal commands required after the download.
 
-1. **Download** the latest `ag-installer-*.AppImage` from
-   <https://github.com/PieterdenEngelse/RERAG/releases/latest>.
+1. **Download** the latest AppImage:
+   <https://github.com/PieterdenEngelse/RERAG/releases/latest/download/ag-installer-v1.0.0-x86_64.AppImage>
+   (or browse all releases at
+   <https://github.com/PieterdenEngelse/RERAG/releases>).
 2. **Make it executable.** Right-click → Properties → Permissions →
    "Allow executing file as program". Or in a terminal:
    ```bash
@@ -123,9 +128,12 @@ how RAG works under the hood.
 
 ## API keys
 
-Phase E of the installer (next release) wires the First-Run Config screen
-to prompt for API keys (Google, OpenAI, OpenRouter, ...) and write them to
-your local `~/.config/ag/ag.env`. Until then, the dashboard's
+The installer's **First-Run Config** screen (Screen 5 of 6) prompts for
+LLM API keys — OpenAI, OpenRouter, Anthropic — and writes them atomically
+into `~/.config/ag/ag.env` with mode `0600`. Leave any field blank to
+skip; users on Ollama-only don't need any external keys.
+
+If you skip First-Run entirely or want to add keys later, the dashboard's
 **Config → Runtime** page accepts them at runtime; they persist in
 `~/.local/share/ag/overrides.json`.
 
@@ -153,8 +161,8 @@ backend for local LLM inference.
 The installer is a separate Dioxus desktop binary that bundles the
 backend, frontend dist, FalkorDB binaries (extracted from the pinned
 docker image), systemd templates, and the env example. See
-[`docs/bin3`](docs/bin3) for the full installer design and 8-phase
-execution plan.
+[`docs/bin3`](docs/bin3) for the full design and 8-phase execution
+plan — all eight phases (0, A–H) are now ✅ shipped as of v1.0.0.
 
 ## Build from source
 
@@ -186,9 +194,12 @@ holder. The AppImage is downloadable but not yet legally redistributable.
 
 Issues and pull requests welcome on
 [github.com/PieterdenEngelse/RERAG](https://github.com/PieterdenEngelse/RERAG).
-The installer design plan ([`docs/bin3`](docs/bin3)) is the best entry
-point for understanding the roadmap; the eight phases (A through H) each
-have their own scope, risks, and acceptance criteria.
+The repo was renamed from `RARAG` → `RERAG` after the v1.0.0 cut;
+GitHub auto-redirects old links for ~6 months.
 
-For coding conventions, build commands, and the project's UI/voice rules,
-see [`CLAUDE.md`](CLAUDE.md).
+For coding conventions, build commands, and the project's UI/voice
+rules, see [`CLAUDE.md`](CLAUDE.md). The installer's design history
+is in [`docs/bin3`](docs/bin3) (all eight phases shipped; useful as
+a retrospective of how the GUI installer came together). For the
+distro support matrix and verification steps, see
+[`docs/distro-notes.md`](docs/distro-notes.md).
