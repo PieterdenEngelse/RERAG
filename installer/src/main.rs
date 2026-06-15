@@ -16,6 +16,7 @@ mod install_steps;
 mod paths;
 mod prompts;
 mod ui;
+mod uninstall;
 mod update_check;
 
 use dioxus::prelude::*;
@@ -41,6 +42,28 @@ fn main() {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
         return;
+    }
+    if args.iter().any(|a| a == "--uninstall") {
+        let purge = args.iter().any(|a| a == "--purge");
+        // Spin up a tokio runtime just for the uninstall flow; we don't
+        // need the full Dioxus desktop stack for a CLI op.
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("could not start tokio runtime: {e}");
+                std::process::exit(1);
+            }
+        };
+        match rt.block_on(uninstall::run(purge)) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("uninstall error: {e:#}");
+                std::process::exit(1);
+            }
+        }
     }
 
     tracing_subscriber::fmt()
@@ -79,8 +102,18 @@ fn print_help() {
     println!();
     println!("  --version, -V    Print version + git SHA + build timestamp and exit");
     println!("  --help, -h       This help");
+    println!("  --uninstall      Remove ag's binaries + systemd units. Preserves");
+    println!("                   your ag.env and $AG_HOME/ data unless --purge");
+    println!("                   is also passed. Confirms before any deletion.");
+    println!("  --uninstall --purge");
+    println!("                   Same as --uninstall, but also removes ag.env");
+    println!("                   (API keys, FalkorDB password) and the entire");
+    println!("                   $AG_HOME/ tree (data, indexes, logs).");
     println!();
     println!("Without flags: opens the GUI installer window.");
+    println!();
+    println!("Sandbox testing (every CLI path honors these):");
+    println!("  HOME=/tmp/ag-test SKIP_SYSTEMCTL=1 ag-installer …");
     println!();
     println!("Design: docs/bin3 in the repo.");
 }
