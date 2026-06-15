@@ -72,7 +72,7 @@ fn print_version() {
 }
 
 fn print_help() {
-    println!("ag-installer {VERSION} — GUI installer for ag");
+    println!("ag-installer {VERSION} — GUI installer for RERAG (Rust Educational RAG)");
     println!();
     println!("Usage: ag-installer [OPTIONS]");
     println!();

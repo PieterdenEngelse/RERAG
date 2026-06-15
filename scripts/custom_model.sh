@@ -2,7 +2,7 @@
 # scripts/custom_model.sh
 # Version: 1.0.0
 # 
-# Custom model installation for Agentic RAG
+# Custom model installation for RERAG
 # Imports a fine-tuned GGUF model into Ollama
 #
 # Usage:
@@ -195,7 +195,7 @@ EOF
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Import a custom fine-tuned model into Ollama for use with Agentic RAG."
+    echo "Import a custom fine-tuned model into Ollama for use with RERAG."
     echo ""
     echo "Options:"
     echo "  -h, --help              Show this help message"
@@ -264,7 +264,7 @@ main() {
 
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║           Agentic RAG Custom Model Installer                 ║"
+    echo "║              RERAG Custom Model Installer                    ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
@@ -305,7 +305,7 @@ main() {
     echo "Test with:"
     echo "  ollama run $MODEL_NAME \"Hello, how are you?\""
     echo ""
-    echo "Enable in Agentic RAG:"
+    echo "Enable in RERAG:"
     echo "  export CUSTOM_MODEL_ENABLED=true"
     echo "  export CUSTOM_MODEL_NAME=$MODEL_NAME"
     echo ""

@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=ag installer
-GenericName=Agentic RAG installer
-Comment=Install ag — the agentic RAG stack — to ~/.local
+Name=RERAG installer
+GenericName=Rust Educational RAG installer
+Comment=Install RERAG — Rust Educational RAG — to ~/.local
 Exec=AppRun
 Icon=ag-installer
 Categories=Development;Database;

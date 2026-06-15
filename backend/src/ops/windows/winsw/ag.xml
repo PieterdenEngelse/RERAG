@@ -1,7 +1,7 @@
 <service>
   <id>ag</id>
-  <name>Agentic RAG API Server</name>
-  <description>Agentic RAG API Server (Actix Web)</description>
+  <name>RERAG API Server</name>
+  <description>RERAG (Rust Educational RAG) — API server (Actix Web)</description>
 
   <!-- Path to the executable (adjust to your installed location) -->
   <executable>%BASE%\ag.exe</executable>

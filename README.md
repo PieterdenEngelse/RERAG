@@ -1,9 +1,17 @@
-# ag
+# RERAG
+
+**Rust Educational RAG · working name `ag`**
 
 A Rust-first Retrieval-Augmented Generation stack with a built-in chat
 interface, observability dashboard, and tool-calling agent mode. Backend is an
 Actix Web server (port 3010 by default); the frontend is a Dioxus desktop /
 web UI served from the same port.
+
+RERAG is intentionally designed as a learning platform — most surfaces show
+what the system is doing internally (chunk counts, retrieval scores, cache
+layers, graph-RAG entity merges) so the reader can build a mental model of
+how RAG works under the hood. The binary, paths, and code identifiers stay
+on the short name `ag` for ergonomic reasons.
 
 > **Status:** pre-1.0. The first functional public release is
 > [`v0.2.5`](https://github.com/PieterdenEngelse/RARAG/releases/tag/v0.2.5).

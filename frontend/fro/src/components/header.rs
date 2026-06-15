@@ -380,7 +380,7 @@ pub fn Header() -> Element {
                 h1 {
                     class: "font-medium truncate",
                     style: "font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.975rem; color: #026B7C;",
-                    "Rust RAG Learning Platform"
+                    "RERAG — Rust Educational RAG"
                 }
                 div { class: "flex items-center gap-1 flex-shrink-0",
                     div {

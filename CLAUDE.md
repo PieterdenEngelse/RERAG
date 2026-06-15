@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repository Does
 
-**ag** is a Rust-first Retrieval-Augmented Generation (RAG) stack: an Actix Web backend handles document ingestion, semantic search, agent memory, and observability APIs; a Dioxus frontend provides a monitoring dashboard and chat UI.
+**RERAG (Rust Educational RAG) — internally `ag`** — is a Rust-first Retrieval-Augmented Generation stack: an Actix Web backend handles document ingestion, semantic search, agent memory, and observability APIs; a Dioxus frontend provides a monitoring dashboard and chat UI.
 
-**ag is also a learning platform.** The app is intentionally designed to teach the user how agentic RAG systems work — how agents use tools, how retrieval is layered with LLM generation, how memory and episodes are tracked, and how observability surfaces what the system is doing internally. UI decisions (monitoring dashboards, info modals, visible stats) should support this educational goal: make the invisible visible.
+**RERAG is also a learning platform.** The app is intentionally designed to teach the user how RAG systems work — how agents use tools, how retrieval is layered with LLM generation, how memory and episodes are tracked, and how observability surfaces what the system is doing internally. UI decisions (monitoring dashboards, info modals, visible stats) should support this educational goal: make the invisible visible.
 
 ## Build, Test, and Development Commands
 
@@ -184,15 +184,16 @@ Info modals are written from the perspective of the compiled app's end user. The
 
 ## Describing the app
 
-**Skip the word "agentic" when describing the app.** It's a buzzword that signals trend-chasing more than meaning — readers either don't know what it implies or actively distrust the term. Prefer concrete descriptions of what ag actually does:
+**Use "RERAG" (or "RERAG — Rust Educational RAG") in user prose. Skip "agentic" as a descriptor.** The name expands to *Rust Educational RAG* — "Educational" replaces the older "agentic" expansion of the acronym. "agentic" remained a buzzword that signals trend-chasing more than meaning; "Educational" aligns with what ag actually is (a learning platform that makes the invisible visible).
 
-- ✅ "a RAG stack with chat, monitoring, and a tool-calling agent mode"
-- ✅ "ag — Retrieval-Augmented Generation with document ingestion, semantic search, and agent memory"
-- ✅ "the app" / "ag"
+- ✅ "RERAG (Rust Educational RAG)"
+- ✅ "RERAG — a RAG stack with chat, monitoring, and a tool-calling agent mode"
+- ✅ "RERAG (ag)" — when introducing the working name in technical prose
+- ✅ "ag" / "the app" — short-form / CLI references where the brand name has already been established
 - ❌ "an agentic RAG stack"
-- ❌ "agentic RAG platform"
+- ❌ "Agentic RAG platform"
 
-This applies to README copy, release notes, info modals, PR descriptions, AppImage tooltips, and any other user-facing prose. The Rust enum variant `AgentMode::Agentic` is a code identifier and stays — the rule is about how we *describe* the app to users, not how we name internal types.
+This applies to README copy, release notes, info modals, AppImage tooltips, PR descriptions, and any other user-facing prose. **Code identifiers don't change**: the Rust enum variant `AgentMode::Agentic`, Cargo package name `ag`, binary `ag`, installer paths (`~/.local/share/ag/`, `~/.config/ag/ag.env`), systemd unit filenames (`ag.service`, `ag-stack.service`), env variables (`AG_HOME`, `AG_BIN`, …), and the `COMPOSE_PROJECT_NAME=ag` setting all stay — the rule is about how we *describe* the app, not how we name internal types or files.
 
 ## Toggles (boolean controls)
 

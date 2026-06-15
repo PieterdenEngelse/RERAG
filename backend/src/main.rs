@@ -65,7 +65,7 @@ async fn main() -> std::io::Result<()> {
     // Initialize global health tracker for load metrics
     ag::monitoring::init_health_tracker();
 
-    info!("🚀 Starting agentic-rag v{}", env!("CARGO_PKG_VERSION"));
+    info!("🚀 Starting RERAG v{}", env!("CARGO_PKG_VERSION"));
 
     // Initialize OpenTelemetry for distributed tracing (Phase 16)
     let otel_config = ag::monitoring::otel_config::OtelConfig::from_env();

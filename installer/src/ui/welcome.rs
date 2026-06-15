@@ -16,9 +16,9 @@ pub fn Welcome() -> Element {
     rsx! {
         div { class: "screen",
             div { class: "screen-header",
-                h1 { class: "screen-title", "ag installer" }
+                h1 { class: "screen-title", "RERAG installer" }
                 p { class: "screen-subtitle",
-                    "Install ag — the agentic RAG stack — to your user account."
+                    "Install RERAG (Rust Educational RAG) to your user account."
                 }
             }
             div { class: "screen-body screen-body-centered",
