@@ -44,12 +44,12 @@ Legend: ✅ verified · 🟡 partial (smoke only, no full install) ·
 
 | Distro | Headless smoke | Full install | Tested version | Date (UTC) | Notes |
 |---|---|---|---|---|---|
-| **Ubuntu 24.04 LTS** | ✅ | ❔ | v0.4.0 | 2026-06-15 | Build baseline; glibc 2.39 native. Smoke pass on every release via `scripts/smoke-test-distros.sh`. |
+| **Ubuntu 24.04 LTS** | ✅ | ❔ | v0.4.1 | 2026-06-15 | Build baseline; glibc 2.39 native. Smoke pass on every release via `scripts/smoke-test-distros.sh`. |
 | Ubuntu 24.10 / 25.04 | ❔ | ❔ | — | — | Expected to work (newer glibc). |
-| **Debian 12 (bookworm)** | 🔴 → ⏸️ | ⏸️ | v0.4.0 | 2026-06-15 | **glibc 2.36 < required 2.39**. Path to support: see "Older-glibc support" below. |
-| **Fedora 39** | 🔴 → ⏸️ | ⏸️ | v0.4.0 | 2026-06-15 | **glibc 2.38 < required 2.39**. Same blocker as Debian 12. Fedora 40+ is fine. |
+| **Debian 12 (bookworm)** | ⏸️ | ⏸️ | v0.4.1 | 2026-06-15 | **glibc 2.36 < required 2.39** — by design unsupported in v1; users install via `installers/install-linux.sh`. |
+| **Fedora 39** | ⏸️ | ⏸️ | v0.4.1 | 2026-06-15 | **glibc 2.38 < required 2.39** — same v1 policy as Debian 12. Fedora 40+ is fine. |
 | Fedora 40+ | ❔ | ❔ | — | — | Expected to work (glibc 2.39). Needs verification. |
-| **Arch (rolling)** | 🟡 (libxdo) | ❔ | v0.4.0 | 2026-06-15 | glibc OK; **missing `libxdo.so.3`** at runtime — Arch's `xdotool` package doesn't ship it. End users would need to install `libxdo` from AUR or our build needs to bundle libxdo. |
+| **Arch (rolling)** | ✅ | ❔ | v0.4.1 | 2026-06-15 | Was 🔴 on v0.4.0 (missing `libxdo.so.3`); v0.4.1 bundles libxdo into the AppImage. Smoke confirms fix. |
 | openSUSE Tumbleweed | ❔ | ❔ | — | — | Rolling — likely glibc 2.39+. Needs verification. |
 
 ## The glibc 2.39 baseline — v1 distribution policy
