@@ -801,4 +801,72 @@ html, body {
 .failure-modal .modal-title {
     color: #fbbf24;
 }
+
+/* =============================================================================
+   Phase F: update banner + About modal
+   ============================================================================= */
+
+.update-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.65rem 1.25rem;
+    background: #0c1422;
+    border-bottom: 1px solid #1f2c44;
+    color: #d1d5db;
+    font-size: 0.85rem;
+}
+.update-banner-text strong {
+    color: #ffffff;
+}
+.update-banner-action {
+    color: #22d3ee;
+    flex-shrink: 0;
+}
+.update-banner-action:hover {
+    color: #67e8f9;
+}
+
+.about-modal .modal-title {
+    color: #ffffff;
+}
+.about-summary {
+    color: #d1d5db;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin-bottom: 1rem;
+}
+.about-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.25rem;
+}
+.about-table td {
+    padding: 0.4rem 0.85rem;
+    border-bottom: 1px solid #1f2632;
+    font-size: 0.85rem;
+}
+.about-table .about-key {
+    color: #9ca3af;
+    width: 8rem;
+}
+.about-table .about-value {
+    color: #d1d5db;
+    font-family: ui-monospace, monospace;
+}
+.about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 1.25rem;
+}
+.about-links .btn-link {
+    text-align: left;
+    color: #60a5fa;
+}
+.about-links .btn-link:hover {
+    color: #93c5fd;
+}
+}
 .footer-sep { color: #2d3543; }

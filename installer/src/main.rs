@@ -16,6 +16,7 @@ mod install_steps;
 mod paths;
 mod prompts;
 mod ui;
+mod update_check;
 
 use dioxus::prelude::*;
 

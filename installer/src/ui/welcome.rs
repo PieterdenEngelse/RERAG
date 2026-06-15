@@ -1,20 +1,53 @@
 //! Screen 1 — Welcome.
 //!
-//! Static branding + one-paragraph overview + collapsible "what gets installed"
-//! preview. Buttons: Cancel / Next → Detection.
+//! Static branding + one-paragraph overview + collapsible "what gets
+//! installed" preview. Phase F adds a non-blocking update-available
+//! banner (driven by crate::update_check) and an About button that
+//! opens the AboutModal. Buttons: Cancel / Next → Detection.
 
 use dioxus::prelude::*;
 
-use crate::ui::components::NavFooter;
+use crate::ui::components::{AboutModal, NavFooter};
+use crate::update_check;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[component]
 pub fn Welcome() -> Element {
     let mut show_details = use_signal(|| false);
+    let about_open = use_signal(|| false);
+
+    // Phase F: non-blocking update check. Returns None on any failure
+    // (network, rate limit, no newer release) so the banner stays hidden.
+    let update = use_resource(update_check::check);
+    let update_info = update.value().read().clone().flatten();
 
     rsx! {
         div { class: "screen",
+            if let Some(info) = update_info {
+                {
+                    let url = info.url.clone();
+                    let latest = info.latest.clone();
+                    let current = info.current.clone();
+                    rsx! {
+                        div { class: "update-banner",
+                            span { class: "update-banner-text",
+                                "Update available: " strong { "{latest}" }
+                                " (you have {current})"
+                            }
+                            button {
+                                class: "btn btn-link update-banner-action",
+                                onclick: move |_| {
+                                    let _ = std::process::Command::new("xdg-open")
+                                        .arg(url.clone())
+                                        .spawn();
+                                },
+                                "Download →"
+                            }
+                        }
+                    }
+                }
+            }
             div { class: "screen-header",
                 h1 { class: "screen-title", "RERAG installer" }
                 p { class: "screen-subtitle",
@@ -41,6 +74,7 @@ pub fn Welcome() -> Element {
                             },
                             if *show_details.read() { "Hide what gets installed" } else { "What gets installed?" }
                         }
+                        AboutTrigger { open: about_open }
                     }
                     if *show_details.read() {
                         ul { class: "welcome-paths",
@@ -61,6 +95,19 @@ pub fn Welcome() -> Element {
                 }
             }
             NavFooter { next_label: "Begin".to_string(), hide_back: true }
+            AboutModal { open: about_open }
+        }
+    }
+}
+
+#[component]
+fn AboutTrigger(open: Signal<bool>) -> Element {
+    let mut open = open;
+    rsx! {
+        button {
+            class: "btn btn-link",
+            onclick: move |_| open.set(true),
+            "About this installer"
         }
     }
 }

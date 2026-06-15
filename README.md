@@ -19,22 +19,40 @@ on the short name `ag` for ergonomic reasons.
 
 ## Install
 
-The supported install path is the GUI installer, distributed as an AppImage.
+### Quick install (GUI) — recommended
+
+For end users. No terminal commands required after the download.
+
+1. **Download** the latest `ag-installer-*.AppImage` from
+   <https://github.com/PieterdenEngelse/RARAG/releases/latest>.
+2. **Make it executable.** Right-click → Properties → Permissions →
+   "Allow executing file as program". Or in a terminal:
+   ```bash
+   chmod +x ~/Downloads/ag-installer-*.AppImage
+   ```
+3. **Double-click** the AppImage. The installer opens, walks you through
+   six screens (Welcome → Detection → Prompts → Install → First-Run →
+   Done), and lands you on the dashboard at <http://127.0.0.1:3010/> when
+   finished.
+
+No root password needed; nothing is written outside your home directory.
+
+### Developer install (terminal)
+
+If you'd rather install from source or want to script the process,
+[`installers/install-linux.sh`](installers/install-linux.sh) is the
+shell-installer equivalent of the GUI (same XDG paths, same systemd
+units, same prompts). Clone the repo and run:
 
 ```bash
-# Download the AppImage from the latest release
-curl -L -o ag-installer.AppImage \
-  https://github.com/PieterdenEngelse/RARAG/releases/latest/download/ag-installer-x86_64.AppImage
-chmod +x ag-installer.AppImage
-
-# Run it (single-window installer, no root required for the default install)
-./ag-installer.AppImage
+./installers/install-linux.sh
 ```
 
-The installer walks six screens: Welcome → Detection → Prompts → Install
-Progress → First-Run Config → Done. By the end of the Done screen ag is
-installed under XDG-standard paths in your home directory, three
-`systemd --user` services are running, and the dashboard is available at
+Both install paths walk the same six steps and produce the same result.
+The installer walks: Welcome → Detection → Prompts → Install Progress
+→ First-Run Config → Done. By the end, ag is installed under
+XDG-standard paths in your home directory, three `systemd --user`
+services are running, and the dashboard is available at
 <http://127.0.0.1:3010/>.
 
 ### What gets installed

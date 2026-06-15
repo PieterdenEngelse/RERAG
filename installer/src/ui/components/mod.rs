@@ -6,6 +6,7 @@ pub mod log_view;
 pub mod prompt_radio;
 pub mod status_icon;
 pub mod failure_modal;
+pub mod about_modal;
 
 pub use nav_footer::NavFooter;
 pub use step_list::StepListView;
@@ -13,3 +14,4 @@ pub use log_view::LogView;
 pub use prompt_radio::PromptRadio;
 pub use status_icon::{StatusIcon, IconKind};
 pub use failure_modal::{FailureInfo, FailureModal};
+pub use about_modal::AboutModal;
