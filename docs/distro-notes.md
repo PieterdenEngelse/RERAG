@@ -52,36 +52,61 @@ Legend: ✅ verified · 🟡 partial (smoke only, no full install) ·
 | **Arch (rolling)** | 🟡 (libxdo) | ❔ | v0.4.0 | 2026-06-15 | glibc OK; **missing `libxdo.so.3`** at runtime — Arch's `xdotool` package doesn't ship it. End users would need to install `libxdo` from AUR or our build needs to bundle libxdo. |
 | openSUSE Tumbleweed | ❔ | ❔ | — | — | Rolling — likely glibc 2.39+. Needs verification. |
 
-## The glibc 2.39 baseline
+## The glibc 2.39 baseline — v1 distribution policy
 
-The AppImage requires **glibc 2.39 or newer** at runtime. This comes
-from a transitive constraint: the `onnx` Cargo feature pulls the
-`ort` crate, which uses prebuilt ONNX Runtime binaries linked against
-glibc 2.39. CI builds on `ubuntu-24.04` (glibc 2.39) to match.
+**The AppImage requires glibc 2.39 or newer.** This is a deliberate v1
+distribution policy, not a temporary constraint.
 
-Distros affected (cannot run the current AppImage):
+The constraint comes from the `onnx` Cargo feature pulling the `ort`
+crate, which uses prebuilt ONNX Runtime binaries linked against glibc
+2.39. CI builds on `ubuntu-24.04` (glibc 2.39) to match. ONNX powers
+ag's FastEmbed local embedding pipeline — the retrieval surface that
+makes the "learning platform" experience responsive enough to feel
+educational. The project chose to keep ONNX over broader distro
+support.
+
+### What this means for users
+
+| If you're on … | … your install path is |
+|---|---|
+| Ubuntu 24.04+, Fedora 40+, Arch, openSUSE Tumbleweed, NixOS unstable | **AppImage** (this repo's releases). Download, `chmod +x`, double-click. |
+| Debian 12 stable, Fedora 39, Ubuntu 22.04 LTS, RHEL/Rocky 9 | **Build from source** via `installers/install-linux.sh`. ag compiles against your system's glibc, ONNX included. No AppImage. |
+
+Both paths produce the same final install (XDG paths, three
+`systemd --user` units, same dashboard). The AppImage is for end-users
+on modern distros; the bash installer is the universal fallback for
+older glibc + source-curious developers.
+
+### Distros affected (cannot run the current AppImage)
+
 - Debian 12 bookworm (glibc 2.36)
 - Fedora 39 (glibc 2.38; EOL April 2024)
 - Ubuntu 22.04 LTS (glibc 2.35)
 - RHEL/Rocky/Alma 9 (glibc 2.34)
 
-### Older-glibc support — path forward (post-v1)
+These distros are not "unsupported" — they're unsupported *via
+AppImage*. The bash installer path works for all of them.
 
-Three options, in increasing order of effort:
+### If broader AppImage coverage becomes important later
 
-1. **Build on `ubuntu-22.04` with `--no-default-features` for onnx.**
-   Drops ONNX support (no FastEmbed local embedding); user falls
-   back to Ollama embedding via API. Smaller binary, broader compat.
-2. **Build ort from source against an older glibc.** Doesn't drop
-   features but adds a substantial CI build step (~20-30 min).
+Three options exist for relaxing the floor, all deferred past v1:
+
+1. **`--no-default-features` build on `ubuntu-22.04`.** Drops ONNX
+   (no FastEmbed; embeddings via Ollama HTTP instead). One extra CI
+   job per release; ships as a second "compat" AppImage. Maintenance
+   cost: keeping two release artifacts coherent.
+2. **Rebuild ort from source against older glibc.** ~20-30 min extra
+   CI time; you own the rebuild forever (every ort release needs the
+   step rerun). Doesn't drop features.
 3. **Static link via musl.** No glibc dependency at all. Largest
-   change — every native dep needs musl-compatible variants. Likely
-   blocks webkit2gtk which doesn't musl cleanly.
+   change — drops ONNX (ort's prebuilt is glibc-only),
+   webkit2gtk doesn't musl cleanly (so the GUI installer can't go
+   this route — at most a server-only musl AppImage as a separate
+   artifact). Big restructuring of the release pipeline.
 
-For v1, the project's position is **glibc 2.39 is the floor**.
-Distros with older glibc are listed as `⏸️ unsupported in v1` in the
-matrix. Option 1 (drop ONNX) is the cheapest escape hatch if one of
-those distros becomes important.
+None of these are planned for v1. They become tractable if/when a
+real Debian-12-or-RHEL-9 user shows up with a use case the bash
+installer can't serve.
 
 ## Other known quirks
 
@@ -89,17 +114,23 @@ those distros becomes important.
 
 Arch's `xdotool` package no longer ships `libxdo.so.3`. The
 installer binary's NEEDED list includes `libxdo.so.3` (Dioxus
-desktop → `tao` window crate). Users would see:
+desktop → `tao` window crate), so an Arch user with only `xdotool`
+installed would see:
 
 ```
 error while loading shared libraries: libxdo.so.3: cannot open shared object file
 ```
 
-Workarounds:
-- Install `libxdo` from AUR (the canonical shared library).
-- Bundle `libxdo.so.3` into the AppImage's `usr/lib/` — adds ~20 KB,
-  resolves it for every distro where the system package is missing
-  or misnamed. Lowest-friction option for v1.
+**Resolved in AppImages built after `installer/build-appimage.sh`'s
+libxdo bundling step landed.** The build host's `libxdo.so.3` is
+copied into `AppDir/usr/lib/` (~20 KB cost). The AppRun shim's
+`LD_LIBRARY_PATH=$SELF_DIR/usr/lib:...` makes the bundled copy take
+precedence over the (missing) system one. Verified by re-running
+`scripts/smoke-test-distros.sh` against the new AppImage.
+
+Users on AppImage releases **before** the libxdo bundle still see
+the error. Either upgrade to the latest AppImage, or install `libxdo`
+from AUR as a workaround.
 
 ### Fedora — xattr persistence
 

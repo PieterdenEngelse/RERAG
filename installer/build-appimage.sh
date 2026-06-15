@@ -91,6 +91,22 @@ else
     log "  libtika_native.so not found — skipping (Phase D will require it)"
 fi
 
+# Phase G fix: bundle libxdo.so.3.
+# The installer binary's NEEDED list includes libxdo.so.3 (Dioxus desktop →
+# tao window crate). Arch's `xdotool` package no longer ships this library,
+# and a few other distros are inconsistent. Bundling it (~20 KB) makes the
+# installer self-sufficient on every target with glibc 2.39+. See
+# docs/distro-notes.md §Arch — libxdo.
+LIBXDO="$(ldconfig -p 2>/dev/null | awk '/libxdo\.so\.3/ {print $4; exit}')"
+if [[ -n "$LIBXDO" && -f "$LIBXDO" ]]; then
+    # Resolve to the real file (ldconfig may report a symlink path).
+    LIBXDO_REAL="$(readlink -f "$LIBXDO")"
+    cp "$LIBXDO_REAL" "$APPDIR/usr/lib/libxdo.so.3"
+    ok "bundled libxdo.so.3 from $LIBXDO_REAL ($(du -h "$LIBXDO_REAL" | cut -f1))"
+else
+    log "  libxdo.so.3 not on the build host — skipping (Arch users will see the missing-lib error)"
+fi
+
 # dx build --platform web outputs to target/dx/<pkg>/release/web/public/,
 # not frontend/fro/dist/ (which was trunk's output path). The dx output
 # includes hashed asset filenames that the runtime asset!() injection
