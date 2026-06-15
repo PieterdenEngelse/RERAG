@@ -84,6 +84,7 @@ docker compose --profile observability up -d
 
 - **Confirmation threshold**: Don't ask for confirmation on small or single-file edits — only ask before major or multi-file changes.
 - **No speculative pre-builds**: Don't run `cargo build` to check for errors after making changes. Build errors surface when the user restarts the service (`systemctl --user restart ag.service`). Running a build check just wastes the user's time.
+- **Commit directly to main**: Solo project, self-reviewed. Don't create feature branches or PRs by default — commit Phase work straight to main. Tag a release when a phase ships. Only branch when there's a specific reason (long-running parallel work, risky rewrite that wants isolation, an actual external reviewer).
 
 ## UI Color Rules
 
@@ -92,6 +93,19 @@ docker compose --profile observability up -d
 - **When asked to increase contrast**: shift 2 Tailwind steps toward white (e.g. `text-gray-500` → `text-gray-300`)
 - **Links are always blue**: use `text-blue-400 hover:text-blue-300` for all clickable links — never orange, teal, or any other color
 - These rules apply to all Dioxus components and pages without exception
+
+**Hex equivalents** for the installer crate (`installer/assets/style.css`) and any other raw-CSS surface — these are the Tailwind palette values for the rules above:
+
+| Tailwind class | Hex | Rule |
+|---|---|---|
+| `text-gray-300` | `#d1d5db` | preferred for secondary/muted labels |
+| `text-gray-400` | `#9ca3af` | minimum readable on dark |
+| `text-gray-500` | `#6b7280` | **DO NOT USE for text** (only for fully-decorative borders, dividers) |
+| `text-gray-600` | `#4b5563` | **DO NOT USE for text** |
+| `text-blue-400` | `#60a5fa` | link default color |
+| `text-blue-300` | `#93c5fd` | link hover color |
+
+When working in `installer/assets/style.css` or any other raw-CSS file, use these hex values directly. Don't introduce new gray-500-or-darker text colors — the contrast violation isn't visible until someone actually reads the screen on a dark display.
 
 ## Coding Conventions
 
