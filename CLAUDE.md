@@ -168,6 +168,18 @@ graph    # GraphRAG via the falkordb crate
 
 Info modals are written from the perspective of the compiled app's end user. They do not know or care about "the frontend" or "the backend" — to them there is only **the app**. Use "the app" or "ag" instead of "the backend", "the frontend", or "the server" when those words would leak implementation structure. Technical terms that are user-visible (env files, config variables, ports) are fine; source-code architecture terms (Actix, Dioxus, HttpServer, handler) are not.
 
+## Describing the app
+
+**Skip the word "agentic" when describing the app.** It's a buzzword that signals trend-chasing more than meaning — readers either don't know what it implies or actively distrust the term. Prefer concrete descriptions of what ag actually does:
+
+- ✅ "a RAG stack with chat, monitoring, and a tool-calling agent mode"
+- ✅ "ag — Retrieval-Augmented Generation with document ingestion, semantic search, and agent memory"
+- ✅ "the app" / "ag"
+- ❌ "an agentic RAG stack"
+- ❌ "agentic RAG platform"
+
+This applies to README copy, release notes, info modals, PR descriptions, AppImage tooltips, and any other user-facing prose. The Rust enum variant `AgentMode::Agentic` is a code identifier and stays — the rule is about how we *describe* the app to users, not how we name internal types.
+
 ## Toggles (boolean controls)
 
 Two acceptable patterns for boolean controls — pick by placement:
