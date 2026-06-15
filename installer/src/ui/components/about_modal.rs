@@ -24,9 +24,9 @@ pub fn AboutModal(props: AboutModalProps) -> Element {
     if !*open.read() {
         return rsx! {};
     }
-    let releases_url = "https://github.com/PieterdenEngelse/RARAG/releases";
-    let design_url = "https://github.com/PieterdenEngelse/RARAG/blob/main/docs/bin3";
-    let readme_url = "https://github.com/PieterdenEngelse/RARAG/blob/main/README.md";
+    let releases_url = "https://github.com/PieterdenEngelse/RERAG/releases";
+    let design_url = "https://github.com/PieterdenEngelse/RERAG/blob/main/docs/bin3";
+    let readme_url = "https://github.com/PieterdenEngelse/RERAG/blob/main/README.md";
 
     let open_url = |url: &'static str| {
         move |_| {

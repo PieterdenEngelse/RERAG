@@ -72,7 +72,7 @@ if [[ -n "$GLIBC" ]] && awk "BEGIN {exit !(${GLIBC} < 2.39)}"; then
 Supported AppImage targets: Ubuntu 24.04+, Fedora 40+, Arch, openSUSE Tumbleweed.
 
 Older distros (Debian 12, Fedora 39, Ubuntu 22.04, RHEL/Rocky 9):
-build from source instead — clone github.com/PieterdenEngelse/RARAG
+build from source instead — clone github.com/PieterdenEngelse/RERAG
 and run installers/install-linux.sh. ag compiles against your system's
 glibc with no AppImage involved."
     echo "$MSG" >&2

@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 
 const CACHE_TTL_SECS: u64 = 4 * 60 * 60;
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/PieterdenEngelse/RARAG/releases/latest";
+    "https://api.github.com/repos/PieterdenEngelse/RERAG/releases/latest";
 
 /// What the Welcome screen needs to render the "update available" banner.
 #[derive(Clone, Debug, PartialEq, Eq)]

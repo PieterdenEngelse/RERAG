@@ -9,7 +9,7 @@ edition = "2021"
 authors.workspace = true
 description = "GUI installer for RERAG (Rust Educational RAG)"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/PieterdenEngelse/RARAG"
+repository = "https://github.com/PieterdenEngelse/RERAG"
 
 # Phase A scope: minimal Dioxus desktop window, version surfaces via --version,
 # and the binary is what the AppImage build packages. Real install logic lands

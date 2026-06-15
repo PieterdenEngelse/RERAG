@@ -14,7 +14,7 @@ how RAG works under the hood. The binary, paths, and code identifiers stay
 on the short name `ag` for ergonomic reasons.
 
 > **Status:** pre-1.0. The first functional public release is
-> [`v0.2.5`](https://github.com/PieterdenEngelse/RARAG/releases/tag/v0.2.5).
+> [`v0.2.5`](https://github.com/PieterdenEngelse/RERAG/releases/tag/v0.2.5).
 > APIs, configuration knobs, and storage layouts may still change.
 
 ## Install
@@ -24,7 +24,7 @@ on the short name `ag` for ergonomic reasons.
 For end users. No terminal commands required after the download.
 
 1. **Download** the latest `ag-installer-*.AppImage` from
-   <https://github.com/PieterdenEngelse/RARAG/releases/latest>.
+   <https://github.com/PieterdenEngelse/RERAG/releases/latest>.
 2. **Make it executable.** Right-click → Properties → Permissions →
    "Allow executing file as program". Or in a terminal:
    ```bash
@@ -185,7 +185,7 @@ holder. The AppImage is downloadable but not yet legally redistributable.
 ## Contributing
 
 Issues and pull requests welcome on
-[github.com/PieterdenEngelse/RARAG](https://github.com/PieterdenEngelse/RARAG).
+[github.com/PieterdenEngelse/RERAG](https://github.com/PieterdenEngelse/RERAG).
 The installer design plan ([`docs/bin3`](docs/bin3)) is the best entry
 point for understanding the roadmap; the eight phases (A through H) each
 have their own scope, risks, and acceptance criteria.
