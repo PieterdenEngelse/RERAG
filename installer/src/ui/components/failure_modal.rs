@@ -48,10 +48,24 @@ pub fn FailureModal(props: FailureModalProps) -> Element {
 
     rsx! {
         div { class: "modal-overlay",
+            // Escape key closes the modal (keyboard parity with the Close
+            // button below). Click-to-close on the overlay is intentionally
+            // omitted here — losing the error details with an accidental
+            // background click would be worse UX than for the About modal.
+            onkeydown: move |evt| {
+                if evt.key() == dioxus::prelude::Key::Escape {
+                    error_signal.set(None);
+                }
+            },
             div { class: "modal-content failure-modal",
-                h2 { class: "modal-title", "Install failed" }
+                role: "alertdialog",
+                aria_modal: "true",
+                aria_labelledby: "failure-modal-title",
+                aria_describedby: "failure-modal-message",
+                tabindex: "-1",
+                h2 { id: "failure-modal-title", class: "modal-title", "Install failed" }
                 p { class: "modal-step", "Step: " span { class: "modal-step-name", "{info.step}" } }
-                pre { class: "modal-message", "{info.message}" }
+                pre { id: "failure-modal-message", class: "modal-message", "{info.message}" }
                 div { class: "modal-actions",
                     button {
                         class: "btn btn-link",

@@ -37,9 +37,20 @@ pub fn AboutModal(props: AboutModalProps) -> Element {
     rsx! {
         div { class: "modal-overlay",
             onclick: move |_| open.set(false),
+            // Keyboard escape: any key handler at the overlay level catches
+            // Escape and closes, parity with click-to-close.
+            onkeydown: move |evt| {
+                if evt.key() == dioxus::prelude::Key::Escape {
+                    open.set(false);
+                }
+            },
             div { class: "modal-content about-modal",
+                role: "dialog",
+                aria_modal: "true",
+                aria_labelledby: "about-modal-title",
+                tabindex: "-1",
                 onclick: move |evt| evt.stop_propagation(),
-                h2 { class: "modal-title", "About RERAG installer" }
+                h2 { id: "about-modal-title", class: "modal-title", "About RERAG installer" }
                 p { class: "about-summary",
                     "Installs "
                     strong { "RERAG" }

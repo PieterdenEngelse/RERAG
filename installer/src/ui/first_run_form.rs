@@ -255,6 +255,7 @@ fn OllamaModelField(
             } else {
                 select {
                     class: "field-select",
+                    aria_label: "Ollama model",
                     value: "{m.read()}",
                     onchange: move |evt| m.set(evt.value().clone()),
                     for name in models.iter() {
@@ -280,6 +281,7 @@ fn PasswordField(password: Signal<String>, on_reset_default: EventHandler<()>) -
             div { class: "field-input-with-toggle",
                 input {
                     class: "field-input",
+                    aria_label: "FalkorDB password",
                     r#type: if *show.read() { "text" } else { "password" },
                     value: "{p.read()}",
                     oninput: move |evt| p.set(evt.value().clone()),
@@ -331,6 +333,7 @@ fn AgentModeField(mode: Signal<String>) -> Element {
             label { class: "field-label", "Default agent mode" }
             select {
                 class: "field-select",
+                aria_label: "Default agent mode",
                 value: "{m.read()}",
                 onchange: move |evt| m.set(evt.value().clone()),
                 for (k, _) in AGENT_MODES.iter() {
@@ -362,6 +365,7 @@ fn SecretField(props: SecretFieldProps) -> Element {
             div { class: "field-input-with-toggle",
                 input {
                     class: "field-input",
+                    aria_label: "{props.label}",
                     r#type: if *show.read() { "text" } else { "password" },
                     placeholder: "{props.placeholder}",
                     value: "{v.read()}",

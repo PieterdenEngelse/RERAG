@@ -194,6 +194,7 @@ fn PortPicker() -> Element {
             input {
                 r#type: "text",
                 class: "prompt-card-input",
+                aria_label: "New backend port (1024-65535)",
                 value: "{raw.read()}",
                 oninput: oninput,
                 placeholder: "e.g. 3011",

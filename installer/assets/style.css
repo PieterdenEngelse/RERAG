@@ -449,6 +449,51 @@ html, body {
 }
 
 /* =============================================================================
+   Accessibility — visible focus indicators (Phase H / v1.0.0)
+   ============================================================================= */
+
+/* :focus-visible only renders when the focus came from keyboard navigation
+   (Tab / Shift-Tab / Enter), not from mouse clicks. So mouse-driven users
+   never see the outline, but keyboard users always know where they are. */
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid #22d3ee;
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* The text inputs already have a brand-color border on :focus from earlier
+   rules; reinforce the visible outline so keyboard navigation lights them
+   up consistently with everything else. */
+.field-input:focus-visible,
+.field-select:focus-visible,
+.prompt-card-input:focus-visible {
+    outline-offset: 0;
+}
+
+/* Skip-to-content link (used by keyboard users to jump past the header).
+   Visually hidden until focused. */
+.skip-link {
+    position: absolute;
+    left: -10000px;
+    top: -10000px;
+    background: #22d3ee;
+    color: #0a0c10;
+    padding: 0.5rem 1rem;
+    font-weight: 600;
+    z-index: 200;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+    left: 1rem;
+    top: 1rem;
+}
+
+/* =============================================================================
    First-Run additions (Phase E): input+toggle, link button, sections, error
    ============================================================================= */
 
