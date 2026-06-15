@@ -60,8 +60,8 @@ APPIMAGE_NAME="$(basename "$APPIMAGE_ABS")"
 DISTROS=(
     "ubuntu-24.04|ubuntu:24.04|apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwebkit2gtk-4.1-0 libgtk-3-0 libsoup-3.0-0 libxdo3 libfuse2 ca-certificates >/dev/null"
     "debian-12|debian:12|apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwebkit2gtk-4.1-0 libgtk-3-0 libsoup-3.0-0 libxdo3 libfuse2 ca-certificates >/dev/null"
-    "fedora-39|fedora:39|dnf install -y -q webkit2gtk4.1 gtk3 libsoup3 fuse-libs >/dev/null"
-    "arch-rolling|archlinux:latest|pacman -Sy --noconfirm --noprogressbar webkit2gtk-4.1 gtk3 libsoup3 fuse2 ca-certificates >/dev/null 2>&1"
+    "fedora-39|fedora:39|dnf install -y -q webkit2gtk4.1 gtk3 libsoup3 fuse-libs libxdo >/dev/null"
+    "arch-rolling|archlinux:latest|pacman -Sy --noconfirm --noprogressbar webkit2gtk-4.1 gtk3 libsoup3 fuse2 ca-certificates xdotool >/dev/null 2>&1"
 )
 
 PASS=()
