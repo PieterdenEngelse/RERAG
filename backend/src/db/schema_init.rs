@@ -23,6 +23,7 @@ impl SchemaInitializer {
         Self::run_v16_migration(db_conn)?;
         Self::run_v17_migration(db_conn)?;
         Self::run_v18_migration(db_conn)?;
+        Self::run_v19_migration(db_conn)?;
         info!("Database schema initialized with WAL mode");
         Ok(())
     }
@@ -125,6 +126,21 @@ impl SchemaInitializer {
         if !Self::column_exists(conn, "corpora", "watch_dir")? {
             conn.execute_batch("ALTER TABLE corpora ADD COLUMN watch_dir TEXT")?;
             info!("corpus migration v18: added corpora.watch_dir column");
+        }
+        Ok(())
+    }
+
+    /// Add `corpus` TEXT column to `extraction_records`. Pre-existing rows
+    /// (ingested before this column existed) backfill to 'default' — the only
+    /// reasonable guess, since the corpus name was never persisted. Going
+    /// forward, every insert writes the real value so the TIP per-corpus
+    /// filter stops dropping reloaded files.
+    fn run_v19_migration(conn: &Connection) -> SqlResult<()> {
+        if !Self::column_exists(conn, "extraction_records", "corpus")? {
+            conn.execute_batch(
+                "ALTER TABLE extraction_records ADD COLUMN corpus TEXT NOT NULL DEFAULT 'default'",
+            )?;
+            info!("corpus migration v19: added extraction_records.corpus column");
         }
         Ok(())
     }

@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS extraction_records (
     format    TEXT NOT NULL,
     ok        INTEGER NOT NULL,
     chars     INTEGER NOT NULL,
+    corpus    TEXT NOT NULL DEFAULT 'default',
     recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

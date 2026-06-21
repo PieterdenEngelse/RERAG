@@ -24,8 +24,15 @@ pub fn insert(rec: &FileRecord) {
     let Some(mutex) = DB_CONN.get() else { return };
     let Ok(conn) = mutex.lock() else { return };
     if let Err(e) = conn.execute(
-        "INSERT INTO extraction_records (filename, path, format, ok, chars) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![rec.filename, rec.path, rec.format, rec.ok as i64, rec.chars as i64],
+        "INSERT INTO extraction_records (filename, path, format, ok, chars, corpus) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            rec.filename,
+            rec.path,
+            rec.format,
+            rec.ok as i64,
+            rec.chars as i64,
+            rec.corpus,
+        ],
     ) {
         warn!("extraction_records: insert failed: {}", e);
         return;
@@ -62,7 +69,7 @@ pub fn load_recent() -> Vec<FileRecord> {
     };
     let cutoff = format!("-{} days", DAYS_HISTORY);
     let mut stmt = match conn.prepare(
-        "SELECT filename, path, format, ok, chars FROM extraction_records
+        "SELECT filename, path, format, ok, chars, corpus FROM extraction_records
          WHERE recorded_at > datetime('now', ?1)
          ORDER BY recorded_at DESC LIMIT ?2",
     ) {
@@ -79,7 +86,7 @@ pub fn load_recent() -> Vec<FileRecord> {
             format: row.get(2)?,
             ok: row.get::<_, i64>(3)? != 0,
             chars: row.get::<_, i64>(4)? as u64,
-            corpus: String::new(),
+            corpus: row.get(5)?,
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())
