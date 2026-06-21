@@ -290,3 +290,91 @@ fn real_fixture_pdf_splits_body_into_left_and_right_columns() {
         );
     }
 }
+
+/// End-to-end k=4 case. The fixture is a synthetic quarterly-revenue table —
+/// 1 title, 1 header row (Region/Q1/Q2/Q3), 6 body rows, 1 footer. With the
+/// PDF text-matrix Tlm fix + TJ kern advance, the body cells land at four
+/// distinct x-coordinates that adaptive-k must pick up cleanly. Guards
+/// against regressions that would either (a) ratchet x across rows and
+/// destroy column structure, or (b) collapse the row into one wide line.
+#[test]
+fn real_fixture_four_column_pdf_drives_adaptive_k_to_4() {
+    const FIXTURE: &[u8] = include_bytes!("fixtures/pdf/four_col_quarterly.pdf");
+
+    let words = extract_words(FIXTURE).expect("lopdf must parse the 4-column fixture");
+    assert!(!words.is_empty(), "lopdf returned 0 words on the fixture");
+    assert!(
+        words.iter().any(|w| w.bbox.is_some()),
+        "all words bbox=None — fell through to extractous; column detector \
+         cannot run on this fixture"
+    );
+
+    let lines = group_words_into_lines(&words);
+    let columns = assign_columns(&lines);
+
+    assert_eq!(columns.pages.len(), 1, "fixture is single-page");
+    assert_eq!(
+        columns.pages[0].k_used, 4,
+        "4-column body should drive adaptive-k to k=4"
+    );
+    let s = columns.pages[0]
+        .silhouette
+        .expect("silhouette should be computed");
+    assert!(
+        s > 0.80,
+        "silhouette {} unexpectedly low for a clean 4-column split",
+        s
+    );
+
+    // All four columns represented.
+    let cols_seen: std::collections::BTreeSet<u8> = columns
+        .positions
+        .iter()
+        .filter_map(|c| match c {
+            ColumnPosition::Col(n) => Some(*n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cols_seen,
+        [0u8, 1, 2, 3].into_iter().collect(),
+        "expected all four columns Col(0..4) in line classifications, got {:?}",
+        cols_seen
+    );
+
+    // Column-pure chunking — no chunk should straddle two non-Multi columns.
+    let mut word_columns = vec![ColumnPosition::Multi; words.len()];
+    for (line, col) in lines.iter().zip(columns.positions.iter()) {
+        for wi in line.word_range.clone() {
+            word_columns[wi] = *col;
+        }
+    }
+    let tags = vec![RegionTag::Text; words.len()];
+    let ir = build_ir(
+        "four_col_quarterly.pdf",
+        &words,
+        &tags,
+        TableModel::load_or_text(),
+        Some(&word_columns),
+    );
+    let chunker = FixedChunker::new(ChunkerConfig::default());
+    let chunks = chunk_ir(&ir, &chunker);
+    for (text, meta) in &chunks {
+        let distinct: std::collections::BTreeSet<u8> = meta
+            .column_position_set
+            .iter()
+            .filter_map(|c| match c {
+                ColumnPosition::Col(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            distinct.len() <= 1,
+            "chunk straddles {} columns — column-aware chunker should flush \
+             at every column transition. chunk='{}' set={:?}",
+            distinct.len(),
+            text,
+            meta.column_position_set
+        );
+    }
+}
