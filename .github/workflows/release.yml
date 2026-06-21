@@ -165,7 +165,7 @@ jobs:
           appimagetool --version || true
 
       - name: Build ag (backend)
-        run: cargo build --release -p ag
+        run: cargo build --release -p ag --features layout_ml
 
       - name: Build ag-installer
         run: cargo build --release -p ag-installer
