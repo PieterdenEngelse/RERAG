@@ -33,6 +33,7 @@ pub async fn get_extraction(path: web::Path<String>) -> Result<HttpResponse> {
 
     let lines = crate::db::pdf_rows::get_lines(&conn, &document_id, None, None).unwrap_or_default();
     let pages = crate::db::pdf_rows::get_pages(&conn, &document_id).unwrap_or_default();
+    let summary = crate::db::pdf_rows::get_summary(&conn, &document_id).unwrap_or(None);
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "document_id": document_id,
@@ -40,5 +41,6 @@ pub async fn get_extraction(path: web::Path<String>) -> Result<HttpResponse> {
         "line_count": lines.len(),
         "pages": pages,
         "lines": lines,
+        "summary": summary,
     })))
 }

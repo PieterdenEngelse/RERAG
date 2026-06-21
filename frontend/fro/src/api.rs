@@ -2161,6 +2161,24 @@ pub struct PdfPageRow {
     pub column_silhouette: Option<f32>,
     #[serde(default)]
     pub is_scanned: bool,
+    #[serde(default = "default_page_type")]
+    pub page_type: String,
+}
+
+fn default_page_type() -> String {
+    "body".to_string()
+}
+
+/// Phase 2 doc-level summary returned alongside the per-page rows.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct PdfParsingSummary {
+    pub page_count: u32,
+    pub scanned_page_count: u32,
+    pub total_lines: u32,
+    #[serde(default)]
+    pub bbox_coverage_pct: Option<f32>,
+    #[serde(default)]
+    pub page_types: std::collections::BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -2170,6 +2188,8 @@ pub struct PdfExtractionResponse {
     pub line_count: usize,
     pub pages: Vec<PdfPageRow>,
     pub lines: Vec<PdfLineRow>,
+    #[serde(default)]
+    pub summary: Option<PdfParsingSummary>,
 }
 
 /// Fetch the relational PDF sidecar for `document_id` (the filename used

@@ -21,6 +21,8 @@ pub mod line_grouper;
 #[cfg(feature = "layout_ml")]
 pub mod native_extractor;
 #[cfg(feature = "layout_ml")]
+pub mod page_type;
+#[cfg(feature = "layout_ml")]
 pub mod table_model;
 #[cfg(feature = "layout_ml")]
 pub mod word_extractor;

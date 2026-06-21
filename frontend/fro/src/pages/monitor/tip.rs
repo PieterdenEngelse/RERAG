@@ -1485,6 +1485,19 @@ pub fn MonitorTip() -> Element {
                                             }
                                             " page visualises which columns were found per page."
                                         }
+                                        p { class: "mt-1.5",
+                                            "Phase 2 layers a per-page heuristic classifier on top: every page is tagged "
+                                            span { class: "font-mono text-gray-200", "cover" }
+                                            " / "
+                                            span { class: "font-mono text-gray-200", "toc" }
+                                            " / "
+                                            span { class: "font-mono text-gray-200", "body" }
+                                            " / "
+                                            span { class: "font-mono text-gray-200", "appendix" }
+                                            " from line text alone (page number, line count, header sniff, TOC dot-leader density). A document-level "
+                                            span { class: "font-mono text-gray-200", "pdf_parsing_summary" }
+                                            " row also captures bbox-coverage percentage (how many words had positions vs the extractous text-only fallback) and how many pages were scanned. The page-type banner on /pdf-extraction surfaces all of it."
+                                        }
                                     }
                                     p { class: "text-gray-400",
                                         "Entry point. Reads raw bytes and converts them to plain text via "
@@ -2219,6 +2232,19 @@ pub fn MonitorTip() -> Element {
                                             span { class: "font-mono text-gray-200", "column_position" }
                                             " and the chunker treats a cross-column same-page transition as a hard boundary. A two-column invoice's left-column label and right-column amount never share a chunk, so the LLM can answer \"what's the renewal fee?\" against the right column instead of mixing both."
                                         }
+                                        li { span { class: "text-gray-200", "Document shape (Phase 2): " }
+                                            "each page is also tagged "
+                                            span { class: "font-mono text-gray-200", "page_type" }
+                                            " (cover / toc / body / appendix) from line text alone, and a "
+                                            span { class: "font-mono text-gray-200", "pdf_parsing_summary" }
+                                            " row records the per-document mix plus bbox-coverage and scanned-page counts. The retriever can filter front-matter and reference pages out of grounded answers, and a quick glance at the "
+                                            Link {
+                                                to: Route::PdfExtraction {},
+                                                class: "text-blue-400 hover:text-blue-300 underline",
+                                                "/pdf-extraction"
+                                            }
+                                            " banner tells a reader which pages the answer is likely to come from."
+                                        }
                                         li { span { class: "text-gray-200", "Extractor provenance: " } "the "
                                             span { class: "font-mono text-amber-300", "extractor" }
                                             " field tells the retriever whether structure came from the built-in parser or a sidecar service like Docling."
@@ -2236,7 +2262,9 @@ pub fn MonitorTip() -> Element {
                                             span { class: "font-mono text-sky-300", "native_pdf" }
                                             " — in-process relational extractor (layout_ml feature). Words + bboxes from lopdf → y-banded LineSpans → adaptive-k column classification → DocIR with per-block "
                                             span { class: "font-mono text-gray-200", "column_position" }
-                                            ". Persists pdf_lines / pdf_pages sidecar rows that back the "
+                                            ". Persists pdf_lines / pdf_pages / pdf_parsing_summary sidecar rows (Phase 2 adds the per-page "
+                                            span { class: "font-mono text-gray-200", "page_type" }
+                                            " tag and the document summary) that back the "
                                             Link {
                                                 to: Route::PdfExtraction {},
                                                 class: "text-sky-400 underline hover:text-sky-300",

@@ -271,9 +271,9 @@ pub static KNOWN_KEYS: &[KnownKey] = &[
     },
     KnownKey {
         key: "PDF_RELATIONAL_ENABLED",
-        description: "Default for new corpora: persist the relational PDF sidecar tables (pdf_lines, pdf_pages) and make the column-aware chunker treat cross-column transitions as strong boundaries. Lets ag answer questions about two-column documents (invoices, articles) without confusing left- and right-column content. Each corpus can override this on /config/corpus. Independent of LAYOUT_ML_ENABLED at the gate level, but the extractor itself requires the layout_ml Cargo feature — without it this setting is a no-op. No restart needed; takes effect on next document extraction.",
+        description: "Default for new corpora: persist the relational PDF sidecar tables (pdf_lines, pdf_pages, pdf_parsing_summary) and make the column-aware chunker treat cross-column transitions as strong boundaries. Lets ag answer questions about two-column documents (invoices, articles) without confusing left- and right-column content, and powers the /pdf-extraction educational view. Each corpus can override this on /config/corpus. Independent of LAYOUT_ML_ENABLED at the gate level, but the extractor itself requires the layout_ml Cargo feature — without it this setting is a no-op. No restart needed; takes effect on next document extraction.",
         kind: Kind::Bool,
-        default: Some("false"),
+        default: Some("true"),
         category: "pdf",
         restart_required: false,
     },

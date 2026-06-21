@@ -20,6 +20,7 @@ use ag::pdf::column_detect::assign_columns;
 use ag::pdf::ir_builder::build_ir;
 use ag::pdf::layout_model::RegionTag;
 use ag::pdf::line_grouper::group_words_into_lines;
+use ag::pdf::page_type::{classify_page, PageType};
 use ag::pdf::table_model::TableModel;
 use ag::pdf::word_extractor::{extract_words, WordSpan};
 
@@ -377,4 +378,37 @@ fn real_fixture_four_column_pdf_drives_adaptive_k_to_4() {
             meta.column_position_set
         );
     }
+}
+
+/// Phase 2: page-type heuristic on the real two-column invoice fixture.
+/// The fixture has a header + body table + footer — should classify as body
+/// (it's neither short enough to be a cover nor TOC-shaped).
+#[test]
+fn real_fixture_two_column_invoice_classifies_as_body() {
+    const FIXTURE: &[u8] = include_bytes!("fixtures/pdf/two_column_invoice.pdf");
+    let words = extract_words(FIXTURE).expect("lopdf must parse the fixture");
+    let lines = group_words_into_lines(&words);
+    let page1: Vec<_> = lines.iter().filter(|l| l.page == 1).cloned().collect();
+    assert_eq!(
+        classify_page(1, &page1),
+        PageType::Body,
+        "two_column_invoice.pdf page 1 should classify as body, not cover/toc/appendix \
+         (lines={})",
+        page1.len()
+    );
+}
+
+/// Phase 2: same exercise on the 4-column fixture.
+#[test]
+fn real_fixture_four_column_pdf_classifies_as_body() {
+    const FIXTURE: &[u8] = include_bytes!("fixtures/pdf/four_col_quarterly.pdf");
+    let words = extract_words(FIXTURE).expect("lopdf must parse the fixture");
+    let lines = group_words_into_lines(&words);
+    let page1: Vec<_> = lines.iter().filter(|l| l.page == 1).cloned().collect();
+    assert_eq!(
+        classify_page(1, &page1),
+        PageType::Body,
+        "four_col_quarterly.pdf page 1 should classify as body (lines={})",
+        page1.len()
+    );
 }

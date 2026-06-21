@@ -231,5 +231,25 @@ CREATE TABLE IF NOT EXISTS pdf_pages (
     column_k_used      INTEGER NOT NULL DEFAULT 1,
     column_silhouette  REAL,
     is_scanned         INTEGER NOT NULL DEFAULT 0,
+    -- Phase 2: heuristic page-type tag computed over pdf_lines. The 'body'
+    -- default keeps existing rows valid through the v20 ALTER.
+    page_type          TEXT NOT NULL DEFAULT 'body'
+                       CHECK(page_type IN ('cover','toc','body','appendix')),
     PRIMARY KEY (document_id, page)
+);
+
+-- Phase 2: document-level extraction summary, aggregated from pdf_pages /
+-- pdf_lines at ingest time. One row per document; rewritten on each
+-- ingestion. Keeps the per-document banner on /pdf-extraction cheap.
+CREATE TABLE IF NOT EXISTS pdf_parsing_summary (
+    document_id        TEXT PRIMARY KEY,
+    page_count         INTEGER NOT NULL,
+    scanned_page_count INTEGER NOT NULL,
+    total_lines        INTEGER NOT NULL,
+    -- Percentage of words on bbox-bearing lines, 0..=100. NULL when the
+    -- document has no lines (pathological / empty PDF).
+    bbox_coverage_pct  REAL,
+    -- JSON object {"cover": 1, "toc": 0, "body": 18, "appendix": 1}.
+    page_types_json    TEXT NOT NULL DEFAULT '{}',
+    recorded_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

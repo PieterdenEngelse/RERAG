@@ -24,6 +24,27 @@ pub struct PageRow {
     pub column_k_used: u8,
     pub column_silhouette: Option<f32>,
     pub is_scanned: bool,
+    /// Phase 2 heuristic — one of cover/toc/body/appendix. Defaults to
+    /// "body" via the schema's DEFAULT clause so pre-Phase-2 rows survive
+    /// migration without rewrite.
+    #[serde(default = "default_page_type")]
+    pub page_type: String,
+}
+
+fn default_page_type() -> String {
+    "body".to_string()
+}
+
+/// Document-level extraction summary written by the Phase 2 pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SummaryRow {
+    pub page_count: u32,
+    pub scanned_page_count: u32,
+    pub total_lines: u32,
+    /// 0..=100. None when the document has no lines at all.
+    pub bbox_coverage_pct: Option<f32>,
+    /// `{"cover":1,"toc":0,"body":18,"appendix":1}`. Stable key ordering.
+    pub page_types: std::collections::BTreeMap<String, u32>,
 }
 
 /// Replace all `pdf_lines` rows for `document_id` with `lines`. Returns the
@@ -80,8 +101,9 @@ pub fn replace_pages(
     {
         let mut stmt = tx.prepare(
             "INSERT INTO pdf_pages
-                (document_id, page, line_count, column_k_used, column_silhouette, is_scanned)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (document_id, page, line_count, column_k_used,
+                 column_silhouette, is_scanned, page_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         for p in pages {
             stmt.execute(params![
@@ -90,7 +112,8 @@ pub fn replace_pages(
                 p.line_count,
                 p.column_k_used,
                 p.column_silhouette,
-                if p.is_scanned { 1 } else { 0 }
+                if p.is_scanned { 1 } else { 0 },
+                p.page_type,
             ])?;
             inserted += 1;
         }
@@ -160,7 +183,7 @@ pub fn get_lines(
 
 pub fn get_pages(conn: &Connection, document_id: &str) -> rusqlite::Result<Vec<PageRow>> {
     let mut stmt = conn.prepare(
-        "SELECT page, line_count, column_k_used, column_silhouette, is_scanned
+        "SELECT page, line_count, column_k_used, column_silhouette, is_scanned, page_type
          FROM pdf_pages WHERE document_id = ?1 ORDER BY page",
     )?;
     let rows: Vec<PageRow> = stmt
@@ -171,11 +194,64 @@ pub fn get_pages(conn: &Connection, document_id: &str) -> rusqlite::Result<Vec<P
                 column_k_used: row.get(2)?,
                 column_silhouette: row.get(3)?,
                 is_scanned: row.get::<_, i64>(4)? != 0,
+                page_type: row.get(5)?,
             })
         })?
         .filter_map(|r| r.ok())
         .collect();
     Ok(rows)
+}
+
+/// Replace the per-document summary row. Always exactly one row per
+/// document_id; `INSERT OR REPLACE` covers both first ingest and re-ingest.
+pub fn replace_summary(
+    conn: &Connection,
+    document_id: &str,
+    summary: &SummaryRow,
+) -> rusqlite::Result<()> {
+    let page_types_json = serde_json::to_string(&summary.page_types)
+        .unwrap_or_else(|_| "{}".to_string());
+    conn.execute(
+        "INSERT OR REPLACE INTO pdf_parsing_summary
+            (document_id, page_count, scanned_page_count, total_lines,
+             bbox_coverage_pct, page_types_json, recorded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)",
+        params![
+            document_id,
+            summary.page_count,
+            summary.scanned_page_count,
+            summary.total_lines,
+            summary.bbox_coverage_pct,
+            page_types_json,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_summary(
+    conn: &Connection,
+    document_id: &str,
+) -> rusqlite::Result<Option<SummaryRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT page_count, scanned_page_count, total_lines,
+                bbox_coverage_pct, page_types_json
+         FROM pdf_parsing_summary WHERE document_id = ?1",
+    )?;
+    let row = stmt
+        .query_row(params![document_id], |row| {
+            let json: String = row.get(4)?;
+            let page_types: std::collections::BTreeMap<String, u32> =
+                serde_json::from_str(&json).unwrap_or_default();
+            Ok(SummaryRow {
+                page_count: row.get(0)?,
+                scanned_page_count: row.get(1)?,
+                total_lines: row.get(2)?,
+                bbox_coverage_pct: row.get(3)?,
+                page_types,
+            })
+        })
+        .ok();
+    Ok(row)
 }
 
 /// Document id of the canned demo invoice the PDF Extraction page defaults
@@ -213,6 +289,19 @@ pub fn seed_demo_if_missing(conn: &mut Connection) -> rusqlite::Result<bool> {
     // by_format counter against the real ingest.
     replace_lines(conn, DEMO_INVOICE_DOC_ID, &demo_invoice_lines())?;
     replace_pages(conn, DEMO_INVOICE_DOC_ID, &demo_invoice_pages())?;
+    let mut page_types = std::collections::BTreeMap::new();
+    page_types.insert("body".to_string(), 1);
+    replace_summary(
+        conn,
+        DEMO_INVOICE_DOC_ID,
+        &SummaryRow {
+            page_count: 1,
+            scanned_page_count: 0,
+            total_lines: 12,
+            bbox_coverage_pct: Some(100.0),
+            page_types,
+        },
+    )?;
     Ok(true)
 }
 
@@ -263,6 +352,7 @@ fn demo_invoice_pages() -> Vec<PageRow> {
         column_k_used: 2,
         column_silhouette: Some(0.72),
         is_scanned: false,
+        page_type: "body".to_string(),
     }]
 }
 
@@ -349,4 +439,127 @@ pub async fn ingest_demo_pdf(
         n
     };
     Ok(chunks)
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    // Minimal in-memory schema — only the pdf_parsing_summary table, so the
+    // tests don't pick up unrelated migrations from SchemaInitializer.
+    fn open_with_summary_table() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE pdf_parsing_summary (
+                document_id        TEXT PRIMARY KEY,
+                page_count         INTEGER NOT NULL,
+                scanned_page_count INTEGER NOT NULL,
+                total_lines        INTEGER NOT NULL,
+                bbox_coverage_pct  REAL,
+                page_types_json    TEXT NOT NULL DEFAULT '{}',
+                recorded_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+        )
+        .expect("create table");
+        conn
+    }
+
+    fn sample_summary() -> SummaryRow {
+        let mut page_types = BTreeMap::new();
+        page_types.insert("cover".to_string(), 1);
+        page_types.insert("toc".to_string(), 0);
+        page_types.insert("body".to_string(), 18);
+        page_types.insert("appendix".to_string(), 1);
+        SummaryRow {
+            page_count: 20,
+            scanned_page_count: 2,
+            total_lines: 412,
+            bbox_coverage_pct: Some(97.5),
+            page_types,
+        }
+    }
+
+    #[test]
+    fn round_trip_preserves_all_fields() {
+        let conn = open_with_summary_table();
+        let want = sample_summary();
+        replace_summary(&conn, "doc1.pdf", &want).expect("replace_summary");
+        let got = get_summary(&conn, "doc1.pdf")
+            .expect("get_summary")
+            .expect("row present");
+        assert_eq!(got.page_count, want.page_count);
+        assert_eq!(got.scanned_page_count, want.scanned_page_count);
+        assert_eq!(got.total_lines, want.total_lines);
+        assert_eq!(got.bbox_coverage_pct, want.bbox_coverage_pct);
+        assert_eq!(got.page_types, want.page_types);
+    }
+
+    #[test]
+    fn get_summary_returns_none_for_missing_document() {
+        let conn = open_with_summary_table();
+        assert!(get_summary(&conn, "absent.pdf").expect("ok").is_none());
+    }
+
+    #[test]
+    fn replace_summary_overwrites_existing_row() {
+        let conn = open_with_summary_table();
+        let mut first = sample_summary();
+        first.page_count = 5;
+        replace_summary(&conn, "doc.pdf", &first).expect("first write");
+
+        let mut second = sample_summary();
+        second.page_count = 99;
+        second.total_lines = 1234;
+        replace_summary(&conn, "doc.pdf", &second).expect("second write");
+
+        let got = get_summary(&conn, "doc.pdf").unwrap().unwrap();
+        assert_eq!(got.page_count, 99);
+        assert_eq!(got.total_lines, 1234);
+
+        // Sanity: still exactly one row for this document.
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pdf_parsing_summary WHERE document_id = ?1",
+                params!["doc.pdf"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn null_bbox_coverage_round_trips_as_none() {
+        let conn = open_with_summary_table();
+        let row = SummaryRow {
+            page_count: 0,
+            scanned_page_count: 0,
+            total_lines: 0,
+            bbox_coverage_pct: None,
+            page_types: BTreeMap::new(),
+        };
+        replace_summary(&conn, "empty.pdf", &row).expect("write");
+        let got = get_summary(&conn, "empty.pdf").unwrap().unwrap();
+        assert_eq!(got.bbox_coverage_pct, None);
+        assert!(got.page_types.is_empty());
+    }
+
+    #[test]
+    fn corrupted_page_types_json_falls_back_to_empty_map() {
+        // If something writes garbage into page_types_json directly,
+        // get_summary should still return a row — just with no page-type
+        // counts — rather than erroring out.
+        let conn = open_with_summary_table();
+        conn.execute(
+            "INSERT INTO pdf_parsing_summary
+                (document_id, page_count, scanned_page_count, total_lines,
+                 bbox_coverage_pct, page_types_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params!["weird.pdf", 1, 0, 5, 50.0, "not json"],
+        )
+        .unwrap();
+        let got = get_summary(&conn, "weird.pdf").unwrap().unwrap();
+        assert_eq!(got.page_count, 1);
+        assert!(got.page_types.is_empty());
+    }
 }

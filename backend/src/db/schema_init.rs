@@ -24,6 +24,7 @@ impl SchemaInitializer {
         Self::run_v17_migration(db_conn)?;
         Self::run_v18_migration(db_conn)?;
         Self::run_v19_migration(db_conn)?;
+        Self::run_v20_migration(db_conn)?;
         info!("Database schema initialized with WAL mode");
         Ok(())
     }
@@ -142,6 +143,31 @@ impl SchemaInitializer {
             )?;
             info!("corpus migration v19: added extraction_records.corpus column");
         }
+        Ok(())
+    }
+
+    /// Phase 2 relational PDF tables: add `page_type` to `pdf_pages` and
+    /// create `pdf_parsing_summary`. Both gated on column / table existence
+    /// so the migration is idempotent — `cargo test --test pdf_relational`
+    /// runs against a fresh DB while production carries pre-Phase-2 rows.
+    fn run_v20_migration(conn: &Connection) -> SqlResult<()> {
+        if !Self::column_exists(conn, "pdf_pages", "page_type")? {
+            conn.execute_batch(
+                "ALTER TABLE pdf_pages ADD COLUMN page_type TEXT NOT NULL DEFAULT 'body'",
+            )?;
+            info!("phase2 migration v20: added pdf_pages.page_type column");
+        }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS pdf_parsing_summary (
+                document_id        TEXT PRIMARY KEY,
+                page_count         INTEGER NOT NULL,
+                scanned_page_count INTEGER NOT NULL,
+                total_lines        INTEGER NOT NULL,
+                bbox_coverage_pct  REAL,
+                page_types_json    TEXT NOT NULL DEFAULT '{}',
+                recorded_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+        )?;
         Ok(())
     }
 

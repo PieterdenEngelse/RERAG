@@ -482,13 +482,15 @@ pub fn prepare_doc(
 ///   * SQLite isn't reachable;
 ///   * `effective_relational_pdf_enabled(corpus)` returns false.
 fn persist_relational_pdf_rows(ir: &crate::doc_ir::DocIR, filename: &str, corpus_slug: &str) {
-    // Metadata keys mirror pdf::native_extractor::relational::{LINES_KEY,PAGES_KEY}.
+    // Metadata keys mirror pdf::native_extractor::relational::{LINES_KEY,PAGES_KEY,SUMMARY_KEY}.
     const LINES_KEY: &str = "pdf_relational_lines_json";
     const PAGES_KEY: &str = "pdf_relational_pages_json";
+    const SUMMARY_KEY: &str = "pdf_relational_summary_json";
 
     let lines_json = ir.metadata.get(LINES_KEY);
     let pages_json = ir.metadata.get(PAGES_KEY);
-    if lines_json.is_none() && pages_json.is_none() {
+    let summary_json = ir.metadata.get(SUMMARY_KEY);
+    if lines_json.is_none() && pages_json.is_none() && summary_json.is_none() {
         return;
     }
 
@@ -539,6 +541,18 @@ fn persist_relational_pdf_rows(ir: &crate::doc_ir::DocIR, filename: &str, corpus
                 }
             }
             Err(e) => warn!(error = %e, "relational_pdf: page JSON decode failed"),
+        }
+    }
+    if let Some(json) = summary_json {
+        match serde_json::from_str::<crate::db::pdf_rows::SummaryRow>(json) {
+            Ok(row) => {
+                if let Err(e) = crate::db::pdf_rows::replace_summary(&conn, filename, &row) {
+                    warn!(error = %e, filename, "relational_pdf: replace_summary failed");
+                } else {
+                    debug!(filename, "relational_pdf: summary persisted");
+                }
+            }
+            Err(e) => warn!(error = %e, "relational_pdf: summary JSON decode failed"),
         }
     }
 }

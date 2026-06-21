@@ -6,7 +6,7 @@
 //! visitor with no input is the demo fixture `two_column_invoice.pdf`, so
 //! the page is "useful" even when arrived at directly from the nav.
 
-use crate::api::{self, PdfExtractionResponse, PdfLineRow, PdfPageRow};
+use crate::api::{self, PdfExtractionResponse, PdfLineRow, PdfPageRow, PdfParsingSummary};
 use crate::app::Route;
 use crate::components::monitor::nav_tabs::NavTabs;
 use crate::pages::hardware::components::{info_modal, InfoIcon};
@@ -21,6 +21,7 @@ pub fn PdfExtraction() -> Element {
     let mut loading = use_signal(|| false);
     let mut show_info = use_signal(|| false);
     let show_silhouette_info = use_signal(|| false);
+    let show_summary_info = use_signal(|| false);
 
     let load = move |doc_id: String| {
         spawn(async move {
@@ -113,6 +114,9 @@ pub fn PdfExtraction() -> Element {
 
                 if let Some(resp) = data.read().clone() {
                     SummaryHeader { resp: resp.clone(), on_silhouette_info: show_silhouette_info }
+                    if let Some(s) = resp.summary.clone() {
+                        DocumentSummary { summary: s, on_info: show_summary_info }
+                    }
                     PageList { resp: resp }
                 }
             }
@@ -137,6 +141,18 @@ pub fn PdfExtraction() -> Element {
                 vec![
                     "Silhouette (–1 to +1) measures how clean a k-means split is. Higher = clusters are well-separated. Adaptive-k picks the highest-silhouette k in 2..=6; if no k clears ≈0.30, every line on the page is tagged Multi (we refuse to guess).",
                     "The k that was actually used and its silhouette are persisted per page so future tuning has historical data to calibrate against without a schema change.",
+                ],
+            ) }
+        }
+
+        if *show_summary_info.read() {
+            { info_modal(
+                "Document shape — page-type classification (Phase 2)",
+                show_summary_info,
+                vec![
+                    "Every page is tagged Cover, TOC, Body, or Appendix from line text alone — no fonts, no ML. Four cheap signals do the work: page number, line count, header sniff for \"Contents\" / \"Appendix\" / \"Index\" (English, German, French, Spanish), and the density of TOC-shaped entries (text followed by a 1–4 digit page number, optionally with a dot leader). Appendix headings take precedence over short cover-like pages, so \"Appendix A: …\" wins even on a brief opening page.",
+                    "Why these four classes: they are the ones a reader would actually filter by (\"show me only body pages of this report\"), and they are the minimal set that lets the dashboard pick distinct badge colours. Finer distinctions — front-matter, bibliography, index — all collapse into one of these four for retrieval purposes. The classifier is intentionally conservative: pages that do not fit anywhere fall through to Body, and adapter pages that happen to mention \"appendix\" mid-paragraph never trigger the appendix tag.",
+                    "The banner also shows two pipeline-health signals. bbox coverage is the fraction of words that came back with positions from the lopdf parser — lower numbers mean more pages fell through to the extractous text-only fallback, and the column detector had nothing to work with on those pages. scanned page count is how many pages had zero bbox-bearing lines, almost always image-only PDFs. Both are persisted in pdf_parsing_summary so the retriever can warn \"this doc is mostly scanned, expect rougher retrieval\" before the LLM even sees the chunks.",
                 ],
             ) }
         }
@@ -178,6 +194,73 @@ fn SummaryHeader(resp: PdfExtractionResponse, on_silhouette_info: Signal<bool>) 
 }
 
 #[component]
+fn DocumentSummary(summary: PdfParsingSummary, on_info: Signal<bool>) -> Element {
+    // Order matters: matches the reading flow of a document.
+    let ordered = [
+        ("cover", "Cover"),
+        ("toc", "TOC"),
+        ("body", "Body"),
+        ("appendix", "Appendix"),
+    ];
+    let bbox_text = summary
+        .bbox_coverage_pct
+        .map(|p| format!("{:.0}%", p))
+        .unwrap_or_else(|| "—".to_string());
+    let scanned_text = if summary.scanned_page_count == 0 {
+        "no scanned pages".to_string()
+    } else if summary.scanned_page_count == summary.page_count {
+        "all pages scanned (text-only fallback)".to_string()
+    } else {
+        format!(
+            "{} of {} pages scanned",
+            summary.scanned_page_count, summary.page_count
+        )
+    };
+    rsx! {
+        div {
+            class: "bg-gray-800 rounded p-4 mb-6",
+            div {
+                class: "flex items-center gap-2 mb-2",
+                div {
+                    class: "text-xs text-gray-400 uppercase tracking-wide",
+                    "Document summary"
+                }
+                button {
+                    class: PARAM_ICON_BUTTON_CLASS,
+                    style: PARAM_ICON_BUTTON_STYLE,
+                    title: "How the page-type badges and pipeline-health numbers are computed",
+                    onclick: move |_| on_info.set(true),
+                    InfoIcon {}
+                }
+            }
+            div {
+                class: "flex flex-wrap gap-4 items-center text-sm",
+                for (key, label) in ordered.iter() {
+                    {
+                        let count = summary.page_types.get(*key).copied().unwrap_or(0);
+                        let (cls, _) = page_type_badge(key);
+                        rsx! {
+                            div {
+                                class: "flex items-center gap-1.5",
+                                div { class: cls, "{label}" }
+                                div { class: "text-gray-300", "{count}" }
+                            }
+                        }
+                    }
+                }
+                div {
+                    class: "text-gray-400 text-xs ml-2",
+                    "bbox coverage "
+                    span { class: "text-gray-200", "{bbox_text}" }
+                    " · "
+                    span { class: "text-gray-200", "{scanned_text}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn PageList(resp: PdfExtractionResponse) -> Element {
     rsx! {
         div {
@@ -212,6 +295,7 @@ fn PagePanel(page: PdfPageRow, lines: Vec<PdfLineRow>) -> Element {
         None => "—".to_string(),
     };
     let silhouette_class = silhouette_badge_class(page.column_silhouette);
+    let (pt_class, pt_label) = page_type_badge(&page.page_type);
 
     rsx! {
         div {
@@ -219,6 +303,7 @@ fn PagePanel(page: PdfPageRow, lines: Vec<PdfLineRow>) -> Element {
             div {
                 class: "flex items-center gap-3 mb-3",
                 div { class: "text-lg font-semibold text-gray-100", "Page {page.page}" }
+                div { class: pt_class, "{pt_label}" }
                 div { class: "text-xs text-gray-400", "{page.line_count} lines" }
                 div { class: "text-xs text-gray-400", "k={page.column_k_used}" }
                 div { class: silhouette_class, "silhouette {silhouette_str}" }
@@ -377,6 +462,34 @@ fn column_badge(column: &str) -> (String, String) {
         format!("{base} bg-gray-700 text-gray-300 border-gray-600"),
         "?".into(),
     )
+}
+
+/// Badge palette for the four page types. Distinct hues so a quick scan of
+/// the page list shows the document's shape (where the TOC is, where the
+/// appendix starts). Returned class is `String` so callers can interpolate
+/// directly into the rsx; the label is the short form shown in the badge.
+fn page_type_badge(page_type: &str) -> (String, &'static str) {
+    let base = "px-2 py-0.5 rounded text-xs border";
+    match page_type {
+        "cover" => (
+            format!("{base} bg-rose-900 text-rose-200 border-rose-800"),
+            "Cover",
+        ),
+        "toc" => (
+            format!("{base} bg-sky-900 text-sky-200 border-sky-800"),
+            "TOC",
+        ),
+        "appendix" => (
+            format!("{base} bg-amber-900 text-amber-200 border-amber-800"),
+            "Appendix",
+        ),
+        // Default to Body — also covers unknown values from future
+        // backend versions, so the UI degrades gracefully.
+        _ => (
+            format!("{base} bg-gray-700 text-gray-300 border-gray-600"),
+            "Body",
+        ),
+    }
 }
 
 fn silhouette_badge_class(s: Option<f32>) -> &'static str {
