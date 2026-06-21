@@ -5,9 +5,11 @@
 pub mod graph_search;
 pub mod memory_recall;
 pub mod memory_store;
+pub mod pdf_lines;
 pub mod tantivy_search;
 
 pub use graph_search::GraphSearchTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
+pub use pdf_lines::GetLinesInColumnTool;
 pub use tantivy_search::TantivySearchTool;

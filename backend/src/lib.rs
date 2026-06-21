@@ -10,6 +10,7 @@ pub mod db {
     pub mod param_hardware;
     pub mod param_store;
     pub mod path_resolver;
+    pub mod pdf_rows;
     pub mod schema_init;
 }
 pub mod agent;

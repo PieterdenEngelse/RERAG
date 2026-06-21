@@ -41,6 +41,8 @@ pub fn ConfigCorpus() -> Element {
     let mut pq_str = use_signal(String::new);
     // Native PDF tri-state: "" = inherit global, "true" = on, "false" = off.
     let mut native_pdf_str = use_signal(String::new);
+    // Relational PDF tri-state (same shape as Native PDF).
+    let mut relational_pdf_str = use_signal(String::new);
     let mut saving = use_signal(|| false);
     let mut save_msg = use_signal(|| Option::<String>::None);
 
@@ -67,6 +69,7 @@ pub fn ConfigCorpus() -> Element {
     let mut show_ef_s = use_signal(|| false);
     let mut show_pq = use_signal(|| false);
     let mut show_native_pdf = use_signal(|| false);
+    let mut show_relational_pdf = use_signal(|| false);
 
     // Build metadata for drift detection
     let mut build_meta = use_signal(|| Option::<api::CorpusBuildMeta>::None);
@@ -101,6 +104,11 @@ pub fn ConfigCorpus() -> Element {
                     .map(|b| b.to_string())
                     .unwrap_or_default(),
             );
+            relational_pdf_str.set(
+                s.relational_pdf_enabled
+                    .map(|b| b.to_string())
+                    .unwrap_or_default(),
+            );
             build_meta.set(Some(r.build_meta));
         }
         if let Ok(r) = api::fetch_chunk_config().await {
@@ -123,6 +131,7 @@ pub fn ConfigCorpus() -> Element {
         ef_search_str.set(String::new());
         pq_str.set(String::new());
         native_pdf_str.set(String::new());
+        relational_pdf_str.set(String::new());
         save_msg.set(None);
         build_meta.set(None);
         // Seed watch_dir from the already-fetched corpora list (cheap).
@@ -153,6 +162,11 @@ pub fn ConfigCorpus() -> Element {
                         .map(|b| b.to_string())
                         .unwrap_or_default(),
                 );
+                relational_pdf_str.set(
+                    s.relational_pdf_enabled
+                        .map(|b| b.to_string())
+                        .unwrap_or_default(),
+                );
                 build_meta.set(Some(r.build_meta));
             }
         });
@@ -173,6 +187,11 @@ pub fn ConfigCorpus() -> Element {
             "false" => Some(false),
             _ => None,
         };
+        let relational_pdf = match relational_pdf_str().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
         spawn(async move {
             let settings = api::CorpusSettings {
                 search_top_k: top_k,
@@ -182,6 +201,7 @@ pub fn ConfigCorpus() -> Element {
                 hnsw_ef_search: ef_s,
                 pq_subvectors: pq,
                 native_pdf_enabled: native_pdf,
+                relational_pdf_enabled: relational_pdf,
                 ..Default::default()
             };
             match api::patch_corpus_settings(&slug, &settings).await {
@@ -541,6 +561,21 @@ pub fn ConfigCorpus() -> Element {
                                 option { value: "false", "off" }
                             }
                         }
+
+                        div { class: "flex flex-col gap-1",
+                            div { class: "flex items-center gap-1",
+                                label { class: "text-xs text-gray-400 shrink-0", "Relational PDF" }
+                                button { class: BTN_CLASS, style: BTN_STYLE, onclick: move |_| show_relational_pdf.set(!show_relational_pdf()), {info_icon()} }
+                            }
+                            select {
+                                class: "select select-sm select-bordered bg-gray-700 text-gray-200",
+                                value: relational_pdf_str(),
+                                onchange: move |evt| relational_pdf_str.set(evt.value()),
+                                option { value: "", "— global —" }
+                                option { value: "true",  "on" }
+                                option { value: "false", "off" }
+                            }
+                        }
                     }
 
                     // Info panels expand below
@@ -601,6 +636,16 @@ pub fn ConfigCorpus() -> Element {
                             p { span { class: "text-gray-200 font-medium", "off — " } "Skip the Native pipeline. PDFs go through plain pdftotext and arrive as one flat text block. Fast and side-effect-free; best for scratch corpora and bulk text dumps." }
                             p { span { class: "text-gray-200 font-medium", "global — " } "Inherit the install-wide default (the " span { class: "font-mono text-gray-100", "LAYOUT_ML_ENABLED" } " setting on /config/onnx)." }
                             p { class: "text-gray-400", "Takes effect on the next upload — no reindex of existing documents is triggered. Existing docs keep whatever extractor produced them; re-upload or reindex to refresh." }
+                        }
+                    }
+                    if show_relational_pdf() {
+                        div { class: "rounded bg-gray-800 border border-gray-600 p-3 text-xs text-gray-300 space-y-1",
+                            p { "Per-corpus override for the Relational PDF sidecar: persists " span { class: "font-mono text-gray-100", "pdf_lines" } " and " span { class: "font-mono text-gray-100", "pdf_pages" } " tables and makes the chunker treat same-page Left↔Right column transitions as strong boundaries." }
+                            p { "Solves the two-column invoice failure mode — a chunk that mixes \"Renewal fee\" (left column) and \"EUR 200\" (right column) becomes two column-pure chunks, so the right number reaches the LLM with its label." }
+                            p { span { class: "text-gray-200 font-medium", "on — " } "Persist sidecar rows for this corpus and tag chunks with column position. Visible under /pdf-extraction." }
+                            p { span { class: "text-gray-200 font-medium", "off — " } "Skip sidecar persistence. Columns still get detected (so the chunker boundary fires) but rows aren't written to SQLite." }
+                            p { span { class: "text-gray-200 font-medium", "global — " } "Inherit the install-wide " span { class: "font-mono text-gray-100", "PDF_RELATIONAL_ENABLED" } " default." }
+                            p { class: "text-gray-400", "Requires the " span { class: "font-mono text-gray-100", "layout_ml" } " Cargo feature; without it the toggle saves but has no effect. Takes effect on the next upload." }
                         }
                     }
 

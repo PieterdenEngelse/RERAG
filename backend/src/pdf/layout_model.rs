@@ -397,8 +397,8 @@ impl DetrLayoutModel {
         let num_queries = logits_shape.get(1).copied().unwrap_or(0) as usize;
         let num_cls = self.num_classes + 1; // +1 for background
 
-        let logits: Vec<f32> = logits_flat.iter().copied().collect();
-        let boxes: Vec<f32> = boxes_flat.iter().copied().collect();
+        let logits: Vec<f32> = logits_flat.to_vec();
+        let boxes: Vec<f32> = boxes_flat.to_vec();
 
         let mut regions = Vec::new();
 
@@ -610,7 +610,7 @@ impl OrtLayoutClassifier {
         let (shape, data) = outputs[0]
             .try_extract_tensor::<i64>()
             .map_err(|e| anyhow::anyhow!("extract labels: {e}"))?;
-        let flat: Vec<i64> = data.iter().copied().collect();
+        let flat: Vec<i64> = data.to_vec();
         let shape_dims: Vec<i64> = shape.iter().copied().collect();
 
         let labels: &[i64] = match shape_dims.as_slice() {

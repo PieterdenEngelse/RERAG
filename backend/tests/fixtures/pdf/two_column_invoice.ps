@@ -1,0 +1,51 @@
+%!PS-Adobe-3.0
+%%Title: RERAG two-column invoice demo fixture
+%%Creator: hand-written PostScript (regenerate with `ps2pdf two_column_invoice.ps two_column_invoice.pdf`)
+%%BoundingBox: 0 0 612 792
+%%Pages: 1
+%%EndComments
+
+%%Page: 1 1
+
+% Header — single column at the top so the page mixes layouts the way a
+% real invoice does. The detector should still call the body section
+% k=2 because the bulk of the lines split into two clean clusters.
+/Helvetica-Bold findfont 16 scalefont setfont
+60 740 moveto (DEMO INVOICE) show
+
+/Helvetica findfont 10 scalefont setfont
+60 720 moveto (RERAG educational fixture for relational PDF extraction) show
+
+/Helvetica-Bold findfont 12 scalefont setfont
+60 685 moveto (Schedule of charges) show
+
+% Body — two columns. Left column at x=60 (labels), right column at
+% x=400 (amounts). 30pt vertical spacing per row, 6 rows. The big
+% horizontal gap (340pt) makes adaptive-k k-means an easy win.
+/Helvetica findfont 12 scalefont setfont
+
+60  655 moveto (Renewal fee) show
+400 655 moveto (EUR 200) show
+
+60  625 moveto (Late payment fee) show
+400 625 moveto (EUR 75) show
+
+60  595 moveto (Cancellation fee) show
+400 595 moveto (EUR 150) show
+
+60  565 moveto (Reinstatement fee) show
+400 565 moveto (EUR 50) show
+
+60  535 moveto (Document copy fee) show
+400 535 moveto (EUR 10) show
+
+60  505 moveto (Account closure fee) show
+400 505 moveto (EUR 100) show
+
+% Footer — single line at the bottom so the detector sees a Single
+% region too on a real page.
+/Helvetica findfont 9 scalefont setfont
+60 80 moveto (All amounts are illustrative. See the PDF Extraction page in ag for the column tagging.) show
+
+showpage
+%%EOF

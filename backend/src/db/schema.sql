@@ -188,3 +188,47 @@ CREATE TABLE IF NOT EXISTS golden_sample_meta (
     captured_at         TIMESTAMP,
     tokenizer_model     TEXT
 );
+
+-- Relational PDF extraction sidecar tables (Phase 1).
+-- `document_id` here is the filename (the same identifier `chunk_id`
+-- uses as its prefix in Tantivy: "{filename}#{i}"). No FK because the
+-- legacy `documents` SQL table isn't populated by the current upload
+-- pipeline — Tantivy is the authoritative document index.
+-- Coordinates are normalised to 0..1000 by the lopdf path (see
+-- pdf::word_extractor); rows from the extractous fallback have NULL
+-- coordinates and column_position='multi'.
+CREATE TABLE IF NOT EXISTS pdf_lines (
+    document_id     TEXT NOT NULL,
+    page            INTEGER NOT NULL,
+    line_idx        INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    x0              INTEGER,
+    y0              INTEGER,
+    x1              INTEGER,
+    y1              INTEGER,
+    -- column_position wire format: 'single' | 'multi' | 'col<n>' where n
+    -- is a 0-based index in left-to-right order, output by adaptive-k
+    -- column detection (k ∈ 2..=6). SQLite's CHECK regex isn't expressive
+    -- enough to validate the 'col<n>' branch, so application code
+    -- (crate::doc_ir::ColumnPosition) is the writer of record.
+    column_position TEXT NOT NULL,
+    PRIMARY KEY (document_id, page, line_idx)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pdf_lines_doc_page ON pdf_lines(document_id, page);
+CREATE INDEX IF NOT EXISTS idx_pdf_lines_column ON pdf_lines(document_id, column_position);
+
+-- Per-page extraction diagnostics. `column_k_used` is the k chosen by
+-- adaptive k-means (1 for Single, 2..=6 for Col(0..k-1), or whatever k
+-- produced the best score even when the page falls back to Multi).
+-- `column_silhouette` is the mean silhouette of the chosen k — persisted
+-- so future tuning has historical data.
+CREATE TABLE IF NOT EXISTS pdf_pages (
+    document_id        TEXT NOT NULL,
+    page               INTEGER NOT NULL,
+    line_count         INTEGER NOT NULL,
+    column_k_used      INTEGER NOT NULL DEFAULT 1,
+    column_silhouette  REAL,
+    is_scanned         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (document_id, page)
+);

@@ -73,14 +73,22 @@ pub fn chunk_ir(
     ir: &crate::doc_ir::DocIR,
     chunker: &dyn Chunker,
 ) -> Vec<(String, crate::doc_ir::ChunkMeta)> {
-    use crate::doc_ir::ChunkMeta;
+    use crate::doc_ir::{ChunkMeta, ColumnPosition};
+    use std::collections::BTreeSet;
 
     let mut result: Vec<(String, ChunkMeta)> = Vec::new();
     let mut pending = String::new();
     let mut pending_meta = ChunkMeta::default();
+    let mut pending_columns: BTreeSet<ColumnPosition> = BTreeSet::new();
     // (level, header_text) stack — newest level at the back.
     let mut heading_stack: Vec<(u8, String)> = Vec::new();
     let mut current_section_id = uuid::Uuid::new_v4().to_string();
+    // Track the column position the current accumulation lives in so a
+    // same-page transition to a different column forces a flush (column-pure
+    // chunks). None means "we haven't committed to a column yet" — Single
+    // and Multi don't trigger flushes; only Left↔Right cross-column moves do.
+    let mut pending_column: Option<ColumnPosition> = None;
+    let mut pending_page: Option<u32> = None;
 
     let block_extractor = |block: &crate::doc_ir::DocBlock| -> String {
         block
@@ -88,6 +96,13 @@ pub fn chunk_ir(
             .get("extractor")
             .cloned()
             .unwrap_or_else(|| "builtin".into())
+    };
+
+    let block_column = |block: &crate::doc_ir::DocBlock| -> Option<ColumnPosition> {
+        block
+            .metadata
+            .get("column_position")
+            .and_then(|s| ColumnPosition::from_str_opt(s))
     };
 
     let heading_path =
@@ -101,11 +116,24 @@ pub fn chunk_ir(
     };
 
     for block in &ir.blocks {
-        if block.block_type.is_atomic() {
-            // Flush accumulated text first
-            if !pending.trim().is_empty() {
+        // Same-page transition between different non-Multi columns is a
+        // strong boundary. Multi and Single never trigger this — they're
+        // either ambiguous (don't pretend to know) or single-column (no
+        // disambiguation needed). With adaptive-k the source columns are
+        // arbitrary Col(a) / Col(b) labels — any a != b crossing fires.
+        if let (Some(prev_page), Some(prev_col), Some(cur_col)) =
+            (pending_page, pending_column, block_column(block))
+        {
+            let same_page = block.page == Some(prev_page);
+            let crossing = matches!(
+                (prev_col, cur_col),
+                (ColumnPosition::Col(a), ColumnPosition::Col(b)) if a != b
+            );
+            if same_page && crossing && !pending.trim().is_empty() {
+                let mut flush_meta = pending_meta.clone();
+                flush_meta.column_position_set = std::mem::take(&mut pending_columns);
                 for text in chunker.chunk_text(pending.trim()) {
-                    result.push((text, pending_meta.clone()));
+                    result.push((text, flush_meta.clone()));
                 }
                 pending.clear();
                 pending_meta = ChunkMeta {
@@ -113,6 +141,27 @@ pub fn chunk_ir(
                     section_id: current_section_id.clone(),
                     ..Default::default()
                 };
+                pending_column = None;
+                pending_page = None;
+            }
+        }
+
+        if block.block_type.is_atomic() {
+            // Flush accumulated text first
+            if !pending.trim().is_empty() {
+                let mut flush_meta = pending_meta.clone();
+                flush_meta.column_position_set = std::mem::take(&mut pending_columns);
+                for text in chunker.chunk_text(pending.trim()) {
+                    result.push((text, flush_meta.clone()));
+                }
+                pending.clear();
+                pending_meta = ChunkMeta {
+                    heading_path: heading_path(&heading_stack),
+                    section_id: current_section_id.clone(),
+                    ..Default::default()
+                };
+                pending_column = None;
+                pending_page = None;
             }
             let text = block.embed_text().trim().to_string();
             if !text.is_empty() {
@@ -122,23 +171,32 @@ pub fn chunk_ir(
                 } else {
                     format!("{}\n\n{}", crumb, text)
                 };
+                let mut col_set = BTreeSet::new();
+                if let Some(c) = block_column(block) {
+                    col_set.insert(c);
+                }
                 let meta = ChunkMeta {
                     block_type: block.block_type.name().to_string(),
                     page: block.page,
                     extractor: block_extractor(block),
                     heading_path: heading_path(&heading_stack),
                     section_id: current_section_id.clone(),
+                    column_position_set: col_set,
                 };
                 result.push((embed_text, meta));
             }
         } else if block.block_type.is_strong_boundary() {
             // Flush, then start fresh accumulation.
             if !pending.trim().is_empty() {
+                let mut flush_meta = pending_meta.clone();
+                flush_meta.column_position_set = std::mem::take(&mut pending_columns);
                 for text in chunker.chunk_text(pending.trim()) {
-                    result.push((text, pending_meta.clone()));
+                    result.push((text, flush_meta.clone()));
                 }
                 pending.clear();
             }
+            pending_column = None;
+            pending_page = None;
             // Only Header blocks contribute to the heading stack; PageBreak is a
             // strong boundary too but carries no heading text.
             if let crate::doc_ir::BlockType::Header { level } = block.block_type {
@@ -162,6 +220,7 @@ pub fn chunk_ir(
                 extractor: block_extractor(block),
                 heading_path: heading_path(&heading_stack),
                 section_id: current_section_id.clone(),
+                column_position_set: BTreeSet::new(),
             };
             let crumb = format_breadcrumb(&heading_stack);
             if !crumb.is_empty() {
@@ -176,6 +235,7 @@ pub fn chunk_ir(
                     extractor: block_extractor(block),
                     heading_path: heading_path(&heading_stack),
                     section_id: current_section_id.clone(),
+                    column_position_set: BTreeSet::new(),
                 };
                 let crumb = format_breadcrumb(&heading_stack);
                 if !crumb.is_empty() {
@@ -186,12 +246,26 @@ pub fn chunk_ir(
                 pending.push_str("\n\n");
             }
             pending.push_str(block.text.trim());
+
+            // Track the current accumulation's column + page so the next
+            // block's cross-column transition check fires when it should.
+            if let Some(col) = block_column(block) {
+                pending_columns.insert(col);
+                if pending_column.is_none() && matches!(col, ColumnPosition::Col(_)) {
+                    pending_column = Some(col);
+                }
+            }
+            if pending_page.is_none() {
+                pending_page = block.page;
+            }
         }
     }
 
     if !pending.trim().is_empty() {
+        let mut flush_meta = pending_meta.clone();
+        flush_meta.column_position_set = std::mem::take(&mut pending_columns);
         for text in chunker.chunk_text(pending.trim()) {
-            result.push((text, pending_meta.clone()));
+            result.push((text, flush_meta.clone()));
         }
     }
 
@@ -1101,5 +1175,117 @@ mod chunk_ir_tests {
             pages.contains(&1) && pages.contains(&2) && pages.contains(&3),
             "expected pages 1,2,3 across chunks, got {pages:?}"
         );
+    }
+
+    /// A Col(0) block followed by a Col(1) block on the same page must
+    /// produce two distinct chunks (one per column) — otherwise the
+    /// resulting chunk would contain text from both columns and the
+    /// renewal-fee question stays unanswerable. See docs/rag2.md §4.
+    #[test]
+    fn same_page_cross_column_transition_is_a_strong_boundary() {
+        let mut ir = DocIR::new("t.pdf", "pdf");
+        let mut left = DocBlock::text("Renewal fee EUR 200 one-time");
+        left.page = Some(1);
+        left.metadata
+            .insert("column_position".to_string(), "col0".to_string());
+        ir.push(left);
+
+        let mut right = DocBlock::text("Late payment 75");
+        right.page = Some(1);
+        right
+            .metadata
+            .insert("column_position".to_string(), "col1".to_string());
+        ir.push(right);
+
+        let chunks = chunk_ir(&ir, &chunker());
+        assert!(
+            chunks.len() >= 2,
+            "expected at least 2 column-pure chunks, got {} ({:?})",
+            chunks.len(),
+            chunks.iter().map(|(t, _)| t).collect::<Vec<_>>()
+        );
+
+        // Every chunk's column_position_set holds a single column (the
+        // cross-column flush prevents Col(0)+Col(1) mixing).
+        use crate::doc_ir::ColumnPosition;
+        for (text, meta) in &chunks {
+            let has_both = meta.column_position_set.contains(&ColumnPosition::Col(0))
+                && meta.column_position_set.contains(&ColumnPosition::Col(1));
+            assert!(
+                !has_both,
+                "chunk '{text}' mixes Col(0) and Col(1) content; \
+                 column_position_set = {:?}",
+                meta.column_position_set
+            );
+        }
+    }
+
+    /// Same logic generalises to 3+ columns: a page with Col(0), Col(1),
+    /// Col(2) blocks must produce three column-pure chunks. Without the
+    /// generalised crossing check this would only catch Left↔Right.
+    #[test]
+    fn three_column_page_produces_three_pure_chunks() {
+        use crate::doc_ir::ColumnPosition;
+        let mut ir = DocIR::new("t.pdf", "pdf");
+        for (text, col) in [
+            ("left col body", 0u8),
+            ("middle col body", 1),
+            ("right col body", 2),
+        ] {
+            let mut b = DocBlock::text(text);
+            b.page = Some(1);
+            b.metadata
+                .insert("column_position".to_string(), format!("col{}", col));
+            ir.push(b);
+        }
+        let chunks = chunk_ir(&ir, &chunker());
+        assert!(
+            chunks.len() >= 3,
+            "expected at least 3 column-pure chunks, got {}",
+            chunks.len()
+        );
+        // No chunk holds two different Col(_) values.
+        for (text, meta) in &chunks {
+            let cols: Vec<u8> = meta
+                .column_position_set
+                .iter()
+                .filter_map(|c| {
+                    if let ColumnPosition::Col(i) = c {
+                        Some(*i)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert!(cols.len() <= 1, "chunk '{text}' mixes columns {:?}", cols);
+        }
+    }
+
+    #[test]
+    fn cross_column_flush_does_not_fire_across_pages() {
+        // Col(0) on page 1, then Col(1) on page 2: this should be split by
+        // the PageBreak strong boundary, NOT by the column transition
+        // (which is gated to same-page). We only emit the PageBreak when
+        // the input includes one, so use that shape.
+        let mut ir = DocIR::new("t.pdf", "pdf");
+        let mut left = DocBlock::text("page one left text");
+        left.page = Some(1);
+        left.metadata
+            .insert("column_position".to_string(), "col0".to_string());
+        ir.push(left);
+
+        ir.push(DocBlock::page_break(2));
+
+        let mut right = DocBlock::text("page two right text");
+        right.page = Some(2);
+        right
+            .metadata
+            .insert("column_position".to_string(), "col1".to_string());
+        ir.push(right);
+
+        let chunks = chunk_ir(&ir, &chunker());
+        let ids: std::collections::HashSet<_> =
+            chunks.iter().map(|(_, m)| m.section_id.clone()).collect();
+        assert!(ids.len() >= 2, "expected per-page sections, got {ids:?}");
     }
 }

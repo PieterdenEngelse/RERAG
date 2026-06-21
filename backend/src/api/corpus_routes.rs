@@ -132,7 +132,12 @@ pub async fn list_corpora_handler(config: web::Data<ApiConfig>) -> Result<HttpRe
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| config.path_manager.corpus_upload_dir(&c.slug));
             let doc_count = std::fs::read_dir(&dir)
-                .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_file())
+                        .count()
+                })
                 .unwrap_or(0);
             json!({
                 "id": c.id,

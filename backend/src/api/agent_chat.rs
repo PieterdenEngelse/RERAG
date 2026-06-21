@@ -1818,6 +1818,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                         .tool(MemoryRecallTool::new())
                         .tool(MemoryStoreTool::new())
                         .tool(GraphSearchTool::new(ret))
+                        .tool(GetLinesInColumnTool)
                         .build()
                         .prompt(&req.query)
                         .await
@@ -1840,6 +1841,7 @@ pub(crate) async fn run_agent_stream(req: web::Json<AgentRequest>) -> Result<Htt
                         .tool(MemoryRecallTool::new())
                         .tool(MemoryStoreTool::new())
                         .tool(GraphSearchTool::new(ret))
+                        .tool(GetLinesInColumnTool)
                         .build()
                         .prompt(&req.query)
                         .await

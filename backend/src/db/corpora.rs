@@ -65,6 +65,8 @@ pub struct CorpusSettings {
     pub pipeline_stages: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_pdf_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relational_pdf_enabled: Option<bool>,
 }
 
 /// Build-time parameters recorded after each reindex. Used to detect settings drift.
@@ -166,6 +168,20 @@ pub fn effective_native_pdf_enabled(conn: &Connection, slug: &str) -> bool {
         }
     }
     crate::settings::effective_bool("LAYOUT_ML_ENABLED", false)
+}
+
+/// Effective Relational PDF Extraction setting for `slug`:
+/// per-corpus override → global PDF_RELATIONAL_ENABLED → false. Independent
+/// of native-pdf gating, but the extractor only fills the sidecar metadata
+/// when the layout_ml Cargo feature is compiled in — so without that
+/// feature this returns true but has no observable effect.
+pub fn effective_relational_pdf_enabled(conn: &Connection, slug: &str) -> bool {
+    if let Ok(s) = get_corpus_settings(conn, slug) {
+        if let Some(v) = s.relational_pdf_enabled {
+            return v;
+        }
+    }
+    crate::settings::effective_bool("PDF_RELATIONAL_ENABLED", false)
 }
 
 pub fn get_corpus_build_meta(conn: &Connection, slug: &str) -> Result<CorpusBuildMeta> {
@@ -299,11 +315,7 @@ pub fn get_corpus_by_slug(conn: &Connection, slug: &str) -> Result<Option<Corpus
 /// string) to clear the override and fall back to the PathManager-derived
 /// default. The change is **restart-required** — running watchers are not
 /// torn down and respawned here.
-pub fn set_corpus_watch_dir(
-    conn: &Connection,
-    slug: &str,
-    watch_dir: Option<&str>,
-) -> Result<()> {
+pub fn set_corpus_watch_dir(conn: &Connection, slug: &str, watch_dir: Option<&str>) -> Result<()> {
     let normalized = watch_dir
         .map(str::trim)
         .filter(|s| !s.is_empty())

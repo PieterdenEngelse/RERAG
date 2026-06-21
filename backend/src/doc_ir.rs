@@ -5,8 +5,61 @@
 // boundaries (headers flush chunks, tables and code blocks are never split).
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
+
+/// Which column of a multi-column page a line / block / chunk belongs to.
+///
+/// `Single` — the page is a single-column layout (no split).
+/// `Col(i)` — 0-based index in left-to-right order, output by adaptive-k
+///            column detection (k ∈ 2..=6 chosen by silhouette).
+/// `Multi`  — either no k clears the silhouette threshold, the bbox was
+///            missing, or the block spans column boundaries (i.e. "ambiguous,
+///            don't trust this for column-pure chunking").
+///
+/// Wire format (SQLite `pdf_lines.column_position`, DocBlock metadata,
+/// JSON): `"single"`, `"col0"`, `"col1"`, …, `"multi"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ColumnPosition {
+    Single,
+    Col(u8),
+    Multi,
+}
+
+impl ColumnPosition {
+    pub fn as_str(self) -> String {
+        match self {
+            ColumnPosition::Single => "single".to_string(),
+            ColumnPosition::Col(i) => format!("col{}", i),
+            ColumnPosition::Multi => "multi".to_string(),
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "single" => Some(ColumnPosition::Single),
+            "multi" => Some(ColumnPosition::Multi),
+            other => other
+                .strip_prefix("col")
+                .and_then(|n| n.parse::<u8>().ok())
+                .map(ColumnPosition::Col),
+        }
+    }
+}
+
+impl Serialize for ColumnPosition {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ColumnPosition {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = <String as Deserialize>::deserialize(d)?;
+        ColumnPosition::from_str_opt(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid ColumnPosition: {}", s)))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum BlockType {
@@ -248,6 +301,14 @@ pub struct ChunkMeta {
     /// Empty for content carved off before any boundary (rare; covers pre-header text).
     #[serde(default)]
     pub section_id: String,
+    /// Column positions covered by the source blocks. Populated by the
+    /// relational PDF extractor (see `pdf::column_detect`). Empty for
+    /// non-PDF content or when the extractor didn't run. After the
+    /// column-aware `chunk_ir` boundary logic this set is normally a
+    /// singleton; `Multi` means low confidence on a page where columns
+    /// weren't separable.
+    #[serde(default)]
+    pub column_position_set: BTreeSet<ColumnPosition>,
 }
 
 #[cfg(test)]

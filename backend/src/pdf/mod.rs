@@ -11,9 +11,13 @@
 // classification) → TableFormer (table structure) → DocIR builder.
 
 #[cfg(feature = "layout_ml")]
+pub mod column_detect;
+#[cfg(feature = "layout_ml")]
 pub mod ir_builder;
 #[cfg(feature = "layout_ml")]
 pub mod layout_model;
+#[cfg(feature = "layout_ml")]
+pub mod line_grouper;
 #[cfg(feature = "layout_ml")]
 pub mod native_extractor;
 #[cfg(feature = "layout_ml")]

@@ -14,6 +14,7 @@ pub fn NavTabs(props: NavTabsProps) -> Element {
         ("RAG", Route::MonitorRag {}),
         ("Index", Route::MonitorIndex {}),
         ("Chunks", Route::MonitorChunks {}),
+        ("PDF Extraction", Route::PdfExtraction {}),
         ("Datastores", Route::MonitorDatastores {}),
         ("Knowledge Graph", Route::MonitorKnowledgeGraph {}),
         ("Cache", Route::MonitorCache {}),

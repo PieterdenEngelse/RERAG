@@ -397,6 +397,13 @@ pub fn prepare_doc(
         record_canon_store(&filename, flat.len(), norm.len(), corpus_slug);
     }
 
+    // Relational PDF sidecar persistence: when the corpus has opted in,
+    // ferry the line/page rows the native extractor stashed in IR metadata
+    // into the SQLite sidecar tables. document_id here is the filename —
+    // same identifier chunk_ids are prefixed with — so a re-index of the
+    // same file replaces its rows via the helpers' DELETE+INSERT pattern.
+    persist_relational_pdf_rows(ir, &filename, corpus_slug);
+
     let chunk_start = std::time::Instant::now();
     let mut embed_file_in = 0usize;
     let mut embed_file_out = 0usize;
@@ -464,6 +471,75 @@ pub fn prepare_doc(
         chunker_mode,
         chunk_duration_ms: chunk_duration.as_millis() as u64,
         embed_duration_ms: embed_duration.as_millis() as u64,
+    }
+}
+
+/// Persist relational PDF sidecar rows from `ir.metadata` into SQLite when
+/// the corpus has opted in. Keyed on filename (the same identifier
+/// `chunk_id` uses). A no-op when:
+///   * the IR carries no relational metadata (non-PDF, or layout_ml not
+///     compiled);
+///   * SQLite isn't reachable;
+///   * `effective_relational_pdf_enabled(corpus)` returns false.
+fn persist_relational_pdf_rows(ir: &crate::doc_ir::DocIR, filename: &str, corpus_slug: &str) {
+    // Metadata keys mirror pdf::native_extractor::relational::{LINES_KEY,PAGES_KEY}.
+    const LINES_KEY: &str = "pdf_relational_lines_json";
+    const PAGES_KEY: &str = "pdf_relational_pages_json";
+
+    let lines_json = ir.metadata.get(LINES_KEY);
+    let pages_json = ir.metadata.get(PAGES_KEY);
+    if lines_json.is_none() && pages_json.is_none() {
+        return;
+    }
+
+    let db_path = match crate::db::chunk_settings::get_db_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let mut conn = match rusqlite::Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "relational_pdf: failed to open SQLite for sidecar write");
+            return;
+        }
+    };
+
+    let enabled = crate::db::corpora::effective_relational_pdf_enabled(&conn, corpus_slug);
+    if !enabled {
+        return;
+    }
+
+    if let Some(json) = lines_json {
+        match serde_json::from_str::<Vec<crate::db::pdf_rows::LineRow>>(json) {
+            Ok(rows) => {
+                if let Err(e) = crate::db::pdf_rows::replace_lines(&mut conn, filename, &rows) {
+                    warn!(error = %e, filename, "relational_pdf: replace_lines failed");
+                } else {
+                    debug!(
+                        filename,
+                        lines = rows.len(),
+                        "relational_pdf: lines persisted"
+                    );
+                }
+            }
+            Err(e) => warn!(error = %e, "relational_pdf: line JSON decode failed"),
+        }
+    }
+    if let Some(json) = pages_json {
+        match serde_json::from_str::<Vec<crate::db::pdf_rows::PageRow>>(json) {
+            Ok(rows) => {
+                if let Err(e) = crate::db::pdf_rows::replace_pages(&mut conn, filename, &rows) {
+                    warn!(error = %e, filename, "relational_pdf: replace_pages failed");
+                } else {
+                    debug!(
+                        filename,
+                        pages = rows.len(),
+                        "relational_pdf: pages persisted"
+                    );
+                }
+            }
+            Err(e) => warn!(error = %e, "relational_pdf: page JSON decode failed"),
+        }
     }
 }
 
@@ -1352,6 +1428,20 @@ fn pdf_paged_ir(path: &Path, bytes: Vec<u8>, corpus: &str) -> Option<crate::doc_
         ir.push(DocBlock::text(raw));
     }
     ir.tag_extractor("builtin/pdf");
+    // Mirror what the markdown/html/code branches of
+    // `extract_ir_from_bytes_typed` do — without this call the parser
+    // board's `by_format` counter never sees any pdftotext-extracted PDF,
+    // because the fallback OCR path records via `extract_text_from_bytes`
+    // but the happy path doesn't.
+    let chars = ir.to_plain_text().len();
+    crate::monitoring::record_extraction_format(
+        "builtin/pdf",
+        true,
+        chars,
+        filename,
+        &path.to_string_lossy(),
+        corpus,
+    );
     Some(ir)
 }
 

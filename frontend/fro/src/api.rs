@@ -2134,6 +2134,54 @@ async fn post_empty(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ── Relational PDF extraction sidecar (Phase 1) ──────────────────────────
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct PdfLineRow {
+    pub page: u32,
+    pub line_idx: u32,
+    pub text: String,
+    #[serde(default)]
+    pub x0: Option<i64>,
+    #[serde(default)]
+    pub y0: Option<i64>,
+    #[serde(default)]
+    pub x1: Option<i64>,
+    #[serde(default)]
+    pub y1: Option<i64>,
+    pub column_position: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct PdfPageRow {
+    pub page: u32,
+    pub line_count: u32,
+    pub column_k_used: u8,
+    #[serde(default)]
+    pub column_silhouette: Option<f32>,
+    #[serde(default)]
+    pub is_scanned: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct PdfExtractionResponse {
+    pub document_id: String,
+    pub page_count: usize,
+    pub line_count: usize,
+    pub pages: Vec<PdfPageRow>,
+    pub lines: Vec<PdfLineRow>,
+}
+
+/// Fetch the relational PDF sidecar for `document_id` (the filename used
+/// as the chunk_id prefix — e.g. "invoice.pdf").
+pub async fn fetch_pdf_extraction(document_id: &str) -> Result<PdfExtractionResponse, String> {
+    let path = format!(
+        "/pdf/extraction/{}",
+        urlencoding::encode(document_id)
+    );
+    fetch_json(&path).await
+}
+
 async fn fetch_json<T>(path: &str) -> Result<T, String>
 where
     T: for<'de> serde::Deserialize<'de>,
@@ -4454,6 +4502,7 @@ pub struct CorpusSettings {
     pub context_prefix_tokens: Option<usize>,
     pub pipeline_stages: Option<String>,
     pub native_pdf_enabled: Option<bool>,
+    pub relational_pdf_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

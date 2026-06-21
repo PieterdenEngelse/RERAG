@@ -227,6 +227,19 @@ async fn main() -> std::io::Result<()> {
     ag::db::chunk_settings::set_global_db_path(pm.db_path("documents"));
     ag::db::chunk_settings::load_active_config(&_db_conn);
     ag::db::llm_settings::load_active_config(&_db_conn);
+
+    // Seed the canned two-column-invoice demo so the PDF Extraction page
+    // renders something useful on a fresh install. No-ops if the demo doc
+    // already has rows, and a real user-uploaded PDF with the same filename
+    // always wins (real ingestion runs after this).
+    match rusqlite::Connection::open(pm.db_path("documents")) {
+        Ok(mut seed_conn) => match ag::db::pdf_rows::seed_demo_if_missing(&mut seed_conn) {
+            Ok(true) => info!("✓ Seeded PDF Extraction demo (two_column_invoice.pdf)"),
+            Ok(false) => {}
+            Err(e) => warn!(error = %e, "pdf_rows: demo seed failed"),
+        },
+        Err(e) => warn!(error = %e, "pdf_rows: could not open seed connection"),
+    }
     ag::db::param_hardware::load_active_config(&_db_conn);
     ag::db::ner_settings::load_active_config(&_db_conn);
     ag::db::extraction_records::init(pm.db_path("documents"));
@@ -583,6 +596,35 @@ async fn main() -> std::io::Result<()> {
     let retriever = Arc::new(Mutex::new(retriever));
     ag::api::set_retriever_handle(Arc::clone(&retriever));
 
+    // Run the bundled demo PDF through the real ingestion path in the
+    // background so every TIP board lights up with measured counters
+    // (parser, preprocess, canon, chunking). Idempotent via a real
+    // extraction_records row check inside ingest_demo_pdf. Failure
+    // leaves the SQL seed in place as a graceful fallback — boot never
+    // panics because of the demo.
+    {
+        let data_dir = pm.data_dir().to_path_buf();
+        let db_path = pm.db_path("documents");
+        let retriever_for_demo = Arc::clone(&retriever);
+        let chunker_mode = config.chunker_mode;
+        actix_web::rt::spawn(async move {
+            match ag::db::pdf_rows::ingest_demo_pdf(
+                data_dir,
+                db_path,
+                retriever_for_demo,
+                chunker_mode,
+            )
+            .await
+            {
+                Ok(n) if n > 0 => {
+                    info!("✓ Demo PDF ingested ({} chunks): two_column_invoice.pdf", n)
+                }
+                Ok(_) => {} // real-record already present, skipped
+                Err(e) => warn!(error = %e, "demo PDF ingest failed; SQL seed remains"),
+            }
+        });
+    }
+
     // ── L3 hot-reload: rebuild the RedisCache when any REDIS_* setting
     //    override changes. The subscriber runs synchronously; the rebuild
     //    happens in a tokio task that locks the retriever briefly to swap
@@ -842,7 +884,11 @@ async fn main() -> std::io::Result<()> {
     // can fall back to it when FILE_WATCHER_DIR is not set.
     let default_corpus_watch_dir: Option<String> = rusqlite::Connection::open(&db_path_str)
         .ok()
-        .and_then(|conn| ag::db::corpora::get_corpus_by_slug(&conn, "default").ok().flatten())
+        .and_then(|conn| {
+            ag::db::corpora::get_corpus_by_slug(&conn, "default")
+                .ok()
+                .flatten()
+        })
         .and_then(|c| c.watch_dir);
 
     // Precedence for the default corpus: FILE_WATCHER_DIR (env/override) →
@@ -873,9 +919,10 @@ async fn main() -> std::io::Result<()> {
         if let Ok(corpora) = ag::db::corpora::list_corpora(&conn) {
             for corpus in corpora.into_iter().filter(|c| c.slug != "default") {
                 let slug = corpus.slug.clone();
-                let corpus_dir = corpus.watch_dir.clone().unwrap_or_else(|| {
-                    pm.corpus_upload_dir(&slug).to_string_lossy().to_string()
-                });
+                let corpus_dir = corpus
+                    .watch_dir
+                    .clone()
+                    .unwrap_or_else(|| pm.corpus_upload_dir(&slug).to_string_lossy().to_string());
                 if let Some(handle) = ag::corpus_registry::get_registry()
                     .and_then(|reg| reg.get_or_create(&slug).ok())
                 {

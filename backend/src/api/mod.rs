@@ -617,6 +617,7 @@ const VALID_MEMORY_TYPES: &[&str] = &[
 
 pub mod agentic_monitor_routes;
 pub mod graph_routes;
+pub mod pdf_extraction_routes;
 pub mod runtime_routes;
 pub mod sys_routes;
 pub mod tool_routes;
@@ -1220,6 +1221,10 @@ pub fn start_api_server(
             .route(
                 "/agent/goals/{goal_id}/fail",
                 web::post().to(agentic_monitor_routes::fail_goal),
+            )
+            .route(
+                "/pdf/extraction/{document_id}",
+                web::get().to(pdf_extraction_routes::get_extraction),
             )
             .service(web::scope("/sys").configure(sys_routes::sys_routes))
             .configure(tool_routes::configure_tool_routes)

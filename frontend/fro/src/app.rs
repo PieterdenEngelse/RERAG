@@ -12,7 +12,7 @@ use crate::pages::{
     MonitorAgentic, MonitorCache, MonitorChunks, MonitorDatastores, MonitorDocker,
     MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
     MonitorOnnx, MonitorOnnxStatus, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip,
-    MonitorTools, PageNotFound, Parameters, Train,
+    MonitorTools, PageNotFound, Parameters, PdfExtraction, Train,
 };
 use dioxus::prelude::*;
 
@@ -154,6 +154,8 @@ pub enum Route {
         DocuDetrLayout {},
         #[route("/docu/index/agglutinative-languages")]
         DocuAgglutinative {},
+        #[route("/pdf-extraction")]
+        PdfExtraction {},
     #[end_layout]
     #[route("/:..segments")]
     PageNotFound { segments: Vec<String> },
@@ -466,7 +468,7 @@ fn Layout() -> Element {
                         onclick: move |_| selected_command.set(None),
 
                         div {
-                            class: "bg-gray-800 rounded-lg w-[95vw] max-w-[600px] p-4 shadow-2xl border border-gray-600 my-[5vh]",
+                            class: "bg-gray-800 rounded-lg w-[98vw] p-4 shadow-2xl border border-gray-600 my-[5vh]",
                             onclick: move |evt| evt.stop_propagation(),
 
                             // Header with X
@@ -521,7 +523,7 @@ fn Layout() -> Element {
                         onclick: move |_| show_how_it_works.set(false),
 
                         div {
-                            class: "bg-gray-800 rounded-lg w-[95vw] max-w-[1200px] p-4 shadow-2xl border border-gray-600 my-[5vh]",
+                            class: "bg-gray-800 rounded-lg w-[98vw] p-4 shadow-2xl border border-gray-600 my-[5vh]",
                             onclick: move |evt| evt.stop_propagation(),
 
                             // Header with X
@@ -629,7 +631,7 @@ fn Layout() -> Element {
                         onclick: move |_| show_escape_sequence.set(false),
 
                         div {
-                            class: "bg-gray-800 rounded-lg w-[95vw] max-w-[1400px] p-4 shadow-2xl border border-gray-600 my-[5vh]",
+                            class: "bg-gray-800 rounded-lg w-[98vw] p-4 shadow-2xl border border-gray-600 my-[5vh]",
                             onclick: move |evt| evt.stop_propagation(),
 
                             // Header with X
@@ -751,7 +753,7 @@ fn Layout() -> Element {
                         onclick: move |_| show_flow.set(false),
 
                         div {
-                            class: "bg-gray-800 rounded-lg w-[95vw] max-w-[1000px] p-4 shadow-2xl border border-gray-600 my-[5vh]",
+                            class: "bg-gray-800 rounded-lg w-[98vw] p-4 shadow-2xl border border-gray-600 my-[5vh]",
                             onclick: move |evt| evt.stop_propagation(),
 
                             // Header with X
@@ -845,7 +847,7 @@ fn Layout() -> Element {
                         onclick: move |_| show_categorized.set(false),
 
                         div {
-                            class: "bg-gray-800 rounded-lg w-[95vw] max-w-[1200px] p-4 shadow-2xl border border-gray-600 my-[5vh]",
+                            class: "bg-gray-800 rounded-lg w-[98vw] p-4 shadow-2xl border border-gray-600 my-[5vh]",
                             onclick: move |evt| evt.stop_propagation(),
 
                             // Header with X

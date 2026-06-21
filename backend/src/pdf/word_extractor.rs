@@ -146,10 +146,18 @@ fn parse_page_words(
 ) -> Vec<WordSpan> {
     let mut words = Vec::new();
 
-    // Text state
+    // Text state. PDF §9.4.2: each BT/ET pair has *two* matrices —
+    // the text matrix Tm (where the *next glyph* goes; advances per Tj) and
+    // the text line matrix Tlm (the origin of the current line). Td/TD/T*
+    // update Tlm and snap Tm back to it; Tm advances within a line as
+    // glyphs are shown. Conflating them (incrementing Tm from a Td delta
+    // when Tm has already advanced through prior text) makes x-coords
+    // ratchet forward across lines — that was the original bug.
     let mut in_text = false;
-    let mut tx = 0.0f64; // text cursor x in PDF user-space
-    let mut ty = 0.0f64; // text cursor y in PDF user-space
+    let mut tx = 0.0f64; // Tm.e — text cursor x in PDF user-space
+    let mut ty = 0.0f64; // Tm.f — text cursor y in PDF user-space
+    let mut line_x = 0.0f64; // Tlm.e — line origin x
+    let mut line_y = 0.0f64; // Tlm.f — line origin y
     let mut font_size = 10.0f64;
     let mut leading = 0.0f64;
 
@@ -182,6 +190,8 @@ fn parse_page_words(
                 in_text = true;
                 tx = 0.0;
                 ty = 0.0;
+                line_x = 0.0;
+                line_y = 0.0;
             }
             "ET" => {
                 in_text = false;
@@ -199,19 +209,34 @@ fn parse_page_words(
                 }
             }
             "Tm" if in_text && op.operands.len() >= 6 => {
-                // [a b c d e f] Tm — sets text matrix; e=tx, f=ty
-                tx = op.operands[4].as_float().unwrap_or(0.0) as f64;
-                ty = op.operands[5].as_float().unwrap_or(0.0) as f64;
+                // [a b c d e f] Tm — replaces *both* Tm and Tlm.
+                let e = op.operands[4].as_float().unwrap_or(0.0) as f64;
+                let f = op.operands[5].as_float().unwrap_or(0.0) as f64;
+                tx = e;
+                ty = f;
+                line_x = e;
+                line_y = f;
             }
             "Td" | "TD" if in_text && op.operands.len() >= 2 => {
-                tx += op.operands[0].as_float().unwrap_or(0.0) as f64;
-                ty += op.operands[1].as_float().unwrap_or(0.0) as f64;
+                // Translate the *line matrix* Tlm, then reset the text
+                // cursor (Tm) to the new Tlm origin. Crucially, do not
+                // add the delta to a tx that has already advanced through
+                // a prior Tj's glyph widths.
+                let dx = op.operands[0].as_float().unwrap_or(0.0) as f64;
+                let dy = op.operands[1].as_float().unwrap_or(0.0) as f64;
+                line_x += dx;
+                line_y += dy;
+                tx = line_x;
+                ty = line_y;
                 if op.operator == "TD" {
-                    leading = -op.operands[1].as_float().unwrap_or(0.0) as f64;
+                    leading = -dy;
                 }
             }
             "T*" if in_text => {
-                ty -= leading;
+                // Equivalent to `0 -leading Td`.
+                line_y -= leading;
+                tx = line_x;
+                ty = line_y;
             }
             "Tj" if in_text => {
                 if let Some(text) = op.operands.first().and_then(obj_as_str) {
@@ -220,43 +245,56 @@ fn parse_page_words(
                 }
             }
             "'" if in_text => {
-                ty -= leading;
+                // T*-then-Tj: move to next line, then show.
+                line_y -= leading;
+                tx = line_x;
+                ty = line_y;
                 if let Some(text) = op.operands.first().and_then(obj_as_str) {
                     emit(&mut words, &text, tx, ty, font_size);
+                    tx += text.len() as f64 * font_size * 0.6;
                 }
             }
             "\"" if in_text && op.operands.len() >= 3 => {
+                // aw ac str " — set word spacing, char spacing, T* then Tj.
                 if let Some(l) = op.operands.get(1).and_then(obj_as_f64) {
                     leading = l;
                 }
-                ty -= leading;
+                line_y -= leading;
+                tx = line_x;
+                ty = line_y;
                 if let Some(text) = op.operands.get(2).and_then(obj_as_str) {
                     emit(&mut words, &text, tx, ty, font_size);
+                    tx += text.len() as f64 * font_size * 0.6;
                 }
             }
             "TJ" if in_text => {
-                // [(str) kern (str) ...] TJ
+                // [(str) kern (str) ...] TJ — show each string at the
+                // current tx, then advance tx by:
+                //   * sum of glyph widths after a string operand,
+                //   * `-kern / 1000 × font_size` after a numeric operand
+                //     (negative kern = forward advance in PDF).
+                // Collapsing the array into one string and emitting once
+                // throws away large kern values (e.g. the ~22700 jump that
+                // ps2pdf uses to leap from a left column into a right
+                // column on the same baseline) — that bug caused two-
+                // column pages to read as a single wide column.
                 if let Some(lopdf::Object::Array(arr)) = op.operands.first() {
-                    let mut full = String::new();
                     for item in arr {
                         match item {
-                            lopdf::Object::String(b, _) => full.push_str(&pdf_bytes_to_utf8(b)),
+                            lopdf::Object::String(b, _) => {
+                                let text = pdf_bytes_to_utf8(b);
+                                emit(&mut words, &text, tx, ty, font_size);
+                                tx += text.len() as f64 * font_size * 0.6;
+                            }
                             lopdf::Object::Integer(k) => {
-                                // Negative kern = advance; positive = retract
-                                if *k < -100 {
-                                    full.push(' ');
-                                }
+                                tx -= (*k as f64) * font_size / 1000.0;
                             }
                             lopdf::Object::Real(k) => {
-                                if *k < -100.0 {
-                                    full.push(' ');
-                                }
+                                tx -= (*k as f64) * font_size / 1000.0;
                             }
                             _ => {}
                         }
                     }
-                    emit(&mut words, &full, tx, ty, font_size);
-                    tx += full.len() as f64 * font_size * 0.6;
                 }
             }
             _ => {}

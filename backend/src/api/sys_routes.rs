@@ -205,8 +205,7 @@ async fn get_models(query: web::Query<ModelsQuery>) -> impl Responder {
                     Ok(tags) => {
                         // The "active" model is whatever's in hardware_config —
                         // surface it so the UI can flag the dropdown row with ⚡.
-                        let configured_model =
-                            crate::db::param_hardware::global_config().model;
+                        let configured_model = crate::db::param_hardware::global_config().model;
                         let models: Vec<ModelInfo> = tags
                             .models
                             .into_iter()
