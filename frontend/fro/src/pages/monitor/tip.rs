@@ -1472,6 +1472,19 @@ pub fn MonitorTip() -> Element {
                                             span { class: "font-mono", "LAYOUT_ML_ENABLED=true" }
                                             ", PDFs reach this Parser tab as DocIR (typed Title / SectionHeader / Table / Figure / Caption / List blocks with word-level bounding boxes) — produced by the Stage 0 lopdf pipeline rather than by the plain pdftotext cascade described below. The block-type tags survive into chunk metadata and let the retriever reweight by structural role at query time."
                                         }
+                                        p { class: "mt-1.5",
+                                            "With "
+                                            span { class: "font-mono", "PDF_RELATIONAL_ENABLED=true" }
+                                            " (per-corpus override on /config/corpus), the same pipeline also tags each block with a "
+                                            span { class: "font-mono text-gray-200", "column_position" }
+                                            " (col0/col1/.../single/multi) detected by adaptive-k k-means on per-line x0. Cross-column transitions become hard chunk boundaries, and the "
+                                            Link {
+                                                to: Route::PdfExtraction {},
+                                                class: "text-blue-400 hover:text-blue-300 underline",
+                                                "/pdf-extraction"
+                                            }
+                                            " page visualises which columns were found per page."
+                                        }
                                     }
                                     p { class: "text-gray-400",
                                         "Entry point. Reads raw bytes and converts them to plain text via "
@@ -2201,6 +2214,11 @@ pub fn MonitorTip() -> Element {
                                         li { span { class: "text-gray-200", "Precision retrieval: " } "a Table is retrieved as a complete object — no partial rows, no split formulas." }
                                         li { span { class: "text-gray-200", "Header context: " } "the section heading's metadata propagates forward into paragraph chunks, so the retriever knows which section a chunk belongs to." }
                                         li { span { class: "text-gray-200", "Citations: " } "page numbers survive from source → DocIR block → chunk → search result." }
+                                        li { span { class: "text-gray-200", "Column awareness: " }
+                                            "with PDF_RELATIONAL_ENABLED on, each block carries a "
+                                            span { class: "font-mono text-gray-200", "column_position" }
+                                            " and the chunker treats a cross-column same-page transition as a hard boundary. A two-column invoice's left-column label and right-column amount never share a chunk, so the LLM can answer \"what's the renewal fee?\" against the right column instead of mixing both."
+                                        }
                                         li { span { class: "text-gray-200", "Extractor provenance: " } "the "
                                             span { class: "font-mono text-amber-300", "extractor" }
                                             " field tells the retriever whether structure came from the built-in parser or a sidecar service like Docling."
@@ -2215,8 +2233,20 @@ pub fn MonitorTip() -> Element {
                                             "). ML layout analysis for PDFs: reading order, table boundaries, structure not encoded in the file format."
                                         }
                                         li {
+                                            span { class: "font-mono text-sky-300", "native_pdf" }
+                                            " — in-process relational extractor (layout_ml feature). Words + bboxes from lopdf → y-banded LineSpans → adaptive-k column classification → DocIR with per-block "
+                                            span { class: "font-mono text-gray-200", "column_position" }
+                                            ". Persists pdf_lines / pdf_pages sidecar rows that back the "
+                                            Link {
+                                                to: Route::PdfExtraction {},
+                                                class: "text-sky-400 underline hover:text-sky-300",
+                                                "/pdf-extraction"
+                                            }
+                                            " page."
+                                        }
+                                        li {
                                             span { class: "font-mono text-gray-300", "builtin/pdf" }
-                                            " — built-in PDF cascade (pdftotext → pdf_extract → OCR). Used when Docling is off or unavailable."
+                                            " — built-in PDF cascade (pdftotext → pdf_extract → OCR). Used when Docling is off, native_pdf isn't compiled in, or both upper tiers fail."
                                         }
                                         li {
                                             span { class: "font-mono text-gray-300", "builtin/docx · /epub · /pptx · /odt" }
