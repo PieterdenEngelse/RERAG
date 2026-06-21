@@ -765,6 +765,36 @@ pub fn MonitorTip() -> Element {
                                 span { class: "font-semibold text-gray-100", "Accumulation policy: " }
                                 "Text blocks merge into a running buffer until the chunker's token limit is reached. Atomic blocks (Table, Code, Formula, Image) always flush the buffer first, then emit as their own chunk. Headers flush the buffer and set the metadata context for the next accumulation — so the heading's block_type propagates to the following paragraph chunks."
                             }
+                            div { class: "rounded bg-gray-900 border border-sky-900 p-3 space-y-1.5",
+                                p { class: "text-gray-200 font-semibold mb-1", "Column metadata (Phase 1 relational PDF)" }
+                                p {
+                                    "When the "
+                                    span { class: "font-mono text-sky-300", "native_pdf" }
+                                    " extractor runs and the corpus has relational PDF enabled, each block carries a "
+                                    span { class: "font-mono text-gray-200", "column_position" }
+                                    " — "
+                                    span { class: "font-mono text-gray-200", "col0" }
+                                    ", "
+                                    span { class: "font-mono text-gray-200", "col1" }
+                                    ", … (zero-indexed left-to-right), "
+                                    span { class: "font-mono text-gray-200", "single" }
+                                    " (one-column page), or "
+                                    span { class: "font-mono text-gray-200", "multi" }
+                                    " (the column detector wasn't confident enough)."
+                                }
+                                p {
+                                    "Downstream, "
+                                    span { class: "font-mono text-gray-200", "ChunkMeta.column_position_set" }
+                                    " collects every column its source blocks lived in. The chunker treats a same-page transition between two different non-"
+                                    span { class: "font-mono", "multi" }
+                                    " columns as a hard boundary — exactly like a PageBreak — so a left-column label and a right-column amount on the same baseline never share a chunk. That's what lets a two-column invoice answer \"what's the renewal fee?\" against the right column instead of confidently mixing both."
+                                }
+                                p { class: "text-gray-400 italic",
+                                    "Columns are detected by adaptive-k 1-D k-means on per-line x0 with a silhouette threshold and a parsimony tiebreak (smallest k within ε of the best score) so noisy pages collapse to "
+                                    span { class: "font-mono", "multi" }
+                                    " rather than pretending to know."
+                                }
+                            }
                             div { class: "rounded bg-gray-900 border border-gray-700 p-3 space-y-1.5",
                                 p { class: "text-gray-200 font-semibold mb-1", "Extractor labels" }
                                 div { class: "space-y-1 text-gray-400",
@@ -775,8 +805,14 @@ pub fn MonitorTip() -> Element {
                                         "). ML-based layout analysis for PDF: detects reading order, table boundaries, and structure that isn't encoded in the file format."
                                     }
                                     div {
+                                        span { class: "font-mono text-sky-300", "native_pdf" }
+                                        " — in-process relational extractor (layout_ml feature). Words + bboxes from lopdf → y-banded LineSpans → adaptive-k column classification → DocIR with per-block "
+                                        span { class: "font-mono text-gray-200", "column_position" }
+                                        ". Persists pdf_lines / pdf_pages sidecar rows when PDF_RELATIONAL_ENABLED is on; the /pdf-extraction page reads them."
+                                    }
+                                    div {
                                         span { class: "font-mono text-gray-300", "builtin/pdf" }
-                                        " — built-in PDF path (pdftotext → pdf_extract → OCR cascade). Used when Docling is off or unavailable."
+                                        " — built-in PDF path (pdftotext → pdf_extract → OCR cascade). Used when Docling is off, native_pdf isn't compiled in, or both upper tiers fail."
                                     }
                                     div {
                                         span { class: "font-mono text-gray-300", "builtin/docx · builtin/epub · builtin/pptx · builtin/odt" }
@@ -812,7 +848,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                     onclick: move |_| show_iouring_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "I/O Layer — io_uring" }
@@ -958,7 +994,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
                     onclick: move |_| show_ring_buffer_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "Ring buffer — how io_uring talks to the kernel" }
@@ -1073,7 +1109,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
                     onclick: move |_| show_completions_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "Completion — the kernel's receipt for an async I/O operation" }
@@ -1167,7 +1203,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
                     onclick: move |_| show_syscalls_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "Why io_uring cannot replace all syscalls" }
@@ -1246,7 +1282,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
                     onclick: move |_| show_vector_store_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "Vector store — the app's semantic memory" }
@@ -1301,7 +1337,7 @@ pub fn MonitorTip() -> Element {
                     class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
                     onclick: move |_| show_search_cache_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[92vw] max-w-2xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "Search cache — instant answers for repeated queries" }
@@ -1453,9 +1489,21 @@ pub fn MonitorTip() -> Element {
                                             }
                                             // PDF — full width, complex
                                             div {
-                                                p { class: "text-gray-200 font-semibold", "PDF — three-level cascade" }
+                                                p { class: "text-gray-200 font-semibold", "PDF — four-level cascade" }
                                                 ol { class: "ml-3 list-decimal list-outside text-gray-400 space-y-0.5",
-                                                    li { span { class: "font-mono text-gray-200", "pdftotext" } " (poppler-utils, " span { class: "font-mono", "-layout -enc UTF-8" } ") — best quality, handles multi-column layouts and complex fonts." }
+                                                    li {
+                                                        span { class: "font-mono text-sky-300", "native_pdf" }
+                                                        " (layout_ml feature + PDF_RELATIONAL_ENABLED) — words + bboxes from lopdf → y-banded line grouping → adaptive-k 1-D k-means on per-line x0 → per-block "
+                                                        span { class: "font-mono text-gray-200", "column_position" }
+                                                        ". Writes pdf_lines / pdf_pages sidecar rows so the "
+                                                        Link {
+                                                            to: Route::PdfExtraction {},
+                                                            class: "text-sky-400 underline hover:text-sky-300",
+                                                            "/pdf-extraction"
+                                                        }
+                                                        " page can show what columns were found."
+                                                    }
+                                                    li { span { class: "font-mono text-gray-200", "pdftotext" } " (poppler-utils, " span { class: "font-mono", "-layout -enc UTF-8" } ") — handles multi-column layouts and complex fonts when the native path is off or the file isn't a PDF the layout_ml stack can crack." }
                                                     li { span { class: "font-mono text-gray-200", "pdf_extract" } " (Rust crate) — pure-Rust fallback when poppler absent." }
                                                     li { span { class: "font-mono text-gray-200", "pdftoppm" } " + " span { class: "font-mono text-gray-200", "tesseract" } " — OCR last resort for scanned/image PDFs (300 dpi). Requires both on PATH." }
                                                 }
@@ -1888,7 +1936,7 @@ pub fn MonitorTip() -> Element {
                                     if show_format_cleanup_info() {
                                         div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                                             onclick: move |_| show_format_cleanup_info.set(false),
-                                            div { class: "bg-gray-800 border border-sky-900 rounded-lg p-4 text-xs text-gray-300 space-y-2 max-w-md w-full mx-4",
+                                            div { class: "bg-gray-800 border border-sky-900 rounded-lg p-4 text-xs text-gray-300 space-y-2 w-[98vw] mx-4",
                                                 onclick: move |e| e.stop_propagation(),
                                                 div { class: "flex items-center justify-between -mt-1 -mr-1 mb-1",
                                                     h3 { class: "text-xs font-bold text-sky-400 uppercase tracking-wide", "Format Cleanup" }
@@ -2353,6 +2401,14 @@ pub fn MonitorTip() -> Element {
                                 li { "Max chunk: 384 tokens — hard ceiling, always flushed regardless of boundaries." }
                                 li { "Overlap: 32 tokens — tail of each chunk is prepended to the next for cross-boundary retrieval." }
                                 li { "Each chunk becomes one embedding vector and one BM25 document." }
+                                li {
+                                    span { class: "text-gray-200", "Column-aware boundary " }
+                                    "(layout_ml + PDF_RELATIONAL_ENABLED). A same-page transition between two different non-"
+                                    span { class: "font-mono", "multi" }
+                                    " "
+                                    span { class: "font-mono text-gray-200", "column_position" }
+                                    " values is treated as hard as a PageBreak — so a two-column invoice's left-column label and right-column amount never share a chunk. Independent of CHUNKER_MODE: applies in fixed, lightweight, and semantic alike."
+                                }
                                 li { "Tunable via CHUNK_MIN_SIZE, CHUNK_MAX_SIZE, CHUNK_OVERLAP, CHUNKER_MODE. Re-index after changing." }
                             }
                         }
@@ -2612,7 +2668,7 @@ raw query
                     class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
                     onclick: move |_| show_preprocessing_info.set(false),
                     div {
-                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[90vw] max-w-2xl max-h-[92vh] flex flex-col shadow-xl",
+                        class: "bg-gray-800 border border-gray-600 rounded-lg w-[98vw] max-h-[92vh] flex flex-col shadow-xl",
                         onclick: move |evt| evt.stop_propagation(),
                         div { class: "flex items-center justify-between px-6 py-3 border-b border-gray-600 shrink-0",
                             h2 { class: "text-base font-semibold text-gray-100", "Typography & Tag Cleanup" }
@@ -2927,7 +2983,7 @@ raw query
                     class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60",
                     onclick: move |e| { e.stop_propagation(); show_ligature_info.set(false); },
                     div {
-                        class: "bg-gray-800 border border-amber-800 rounded-lg w-[92vw] max-w-5xl max-h-[90vh] flex flex-col shadow-xl mx-4",
+                        class: "bg-gray-800 border border-amber-800 rounded-lg w-[98vw] max-h-[90vh] flex flex-col shadow-xl mx-4",
                         onclick: move |e| e.stop_propagation(),
                         // Header
                         div { class: "flex items-center justify-between px-5 py-3 border-b border-amber-800 shrink-0",
