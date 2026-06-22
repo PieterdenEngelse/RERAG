@@ -167,8 +167,8 @@ plan — all eight phases (0, A–H) are now ✅ shipped as of v1.0.0.
 ## Build from source
 
 ```bash
-# Backend
-cd backend && cargo build --release
+# Backend — layout_ml turns on the native_pdf / column-aware / page-type pipeline
+cd backend && cargo build --release --features layout_ml
 
 # Frontend (uses dx, not trunk — trunk doesn't process Dioxus 0.7 asset!())
 cd frontend/fro && npm ci && npm run css:build && dx build --package fro --platform web --release
