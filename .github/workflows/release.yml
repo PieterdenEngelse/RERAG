@@ -372,11 +372,15 @@ jobs:
         env:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
+          # `installer/wix/*.wxs` is cargo-wix's default discovery dir,
+          # so the heat-emitted `web.wxs` is already picked up alongside
+          # `main.wxs`. v1.2.4 added `--include installer\wix\web.wxs`
+          # too, which fed candle the same file twice and triggered
+          # CNDL0351 (duplicate `.wixobj` outputs).
           cargo wix `
             -p ag-installer `
             --no-build `
             --target x86_64-pc-windows-msvc `
-            --include installer\wix\web.wxs `
             --nocapture `
             --output "ag-installer-v${env:VERSION}-x86_64.msi"
 
