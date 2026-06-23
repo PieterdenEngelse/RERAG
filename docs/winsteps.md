@@ -188,7 +188,7 @@ This is the largest move; ~470 LOC.
 Verification: `cargo check -p ag-installer` passes. `cargo fmt` runs
 cleanly (it may re-flow braces — accept those changes).
 
-### PR1.5 — Verify Linux regression 🟡
+### PR1.5 — Verify Linux regression ✅
 
 1. `cd installer && cargo fmt && cargo clippy --all-targets -- -D warnings`
    — must pass cleanly. Fix any clippy warnings that the move
@@ -228,7 +228,7 @@ Goal: real Windows installer executable that walks all six screens
 end-to-end on a Windows 10/11 box with Docker Desktop. No MSI yet —
 that's PR 3.
 
-### PR2.1 — Add cfg(windows) deps in `installer/Cargo.toml` ⬜
+### PR2.1 — Add cfg(windows) deps in `installer/Cargo.toml` ✅
 
 Append:
 ```toml
@@ -248,7 +248,7 @@ x86_64-pc-windows-msvc` resolves the new crates (run from a Windows VM
 or via `cross`; on this Linux box the cfg(windows) block won't activate
 so a plain `cargo check` is a no-op).
 
-### PR2.2 — Implement `platform/windows.rs` Paths + detection probes ⬜
+### PR2.2 — Implement `platform/windows.rs` Paths + detection probes ✅
 
 **Paths.** Replace the PR1 stub:
 ```rust
@@ -316,7 +316,7 @@ Verification: on a Windows VM, `target\…\release\ag-installer.exe`
 launches; the Detection screen populates real values (non-zero RAM,
 non-zero disk).
 
-### PR2.3 — Implement `platform/windows.rs` install_steps ⬜
+### PR2.3 — Implement `platform/windows.rs` install_steps ✅
 
 For each of the four step bodies, replace the `unimplemented!()` stub
 with a real implementation:
@@ -430,7 +430,7 @@ Verification: with `SKIP_SCHTASKS=1` set on a Windows VM, the install
 log shows every step's would-run lines. With `SKIP_SCHTASKS` unset,
 `schtasks /Query /TN ag` lists the task after step 5.
 
-### PR2.4 — Add scheduled-tasks XML templates ⬜
+### PR2.4 — Add scheduled-tasks XML templates ✅
 
 **`installer/scheduled-tasks/ag.xml.tmpl`**:
 ```xml
@@ -502,7 +502,7 @@ but Action is:
 Verification: `schtasks /Create /XML ag.xml /TN test-ag` should succeed
 manually on a Windows VM, then `schtasks /Delete /TN test-ag /F`.
 
-### PR2.5 — Blockers A + B: docker-compose + backend ⬜
+### PR2.5 — Blockers A + B: docker-compose + backend ✅
 
 **(A) `docker-compose.yml`** — add (NOT under empty profile `""`):
 ```yaml
@@ -547,7 +547,7 @@ as before (AG_ENV is unset). With `AG_ENV=/tmp/fake.env cargo run`, the
 hook calls `from_path` and silently no-ops because the file doesn't
 exist. Both paths log identically.
 
-### PR2.6 — Cross-cutting Windows wiring ⬜
+### PR2.6 — Cross-cutting Windows wiring ✅
 
 **`installer/src/bundled.rs`**:
 1. Rename `appimage_usr_dir()` → `bundle_share_dir()`.
@@ -607,7 +607,7 @@ machine, installs ag-installer to `%PROGRAMFILES%\ag\` and exposes a
 Start Menu shortcut. The first-launch flow then walks the user through
 detection / prompts / install.
 
-### PR3.1 — WiX scaffold + Cargo metadata ⬜
+### PR3.1 — WiX scaffold + Cargo metadata ✅
 
 1. On a Windows VM (or via `cross`):
    ```pwsh
@@ -657,7 +657,7 @@ Verification: `cargo wix -p ag-installer --nocapture` produces an MSI
 in `target/wix/`. Double-click on a Windows VM → SmartScreen warning →
 "More info" → "Run anyway" → installer runs from Start Menu.
 
-### PR3.2 — Add windows-msi CI job with install-verification ⬜
+### PR3.2 — Add windows-msi CI job with install-verification ✅
 
 In `.github/workflows/release.yml` add (sibling to the existing
 AppImage job):
@@ -717,7 +717,7 @@ Verification: push a `v*.*.*` tag to a fork; both `appimage` and
 `windows-msi` jobs complete; the MSI install/uninstall step doesn't
 fail; both artifacts upload to the release.
 
-### PR3.3 — Delete ps1 stub + README Windows section ⬜
+### PR3.3 — Delete ps1 stub + README Windows section ✅
 
 1. `git rm installers/install-windows.ps1` — v1.1.0 stub, uses
    "Agentic RAG" wording explicitly banned by CLAUDE.md.
