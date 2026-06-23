@@ -328,7 +328,14 @@ jobs:
           dx build --package fro --platform web --release
 
       - name: Build ag (backend)
-        run: cargo build --release -p ag --target x86_64-pc-windows-msvc
+        # Drop `io_uring` from default features — it's a Linux-syscall
+        # wrapper crate and can't compile against Windows libc. Keep
+        # `onnx` (FastEmbed, cross-platform) and `graph` (FalkorDB
+        # client, also a portable Redis-protocol client). `layout_ml`
+        # stays opt-out on Windows for the MVP MSI; relational PDF
+        # extraction lights up once we verify its native deps cross-
+        # compile cleanly.
+        run: cargo build --release -p ag --target x86_64-pc-windows-msvc --no-default-features --features onnx,graph
 
       - name: Build ag-installer
         run: cargo build --release -p ag-installer --target x86_64-pc-windows-msvc

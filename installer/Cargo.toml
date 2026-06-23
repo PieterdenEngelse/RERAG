@@ -4,7 +4,7 @@ name = "ag-installer"
 # matches tag" step in .github/workflows/release.yml errors before the
 # build if this drifts from ${TAG#v}. Bump this in the same commit that
 # precedes a release tag.
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 authors.workspace = true
 description = "GUI installer for RERAG — Linux + Windows"
