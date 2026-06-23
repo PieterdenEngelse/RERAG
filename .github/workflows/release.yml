@@ -349,8 +349,11 @@ jobs:
         # dashboard dist. main.wxs's <Feature Id='Main'> references
         # WebFilesGroup via <ComponentGroupRef>. -gg auto-generates
         # GUIDs, -srd suppresses root-dir component, -sfrag emits one
-        # fragment, -var picks the preprocessor var so the source path
-        # is configurable at candle time.
+        # fragment. No `-var` indirection — heat emits the literal
+        # source path into `<File Source="...">` and candle reads it
+        # directly. v1.2.3 tried `-var var.WebDir` + `-dWebDir=...` on
+        # the cargo-wix tail, but cargo-wix parses anything after `--`
+        # as a positional .wxs input rather than forwarding to candle.
         shell: pwsh
         run: |
           $webDir = "target\dx\fro\release\web\public"
@@ -362,7 +365,6 @@ jobs:
             -dr ShareAgDir `
             -cg WebFilesGroup `
             -gg -srd -sfrag `
-            -var var.WebDir `
             -out installer\wix\web.wxs
 
       - name: Build MSI via cargo-wix
@@ -370,17 +372,13 @@ jobs:
         env:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          # cargo-wix builds candle args from the WebDir preprocessor
-          # variable referenced by heat-emitted web.wxs (-var var.WebDir
-          # above). Forward via the `--` separator.
           cargo wix `
             -p ag-installer `
             --no-build `
             --target x86_64-pc-windows-msvc `
             --include installer\wix\web.wxs `
             --nocapture `
-            --output "ag-installer-v${env:VERSION}-x86_64.msi" `
-            -- -dWebDir=target\dx\fro\release\web\public
+            --output "ag-installer-v${env:VERSION}-x86_64.msi"
 
       - name: Verify MSI installs + uninstalls cleanly
         # Per-machine MSI requires admin — windows-latest already runs
