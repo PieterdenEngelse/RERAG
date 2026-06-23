@@ -1,0 +1,239 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  WiX source for the RERAG (ag) Windows installer MSI.
+
+  Built by `cargo wix -p ag-installer` (cargo-wix v0.3+), which invokes
+  candle.exe + light.exe with the variable set described in
+  `installer/Cargo.toml`'s [package.metadata.wix] block. CI runs this on
+  the windows-msi job in .github/workflows/release.yml (added by PR 3.2).
+
+  GUIDs are PINNED across releases — never regenerate them in place, or
+  Windows Installer's upgrade semantics break and users get a confusing
+  "side-by-side install" instead of an upgrade.
+
+  Variables expected at build time (cargo-wix sets these from
+  Cargo.toml and the target dir):
+    var.CargoProfile      "release" by default
+    var.Profile           same as CargoProfile (cargo-wix legacy)
+    var.CargoTargetBinDir target/x86_64-pc-windows-msvc/release
+    var.Version           Cargo.toml package.version (e.g. "1.2.0")
+
+  Layout produced under %PROGRAMFILES%\ag\:
+    bin\ag.exe
+    bin\ag-installer.exe
+    share\ag\docker-compose.yml
+    share\ag\.env.example
+    share\ag\scheduled-tasks\ag.xml.tmpl
+    share\ag\scheduled-tasks\ag-stack.xml.tmpl
+    share\ag\web\…             (harvested from frontend\fro\dist by PR 3.2)
+
+  Per-user runtime data goes under %LOCALAPPDATA%\ag and %APPDATA%\ag —
+  the MSI never touches those. The Dioxus installer (launched from the
+  Start Menu shortcut) populates them on first run.
+-->
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <!--
+      Product identity.
+
+      Id="*" auto-generates the ProductCode on every build (this is what
+      Windows Installer uses to detect "is this MSI already installed?"
+      and to distinguish builds).
+
+      UpgradeCode is FIXED — that's the identity that makes MajorUpgrade
+      treat new installs as in-place upgrades of old ones. Never change
+      it across releases of the ag-installer.
+
+      TODO PR 4 (signed builds): the post-build signtool.exe step runs
+      OUTSIDE this file, in .github/workflows/release.yml. The MSI itself
+      is signed after candle/light emit it; ag.exe and ag-installer.exe
+      are signed before they're packaged. Cert + password come from
+      CERT_PFX_B64 + CERT_PASSWORD secrets. See docs/wininstall.md §5.
+    -->
+    <Product
+        Id='*'
+        Name='RERAG installer'
+        UpgradeCode='0ACE1A07-5A78-4899-8AC6-C96EB28CAB27'
+        Manufacturer='Pieter den Engelse'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package
+            Id='*'
+            Keywords='Installer'
+            Description='RERAG (Rust Educational RAG) — installer for the ag stack'
+            Manufacturer='Pieter den Engelse'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252' />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of RERAG installer is already installed. Uninstall it before installing this older version.' />
+
+        <MediaTemplate EmbedCab='yes' CompressionLevel='high' />
+
+        <!-- Filesystem layout -->
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='ProgramFiles64Folder' Name='PFiles'>
+                <Directory Id='INSTALLFOLDER' Name='ag'>
+
+                    <!-- bin\ -->
+                    <Directory Id='BinDir' Name='bin'>
+                        <Component Id='AgExe' Guid='90F8B802-32B4-4434-BD30-F7FD282790A7' Win64='yes'>
+                            <File
+                                Id='AgExe'
+                                Name='ag.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\ag.exe'
+                                KeyPath='yes' />
+                        </Component>
+                        <Component Id='AgInstallerExe' Guid='*' Win64='yes'>
+                            <File
+                                Id='AgInstallerExe'
+                                Name='ag-installer.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\ag-installer.exe'
+                                KeyPath='yes' />
+                        </Component>
+                    </Directory>
+
+                    <!-- share\ag\ -->
+                    <Directory Id='ShareDir' Name='share'>
+                        <Directory Id='ShareAgDir' Name='ag'>
+
+                            <Component Id='DockerComposeYml' Guid='*' Win64='yes'>
+                                <File
+                                    Id='DockerComposeYml'
+                                    Name='docker-compose.yml'
+                                    DiskId='1'
+                                    Source='..\..\docker-compose.yml'
+                                    KeyPath='yes' />
+                            </Component>
+
+                            <Component Id='EnvExample' Guid='*' Win64='yes'>
+                                <File
+                                    Id='EnvExample'
+                                    Name='.env.example'
+                                    DiskId='1'
+                                    Source='..\..\.env.example'
+                                    KeyPath='yes' />
+                            </Component>
+
+                            <!-- share\ag\scheduled-tasks\ -->
+                            <Directory Id='SchedTasksDir' Name='scheduled-tasks'>
+                                <Component Id='AgXmlTmpl' Guid='*' Win64='yes'>
+                                    <File
+                                        Id='AgXmlTmpl'
+                                        Name='ag.xml.tmpl'
+                                        DiskId='1'
+                                        Source='..\scheduled-tasks\ag.xml.tmpl'
+                                        KeyPath='yes' />
+                                </Component>
+                                <Component Id='AgStackXmlTmpl' Guid='*' Win64='yes'>
+                                    <File
+                                        Id='AgStackXmlTmpl'
+                                        Name='ag-stack.xml.tmpl'
+                                        DiskId='1'
+                                        Source='..\scheduled-tasks\ag-stack.xml.tmpl'
+                                        KeyPath='yes' />
+                                </Component>
+                            </Directory>
+
+                            <!--
+                              share\ag\web\ — harvested by heat.exe in CI.
+
+                              PR 3.2 generates installer/wix/web.wxs from
+                              frontend\fro\dist via:
+                                heat dir ..\..\frontend\fro\dist \
+                                  -dr ShareAgDir -cg WebFilesGroup \
+                                  -gg -srd -sfrag -var var.WebDir \
+                                  -out installer\wix\web.wxs
+                              and the candle invocation references it
+                              + sets -dWebDir=...\frontend\fro\dist.
+                              The <FeatureRef Id='WebFiles' /> below pulls
+                              the harvested components into the install.
+                            -->
+
+                        </Directory>
+                    </Directory>
+
+                </Directory>
+            </Directory>
+
+            <!-- Start Menu shortcut -->
+            <Directory Id='ProgramMenuFolder'>
+                <Directory Id='AppShortcutFolder' Name='RERAG'>
+                    <Component Id='AppShortcut' Guid='*' Win64='yes'>
+                        <Shortcut
+                            Id='AppStartMenuShortcut'
+                            Name='RERAG installer'
+                            Description='Detect host capabilities, prompt for choices, install RERAG'
+                            Target='[#AgInstallerExe]'
+                            WorkingDirectory='INSTALLFOLDER' />
+                        <RemoveFolder Id='RemoveAppShortcutFolder' On='uninstall' />
+                        <RegistryValue
+                            Root='HKCU'
+                            Key='Software\RERAG\Installer'
+                            Name='installed'
+                            Type='integer'
+                            Value='1'
+                            KeyPath='yes' />
+                    </Component>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <!-- Single feature: install everything. Future PRs may split
+             out the optional Tika DLL into its own feature if we start
+             bundling it. -->
+        <Feature
+            Id='Main'
+            Title='RERAG installer'
+            Description='Core binaries + bundled compose / scheduled-task templates.'
+            Display='expand'
+            Level='1'
+            AllowAdvertise='no'
+            ConfigurableDirectory='INSTALLFOLDER'>
+            <ComponentRef Id='AgExe' />
+            <ComponentRef Id='AgInstallerExe' />
+            <ComponentRef Id='DockerComposeYml' />
+            <ComponentRef Id='EnvExample' />
+            <ComponentRef Id='AgXmlTmpl' />
+            <ComponentRef Id='AgStackXmlTmpl' />
+            <ComponentRef Id='AppShortcut' />
+            <!--
+              ComponentGroupRef pulled in from harvested web.wxs.
+
+              The Windows release CI (.github/workflows/release.yml's
+              `windows-msi` job) runs heat.exe against
+              target\dx\fro\release\web\public\ BEFORE invoking cargo
+              wix, producing installer\wix\web.wxs with a
+              <ComponentGroup Id='WebFilesGroup'> entry for every file
+              under the dx-built dashboard dist. Both wxs files are
+              compiled together. Without that pre-step, light.exe fails
+              with "Unresolved reference to symbol
+              WixGroup:WebFilesGroup" — which is exactly what we want for
+              local dev: it forces a clear error rather than silently
+              shipping an MSI with no UI assets.
+            -->
+            <ComponentGroupRef Id='WebFilesGroup' />
+        </Feature>
+
+        <!--
+          TODO: drop a 256x256 RERAG icon at installer/assets/icon.ico
+          and re-add the Icon + ARPPRODUCTICON lines so the entry in
+          "Apps & Features" carries a brand icon. Skipped for v1 to keep
+          the build dependency-free; Windows will fall back to the
+          generic-installer icon.
+        -->
+        <Property Id='ARPHELPLINK' Value='https://github.com/PieterdenEngelse/RERAG' />
+        <Property Id='ARPURLINFOABOUT' Value='https://github.com/PieterdenEngelse/RERAG' />
+
+    </Product>
+
+</Wix>

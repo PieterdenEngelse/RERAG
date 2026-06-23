@@ -65,3 +65,16 @@ winreg = "0.55"
 # build.rs stamps the git SHA and build timestamp into the binary so the
 # update check + dry-run summary can report what was built when.
 chrono = "0.4"
+
+# Read by cargo-wix (v0.3+) when running `cargo wix -p ag-installer` on
+# Windows. GUIDs are PINNED across releases — never regenerate them in
+# place, or Windows Installer's upgrade semantics break (users would get
+# a side-by-side install instead of an in-place upgrade). The
+# UpgradeCode also appears in `installer/wix/main.wxs`; both must match.
+# license = false / eula = false skip the license-acceptance dialog —
+# RERAG is MIT-OR-Apache-2.0; we don't gate install on dialog clickthrough.
+[package.metadata.wix]
+upgrade-guid = "0ACE1A07-5A78-4899-8AC6-C96EB28CAB27"
+path-guid    = "90F8B802-32B4-4434-BD30-F7FD282790A7"
+license      = false
+eula         = false

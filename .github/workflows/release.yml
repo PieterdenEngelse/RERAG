@@ -230,3 +230,200 @@ jobs:
             $PRERELEASE_FLAG \
             "ag-installer-v${{ steps.tag.outputs.version }}-x86_64.AppImage" \
             "ag-installer-v${{ steps.tag.outputs.version }}-x86_64.AppImage.sha256"
+
+  windows-msi:
+    name: Build MSI (windows-x86_64)
+    runs-on: windows-latest
+    # Cold builds on windows-latest are slower than Ubuntu — Rust deps
+    # + frontend + WiX install fits in ~45 min cold, ~12 min warm.
+    timeout-minutes: 90
+    # Serialize after the appimage job so the GitHub Release exists when
+    # we go to upload the MSI. Avoids a race where both jobs try to
+    # `gh release create` the same tag.
+    needs: appimage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # build.rs needs git history for SHA stamping
+          lfs: true       # package-lock.json is stored in LFS
+
+      - name: Determine version tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust (x86_64-pc-windows-msvc + wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target/
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-msvc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-msvc-
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/fro/package-lock.json
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install dioxus-cli + cargo-wix
+        # Both pinned to keep the build reproducible. dx 0.7.9 matches the
+        # CLAUDE.md `dx serve` invocation and the Linux release job.
+        # cargo-wix 0.3 generates WiX v3 syntax — matches main.wxs's
+        # `http://schemas.microsoft.com/wix/2006/wi` namespace.
+        run: |
+          cargo binstall dioxus-cli@0.7.9 --no-confirm --locked
+          cargo binstall cargo-wix --no-confirm --locked
+
+      - name: Install WiX Toolset 3.11
+        # cargo-wix shells out to candle.exe + light.exe + heat.exe from
+        # the WiX 3 toolset. windows-latest ships WiX pre-installed
+        # most months, but pinning via choco makes the build deterministic.
+        shell: pwsh
+        run: |
+          choco install wixtoolset --version=3.11.2 -y --no-progress
+          # Add the WiX bin/ to PATH for subsequent steps.
+          "C:\Program Files (x86)\WiX Toolset v3.11\bin" `
+            | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build frontend dist
+        shell: pwsh
+        run: |
+          cd frontend\fro
+          npm ci
+          npm run css:build
+          dx build --package fro --platform web --release
+
+      - name: Build ag (backend)
+        run: cargo build --release -p ag --target x86_64-pc-windows-msvc
+
+      - name: Build ag-installer
+        run: cargo build --release -p ag-installer --target x86_64-pc-windows-msvc
+
+      - name: Smoke-test ag-installer --version
+        run: target\x86_64-pc-windows-msvc\release\ag-installer.exe --version
+
+      - name: Harvest web/ assets with heat.exe
+        # Produces installer\wix\web.wxs with a ComponentGroup named
+        # WebFilesGroup containing every file under the dx-built
+        # dashboard dist. main.wxs's <Feature Id='Main'> references
+        # WebFilesGroup via <ComponentGroupRef>. -gg auto-generates
+        # GUIDs, -srd suppresses root-dir component, -sfrag emits one
+        # fragment, -var picks the preprocessor var so the source path
+        # is configurable at candle time.
+        shell: pwsh
+        run: |
+          $webDir = "target\dx\fro\release\web\public"
+          if (!(Test-Path $webDir)) {
+            Write-Error "dx build output not at $webDir — frontend build step did not produce assets"
+            exit 1
+          }
+          heat dir $webDir `
+            -dr ShareAgDir `
+            -cg WebFilesGroup `
+            -gg -srd -sfrag `
+            -var var.WebDir `
+            -out installer\wix\web.wxs
+
+      - name: Build MSI via cargo-wix
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          # cargo-wix builds candle args from the WebDir preprocessor
+          # variable referenced by heat-emitted web.wxs (-var var.WebDir
+          # above). Forward via the `--` separator.
+          cargo wix `
+            -p ag-installer `
+            --no-build `
+            --target x86_64-pc-windows-msvc `
+            --include installer\wix\web.wxs `
+            --nocapture `
+            --output "ag-installer-v${env:VERSION}-x86_64.msi" `
+            -- -dWebDir=target\dx\fro\release\web\public
+
+      - name: Verify MSI installs + uninstalls cleanly
+        # Per-machine MSI requires admin — windows-latest already runs
+        # as administrator, so /quiet + /norestart goes straight through.
+        # Then exec both binaries' --version to prove they were laid down
+        # correctly and the layout matches main.wxs. /x removes them.
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          $msi = "ag-installer-v${env:VERSION}-x86_64.msi"
+          Write-Host "Installing $msi …"
+          $p = Start-Process msiexec -Wait -PassThru -ArgumentList @(
+            "/i", $msi, "/quiet", "/qn", "/norestart"
+          )
+          if ($p.ExitCode -ne 0) {
+            Write-Error "msiexec /i exited $($p.ExitCode)"
+            exit 1
+          }
+          $installerExe = "$env:ProgramFiles\ag\bin\ag-installer.exe"
+          $agExe = "$env:ProgramFiles\ag\bin\ag.exe"
+          Write-Host "Exec smoke tests …"
+          & $installerExe --version
+          & $agExe --version
+          Write-Host "Uninstalling …"
+          $p = Start-Process msiexec -Wait -PassThru -ArgumentList @(
+            "/x", $msi, "/quiet", "/qn"
+          )
+          if ($p.ExitCode -ne 0) {
+            Write-Error "msiexec /x exited $($p.ExitCode)"
+            exit 1
+          }
+
+      - name: SHA256
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          $msi = "ag-installer-v${env:VERSION}-x86_64.msi"
+          $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+          "$hash  $msi" | Out-File -FilePath "$msi.sha256" -Encoding ASCII
+
+      - name: Upload MSI as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ag-installer-${{ steps.tag.outputs.tag }}-x86_64-msi
+          path: |
+            ag-installer-v${{ steps.tag.outputs.version }}-x86_64.msi
+            ag-installer-v${{ steps.tag.outputs.version }}-x86_64.msi.sha256
+
+      - name: Upload MSI to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        shell: pwsh
+        run: |
+          # The appimage job (needs:) already ran `gh release create`,
+          # so the release exists. --clobber lets re-runs of windows-msi
+          # overwrite a stale upload from a previous failed attempt.
+          gh release upload $env:TAG `
+            "ag-installer-v$env:VERSION-x86_64.msi" `
+            "ag-installer-v$env:VERSION-x86_64.msi.sha256" `
+            --clobber

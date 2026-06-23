@@ -22,7 +22,7 @@ on the short name `ag` for ergonomic reasons.
 
 ## Install
 
-### Quick install (GUI) — recommended
+### Quick install on Linux (GUI) — recommended
 
 For end users. No terminal commands required after the download.
 
@@ -41,6 +41,33 @@ For end users. No terminal commands required after the download.
    finished.
 
 No root password needed; nothing is written outside your home directory.
+
+### Quick install on Windows (MSI)
+
+For end users on Windows 10 (1809+) or Windows 11. Docker Desktop must
+already be installed.
+
+1. **Download** the latest MSI from the
+   [latest release](https://github.com/PieterdenEngelse/RERAG/releases/latest)
+   (look for `ag-installer-vX.Y.Z-x86_64.msi`).
+2. **Double-click** the MSI. Windows will show *Windows protected your
+   PC* — click **More info** → **Run anyway**. This is normal for
+   unsigned installers; signed builds ship once a code-signing
+   certificate is in place. Accept the UAC prompt to install under
+   `%PROGRAMFILES%\ag\`.
+3. **Launch** *RERAG installer* from the Start Menu. The Dioxus
+   installer walks you through the same six screens as on Linux —
+   detection probes use Win32 / docker / HTTP equivalents of the Linux
+   `systemctl` / `ss` / `/proc` checks.
+4. When the installer finishes, the dashboard opens at
+   <http://127.0.0.1:3010/>. ag is registered as a per-user **Scheduled
+   Task** triggered at logon — no admin rights needed at runtime, no
+   system service to manage. After a reboot, log back in and ag runs
+   automatically.
+
+The compose stack (FalkorDB + Redis + observability) comes up under
+Docker Desktop. FalkorDB runs as a container on Windows since no native
+Windows build exists; on Linux it stays a `systemd --user` service.
 
 ### Developer install (terminal)
 
@@ -62,6 +89,8 @@ services are running, and the dashboard is available at
 
 ### What gets installed
 
+#### Linux
+
 | Path | Contents |
 | --- | --- |
 | `~/.local/bin/ag` | The ag binary |
@@ -73,7 +102,33 @@ services are running, and the dashboard is available at
 
 No system files are modified.
 
+#### Windows
+
+The MSI lays down (under `%PROGRAMFILES%\ag\`, requires admin once at
+install time):
+
+| Path | Contents |
+| --- | --- |
+| `%PROGRAMFILES%\ag\bin\ag.exe` | The ag binary |
+| `%PROGRAMFILES%\ag\bin\ag-installer.exe` | The Dioxus installer GUI |
+| `%PROGRAMFILES%\ag\share\ag\` | Bundled `docker-compose.yml`, `.env.example`, scheduled-task templates, dashboard assets |
+
+The installer then creates the per-user runtime tree (no admin):
+
+| Path | Contents |
+| --- | --- |
+| `%LOCALAPPDATA%\ag\bin\ag-start.cmd` | Wrapper that sets `AG_ENV` then launches `ag.exe` |
+| `%LOCALAPPDATA%\ag\` | Runtime state: data, index, db, logs, web/ |
+| `%APPDATA%\ag\ag.env` | Environment file (per-user; never overwritten on reinstall) |
+| `%APPDATA%\ag\docker-compose.yml` | Observability stack definition (consumed by the `ag-stack` Scheduled Task) |
+| `%APPDATA%\ag\scheduled-tasks\{ag,ag-stack}.xml` | Rendered Scheduled-Task XML (kept for drift detection) |
+
+Two Scheduled Tasks (`ag` and `ag-stack`) trigger at user logon, in
+place of Linux's `systemd --user` units.
+
 ### Uninstall
+
+#### Linux
 
 ```bash
 # Remove the binary, libraries, and systemd units. Keeps your ag.env
@@ -87,20 +142,50 @@ ag-installer --uninstall
 ag-installer --uninstall --purge
 ```
 
+#### Windows
+
+Run the per-user uninstaller first, then remove the MSI program files
+from *Apps & Features*:
+
+```pwsh
+# Stops both Scheduled Tasks, brings the compose stack down, and
+# removes the per-user files under %LOCALAPPDATA%\ag. Keeps ag.env
+# and the runtime data tree unless you add --purge.
+"%ProgramFiles%\ag\bin\ag-installer.exe" --uninstall
+
+# Destructive — also removes %APPDATA%\ag and the full %LOCALAPPDATA%\ag
+# tree (data, indexes, logs, scheduled-task XML, ag.env).
+"%ProgramFiles%\ag\bin\ag-installer.exe" --uninstall --purge
+```
+
+After the per-user uninstall, open *Settings → Apps → Installed apps*,
+find *RERAG installer*, and click *Uninstall* to remove the program
+files under `%PROGRAMFILES%\ag\`.
+
 Both modes prompt for confirmation before deleting anything and print
 exactly which paths will be removed.
 
 ### Requirements
 
-- Linux x86-64 with glibc 2.39+ (Ubuntu 24.04+, Fedora 40+, Arch,
-  openSUSE Tumbleweed). Older distros use the bash installer below
-  instead. See [`docs/distro-notes.md`](docs/distro-notes.md) for the
-  full support matrix.
+#### Linux
+
+- x86-64 with glibc 2.39+ (Ubuntu 24.04+, Fedora 40+, Arch, openSUSE
+  Tumbleweed). Older distros use the bash installer below instead. See
+  [`docs/distro-notes.md`](docs/distro-notes.md) for the full support
+  matrix.
 - Docker (for the optional observability stack; the installer prompts to
   install via `get.docker.com` if missing)
 - ~10 GB free disk on `$HOME`
 - 7 GB RAM minimum; the installer detects low RAM and offers a smaller
   compose profile
+
+#### Windows
+
+- Windows 10 (1809+) or Windows 11, x86-64
+- Docker Desktop (FalkorDB has no native Windows build — it runs as a
+  container under the `falkor-container` compose profile)
+- ~10 GB free disk on the install volume (`%LOCALAPPDATA%`)
+- 7 GB RAM minimum; same low-RAM prompt as on Linux
 
 ## What ag does
 
