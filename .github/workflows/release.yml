@@ -296,16 +296,28 @@ jobs:
           cargo binstall dioxus-cli@0.7.9 --no-confirm --locked
           cargo binstall cargo-wix --no-confirm --locked
 
-      - name: Install WiX Toolset 3.11
+      - name: Locate WiX Toolset 3.x
         # cargo-wix shells out to candle.exe + light.exe + heat.exe from
-        # the WiX 3 toolset. windows-latest ships WiX pre-installed
-        # most months, but pinning via choco makes the build deterministic.
+        # the WiX 3 toolset. windows-latest ships WiX 3.x pre-installed
+        # (currently v3.14). v1.2.0 tried pinning to 3.11.2 via choco,
+        # which refused with "newer version already installed". We use
+        # whichever WiX 3.x is present — same v3 binaries, same schema
+        # namespace as main.wxs's `http://schemas.microsoft.com/wix/2006/wi`.
+        # If a future runner image ships without WiX, fall back to
+        # installing 3.11.2 ourselves.
         shell: pwsh
         run: |
-          choco install wixtoolset --version=3.11.2 -y --no-progress
-          # Add the WiX bin/ to PATH for subsequent steps.
-          "C:\Program Files (x86)\WiX Toolset v3.11\bin" `
-            | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $wixDir = Get-ChildItem "C:\Program Files (x86)\WiX Toolset v3.*" -Directory `
+            -ErrorAction SilentlyContinue `
+            | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wixDir) {
+            Write-Host "No pre-installed WiX 3.x found — installing 3.11.2 via choco."
+            choco install wixtoolset --version=3.11.2 -y --no-progress
+            $wixDir = Get-Item "C:\Program Files (x86)\WiX Toolset v3.11"
+          }
+          $wixBin = Join-Path $wixDir.FullName "bin"
+          Write-Host "Using WiX from: $wixBin"
+          $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build frontend dist
         shell: pwsh
