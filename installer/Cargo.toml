@@ -7,7 +7,7 @@ name = "ag-installer"
 version = "1.1.0"
 edition = "2021"
 authors.workspace = true
-description = "GUI installer for RERAG (Rust Educational RAG)"
+description = "GUI installer for RERAG — Linux + Windows"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/PieterdenEngelse/RERAG"
 
@@ -49,6 +49,17 @@ similar = "2"
 
 # Install-log timestamps (UTC) in Phase D.2 + build-time stamping in build.rs.
 chrono = "0.4"
+
+# Windows-only deps for platform::windows probes + path resolution. Filed
+# under `[target.'cfg(windows)']` so they never enter the Linux resolution
+# graph or AppImage build. See `docs/wininstall.md §2` / `winsteps.md PR2.2`.
+[target.'cfg(windows)'.dependencies]
+# Cross-platform free-disk query — replaces `df -BG` from the Linux probe.
+fs2 = "0.4"
+# Cross-platform total-RAM query — replaces `/proc/meminfo` from the Linux probe.
+sysinfo = "0.32"
+# Read ProductName + DisplayVersion from HKLM for the distro string.
+winreg = "0.55"
 
 [build-dependencies]
 # build.rs stamps the git SHA and build timestamp into the binary so the

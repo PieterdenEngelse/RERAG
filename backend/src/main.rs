@@ -32,6 +32,17 @@ async fn main() -> std::io::Result<()> {
     // PHASE 1: Load Environment & Initialize Monitoring
     // ─────────────────────────────────────────────────────────────
 
+    // Honor AG_ENV — the explicit env-file path set by the installer-
+    // managed launcher. Linux: set by systemd `EnvironmentFile=` (see
+    // systemd/ag.service.tmpl). Windows: set by `ag-start.cmd` (see
+    // platform/windows.rs::copy_artifacts), since Task Scheduler doesn't
+    // load env files. Load BEFORE `.env` so that on Linux the systemd
+    // mechanism is the source of truth, and on Windows the installer-
+    // managed file is. A bare-shell `cargo run` with no AG_ENV continues
+    // to use the project-root `.env` exactly as before.
+    if let Ok(p) = std::env::var("AG_ENV") {
+        dotenvy::from_path(&p).ok();
+    }
     dotenvy::dotenv().ok();
     // Runtime overrides saved by the UI — must load after .env so they win.
     dotenvy::from_filename_override(".env.rate_limits").ok();

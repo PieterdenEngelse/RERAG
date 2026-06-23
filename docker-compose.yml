@@ -46,8 +46,39 @@ services:
   # CORE SERVICES (Required for full ag functionality)
   # ═══════════════════════════════════════════════════════════════
 
-  # FalkorDB (knowledge-graph store) is intentionally absent here — it runs as a
-  # native systemd user service, not a container. See docs/falkordb-native-service.md.
+  # FalkorDB (knowledge-graph store)
+  #
+  # Linux: NOT brought up by default — runs as a native systemd user
+  # service (see docs/falkordb-native-service.md). The Linux installer's
+  # `falkordb` step renders falkordb.service and skips this container.
+  #
+  # Windows: brought up by the Windows installer via
+  # `docker compose --profile falkor-container up -d`. No native FalkorDB
+  # build exists for Windows, so the container is the only viable path
+  # there. The Linux default `docker compose up` never activates this
+  # service because `falkor-container` is the ONLY profile listed
+  # (empty-string default profile is intentionally absent).
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: ag-falkordb
+    restart: unless-stopped
+    profiles: ["falkor-container"]
+    ports:
+      - "${FALKORDB_HOST_PORT:-6380}:6379"
+    volumes:
+      - falkordb-data:/data
+    environment:
+      - FALKORDB_PASSWORD=${FALKOR_PASSWORD:-agpassword123}
+    healthcheck:
+      test:
+        - "CMD"
+        - "redis-cli"
+        - "-a"
+        - "${FALKOR_PASSWORD:-agpassword123}"
+        - "ping"
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -239,6 +270,7 @@ services:
 
 volumes:
   redis-data:
+  falkordb-data:
   prometheus-data:
   grafana-data:
   loki-data:
