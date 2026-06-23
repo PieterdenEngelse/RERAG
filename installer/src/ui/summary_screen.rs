@@ -16,8 +16,7 @@
 use dioxus::prelude::*;
 
 use crate::app::{
-    mock_assumptions, mock_installed_fresh, mock_reused_confirmed, mock_reused_silent,
-    SummaryItem,
+    mock_assumptions, mock_installed_fresh, mock_reused_confirmed, mock_reused_silent, SummaryItem,
 };
 use crate::ui::components::{IconKind, StatusIcon};
 

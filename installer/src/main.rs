@@ -14,6 +14,7 @@ mod detection;
 mod first_run;
 mod install_steps;
 mod paths;
+mod platform;
 mod prompts;
 mod ui;
 mod uninstall;

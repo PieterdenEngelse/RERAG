@@ -1,62 +1,75 @@
-//! Locate bundled artifacts (the AppImage's payload) so install_steps.rs can
-//! copy them into XDG locations.
+//! Locate bundled artifacts so install_steps can copy them into the
+//! per-user install tree.
 //!
-//! In AppImage mode, the AppRun shim exports `AG_INSTALLER_BUNDLE_ROOT`
-//! pointing at `$APPDIR/usr/share/ag/`. From there the bin/ and lib/
-//! directories are siblings under `$APPDIR/usr/`.
+//! Two packaged-install modes:
 //!
-//! In dev mode (`cargo run -p ag-installer`) `AG_INSTALLER_BUNDLE_ROOT`
-//! is unset; we walk up from `current_exe()` to find the repo root and
-//! resolve paths against the in-tree layout (target/release/ag,
-//! frontend/fro/dist/, systemd/*.tmpl, etc.). This lets D.1's skeleton
-//! and D.2's real writes both run with `cargo run` without packaging.
+//! - **Linux AppImage**: AppRun shim exports `AG_INSTALLER_BUNDLE_ROOT`
+//!   pointing at `$APPDIR/usr/share/ag/`. From there `bin/` and `lib/`
+//!   are siblings under `$APPDIR/usr/`.
+//! - **Windows MSI**: cargo-wix lays the payload under
+//!   `%PROGRAMFILES%\ag\`. We resolve relative to `current_exe()` —
+//!   `%PROGRAMFILES%\ag\bin\ag-installer.exe` → walk up two parents →
+//!   `%PROGRAMFILES%\ag` → join `share\ag`. Same on-disk shape as the
+//!   AppImage's `$APPDIR/usr/share/ag/`.
+//!
+//! In dev mode (`cargo run -p ag-installer`) neither signal is set; we
+//! walk up from `current_exe()` to find the repo root and resolve
+//! paths against the in-tree layout (`target/release/`, `frontend/fro/
+//! dist/`, `systemd/*.tmpl`, `installer/scheduled-tasks/*.tmpl`).
 //!
 //! Functions return `PathBuf` unconditionally; callers check `exists()`
-//! before reading. Missing artifacts (e.g. `target/release/ag` before the
-//! backend has been built) are install_steps' problem to surface, not
-//! bundled's.
+//! before reading. Missing artifacts (e.g. `target/release/ag` before
+//! the backend has been built) are install_steps' problem to surface,
+//! not bundled's.
 
 use std::path::PathBuf;
 
-/// Directory containing bundled non-binary artifacts: web/, falkordb/,
-/// systemd/, docker-compose.yml, .env.example.
+#[cfg(unix)]
+const AG_BIN_NAME: &str = "ag";
+#[cfg(windows)]
+const AG_BIN_NAME: &str = "ag.exe";
+
+#[cfg(unix)]
+const LIBTIKA_NAME: &str = "libtika_native.so";
+#[cfg(windows)]
+const LIBTIKA_NAME: &str = "tika_native.dll";
+
+/// Directory containing bundled non-binary artifacts: `web/`,
+/// `docker-compose.yml`, `.env.example`, plus platform-specific service
+/// templates (`systemd/` on Linux, `scheduled-tasks/` on Windows). In
+/// packaged mode this is the bundle's `share/ag/` payload root; in dev
+/// mode it falls back to the repo root so each in-tree path resolver
+/// can pluck its own sub-path.
 pub fn share_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("AG_INSTALLER_BUNDLE_ROOT") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    // Dev fallback: pull from in-tree sources. install_steps treats each
-    // sub-path independently, so a partial dev tree (e.g. no FalkorDB
-    // staging) just surfaces a missing-file error on the relevant step.
-    repo_root()
+    bundle_share_dir().unwrap_or_else(repo_root)
 }
 
 pub fn ag_binary_path() -> PathBuf {
-    if let Some(usr) = appimage_usr_dir() {
-        return usr.join("bin/ag");
+    if let Some(root) = bundle_install_root() {
+        return root.join("bin").join(AG_BIN_NAME);
     }
-    repo_root().join("target/release/ag")
+    repo_root().join("target/release").join(AG_BIN_NAME)
 }
 
 pub fn libtika_path() -> Option<PathBuf> {
-    if let Some(usr) = appimage_usr_dir() {
-        let p = usr.join("lib/libtika_native.so");
+    if let Some(root) = bundle_install_root() {
+        let p = root.join("lib").join(LIBTIKA_NAME);
         return p.exists().then_some(p);
     }
     find_dev_libtika()
 }
 
 pub fn frontend_dist_dir() -> PathBuf {
-    if appimage_usr_dir().is_some() {
+    if bundle_share_dir().is_some() {
         share_dir().join("web")
     } else {
         repo_root().join("frontend/fro/dist")
     }
 }
 
+#[cfg(unix)]
 pub fn falkordb_stage_dir() -> PathBuf {
-    if appimage_usr_dir().is_some() {
+    if bundle_share_dir().is_some() {
         share_dir().join("falkordb")
     } else {
         repo_root().join("installer/stage/falkordb")
@@ -64,7 +77,7 @@ pub fn falkordb_stage_dir() -> PathBuf {
 }
 
 pub fn docker_compose_path() -> PathBuf {
-    if appimage_usr_dir().is_some() {
+    if bundle_share_dir().is_some() {
         share_dir().join("docker-compose.yml")
     } else {
         repo_root().join("docker-compose.yml")
@@ -72,31 +85,67 @@ pub fn docker_compose_path() -> PathBuf {
 }
 
 pub fn env_example_path() -> PathBuf {
-    if appimage_usr_dir().is_some() {
+    if bundle_share_dir().is_some() {
         share_dir().join(".env.example")
     } else {
         repo_root().join(".env.example")
     }
 }
 
+#[cfg(unix)]
 pub fn systemd_template_dir() -> PathBuf {
-    if appimage_usr_dir().is_some() {
+    if bundle_share_dir().is_some() {
         share_dir().join("systemd")
     } else {
         repo_root().join("systemd")
     }
 }
 
+/// Windows analog of `systemd_template_dir`. Holds `ag.xml.tmpl` and
+/// `ag-stack.xml.tmpl` — the Scheduled-Task XML templates rendered by
+/// `platform::windows::install_service`.
+#[cfg(windows)]
+pub fn scheduled_tasks_template_dir() -> PathBuf {
+    if bundle_share_dir().is_some() {
+        share_dir().join("scheduled-tasks")
+    } else {
+        repo_root().join("installer/scheduled-tasks")
+    }
+}
+
 // --- helpers --------------------------------------------------------------
 
-fn appimage_usr_dir() -> Option<PathBuf> {
-    let bundle_root = std::env::var("AG_INSTALLER_BUNDLE_ROOT").ok()?;
-    if bundle_root.is_empty() {
-        return None;
+/// `Some(share/ag/)` when running from a packaged install (AppImage or
+/// MSI); `None` in dev mode. The Linux AppImage explicitly exports
+/// `AG_INSTALLER_BUNDLE_ROOT`; the Windows MSI relies on a fixed layout
+/// relative to `current_exe()` instead.
+fn bundle_share_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("AG_INSTALLER_BUNDLE_ROOT") {
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
     }
-    // bundle_root = $APPDIR/usr/share/ag → grandparent = $APPDIR/usr.
-    let p = PathBuf::from(bundle_root);
-    p.parent()?.parent().map(PathBuf::from)
+    #[cfg(windows)]
+    {
+        // %PROGRAMFILES%\ag\bin\ag-installer.exe → %PROGRAMFILES%\ag → \share\ag
+        let exe = std::env::current_exe().ok()?;
+        let share_ag = exe.parent()?.parent()?.join("share").join("ag");
+        if share_ag.exists() {
+            return Some(share_ag);
+        }
+    }
+    None
+}
+
+/// `Some(<install_root>)` — the directory that holds `bin/`, `lib/`,
+/// and `share/ag/` siblings — when running from a packaged install.
+/// `None` in dev mode. Used to find the installed `ag` binary and
+/// `libtika`/`tika_native` library next to the bundle.
+fn bundle_install_root() -> Option<PathBuf> {
+    let share = bundle_share_dir()?;
+    // share = .../share/ag → parent.parent = the install root
+    // (`$APPDIR/usr` on Linux AppImage, `%PROGRAMFILES%\ag` on Windows MSI).
+    share.parent()?.parent().map(PathBuf::from)
 }
 
 fn repo_root() -> PathBuf {
@@ -118,18 +167,22 @@ fn repo_root() -> PathBuf {
 }
 
 fn find_dev_libtika() -> Option<PathBuf> {
-    // libtika is built as a side effect of `cargo build -p ag`. Its location
-    // is target/release/build/extractous-<hash>/out/libs/libtika_native.so.
+    // libtika / tika_native is built as a side effect of `cargo build -p ag`.
+    // Its location is target/release/build/extractous-<hash>/out/libs/<name>.
     // We pick the newest matching dir to avoid stale artifacts from old
     // checkouts.
     let build_dir = repo_root().join("target/release/build");
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
     if let Ok(entries) = std::fs::read_dir(&build_dir) {
         for entry in entries.flatten() {
-            if !entry.file_name().to_string_lossy().starts_with("extractous-") {
+            if !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("extractous-")
+            {
                 continue;
             }
-            let candidate = entry.path().join("out/libs/libtika_native.so");
+            let candidate = entry.path().join("out/libs").join(LIBTIKA_NAME);
             if !candidate.exists() {
                 continue;
             }
@@ -137,7 +190,7 @@ fn find_dev_libtika() -> Option<PathBuf> {
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            if newest.as_ref().map_or(true, |(t, _)| mtime > *t) {
+            if newest.as_ref().is_none_or(|(t, _)| mtime > *t) {
                 newest = Some((mtime, candidate));
             }
         }

@@ -400,7 +400,10 @@ fn column_fill(column: &str) -> &'static str {
     if column == "multi" {
         return "#facc15"; // yellow-400
     }
-    if let Some(n) = column.strip_prefix("col").and_then(|n| n.parse::<u8>().ok()) {
+    if let Some(n) = column
+        .strip_prefix("col")
+        .and_then(|n| n.parse::<u8>().ok())
+    {
         const PALETTE: &[&str] = &[
             "#3b82f6", // blue-500
             "#a855f7", // purple-500
@@ -443,7 +446,10 @@ fn column_badge(column: &str) -> (String, String) {
             "M".into(),
         );
     }
-    if let Some(n) = column.strip_prefix("col").and_then(|n| n.parse::<u8>().ok()) {
+    if let Some(n) = column
+        .strip_prefix("col")
+        .and_then(|n| n.parse::<u8>().ok())
+    {
         const PALETTE: &[&str] = &[
             "bg-blue-900 text-blue-200 border-blue-800",
             "bg-purple-900 text-purple-200 border-purple-800",
@@ -494,9 +500,7 @@ fn page_type_badge(page_type: &str) -> (String, &'static str) {
 
 fn silhouette_badge_class(s: Option<f32>) -> &'static str {
     match s {
-        Some(v) if v >= 0.30 => {
-            "badge badge-sm bg-green-900 text-green-200 border-green-800"
-        }
+        Some(v) if v >= 0.30 => "badge badge-sm bg-green-900 text-green-200 border-green-800",
         Some(_) => "badge badge-sm bg-yellow-900 text-yellow-200 border-yellow-800",
         None => "badge badge-sm bg-gray-700 text-gray-300 border-gray-600",
     }

@@ -110,7 +110,6 @@ fn PromptCard(props: PromptCardProps) -> Element {
     // Mirror local radio state → shared PromptAnswers signal whenever it
     // changes. use_effect re-runs every time `selected` updates.
     {
-        let selected = selected;
         use_effect(move || {
             let value = selected.read().clone();
             let mut answers = answers_signal.read().clone();
@@ -124,11 +123,17 @@ fn PromptCard(props: PromptCardProps) -> Element {
     let options: Vec<RadioOption> = id
         .options()
         .into_iter()
-        .map(|PromptOption { key, label, description }| RadioOption {
-            key: key.to_string(),
-            label: label.to_string(),
-            description: description.to_string(),
-        })
+        .map(
+            |PromptOption {
+                 key,
+                 label,
+                 description,
+             }| RadioOption {
+                key: key.to_string(),
+                label: label.to_string(),
+                description: description.to_string(),
+            },
+        )
         .collect();
 
     rsx! {
@@ -226,6 +231,6 @@ fn id_key(id: PromptId) -> &'static str {
         PromptId::LowRam => "low_ram",
         PromptId::NativeObs => "native_obs",
         PromptId::SystemRedis => "system_redis",
-        PromptId::AgServiceDrift => "ag_service_drift",
+        PromptId::AgInstallDrift => "ag_install_drift",
     }
 }

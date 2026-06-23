@@ -209,8 +209,8 @@ pub fn replace_summary(
     document_id: &str,
     summary: &SummaryRow,
 ) -> rusqlite::Result<()> {
-    let page_types_json = serde_json::to_string(&summary.page_types)
-        .unwrap_or_else(|_| "{}".to_string());
+    let page_types_json =
+        serde_json::to_string(&summary.page_types).unwrap_or_else(|_| "{}".to_string());
     conn.execute(
         "INSERT OR REPLACE INTO pdf_parsing_summary
             (document_id, page_count, scanned_page_count, total_lines,
@@ -228,10 +228,7 @@ pub fn replace_summary(
     Ok(())
 }
 
-pub fn get_summary(
-    conn: &Connection,
-    document_id: &str,
-) -> rusqlite::Result<Option<SummaryRow>> {
+pub fn get_summary(conn: &Connection, document_id: &str) -> rusqlite::Result<Option<SummaryRow>> {
     let mut stmt = conn.prepare(
         "SELECT page_count, scanned_page_count, total_lines,
                 bbox_coverage_pct, page_types_json

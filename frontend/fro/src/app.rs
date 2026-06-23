@@ -3,12 +3,11 @@ use crate::components::header::Header;
 use crate::components::ActiveDropdown;
 use crate::pages::{
     About, ConfigChunker, ConfigCorpus, ConfigEmbedding, ConfigFalkorDb, ConfigHardware,
-    ConfigIoUring, ConfigMemories, ConfigNer, ConfigOnnx, ConfigOther, ConfigRedis,
-    ConfigRuntime, ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias,
-    DocuBm25, DocuBpeUnigram, DocuCanonicalization, DocuDetrLayout, DocuEmbeddings,
-    DocuEntitiesProduction, DocuFileWatcher, DocuIndex, DocuIoUring, DocuKnowledgeGraphs,
-    DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig, DocuRkyv, DocuTantivy, DocuThreads,
-    DocuTokenizersGeneral, Home, MonitorAgSystemd,
+    ConfigIoUring, ConfigMemories, ConfigNer, ConfigOnnx, ConfigOther, ConfigRedis, ConfigRuntime,
+    ConfigTerms, Docu, DocuAgPipeline, DocuAgglutinative, DocuBias, DocuBm25, DocuBpeUnigram,
+    DocuCanonicalization, DocuDetrLayout, DocuEmbeddings, DocuEntitiesProduction, DocuFileWatcher,
+    DocuIndex, DocuIoUring, DocuKnowledgeGraphs, DocuLoraExport, DocuOnnx, DocuOnnxParams, DocuRig,
+    DocuRkyv, DocuTantivy, DocuThreads, DocuTokenizersGeneral, Home, MonitorAgSystemd,
     MonitorAgentic, MonitorCache, MonitorChunks, MonitorDatastores, MonitorDocker,
     MonitorGrafanaServices, MonitorIndex, MonitorKnowledgeGraph, MonitorLogs, MonitorObservations,
     MonitorOnnx, MonitorOnnxStatus, MonitorRag, MonitorRateLimits, MonitorRequests, MonitorTip,

@@ -87,10 +87,7 @@ struct DetectionGroupProps {
 fn DetectionGroup(props: DetectionGroupProps) -> Element {
     let count = props.rows.len();
     let (class, header) = match props.kind {
-        GroupKind::Ok => (
-            "detection-group detection-group-ok",
-            format!("{count} OK"),
-        ),
+        GroupKind::Ok => ("detection-group detection-group-ok", format!("{count} OK")),
         GroupKind::Warn => (
             "detection-group detection-group-warn",
             if count == 0 {

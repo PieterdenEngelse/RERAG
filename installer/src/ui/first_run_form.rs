@@ -18,17 +18,26 @@ use tokio::time::sleep;
 
 use crate::app::{use_screen, Screen};
 use crate::first_run::{
-    ag_env_path, backend_port, change_falkordb_password, probe_ollama_models,
-    start_ag_and_wait, write_first_run_settings, FirstRunChoices, OllamaProbe,
+    ag_env_path, backend_port, change_falkordb_password, probe_ollama_models, start_ag_and_wait,
+    write_first_run_settings, FirstRunChoices, OllamaProbe,
 };
 use crate::install_steps::FALKORDB_PASS;
 use crate::paths::Paths;
 
 const AGENT_MODES: &[(&str, &str)] = &[
-    ("Hybrid", "Search + LLM fallback. The \"just works\" choice."),
-    ("Rag", "Retrieval only. No LLM needed; works without Ollama."),
+    (
+        "Hybrid",
+        "Search + LLM fallback. The \"just works\" choice.",
+    ),
+    (
+        "Rag",
+        "Retrieval only. No LLM needed; works without Ollama.",
+    ),
     ("Llm", "LLM only. Ollama required; no retrieval."),
-    ("RagStrict", "Grounded retrieval only — refuses to answer beyond the corpus."),
+    (
+        "RagStrict",
+        "Grounded retrieval only — refuses to answer beyond the corpus.",
+    ),
     ("Agentic", "Tool-calling loop via the Rig framework."),
 ];
 
@@ -384,4 +393,3 @@ fn SecretField(props: SecretFieldProps) -> Element {
         }
     }
 }
-

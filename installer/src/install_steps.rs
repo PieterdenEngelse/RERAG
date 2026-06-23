@@ -1,10 +1,15 @@
-//! Install step orchestration — real writes.
+//! Install step orchestration.
 //!
-//! Each step mirrors `installers/install-linux.sh` one-for-one:
-//! `ensure_xdg`, `seed_config`, `install_artifacts`, `falkordb`,
-//! `systemd_step`, `health_check`. Per-step bodies do real fs work,
-//! shell out to systemctl / docker / curl, and stream log lines via
-//! `ProgressSender`.
+//! The six-step `run()` orchestrator + `step!` macro live here. So do the
+//! portable step bodies (`seed_config`, `health_check`) and the platform-
+//! neutral helpers (`LogTee`, `step_log`, `render_template`,
+//! `edit_env_file`, `set_mode`).
+//!
+//! The four OS-touching step bodies — directory tree + log open, artifact
+//! copy/smoke-test, FalkorDB / compose stack, systemd / Scheduled Task —
+//! live under `crate::platform::{linux,windows}` and are invoked via the
+//! `ensure_install_tree` / `copy_artifacts` / `install_stack` /
+//! `install_service` re-exports.
 //!
 //! **Sandbox testing** (so this box's real ag install stays untouched):
 //!
@@ -13,22 +18,20 @@
 //! ```
 //!
 //! - `HOME` redirects every install path (see `crate::paths`).
-//! - `SKIP_SYSTEMCTL=1` makes the systemctl shellouts log what they
-//!   would do instead of touching the real user systemd.
+//! - `SKIP_SYSTEMCTL=1` (Linux) / `SKIP_SCHTASKS=1` (Windows) makes the
+//!   service-management shellouts log what they would do instead of
+//!   touching the real user systemd / Task Scheduler.
 //!
-//! See `docs/bin3 §Phase D` for the spec; `installers/install-linux.sh`
-//! step_* functions for the bash reference.
+//! See `docs/bin3 §Phase D` for the Linux spec; `docs/wininstall.md §2`
+//! for the Windows mapping.
 
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
-use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::{sleep, Duration};
 
@@ -83,19 +86,22 @@ pub struct InstallResult {
 
 /// Shared per-run state: the open install log file (so every step's log
 /// lines get teed to disk for the failure-modal "Open log" button).
+///
+/// `pub(crate)` so platform impls (`platform::linux`, `platform::windows`)
+/// can write into the same tee from their step bodies.
 #[derive(Clone)]
-struct LogTee(Arc<Mutex<Option<fs::File>>>);
+pub(crate) struct LogTee(Arc<Mutex<Option<fs::File>>>);
 
 impl LogTee {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         LogTee(Arc::new(Mutex::new(None)))
     }
-    fn set(&self, file: fs::File) {
+    pub(crate) fn set(&self, file: fs::File) {
         if let Ok(mut slot) = self.0.lock() {
             *slot = Some(file);
         }
     }
-    fn write_line(&self, line: &str) {
+    pub(crate) fn write_line(&self, line: &str) {
         if let Ok(mut slot) = self.0.lock() {
             if let Some(f) = slot.as_mut() {
                 let _ = writeln!(f, "{line}");
@@ -105,7 +111,12 @@ impl LogTee {
 }
 
 /// Helper: emit a log line via the sender AND tee it into the install log.
-fn step_log(tx: &ProgressSender, tee: &LogTee, name: &'static str, line: impl Into<String>) {
+pub(crate) fn step_log(
+    tx: &ProgressSender,
+    tee: &LogTee,
+    name: &'static str,
+    line: impl Into<String>,
+) {
     let line = line.into();
     tee.write_line(&format!("[{name}] {line}"));
     let _ = tx.send(ProgressEvent::StepLog { name, line });
@@ -123,16 +134,25 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
         ($name:expr, $body:expr) => {{
             let name = $name;
             if tx.send(ProgressEvent::StepStart { name }).is_err() {
-                return InstallResult { success: false, log_path };
+                return InstallResult {
+                    success: false,
+                    log_path,
+                };
             }
             tee.write_line(&format!("=== {name} ==="));
             let start = Instant::now();
             match $body.await {
                 Ok(()) => {
                     let duration = start.elapsed();
-                    tee.write_line(&format!("=== {name} done in {:.1}s ===\n", duration.as_secs_f32()));
+                    tee.write_line(&format!(
+                        "=== {name} done in {:.1}s ===\n",
+                        duration.as_secs_f32()
+                    ));
                     if tx.send(ProgressEvent::StepDone { name, duration }).is_err() {
-                        return InstallResult { success: false, log_path };
+                        return InstallResult {
+                            success: false,
+                            log_path,
+                        };
                     }
                 }
                 Err(e) => {
@@ -142,7 +162,10 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
                         name,
                         error: error_text,
                     });
-                    return InstallResult { success: false, log_path };
+                    return InstallResult {
+                        success: false,
+                        log_path,
+                    };
                 }
             }
         }};
@@ -150,17 +173,23 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
 
     step!(
         "Ensure XDG tree",
-        ensure_xdg(&paths, &tx, &tee, &mut log_path)
+        crate::platform::ensure_install_tree(&paths, &tx, &tee, &mut log_path)
     );
     step!(
         "Seed config",
         seed_config(&paths, &tx, &tee, &answers, backend_port)
     );
-    step!("Install artifacts", install_artifacts(&paths, &tx, &tee));
-    step!("FalkorDB native service", falkordb(&paths, &tx, &tee));
+    step!(
+        "Install artifacts",
+        crate::platform::copy_artifacts(&paths, &tx, &tee)
+    );
+    step!(
+        "FalkorDB native service",
+        crate::platform::install_stack(&paths, &tx, &tee)
+    );
     step!(
         "Systemd user units",
-        systemd_step(&paths, &tx, &tee, &answers, backend_port)
+        crate::platform::install_service(&paths, &tx, &tee, &answers, backend_port)
     );
     step!("Health check", health_check(&tx, &tee, backend_port));
 
@@ -172,59 +201,11 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
 }
 
 // =============================================================================
-// Step 1: ensure_xdg — make every dir, open install log
-// =============================================================================
-
-async fn ensure_xdg(
-    paths: &Paths,
-    tx: &ProgressSender,
-    tee: &LogTee,
-    log_path_out: &mut Option<PathBuf>,
-) -> Result<()> {
-    let dirs: Vec<PathBuf> = vec![
-        paths.bin_dir.clone(),
-        paths.lib_dir.clone(),
-        paths.config_dir.clone(),
-        paths.systemd_user_dir.clone(),
-        paths.ag_service_drop_in_dir(),
-        paths.ag_home.join("data"),
-        paths.ag_home.join("index"),
-        paths.ag_home.join("db"),
-        paths.ag_home.join("logs"),
-        paths.ag_home.join("cache"),
-        paths.ag_home.join("locks"),
-        paths.ag_home.join("web"),
-        paths.ag_home.join("falkordb"),
-        paths.ag_home.join("falkordb/data"),
-    ];
-    for d in &dirs {
-        fs::create_dir_all(d).with_context(|| format!("create dir {}", d.display()))?;
-        step_log(tx, tee, "Ensure XDG tree", format!("created {}", d.display()));
-    }
-
-    // Open the install log AFTER the logs/ dir exists. From here on, every
-    // step's log lines tee into this file.
-    let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let log_path = paths.install_log(&ts);
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .with_context(|| format!("open install log {}", log_path.display()))?;
-    tee.set(file);
-    step_log(
-        tx,
-        tee,
-        "Ensure XDG tree",
-        format!("install log: {}", log_path.display()),
-    );
-    *log_path_out = Some(log_path);
-    Ok(())
-}
-
-// =============================================================================
 // Step 2: seed_config — env file + compose file, preserve existing
 // =============================================================================
+//
+// Portable: only filesystem copies + env-file edits. `chmod 600` is a no-op
+// on non-unix (see `set_mode`).
 
 async fn seed_config(
     paths: &Paths,
@@ -242,7 +223,10 @@ async fn seed_config(
             tx,
             tee,
             "Seed config",
-            format!("{} exists — preserved (not overwritten)", env_target.display()),
+            format!(
+                "{} exists — preserved (not overwritten)",
+                env_target.display()
+            ),
         );
     } else {
         if !env_source.exists() {
@@ -251,13 +235,8 @@ async fn seed_config(
                 env_source.display()
             );
         }
-        fs::copy(&env_source, &env_target).with_context(|| {
-            format!(
-                "copy {} → {}",
-                env_source.display(),
-                env_target.display()
-            )
-        })?;
+        fs::copy(&env_source, &env_target)
+            .with_context(|| format!("copy {} → {}", env_source.display(), env_target.display()))?;
         // 0600: ag.env carries DB credentials and FalkorDB password.
         set_mode(&env_target, 0o600)?;
         step_log(
@@ -272,7 +251,10 @@ async fn seed_config(
             tx,
             tee,
             "Seed config",
-            format!("set BACKEND_PORT={backend_port} in {}", env_target.display()),
+            format!(
+                "set BACKEND_PORT={backend_port} in {}",
+                env_target.display()
+            ),
         );
         if matches!(answers.choice(PromptId::SystemRedis), Some("system")) {
             edit_env_file(&env_target, &[("REDIS_URL", "redis://127.0.0.1:6379/")])?;
@@ -324,365 +306,12 @@ async fn seed_config(
 }
 
 // =============================================================================
-// Step 3: install_artifacts — ag binary, libtika, frontend dist, smoke-test
-// =============================================================================
-
-async fn install_artifacts(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
-    // ag binary
-    let ag_bin = bundled::ag_binary_path();
-    if !ag_bin.exists() {
-        bail!(
-            "ag binary missing at {} — build it first (cargo build --release -p ag)",
-            ag_bin.display()
-        );
-    }
-    let ag_target = paths.bin_dir.join("ag");
-    fs::copy(&ag_bin, &ag_target)
-        .with_context(|| format!("copy {} → {}", ag_bin.display(), ag_target.display()))?;
-    set_mode(&ag_target, 0o755)?;
-    step_log(
-        tx,
-        tee,
-        "Install artifacts",
-        format!("installed {}", ag_target.display()),
-    );
-
-    // libtika (optional — PDF parsing degrades to fallback if absent)
-    let libtika = bundled::libtika_path();
-    if let Some(src) = libtika {
-        let dst = paths.lib_dir.join("libtika_native.so");
-        fs::copy(&src, &dst)
-            .with_context(|| format!("copy {} → {}", src.display(), dst.display()))?;
-        set_mode(&dst, 0o644)?;
-        step_log(
-            tx,
-            tee,
-            "Install artifacts",
-            format!("installed {} (from {})", dst.display(), src.display()),
-        );
-    } else {
-        step_log(
-            tx,
-            tee,
-            "Install artifacts",
-            "libtika_native.so not bundled — PDF parsing will use fallback",
-        );
-    }
-
-    // Frontend dist — rsync mirrors bash exactly. `rsync` is ubiquitous on
-    // desktop Linux; failing to find it is a reasonable hard error.
-    let frontend = bundled::frontend_dist_dir();
-    if frontend.exists() && frontend.is_dir() {
-        let dst = paths.ag_home.join("web");
-        fs::create_dir_all(&dst)?;
-        // rsync -a --checksum --delete <src>/ <dst>/
-        // The trailing slash on src tells rsync "contents of, not the dir itself".
-        let src_arg = format!("{}/", frontend.display());
-        let dst_arg = format!("{}/", dst.display());
-        let status = Command::new("rsync")
-            .args(["-a", "--checksum", "--delete", &src_arg, &dst_arg])
-            .status()
-            .await
-            .with_context(|| "spawn rsync (is it installed?)")?;
-        if !status.success() {
-            bail!("rsync exited with {status}");
-        }
-        step_log(
-            tx,
-            tee,
-            "Install artifacts",
-            format!("rsynced {} → {}", src_arg, dst_arg),
-        );
-    } else {
-        step_log(
-            tx,
-            tee,
-            "Install artifacts",
-            format!(
-                "frontend dist not present at {} — skipping (dashboard won't load until built)",
-                frontend.display()
-            ),
-        );
-    }
-
-    // Smoke-test the installed binary (no daemon).
-    let out = Command::new(&ag_target)
-        .arg("--version")
-        .env("LD_LIBRARY_PATH", &paths.lib_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| format!("spawn {} --version", ag_target.display()))?;
-    if !out.status.success() {
-        bail!(
-            "smoke-test failed: {} --version exited {}\nstderr: {}",
-            ag_target.display(),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    step_log(
-        tx,
-        tee,
-        "Install artifacts",
-        format!("smoke-test OK: {ver}"),
-    );
-    Ok(())
-}
-
-// =============================================================================
-// Step 4: falkordb — copy bundled binaries + render unit
-// =============================================================================
-
-async fn falkordb(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
-    let stage = bundled::falkordb_stage_dir();
-    let dst = paths.ag_home.join("falkordb");
-    fs::create_dir_all(&dst)?;
-
-    let bundles = [
-        ("redis-server", 0o755),
-        ("redis-cli", 0o755),
-        ("falkordb.so", 0o644),
-    ];
-    let mut missing = Vec::new();
-    for (name, mode) in &bundles {
-        let src = stage.join(name);
-        if !src.exists() {
-            missing.push(name.to_string());
-            continue;
-        }
-        let target = dst.join(name);
-        fs::copy(&src, &target)
-            .with_context(|| format!("copy {} → {}", src.display(), target.display()))?;
-        set_mode(&target, *mode)?;
-        step_log(
-            tx,
-            tee,
-            "FalkorDB native service",
-            format!("copied {} → {}", src.display(), target.display()),
-        );
-    }
-    if !missing.is_empty() {
-        bail!(
-            "FalkorDB binaries missing from {}: {}. \
-            In dev mode, run installer/build-appimage.sh's extract step or \
-            populate installer/stage/falkordb/ manually.",
-            stage.display(),
-            missing.join(", ")
-        );
-    }
-
-    // Smoke-test extracted redis-server on the host (catches musl/glibc).
-    let smoke = Command::new(dst.join("redis-server"))
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| "spawn redis-server --version")?;
-    if !smoke.status.success() {
-        bail!(
-            "extracted redis-server failed --version (likely musl/glibc mismatch).\n\
-            See docs/falkordb-native-service.md §2 for fallbacks.\nstderr: {}",
-            String::from_utf8_lossy(&smoke.stderr).trim()
-        );
-    }
-    step_log(
-        tx,
-        tee,
-        "FalkorDB native service",
-        format!(
-            "smoke-test OK: {}",
-            String::from_utf8_lossy(&smoke.stdout).trim()
-        ),
-    );
-
-    // Render the unit.
-    let tmpl = bundled::systemd_template_dir().join("falkordb.service.tmpl");
-    render_template(
-        &tmpl,
-        &paths.falkordb_service(),
-        &[
-            ("AG_HOME", paths.ag_home.display().to_string()),
-            ("FDB_PORT", FALKORDB_PORT.to_string()),
-            ("FDB_PASS", FALKORDB_PASS.to_string()),
-        ],
-    )
-    .with_context(|| "render falkordb.service")?;
-    step_log(
-        tx,
-        tee,
-        "FalkorDB native service",
-        format!("rendered {}", paths.falkordb_service().display()),
-    );
-
-    // Activate.
-    systemctl_user(tx, tee, "FalkorDB native service", &["daemon-reload"]).await?;
-    systemctl_user(
-        tx,
-        tee,
-        "FalkorDB native service",
-        &["enable", "--now", "falkordb.service"],
-    )
-    .await?;
-    Ok(())
-}
-
-// =============================================================================
-// Step 5: systemd_step — render ag.service + ag-stack.service, install drop-ins
-// =============================================================================
-
-async fn systemd_step(
-    paths: &Paths,
-    tx: &ProgressSender,
-    tee: &LogTee,
-    answers: &PromptAnswers,
-    backend_port: u16,
-) -> Result<()> {
-    // ag.service — honor AgServiceDrift prompt choice.
-    let ag_unit = paths.ag_service();
-    let drift_choice = answers
-        .choice(PromptId::AgServiceDrift)
-        .unwrap_or("keep");
-    let install_ag_service = match drift_choice {
-        "keep" if ag_unit.exists() => {
-            step_log(
-                tx,
-                tee,
-                "Systemd user units",
-                format!("keeping existing {} per prompt choice", ag_unit.display()),
-            );
-            false
-        }
-        "backup" if ag_unit.exists() => {
-            let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-            let bak = paths
-                .systemd_user_dir
-                .join(format!("ag.service.bak-{ts}"));
-            fs::rename(&ag_unit, &bak).with_context(|| {
-                format!("rename {} → {}", ag_unit.display(), bak.display())
-            })?;
-            step_log(
-                tx,
-                tee,
-                "Systemd user units",
-                format!("backed up {} → {}", ag_unit.display(), bak.display()),
-            );
-            true
-        }
-        _ => true,
-    };
-    if install_ag_service {
-        let tmpl = bundled::systemd_template_dir().join("ag.service.tmpl");
-        render_template(
-            &tmpl,
-            &ag_unit,
-            &[
-                ("AG_BIN", paths.bin_dir.join("ag").display().to_string()),
-                ("AG_HOME", paths.ag_home.display().to_string()),
-                ("AG_ENV", paths.ag_env().display().to_string()),
-                ("AG_LIB_DIR", paths.lib_dir.display().to_string()),
-                ("BACKEND_PORT", backend_port.to_string()),
-            ],
-        )
-        .with_context(|| "render ag.service")?;
-        step_log(
-            tx,
-            tee,
-            "Systemd user units",
-            format!("rendered {}", ag_unit.display()),
-        );
-    }
-
-    // ag-stack.service — skipped if user chose "natives" on NativeObs.
-    let skip_stack = matches!(answers.choice(PromptId::NativeObs), Some("natives"));
-    if skip_stack {
-        step_log(
-            tx,
-            tee,
-            "Systemd user units",
-            "ag-stack.service skipped (user chose native observability)",
-        );
-    } else {
-        // Compose profile derives from LowRam prompt's stack choice.
-        let profile = match answers.choice(PromptId::LowRam) {
-            Some("core") => "core",
-            Some("observability") => "observability",
-            Some("none") => "", // unused (stack skipped); kept for safety
-            _ => "",             // "all" or no LowRam prompt
-        };
-        let tmpl = bundled::systemd_template_dir().join("ag-stack.service.tmpl");
-        render_template(
-            &tmpl,
-            &paths.ag_stack_service(),
-            &[
-                (
-                    "COMPOSE_FILE",
-                    paths.docker_compose().display().to_string(),
-                ),
-                ("COMPOSE_PROFILE", profile.to_string()),
-            ],
-        )
-        .with_context(|| "render ag-stack.service")?;
-        step_log(
-            tx,
-            tee,
-            "Systemd user units",
-            format!(
-                "rendered {} (profile={})",
-                paths.ag_stack_service().display(),
-                if profile.is_empty() { "<all>" } else { profile }
-            ),
-        );
-    }
-
-    // Drop-ins (plain copies — no templating).
-    let drop_in_src = bundled::systemd_template_dir().join("ag.service.d");
-    let drop_in_dst = paths.ag_service_drop_in_dir();
-    if drop_in_src.is_dir() {
-        for name in ["falkordb.conf", "stack.conf"] {
-            let src = drop_in_src.join(name);
-            if !src.exists() {
-                continue;
-            }
-            let dst = drop_in_dst.join(name);
-            fs::copy(&src, &dst)
-                .with_context(|| format!("copy {} → {}", src.display(), dst.display()))?;
-            step_log(
-                tx,
-                tee,
-                "Systemd user units",
-                format!("installed {}", dst.display()),
-            );
-        }
-    }
-
-    // Activate.
-    systemctl_user(tx, tee, "Systemd user units", &["daemon-reload"]).await?;
-    if !skip_stack {
-        systemctl_user(
-            tx,
-            tee,
-            "Systemd user units",
-            &["enable", "--now", "ag-stack.service"],
-        )
-        .await?;
-    }
-    systemctl_user(
-        tx,
-        tee,
-        "Systemd user units",
-        &["enable", "--now", "ag.service"],
-    )
-    .await?;
-    Ok(())
-}
-
-// =============================================================================
 // Step 6: health_check — poll /health
 // =============================================================================
+//
+// Portable: `reqwest` over localhost. `skip_systemctl` is the
+// cfg-selected sandbox gate (`SKIP_SYSTEMCTL` on Linux,
+// `SKIP_SCHTASKS` on Windows).
 
 async fn health_check(tx: &ProgressSender, tee: &LogTee, backend_port: u16) -> Result<()> {
     if paths::skip_systemctl() {
@@ -748,16 +377,19 @@ async fn health_check(tx: &ProgressSender, tee: &LogTee, backend_port: u16) -> R
 }
 
 // =============================================================================
-// Helpers — template render, env edit, systemctl, file mode
+// Helpers — template render, env edit, file mode
 // =============================================================================
 
 /// `{{KEY}}` literal substitution, mirroring bash `render_template`.
-fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()> {
+///
+/// `pub(crate)` so platform impls can render systemd unit / Scheduled Task
+/// XML files from their step bodies.
+pub(crate) fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()> {
     if !src.exists() {
         return Err(anyhow!("template missing: {}", src.display()));
     }
-    let mut content = fs::read_to_string(src)
-        .with_context(|| format!("read template {}", src.display()))?;
+    let mut content =
+        fs::read_to_string(src).with_context(|| format!("read template {}", src.display()))?;
     for (key, value) in vars {
         let placeholder = format!("{{{{{key}}}}}");
         content = content.replace(&placeholder, value);
@@ -770,17 +402,15 @@ fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()
 /// In-place `KEY=value` line replacement for ag.env. Adds the line at EOF
 /// if no matching line exists.
 fn edit_env_file(path: &Path, kvs: &[(&str, &str)]) -> Result<()> {
-    let original = fs::read_to_string(path)
-        .with_context(|| format!("read env file {}", path.display()))?;
+    let original =
+        fs::read_to_string(path).with_context(|| format!("read env file {}", path.display()))?;
     let mut lines: Vec<String> = original.lines().map(String::from).collect();
     for (key, value) in kvs {
         let prefix = format!("{key}=");
         let mut replaced = false;
         for line in lines.iter_mut() {
             let trimmed = line.trim_start();
-            if trimmed.starts_with(&prefix)
-                || trimmed.starts_with(&format!("#{prefix}"))
-            {
+            if trimmed.starts_with(&prefix) || trimmed.starts_with(&format!("#{prefix}")) {
                 *line = format!("{key}={value}");
                 replaced = true;
                 break;
@@ -798,46 +428,8 @@ fn edit_env_file(path: &Path, kvs: &[(&str, &str)]) -> Result<()> {
     Ok(())
 }
 
-/// Run `systemctl --user <args>`. When `SKIP_SYSTEMCTL=1` is set we log
-/// what would have run and return Ok — useful for sandbox testing where
-/// we don't want to touch the real user systemd.
-async fn systemctl_user(
-    tx: &ProgressSender,
-    tee: &LogTee,
-    step_name: &'static str,
-    args: &[&str],
-) -> Result<()> {
-    let pretty = format!("systemctl --user {}", args.join(" "));
-    if paths::skip_systemctl() {
-        step_log(
-            tx,
-            tee,
-            step_name,
-            format!("SKIP_SYSTEMCTL=1 — would run: {pretty}"),
-        );
-        return Ok(());
-    }
-    let mut cmd = Command::new("systemctl");
-    cmd.arg("--user").args(args);
-    let out = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| format!("spawn {pretty}"))?;
-    if !out.status.success() {
-        bail!(
-            "{pretty} exited {}\nstderr: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    step_log(tx, tee, step_name, format!("ran: {pretty}"));
-    Ok(())
-}
-
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> Result<()> {
+pub(crate) fn set_mode(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = fs::Permissions::from_mode(mode);
     fs::set_permissions(path, perms)
@@ -846,6 +438,6 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
+pub(crate) fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
 }

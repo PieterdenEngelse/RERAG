@@ -107,7 +107,10 @@ fn looks_like_toc(lines: &[LineSpan]) -> bool {
     if lines.len() < TOC_MIN_ENTRIES {
         return false;
     }
-    let entry_count = lines.iter().filter(|l| looks_like_toc_entry(&l.text)).count();
+    let entry_count = lines
+        .iter()
+        .filter(|l| looks_like_toc_entry(&l.text))
+        .count();
     if entry_count < TOC_MIN_ENTRIES {
         return false;
     }

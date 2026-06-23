@@ -3,28 +3,34 @@
 //!
 //! Two modes:
 //!
-//! - **Default** removes ag's binaries, the bundled libtika, the three
-//!   rendered systemd units + drop-ins, and the copied compose file.
+//! - **Default** removes ag's binaries, the bundled libtika, the OS-
+//!   managed service registrations (systemd units + drop-ins on Linux,
+//!   Scheduled Tasks on Windows), and the copied compose file.
 //!   **Preserves** `ag.env` (the user's API keys, FalkorDB password)
 //!   and `$AG_HOME` (data, indexes, logs, FalkorDB store).
 //! - **`--purge`** additionally removes `ag.env` and the entire
 //!   `$AG_HOME` tree. Destructive — confirmed via terminal prompt
 //!   regardless of how the installer was invoked.
 //!
-//! Honors `SKIP_SYSTEMCTL=1` the same way install_steps does — the
-//! systemctl calls log what they would run instead of touching real
-//! systemd. Combined with `HOME=/tmp/ag-test` this makes uninstall
-//! testable in a sandbox without disturbing a real ag deployment.
+//! Honors `SKIP_SYSTEMCTL=1` (Linux) / `SKIP_SCHTASKS=1` (Windows) the
+//! same way install_steps does — the service-management shellouts log
+//! what they would run instead of touching real systemd / Task
+//! Scheduler. Combined with `HOME=/tmp/ag-test` (Linux) or
+//! `AG_HOME=C:\Temp\ag-test` (Windows) this makes uninstall testable
+//! in a sandbox without disturbing a real ag deployment.
+//!
+//! The OS-specific bodies — which units / tasks to stop, which files to
+//! remove — live under `crate::platform::{linux,windows}`. This file
+//! owns the user-facing intro, the y/N confirm, and the shared cleanup
+//! of docker-compose.yml / ag.env / ag_home.
 
 use std::fs;
 use std::io::Write as _;
 use std::path::Path;
-use std::process::Stdio;
 
 use anyhow::Result;
-use tokio::process::Command;
 
-use crate::paths::{self, Paths};
+use crate::paths::Paths;
 
 pub async fn run(purge: bool) -> Result<()> {
     let paths = Paths::resolve();
@@ -32,18 +38,21 @@ pub async fn run(purge: bool) -> Result<()> {
     println!("RERAG uninstall");
     println!();
     println!("Will remove:");
-    println!("  • {}", paths.bin_dir.join("ag").display());
-    println!("  • {}", paths.lib_dir.join("libtika_native.so").display());
-    println!("  • {}", paths.ag_service().display());
-    println!("  • {}", paths.ag_stack_service().display());
-    println!("  • {}", paths.falkordb_service().display());
-    println!("  • {}", paths.ag_service_drop_in_dir().display());
+    for target in crate::platform::uninstall_targets(&paths) {
+        println!("  • {}", target.display());
+    }
     println!("  • {}", paths.docker_compose().display());
     println!();
     if purge {
         println!("--purge ALSO removes (DESTRUCTIVE):");
-        println!("  • {}  (ag.env — API keys, FalkorDB password)", paths.ag_env().display());
-        println!("  • {}  (data, indexes, logs, FalkorDB store)", paths.ag_home.display());
+        println!(
+            "  • {}  (ag.env — API keys, FalkorDB password)",
+            paths.ag_env().display()
+        );
+        println!(
+            "  • {}  (data, indexes, logs, FalkorDB store)",
+            paths.ag_home.display()
+        );
     } else {
         println!("Preserved (re-run with --purge to also remove):");
         println!("  • {}", paths.ag_env().display());
@@ -64,26 +73,12 @@ pub async fn run(purge: bool) -> Result<()> {
     }
     println!();
 
-    // 1. Stop + disable services. Best-effort — a stop on a service
-    //    that isn't running, or a disable on one that isn't enabled,
-    //    isn't an error worth bailing on.
-    for unit in ["ag.service", "ag-stack.service", "falkordb.service"] {
-        systemctl_user(&["stop", unit]).await;
-        systemctl_user(&["disable", unit]).await;
-    }
-    systemctl_user(&["daemon-reload"]).await;
+    // OS-specific stop + remove: systemd units on Linux, Scheduled Tasks
+    // + compose-down on Windows. Plus the binaries / native libs whose
+    // filenames differ per platform (ag vs ag.exe, .so vs .dll).
+    crate::platform::uninstall_managed(&paths).await;
 
-    // 2. Remove rendered unit files + the drop-in dir.
-    rm_quiet(&paths.ag_service());
-    rm_quiet(&paths.ag_stack_service());
-    rm_quiet(&paths.falkordb_service());
-    rm_dir_quiet(&paths.ag_service_drop_in_dir());
-
-    // 3. Binaries + bundled libs.
-    rm_quiet(&paths.bin_dir.join("ag"));
-    rm_quiet(&paths.lib_dir.join("libtika_native.so"));
-
-    // 4. Rendered config (compose file). ag.env preserved unless --purge.
+    // Shared cleanup — same on both platforms.
     rm_quiet(&paths.docker_compose());
 
     if purge {
@@ -102,8 +97,11 @@ pub async fn run(purge: bool) -> Result<()> {
 }
 
 // --- helpers --------------------------------------------------------------
+//
+// `pub(crate)` so `platform::{linux,windows}` can reuse the same
+// idempotent rm helpers from their `uninstall_managed` impls.
 
-fn rm_quiet(path: &Path) {
+pub(crate) fn rm_quiet(path: &Path) {
     if !path.exists() {
         return;
     }
@@ -113,35 +111,12 @@ fn rm_quiet(path: &Path) {
     }
 }
 
-fn rm_dir_quiet(path: &Path) {
+pub(crate) fn rm_dir_quiet(path: &Path) {
     if !path.exists() {
         return;
     }
     match fs::remove_dir_all(path) {
         Ok(()) => println!("  removed {}/", path.display()),
         Err(e) => println!("  ! could not remove {}/: {}", path.display(), e),
-    }
-}
-
-async fn systemctl_user(args: &[&str]) {
-    let pretty = format!("systemctl --user {}", args.join(" "));
-    if paths::skip_systemctl() {
-        println!("  SKIP_SYSTEMCTL=1 — would run: {pretty}");
-        return;
-    }
-    let result = Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-    match result {
-        Ok(status) if status.success() => println!("  {pretty}"),
-        Ok(_) => {
-            // Common case: stop/disable on a unit that isn't there.
-            // Don't surface as an error — uninstall is idempotent.
-        }
-        Err(e) => println!("  ! {pretty} — spawn failed: {e}"),
     }
 }

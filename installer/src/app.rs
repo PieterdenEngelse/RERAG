@@ -87,27 +87,36 @@ pub enum DetectionStatus {
     Warn,
 }
 
-/// Render a `DetectionResult` as the eight-row table the screen shows.
-/// Ok / Warn classification mirrors the bash installer's reuse policy: anything
-/// that would trigger a prompt or block the install is Warn; anything safe to
-/// keep / install fresh is Ok.
+/// Render a `DetectionResult` as the ten-row table the screen shows.
+/// Ok / Warn classification mirrors the bash installer's reuse policy:
+/// anything that would trigger a prompt or block the install is Warn;
+/// anything safe to keep / install fresh is Ok.
+///
+/// Labels and values are cfg-branched where the underlying mechanism
+/// differs between Linux (systemd units, `/proc`, `$HOME`) and Windows
+/// (Scheduled Tasks, HTTP probes, the install volume). The rows
+/// themselves are the same set on both platforms — `native_obs` is
+/// always empty on Windows so no row would surface there anyway.
 pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
     vec![
         DetectionRow {
             label: "Distro",
-            value: d
-                .distro
-                .clone()
-                .unwrap_or_else(|| "unknown (/etc/os-release missing)".to_string()),
+            value: d.distro.clone().unwrap_or_else(|| "unknown".to_string()),
             // Always Ok — informational. By the time the GUI loads we
-            // already passed the AppRun glibc gate, so any distro that
-            // gets us here is "supported enough."
+            // already passed the platform's launcher gate (AppRun glibc
+            // check on Linux, MSI requirements on Windows), so anything
+            // that gets us here is "supported enough."
             status: DetectionStatus::Ok,
         },
         DetectionRow {
             label: "Disk",
             value: if d.disk_free_gb == 0 {
                 "unknown".to_string()
+            } else if cfg!(windows) {
+                format!(
+                    "{} GB free on install volume (≥ 20 GB recommended)",
+                    d.disk_free_gb
+                )
             } else {
                 format!("{} GB free on $HOME (≥ 20 GB recommended)", d.disk_free_gb)
             },
@@ -130,9 +139,19 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             },
         },
         DetectionRow {
-            label: "Ollama",
+            label: if cfg!(windows) {
+                "Ollama responding"
+            } else {
+                "Ollama active"
+            },
             value: if d.ollama_active {
-                "user systemd service, active".to_string()
+                if cfg!(windows) {
+                    "/api/tags responded 2xx".to_string()
+                } else {
+                    "user systemd service, active".to_string()
+                }
+            } else if cfg!(windows) {
+                "no response at 127.0.0.1:11434 — LLM modes will return 503".to_string()
             } else {
                 "user systemd service not active — LLM modes will return 503".to_string()
             },
@@ -141,9 +160,19 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             status: DetectionStatus::Ok,
         },
         DetectionRow {
-            label: "FalkorDB unit",
+            label: if cfg!(windows) {
+                "FalkorDB container"
+            } else {
+                "FalkorDB unit"
+            },
             value: if d.falkordb_healthy {
-                "active — will reuse".to_string()
+                if cfg!(windows) {
+                    "ag-falkordb healthy — will reuse".to_string()
+                } else {
+                    "active — will reuse".to_string()
+                }
+            } else if cfg!(windows) {
+                "not running — will start via compose".to_string()
             } else {
                 "not active — will install".to_string()
             },
@@ -189,10 +218,7 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             value: if d.ram_gb == 0 {
                 "unknown".to_string()
             } else {
-                format!(
-                    "{} GB total — compose stack uses ~3 GB resident",
-                    d.ram_gb
-                )
+                format!("{} GB total — compose stack uses ~3 GB resident", d.ram_gb)
             },
             status: if d.ram_gb > 0 && d.ram_gb < 8 {
                 DetectionStatus::Warn
@@ -201,9 +227,19 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             },
         },
         DetectionRow {
-            label: "Existing ag.service",
+            label: if cfg!(windows) {
+                "Existing ag task"
+            } else {
+                "Existing ag.service"
+            },
             value: if d.ag_service_drift {
-                "present but hand-edited (drift detected)".to_string()
+                if cfg!(windows) {
+                    "registered but Command points elsewhere".to_string()
+                } else {
+                    "present but hand-edited (drift detected)".to_string()
+                }
+            } else if cfg!(windows) {
+                "not registered (or points at ag-start.cmd)".to_string()
             } else {
                 "not present (or matches template)".to_string()
             },
@@ -247,12 +283,30 @@ pub struct SummaryItem {
 
 pub fn mock_reused_silent() -> Vec<SummaryItem> {
     vec![
-        SummaryItem { key: "docker", detail: "28.0.1" },
-        SummaryItem { key: "ollama", detail: ":11434 + /api/tags OK" },
-        SummaryItem { key: "~/.cargo", detail: "warm" },
-        SummaryItem { key: "target/", detail: "warm" },
-        SummaryItem { key: "ag.env", detail: "preserved" },
-        SummaryItem { key: "libtika", detail: "newer at XDG; skipped" },
+        SummaryItem {
+            key: "docker",
+            detail: "28.0.1",
+        },
+        SummaryItem {
+            key: "ollama",
+            detail: ":11434 + /api/tags OK",
+        },
+        SummaryItem {
+            key: "~/.cargo",
+            detail: "warm",
+        },
+        SummaryItem {
+            key: "target/",
+            detail: "warm",
+        },
+        SummaryItem {
+            key: "ag.env",
+            detail: "preserved",
+        },
+        SummaryItem {
+            key: "libtika",
+            detail: "newer at XDG; skipped",
+        },
     ]
 }
 pub fn mock_reused_confirmed() -> Vec<SummaryItem> {
@@ -260,12 +314,30 @@ pub fn mock_reused_confirmed() -> Vec<SummaryItem> {
 }
 pub fn mock_installed_fresh() -> Vec<SummaryItem> {
     vec![
-        SummaryItem { key: "ag.service", detail: "~/.config/systemd/user/" },
-        SummaryItem { key: "ag-stack.service", detail: "~/.config/systemd/user/" },
-        SummaryItem { key: "falkordb.service", detail: "~/.config/systemd/user/" },
-        SummaryItem { key: "ag binary", detail: "~/.local/bin/ag" },
-        SummaryItem { key: "web/", detail: "~/.local/share/ag/web/" },
-        SummaryItem { key: "FalkorDB binaries", detail: "~/.local/share/ag/falkordb/" },
+        SummaryItem {
+            key: "ag.service",
+            detail: "~/.config/systemd/user/",
+        },
+        SummaryItem {
+            key: "ag-stack.service",
+            detail: "~/.config/systemd/user/",
+        },
+        SummaryItem {
+            key: "falkordb.service",
+            detail: "~/.config/systemd/user/",
+        },
+        SummaryItem {
+            key: "ag binary",
+            detail: "~/.local/bin/ag",
+        },
+        SummaryItem {
+            key: "web/",
+            detail: "~/.local/share/ag/web/",
+        },
+        SummaryItem {
+            key: "FalkorDB binaries",
+            detail: "~/.local/share/ag/falkordb/",
+        },
     ]
 }
 pub fn mock_assumptions() -> Vec<SummaryItem> {

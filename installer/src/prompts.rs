@@ -14,9 +14,22 @@ pub enum PromptId {
     DockerMissing,
     PortBusy,
     LowRam,
+    /// Native loki / tempo / otelcol units (Linux only — no analog on
+    /// Windows). The variant exists on both platforms so the
+    /// `title()`/`context()`/`options()` match stays exhaustive without
+    /// per-platform branches; `required_prompts` is the only call site,
+    /// and it's `#[cfg(unix)]`-gated. The Windows-side `dead_code`
+    /// suppression below documents that asymmetry.
+    #[cfg_attr(windows, allow(dead_code))]
     NativeObs,
     SystemRedis,
-    AgServiceDrift,
+    /// "Existing ag service / scheduled task was edited" — Linux variant
+    /// is the rendered `~/.config/systemd/user/ag.service`, Windows
+    /// variant is the Scheduled-Task XML. Labels branch on `cfg!(windows)`
+    /// in `title()` / `context()` / `options()`. The same field
+    /// (`DetectionResult::ag_service_drift`) drives both — the bool's
+    /// meaning generalizes cleanly across OSes.
+    AgInstallDrift,
 }
 
 /// Disk warning threshold in GB. Matches bash `preflight_disk` `warn=20`.
@@ -45,6 +58,12 @@ pub fn required_prompts(d: &DetectionResult) -> Vec<PromptId> {
     if d.ram_gb > 0 && d.ram_gb < LOW_RAM_THRESHOLD_GB {
         prompts.push(PromptId::LowRam);
     }
+    // NativeObs has no analog on Windows — there are no native loki /
+    // tempo / otelcol units there, only the compose-managed observability
+    // services. `DetectionResult::native_obs` is always `vec![]` on
+    // Windows, so this branch is a no-op there; the explicit `#[cfg(unix)]`
+    // makes the asymmetry intentional rather than incidental.
+    #[cfg(unix)]
     if !d.native_obs.is_empty() {
         prompts.push(PromptId::NativeObs);
     }
@@ -52,7 +71,7 @@ pub fn required_prompts(d: &DetectionResult) -> Vec<PromptId> {
         prompts.push(PromptId::SystemRedis);
     }
     if d.ag_service_drift {
-        prompts.push(PromptId::AgServiceDrift);
+        prompts.push(PromptId::AgInstallDrift);
     }
     prompts
 }
@@ -75,7 +94,13 @@ impl PromptId {
             PromptId::LowRam => "Compose stack profile",
             PromptId::NativeObs => "Native observability detected",
             PromptId::SystemRedis => "System Redis detected",
-            PromptId::AgServiceDrift => "Existing ag.service was edited",
+            PromptId::AgInstallDrift => {
+                if cfg!(windows) {
+                    "Existing ag scheduled task was edited"
+                } else {
+                    "Existing ag.service was edited"
+                }
+            }
         }
     }
 
@@ -93,10 +118,9 @@ impl PromptId {
                 needs it. The official get.docker.com script is the standard route."
                     .to_string()
             }
-            PromptId::PortBusy => format!(
-                "Something is already listening on port 3010. \
+            PromptId::PortBusy => "Something is already listening on port 3010. \
                 If you continue with the default port, ag.service will fail to bind."
-            ),
+                .to_string(),
             PromptId::LowRam => format!(
                 "Host has {} GB RAM. The full compose stack uses ~3 GB resident. \
                 Pick a profile that fits.",
@@ -112,11 +136,18 @@ impl PromptId {
                 ag can use it (and skip the compose Redis), or install ag-redis alongside."
                     .to_string()
             }
-            PromptId::AgServiceDrift => {
-                "~/.config/systemd/user/ag.service exists but is missing one or more lines \
-                from our template — almost certainly hand-edited. Pick how to handle the \
-                rendered unit from this install."
-                    .to_string()
+            PromptId::AgInstallDrift => {
+                if cfg!(windows) {
+                    "The `ag` scheduled task is registered, but its <Command> doesn't point \
+                    at the installer-managed ag-start.cmd. Pick how to handle the rendered \
+                    task from this install."
+                        .to_string()
+                } else {
+                    "~/.config/systemd/user/ag.service exists but is missing one or more lines \
+                    from our template — almost certainly hand-edited. Pick how to handle the \
+                    rendered unit from this install."
+                        .to_string()
+                }
             }
         }
     }
@@ -220,23 +251,45 @@ impl PromptId {
                     description: "Decide later.",
                 },
             ],
-            PromptId::AgServiceDrift => vec![
-                PromptOption {
-                    key: "keep",
-                    label: "Keep existing ag.service (skip rendering)",
-                    description: "Default. Your hand-edited unit stays in place; this install does not overwrite it.",
-                },
-                PromptOption {
-                    key: "backup",
-                    label: "Back up → ag.service.bak-<ts> and replace",
-                    description: "Safe replace. Original is preserved with a timestamp suffix.",
-                },
-                PromptOption {
-                    key: "replace",
-                    label: "Replace without backup",
-                    description: "Destructive. Only pick if you're certain you don't need the existing unit.",
-                },
-            ],
+            PromptId::AgInstallDrift => {
+                if cfg!(windows) {
+                    vec![
+                        PromptOption {
+                            key: "keep",
+                            label: "Keep existing ag task (skip rendering)",
+                            description: "Default. Your registered scheduled task stays in place; this install does not overwrite it.",
+                        },
+                        PromptOption {
+                            key: "backup",
+                            label: "Back up → ag.xml.bak-<ts> and replace",
+                            description: "Safe replace. Original XML is preserved with a timestamp suffix.",
+                        },
+                        PromptOption {
+                            key: "replace",
+                            label: "Replace without backup",
+                            description: "Destructive. Only pick if you're certain you don't need the existing task.",
+                        },
+                    ]
+                } else {
+                    vec![
+                        PromptOption {
+                            key: "keep",
+                            label: "Keep existing ag.service (skip rendering)",
+                            description: "Default. Your hand-edited unit stays in place; this install does not overwrite it.",
+                        },
+                        PromptOption {
+                            key: "backup",
+                            label: "Back up → ag.service.bak-<ts> and replace",
+                            description: "Safe replace. Original is preserved with a timestamp suffix.",
+                        },
+                        PromptOption {
+                            key: "replace",
+                            label: "Replace without backup",
+                            description: "Destructive. Only pick if you're certain you don't need the existing unit.",
+                        },
+                    ]
+                }
+            }
         }
     }
 
@@ -248,7 +301,7 @@ impl PromptId {
             PromptId::LowRam => "core",
             PromptId::NativeObs => "natives",
             PromptId::SystemRedis => "system",
-            PromptId::AgServiceDrift => "keep",
+            PromptId::AgInstallDrift => "keep",
         }
     }
 }

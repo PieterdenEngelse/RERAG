@@ -203,7 +203,8 @@ impl DocExtractor for NativePdfExtractor {
             ir.metadata.insert(relational::PAGES_KEY.to_string(), json);
         }
         if let Ok(json) = serde_json::to_string(&summary_row) {
-            ir.metadata.insert(relational::SUMMARY_KEY.to_string(), json);
+            ir.metadata
+                .insert(relational::SUMMARY_KEY.to_string(), json);
         }
 
         let char_count: usize = ir.blocks.iter().map(|b| b.text.len()).sum();
@@ -347,10 +348,7 @@ mod build_summary_tests {
         ];
         let s = build_summary(&pages, &words);
         let pct = s.bbox_coverage_pct.expect("Some when words present");
-        assert!(
-            (pct - 25.0).abs() < 0.01,
-            "expected ~25.0, got {pct}"
-        );
+        assert!((pct - 25.0).abs() < 0.01, "expected ~25.0, got {pct}");
     }
 
     #[test]

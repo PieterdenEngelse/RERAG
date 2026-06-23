@@ -462,9 +462,7 @@ pub fn Home() -> Element {
             return;
         }
 
-        web_sys::console::log_1(
-            &"[boards-debug] send_message: setting boards_hidden=true".into(),
-        );
+        web_sys::console::log_1(&"[boards-debug] send_message: setting boards_hidden=true".into());
         boards_hidden.set(crate::app::BoardsHidden(true));
         web_sys::console::log_1(
             &format!(

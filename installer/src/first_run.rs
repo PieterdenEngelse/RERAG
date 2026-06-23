@@ -4,34 +4,33 @@
 //!
 //! 1. **Probe Ollama** for installed models so the dropdown shows the user's
 //!    real model list instead of the Phase B hardcoded suggestions.
-//! 2. **Atomic env file write** — read the existing `~/.config/ag/ag.env`,
-//!    replace specific KEY=VALUE lines, write to a temp file in the same
+//! 2. **Atomic env file write** — read the existing `ag.env`, replace
+//!    specific KEY=VALUE lines, write to a temp file in the same
 //!    directory, and rename over the original. Newline preservation +
-//!    comment preservation are the load-bearing properties; getting them
-//!    wrong corrupts the user's ag.env.
-//! 3. **FalkorDB password change** — re-render falkordb.service.tmpl with
-//!    the new password, daemon-reload, restart, verify with redis-cli ping.
+//!    comment preservation are the load-bearing properties; getting
+//!    them wrong corrupts the user's ag.env.
+//! 3. **FalkorDB password change** — re-render the service template
+//!    with the new password and restart the running unit / container.
+//!    OS-specific (systemd vs compose), delegated to platform.
 //!
-//! Plus the "Start ag now" flow at the end: `systemctl --user start
-//! ag.service` followed by a `/health` poll up to 20s. Success transitions
-//! to the Done screen.
+//! Plus the "Start ag now" flow at the end: start ag via the platform's
+//! service-management surface, then `/health` poll up to 20s. Success
+//! transitions to the Done screen.
 //!
-//! Sandbox testing: same env vars as install_steps — `HOME=/tmp/ag-test
-//! SKIP_SYSTEMCTL=1`. With SKIP_SYSTEMCTL=1 the service restarts log what
-//! they'd do; /health poll is skipped.
+//! Sandbox testing: `HOME=/tmp/ag-test SKIP_SYSTEMCTL=1` on Linux,
+//! `AG_HOME=C:\Temp\ag-test SKIP_SCHTASKS=1` on Windows. With the gate
+//! set the service-management calls log what they'd do; /health poll is
+//! skipped.
 
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
-use tokio::process::Command;
+use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 
-use crate::bundled;
-use crate::install_steps::{ProgressEvent, ProgressSender, DEFAULT_BACKEND_PORT, FALKORDB_PORT};
+use crate::install_steps::{ProgressEvent, ProgressSender, DEFAULT_BACKEND_PORT};
 use crate::paths::{self, Paths};
 
 /// Default Ollama API endpoint. Matches the detection probe; both will
@@ -82,7 +81,7 @@ impl FirstRunChoices {
 }
 
 // =============================================================================
-// Ollama probe
+// Ollama probe — portable
 // =============================================================================
 
 #[derive(Clone, Debug)]
@@ -127,7 +126,7 @@ pub async fn probe_ollama_models() -> OllamaProbe {
 }
 
 // =============================================================================
-// Atomic env-file write
+// Atomic env-file write — portable
 // =============================================================================
 
 /// Rewrite `env_path` so each (key, value) pair from `choices` is in the
@@ -144,8 +143,8 @@ pub fn write_first_run_settings(env_path: &Path, choices: &FirstRunChoices) -> R
         return Ok(());
     }
 
-    let original = fs::read_to_string(env_path)
-        .with_context(|| format!("read {}", env_path.display()))?;
+    let original =
+        fs::read_to_string(env_path).with_context(|| format!("read {}", env_path.display()))?;
 
     let mut lines: Vec<String> = original.lines().map(String::from).collect();
     let mut applied = std::collections::HashSet::<&'static str>::new();
@@ -186,11 +185,10 @@ pub fn write_first_run_settings(env_path: &Path, choices: &FirstRunChoices) -> R
             .with_context(|| format!("write {}", tmp_path.display()))?;
         tmp.sync_all().ok();
     }
-    fs::rename(&tmp_path, env_path).with_context(|| {
-        format!("rename {} → {}", tmp_path.display(), env_path.display())
-    })?;
+    fs::rename(&tmp_path, env_path)
+        .with_context(|| format!("rename {} → {}", tmp_path.display(), env_path.display()))?;
     // 0600 in case the user's umask is permissive — ag.env contains the
-    // FalkorDB password and LLM API keys.
+    // FalkorDB password and LLM API keys. No-op on non-unix.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -201,98 +199,38 @@ pub fn write_first_run_settings(env_path: &Path, choices: &FirstRunChoices) -> R
 }
 
 // =============================================================================
-// FalkorDB password change
+// FalkorDB password change — delegates to platform
 // =============================================================================
 
-/// Re-render falkordb.service.tmpl with `new_password`, daemon-reload,
-/// restart falkordb.service, verify with redis-cli ping using the new
-/// password. No-op if `new_password` equals the install-time default
-/// (caller can skip the call entirely in that case).
+/// Apply a new FalkorDB password. Linux: re-render falkordb.service.tmpl,
+/// daemon-reload, restart the unit, verify with redis-cli ping using
+/// the new password. Windows: edit ag.env's FALKOR_PASSWORD and recreate
+/// the ag-falkordb compose container. PR2.3 fills in the Windows path.
 pub async fn change_falkordb_password(
     paths: &Paths,
     tx: &ProgressSender,
     new_password: &str,
 ) -> Result<()> {
-    let step = "Start ag";
-    send_log(tx, step, format!("changing FalkorDB password"));
-
-    let tmpl = bundled::systemd_template_dir().join("falkordb.service.tmpl");
-    if !tmpl.exists() {
-        bail!(
-            "falkordb.service.tmpl missing at {} — bundled artifacts incomplete",
-            tmpl.display()
-        );
-    }
-    let mut content = fs::read_to_string(&tmpl)
-        .with_context(|| format!("read {}", tmpl.display()))?;
-    let vars = [
-        ("AG_HOME", paths.ag_home.display().to_string()),
-        ("FDB_PORT", FALKORDB_PORT.to_string()),
-        ("FDB_PASS", new_password.to_string()),
-    ];
-    for (k, v) in &vars {
-        content = content.replace(&format!("{{{{{k}}}}}"), v);
-    }
-    fs::write(&paths.falkordb_service(), content)
-        .with_context(|| format!("write {}", paths.falkordb_service().display()))?;
-    send_log(
-        tx,
-        step,
-        format!("re-rendered {}", paths.falkordb_service().display()),
-    );
-
-    systemctl_user(tx, step, &["daemon-reload"]).await?;
-    systemctl_user(tx, step, &["restart", "falkordb.service"]).await?;
-
-    if paths::skip_systemctl() {
-        send_log(tx, step, "SKIP_SYSTEMCTL=1 — skipping redis-cli verify");
-        return Ok(());
-    }
-
-    // FalkorDB takes a moment to come back up after restart; poll PONG.
-    let redis_cli = paths.ag_home.join("falkordb/redis-cli");
-    for attempt in 1..=10u32 {
-        sleep(Duration::from_millis(500)).await;
-        let out = Command::new(&redis_cli)
-            .args(["-p", &FALKORDB_PORT.to_string(), "-a", new_password, "ping"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
-        if let Ok(out) = out {
-            if out.status.success()
-                && String::from_utf8_lossy(&out.stdout).trim() == "PONG"
-            {
-                send_log(
-                    tx,
-                    step,
-                    format!(
-                        "redis-cli ping with new password OK (attempt {attempt})"
-                    ),
-                );
-                return Ok(());
-            }
-        }
-    }
-    bail!("falkordb.service restarted but redis-cli ping with the new password did not return PONG within 5s");
+    crate::platform::apply_falkordb_password(paths, tx, new_password).await
 }
 
 // =============================================================================
-// Start ag + health poll
+// Start ag + health poll — portable shell, OS-specific start
 // =============================================================================
 
-/// `systemctl --user start ag.service` then poll `/health` up to 20s.
-/// Returns Ok once /health responds 2xx; Err with a user-displayable
+/// Start the ag service (`systemctl --user start ag.service` on Linux,
+/// `schtasks /Run /TN ag` on Windows) then poll `/health` up to 20s.
+/// Returns Ok once `/health` responds 2xx; Err with a user-displayable
 /// message otherwise.
 pub async fn start_ag_and_wait(tx: &ProgressSender, backend_port: u16) -> Result<()> {
     let step = "Start ag";
-    systemctl_user(tx, step, &["start", "ag.service"]).await?;
+    crate::platform::start_ag(tx, step).await?;
 
     if paths::skip_systemctl() {
         send_log(
             tx,
             step,
-            "SKIP_SYSTEMCTL=1 — no service started, skipping /health poll",
+            "skip-systemctl/schtasks set — no service started, skipping /health poll",
         );
         return Ok(());
     }
@@ -345,8 +283,7 @@ pub fn backend_port() -> u16 {
 }
 
 // =============================================================================
-// Helpers — small wrappers around progress / systemctl, mirroring
-// install_steps so the UX is consistent across phases
+// Progress helper
 // =============================================================================
 
 fn send_log(tx: &ProgressSender, name: &'static str, line: impl Into<String>) {
@@ -354,33 +291,4 @@ fn send_log(tx: &ProgressSender, name: &'static str, line: impl Into<String>) {
         name,
         line: line.into(),
     });
-}
-
-async fn systemctl_user(
-    tx: &ProgressSender,
-    step_name: &'static str,
-    args: &[&str],
-) -> Result<()> {
-    let pretty = format!("systemctl --user {}", args.join(" "));
-    if paths::skip_systemctl() {
-        send_log(tx, step_name, format!("SKIP_SYSTEMCTL=1 — would run: {pretty}"));
-        return Ok(());
-    }
-    let out = Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| format!("spawn {pretty}"))?;
-    if !out.status.success() {
-        bail!(
-            "{pretty} exited {}\nstderr: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    send_log(tx, step_name, format!("ran: {pretty}"));
-    Ok(())
 }

@@ -16,8 +16,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 const CACHE_TTL_SECS: u64 = 4 * 60 * 60;
-const RELEASES_URL: &str =
-    "https://api.github.com/repos/PieterdenEngelse/RERAG/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/PieterdenEngelse/RERAG/releases/latest";
 
 /// What the Welcome screen needs to render the "update available" banner.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,7 +54,11 @@ pub async fn check() -> Option<UpdateInfo> {
 fn judge(latest: String, url: String) -> Option<UpdateInfo> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     if version_newer(&latest, &current) {
-        Some(UpdateInfo { current, latest, url })
+        Some(UpdateInfo {
+            current,
+            latest,
+            url,
+        })
     } else {
         None
     }

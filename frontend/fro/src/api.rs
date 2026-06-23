@@ -2195,10 +2195,7 @@ pub struct PdfExtractionResponse {
 /// Fetch the relational PDF sidecar for `document_id` (the filename used
 /// as the chunk_id prefix — e.g. "invoice.pdf").
 pub async fn fetch_pdf_extraction(document_id: &str) -> Result<PdfExtractionResponse, String> {
-    let path = format!(
-        "/pdf/extraction/{}",
-        urlencoding::encode(document_id)
-    );
+    let path = format!("/pdf/extraction/{}", urlencoding::encode(document_id));
     fetch_json(&path).await
 }
 
@@ -4484,8 +4481,8 @@ pub async fn update_corpus_watch_dir(slug: &str, watch_dir: Option<&str>) -> Res
         watch_dir: Option<&'a str>,
     }
     let url = api_url(&format!("/corpora/{}/watch-dir", slug));
-    let body = serde_json::to_string(&Body { watch_dir })
-        .map_err(|e| format!("Encode error: {}", e))?;
+    let body =
+        serde_json::to_string(&Body { watch_dir }).map_err(|e| format!("Encode error: {}", e))?;
     let response = reqwest::Client::new()
         .patch(&url)
         .header("Content-Type", "application/json")

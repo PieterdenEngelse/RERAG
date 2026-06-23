@@ -114,7 +114,7 @@ fn initial_steps() -> Vec<InstallStep> {
         .collect()
 }
 
-fn set_step(steps: &mut Vec<InstallStep>, name: &str, status: StepStatus, duration_s: u32) {
+fn set_step(steps: &mut [InstallStep], name: &str, status: StepStatus, duration_s: u32) {
     if let Some(step) = steps.iter_mut().find(|s| s.name == name) {
         step.status = status;
         step.duration_s = duration_s;
