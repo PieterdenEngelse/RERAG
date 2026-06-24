@@ -151,6 +151,9 @@ pub async fn run_detection() -> DetectionResult {
         disk_free_gb,
         ram_gb,
         distro,
+        wsl2_available,
+        wsl2_docker_version,
+        wsl2_distro_name,
     ) = tokio::join!(
         probe_docker(),
         probe_ollama_active(),
@@ -163,6 +166,9 @@ pub async fn run_detection() -> DetectionResult {
         probe_disk_free_gb(&paths),
         probe_ram_gb(),
         probe_distro(),
+        probe_wsl2_available(),
+        probe_wsl2_docker(),
+        probe_wsl2_distro_name(),
     );
     DetectionResult {
         docker_present,
@@ -179,7 +185,57 @@ pub async fn run_detection() -> DetectionResult {
         disk_free_gb,
         ram_gb,
         distro,
+        wsl2_available,
+        wsl2_docker_version,
+        wsl2_distro_name,
     }
+}
+
+/// `wsl --status` exits 0 → WSL2 feature is enabled. `wsl.exe` is a
+/// System32 shim present even when the optional feature isn't installed;
+/// in that case `--status` exits non-zero, so `.success()` is the gate.
+async fn probe_wsl2_available() -> bool {
+    Command::new("wsl")
+        .args(["--status"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// True when the ag-managed `ag-ubuntu` distro is registered. `wsl --list
+/// --quiet` emits UTF-16LE; strip NUL bytes for an ASCII compare.
+async fn probe_wsl2_distro_name() -> Option<String> {
+    let out = Command::new("wsl")
+        .args(["--list", "--quiet"])
+        .output()
+        .await
+        .ok()?;
+    let text = String::from_utf8(out.stdout.clone()).unwrap_or_else(|_| {
+        let ascii: Vec<u8> = out.stdout.into_iter().filter(|&b| b != 0).collect();
+        String::from_utf8_lossy(&ascii).into_owned()
+    });
+    text.lines()
+        .any(|l| l.trim() == "ag-ubuntu")
+        .then(|| "ag-ubuntu".to_string())
+}
+
+/// Docker Engine version inside the `ag-ubuntu` distro. Probes that distro
+/// specifically (not the default) — install and runtime both target
+/// `-d ag-ubuntu`, so detection must check the same place.
+async fn probe_wsl2_docker() -> Option<String> {
+    let out = Command::new("wsl")
+        .args(["-d", "ag-ubuntu", "--", "docker", "--version"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!v.is_empty()).then_some(v)
 }
 
 async fn probe_docker() -> Option<String> {
@@ -259,12 +315,11 @@ async fn probe_falkordb_healthy() -> bool {
 /// runs in a blocking task to keep the tokio reactor healthy if the OS
 /// stalls (rare, but the original `ss` probe also blocked for ~ms).
 async fn probe_backend_port_busy(port: u16) -> bool {
-    tokio::task::spawn_blocking(move || match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(_) => false, // bound successfully → port was free
-        Err(_) => true, // bind failed → assume something else owns the port
-    })
-    .await
-    .unwrap_or(false)
+    // bind succeeds → port was free (not busy); bind fails (AddrInUse) →
+    // assume something else owns the port.
+    tokio::task::spawn_blocking(move || TcpListener::bind(("127.0.0.1", port)).is_err())
+        .await
+        .unwrap_or(false)
 }
 
 /// Raw RESP `PING` over a TCP socket — no `redis-cli` on Windows by
@@ -558,7 +613,22 @@ pub async fn copy_artifacts(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
 // Step 4: install_stack — docker compose with falkor-container profile (PR2.3)
 // =============================================================================
 
-pub async fn install_stack(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+/// Dispatch by Docker mode: WSL2 ag-ubuntu distro vs native (Docker Desktop
+/// or any Engine on the host PATH).
+pub async fn install_stack(
+    paths: &Paths,
+    tx: &ProgressSender,
+    tee: &LogTee,
+    answers: &PromptAnswers,
+) -> Result<()> {
+    if answers.use_wsl2_docker() {
+        install_stack_wsl2(paths, tx, tee).await
+    } else {
+        install_stack_native(paths, tx, tee).await
+    }
+}
+
+async fn install_stack_native(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
     // No FalkorDB native binaries on Windows — the compose stack carries
     // a `falkordb` service under the `falkor-container` profile (added
     // to docker-compose.yml in PR 2.5).
@@ -618,6 +688,70 @@ pub async fn install_stack(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> 
         tee,
         "FalkorDB native service",
         format!("brought up ag-falkordb container via {compose_str}"),
+    );
+    Ok(())
+}
+
+/// WSL2 path: run `docker compose` inside the `ag-ubuntu` distro. The
+/// compose file lives on the Windows side, so its path is translated to
+/// the distro's `/mnt/<drive>/…` view before being passed with `-f`.
+async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+    let compose = paths.docker_compose();
+    if !compose.exists() {
+        bail!(
+            "docker-compose.yml missing at {} — seed_config should have copied it",
+            compose.display()
+        );
+    }
+    let compose_wsl = windows_path_to_wsl(&compose.display().to_string());
+
+    if skip_systemctl() {
+        step_log(
+            tx,
+            tee,
+            "FalkorDB native service",
+            format!(
+                "SKIP_SCHTASKS=1 — would run: wsl -d ag-ubuntu -u root -- docker compose \
+                -f {compose_wsl} --profile \"\" --profile falkor-container up -d"
+            ),
+        );
+        return Ok(());
+    }
+
+    let out = Command::new("wsl")
+        .args([
+            "-d",
+            "ag-ubuntu",
+            "-u",
+            "root",
+            "--",
+            "docker",
+            "compose",
+            "-f",
+            &compose_wsl,
+            "--profile",
+            "",
+            "--profile",
+            "falkor-container",
+            "up",
+            "-d",
+        ])
+        .env("COMPOSE_PROJECT_NAME", "ag")
+        .output()
+        .await
+        .with_context(|| "spawn wsl docker compose up")?;
+    if !out.status.success() {
+        bail!(
+            "wsl docker compose up exited {}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    step_log(
+        tx,
+        tee,
+        "FalkorDB native service",
+        format!("brought up ag-falkordb container via WSL2 (ag-ubuntu) using {compose_wsl}"),
     );
     Ok(())
 }
@@ -706,23 +840,36 @@ pub async fn install_service(
             Some("observability") => "observability",
             _ => "", // "all" / no LowRam prompt → bring up everything
         };
+        let profile_args = if profile.is_empty() {
+            "--profile \"\" --profile falkor-container".to_string()
+        } else {
+            format!("--profile {profile} --profile falkor-container")
+        };
         // Mirror Linux's behavior (systemd/ag-stack.service.tmpl): the
         // default services in docker-compose.yml have
         // `profiles: ["", "<name>"]`, so the empty-string profile is the
-        // activation token for "include the default stack". For LowRam=
-        // all we pass `--profile ""` to pick up Redis + observability,
-        // plus `--profile falkor-container` for FalkorDB (which only
-        // exists in compose on Windows).
-        let stack_args = if profile.is_empty() {
-            format!(
-                "compose -f \"{}\" --profile \"\" --profile falkor-container up -d",
-                paths.docker_compose().display()
+        // activation token for "include the default stack".
+        //
+        // The scheduled-task <Command> differs by Docker mode:
+        //  - native:  docker compose -f "<win_path>" <profiles> up -d
+        //  - WSL2:    wsl -d ag-ubuntu -u root -- docker compose
+        //             -f <wsl_path> <profiles> up -d
+        let use_wsl2 = answers.use_wsl2_docker();
+        let (stack_command, stack_args) = if use_wsl2 {
+            let compose_wsl = windows_path_to_wsl(&paths.docker_compose().display().to_string());
+            (
+                "wsl".to_string(),
+                format!(
+                    "-d ag-ubuntu -u root -- docker compose -f {compose_wsl} {profile_args} up -d"
+                ),
             )
         } else {
-            format!(
-                "compose -f \"{}\" --profile {} --profile falkor-container up -d",
-                paths.docker_compose().display(),
-                profile
+            (
+                "docker".to_string(),
+                format!(
+                    "compose -f \"{}\" {profile_args} up -d",
+                    paths.docker_compose().display()
+                ),
             )
         };
         let stack_task = paths.ag_stack_task_xml();
@@ -731,6 +878,7 @@ pub async fn install_service(
             &tmpl,
             &stack_task,
             &[
+                ("STACK_COMMAND", stack_command),
                 ("STACK_ARGS", stack_args),
                 ("AG_HOME", paths.ag_home.display().to_string()),
                 ("USER", user_id),
@@ -742,9 +890,10 @@ pub async fn install_service(
             tee,
             "Systemd user units",
             format!(
-                "rendered {} (profile={})",
+                "rendered {} (profile={}, docker={})",
                 stack_task.display(),
-                if profile.is_empty() { "<all>" } else { profile }
+                if profile.is_empty() { "<all>" } else { profile },
+                if use_wsl2 { "wsl2" } else { "native" }
             ),
         );
         register_task(tx, tee, "ag-stack", &stack_task).await?;
@@ -887,7 +1036,24 @@ pub async fn uninstall_managed(paths: &Paths) {
         }
     }
 
-    // 3. Remove rendered Task XML + bin/lib files.
+    // 3. Remove the ag-managed WSL2 distro if present (best-effort). This
+    //    tears down the in-distro Docker Engine + all ag containers at once;
+    //    the native `docker compose down` above is a no-op when WSL2 was used.
+    if skip_systemctl() {
+        println!("  SKIP_SCHTASKS=1 — would run: wsl --unregister ag-ubuntu");
+    } else {
+        let result = Command::new("wsl")
+            .args(["--unregister", "ag-ubuntu"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if matches!(result, Ok(s) if s.success()) {
+            println!("  unregistered WSL2 distro ag-ubuntu");
+        }
+    }
+
+    // 4. Remove rendered Task XML + bin/lib files.
     rm_quiet(&paths.ag_task_xml());
     rm_quiet(&paths.ag_stack_task_xml());
     rm_dir_quiet(&paths.scheduled_tasks_dir);
@@ -1055,7 +1221,7 @@ fn edit_env_in_place(path: &std::path::Path, kvs: &[(&str, &str)]) -> Result<()>
 // =============================================================================
 
 pub async fn install_docker(tx: &ProgressSender, tee: &LogTee) -> Result<()> {
-    let step = "Install Docker Compose";
+    let step = "Install Docker Desktop";
     if skip_systemctl() {
         step_log(
             tx,
@@ -1109,6 +1275,237 @@ pub async fn install_docker(tx: &ProgressSender, tee: &LogTee) -> Result<()> {
     Ok(())
 }
 
+// =============================================================================
+// Install Docker Engine inside a WSL2 distro (ag-ubuntu)
+// =============================================================================
+
+/// Ubuntu WSL rootfs. NOTE: cloud-images filenames have shifted across
+/// releases; this is verified at runtime (a non-200 → `bail!` with the URL)
+/// rather than trusted blindly.
+const WSL2_ROOTFS_URL: &str =
+    "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz";
+
+const WSL2_DISTRO: &str = "ag-ubuntu";
+
+/// Create the `ag-ubuntu` WSL2 distro and install Docker CE inside it.
+/// Only invoked when the user picked the WSL2 Docker option, which only
+/// appears when `wsl2_available` was true in detection — so the WSL2
+/// feature is already enabled and no Windows restart is needed here.
+pub async fn install_docker_wsl2(
+    paths: &Paths,
+    tx: &ProgressSender,
+    tee: &LogTee,
+) -> Result<()> {
+    let step = "Install WSL2 Docker Engine";
+
+    if skip_systemctl() {
+        step_log(
+            tx,
+            tee,
+            step,
+            format!(
+                "SKIP_SCHTASKS=1 — would: wsl --set-default-version 2; \
+                download {WSL2_ROOTFS_URL}; \
+                wsl --import {WSL2_DISTRO} {}\\wsl\\{WSL2_DISTRO} <rootfs> --version 2; \
+                install docker-ce inside the distro; write /etc/wsl.conf dockerd autostart; \
+                terminate + poll `docker info`",
+                paths.ag_home.display()
+            ),
+        );
+        return Ok(());
+    }
+
+    // a. Default-version guard (fast no-op since WSL2 is already enabled).
+    let _ = Command::new("wsl")
+        .args(["--set-default-version", "2"])
+        .output()
+        .await;
+
+    // b. Reuse an existing ag-ubuntu distro if present.
+    if probe_wsl2_distro_name().await.is_some() {
+        step_log(
+            tx,
+            tee,
+            step,
+            format!("existing {WSL2_DISTRO} distro found — reusing it"),
+        );
+    } else {
+        // c. Download the Ubuntu rootfs to %TEMP%, verifying the URL first.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(600))
+            .build()
+            .with_context(|| "build http client for rootfs download")?;
+        step_log(tx, tee, step, format!("downloading rootfs: {WSL2_ROOTFS_URL}"));
+        let resp = client
+            .get(WSL2_ROOTFS_URL)
+            .send()
+            .await
+            .with_context(|| format!("GET {WSL2_ROOTFS_URL}"))?;
+        if !resp.status().is_success() {
+            bail!(
+                "rootfs download returned {} for {WSL2_ROOTFS_URL}\n\
+                The Ubuntu WSL rootfs filename may have changed. Download a current \
+                rootfs manually, import it as `{WSL2_DISTRO}`, and re-run the installer.",
+                resp.status()
+            );
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .with_context(|| "read rootfs response body")?;
+        let rootfs_path = std::env::temp_dir().join("ag-ubuntu-rootfs.tar.gz");
+        fs::write(&rootfs_path, &bytes)
+            .with_context(|| format!("write rootfs to {}", rootfs_path.display()))?;
+        step_log(
+            tx,
+            tee,
+            step,
+            format!(
+                "downloaded {:.0} MB → {}",
+                bytes.len() as f64 / (1024.0 * 1024.0),
+                rootfs_path.display()
+            ),
+        );
+
+        // d. Import the distro. wsl --import needs the install dir to exist.
+        let install_dir = paths.ag_home.join("wsl").join(WSL2_DISTRO);
+        fs::create_dir_all(&install_dir)
+            .with_context(|| format!("create {}", install_dir.display()))?;
+        let out = Command::new("wsl")
+            .args([
+                "--import",
+                WSL2_DISTRO,
+                &install_dir.display().to_string(),
+                &rootfs_path.display().to_string(),
+                "--version",
+                "2",
+            ])
+            .output()
+            .await
+            .with_context(|| "spawn wsl --import")?;
+        if !out.status.success() {
+            bail!(
+                "wsl --import exited {}\nstderr: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        step_log(
+            tx,
+            tee,
+            step,
+            format!("imported {WSL2_DISTRO} → {}", install_dir.display()),
+        );
+
+        // e. Install Docker Engine from the official APT repo.
+        let install_script = r#"set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq ca-certificates curl gnupg lsb-release
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -qq
+apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+"#;
+        wsl_root_bash(step, tx, tee, install_script, "install docker-ce").await?;
+
+        // f. dockerd autostart via /etc/wsl.conf (no systemd dependency).
+        let wsl_conf = "[boot]\ncommand = \"/usr/bin/dockerd --host unix:///var/run/docker.sock --log-level error &>/tmp/dockerd.log &\"\n";
+        let write_conf = format!("printf '%s' '{wsl_conf}' > /etc/wsl.conf");
+        wsl_root_bash(step, tx, tee, &write_conf, "write /etc/wsl.conf").await?;
+
+        // g. Restart the distro so /etc/wsl.conf takes effect.
+        let _ = Command::new("wsl")
+            .args(["--terminate", WSL2_DISTRO])
+            .output()
+            .await;
+        sleep(Duration::from_secs(2)).await;
+        step_log(tx, tee, step, "terminated distro to apply /etc/wsl.conf");
+    }
+
+    // h. Readiness poll: WSL re-runs the [boot] command on each cold start
+    //    and dockerd needs a moment. Poll `docker info` rather than a single
+    //    check. WARN (not fatal) if it never comes up — mirrors health_check.
+    let mut ready = false;
+    for attempt in 1..=10u32 {
+        let out = Command::new("wsl")
+            .args(["-d", WSL2_DISTRO, "-u", "root", "--", "docker", "info"])
+            .output()
+            .await;
+        if let Ok(o) = out {
+            if o.status.success() {
+                step_log(
+                    tx,
+                    tee,
+                    step,
+                    format!("dockerd ready in {WSL2_DISTRO} (attempt {attempt})"),
+                );
+                ready = true;
+                break;
+            }
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+    if !ready {
+        step_log(
+            tx,
+            tee,
+            step,
+            "WARN: dockerd did not report ready within ~20s — it may still be starting. \
+            The stack step will retry the connection.",
+        );
+    }
+    Ok(())
+}
+
+/// Run a bash snippet as root inside the ag-ubuntu distro, failing the
+/// step on a non-zero exit.
+async fn wsl_root_bash(
+    step: &'static str,
+    tx: &ProgressSender,
+    tee: &LogTee,
+    script: &str,
+    label: &str,
+) -> Result<()> {
+    let out = Command::new("wsl")
+        .args(["-d", WSL2_DISTRO, "-u", "root", "--", "bash", "-c", script])
+        .output()
+        .await
+        .with_context(|| format!("spawn wsl bash: {label}"))?;
+    if !out.status.success() {
+        bail!(
+            "{label} exited {}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    step_log(tx, tee, step, format!("{label} OK"));
+    Ok(())
+}
+
+/// Convert a Windows absolute path to its WSL2 `/mnt/` equivalent.
+///   `C:\Users\foo\ag\docker-compose.yml`
+///   → `/mnt/c/Users/foo/ag/docker-compose.yml`
+/// Strips the extended-length `\\?\` prefix; passes relative / UNC paths
+/// through with only separator normalization.
+pub fn windows_path_to_wsl(path: &str) -> String {
+    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        let rest = path[3..].replace('\\', "/");
+        format!("/mnt/{drive}/{rest}")
+    } else {
+        path.replace('\\', "/")
+    }
+}
+
 /// Send `AUTH <password>\r\nPING\r\n` to `addr`, read until we either
 /// see `+PONG\r\n` (good — password accepted, ping responded) or the
 /// connection closes / times out.
@@ -1152,4 +1549,20 @@ fn resp_auth_ping(addr: &str, password: &str) -> bool {
     }
     let s = std::str::from_utf8(&buf[..total]).unwrap_or("");
     s.contains("+PONG\r\n") && !s.contains("-ERR")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_translation() {
+        assert_eq!(
+            windows_path_to_wsl(r"C:\Users\foo\ag\docker-compose.yml"),
+            "/mnt/c/Users/foo/ag/docker-compose.yml"
+        );
+        assert_eq!(windows_path_to_wsl(r"D:\data"), "/mnt/d/data");
+        assert_eq!(windows_path_to_wsl("relative"), "relative");
+        assert_eq!(windows_path_to_wsl(r"\\?\C:\ext"), "/mnt/c/ext");
+    }
 }

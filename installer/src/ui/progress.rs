@@ -17,7 +17,9 @@ use dioxus::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::{InstallStep, StepStatus};
-use crate::install_steps::{self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, STEP_NAMES};
+use crate::install_steps::{
+    self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME, STEP_NAMES,
+};
 use crate::prompts::{PromptAnswers, PromptId};
 use crate::ui::components::{FailureInfo, FailureModal, LogView, NavFooter, StepListView};
 
@@ -108,8 +110,10 @@ pub fn ProgressScreen() -> Element {
 fn initial_steps(answers: &PromptAnswers) -> Vec<InstallStep> {
     let mut names: Vec<&'static str> = Vec::new();
     #[cfg(windows)]
-    if matches!(answers.choice(PromptId::DockerMissing), Some("install")) {
-        names.push(INSTALL_DOCKER_STEP_NAME);
+    match answers.choice(PromptId::DockerMissing) {
+        Some("install_docker_desktop") => names.push(INSTALL_DOCKER_STEP_NAME),
+        Some("install_wsl2_docker") => names.push(INSTALL_WSL2_DOCKER_STEP_NAME),
+        _ => {}
     }
     names.extend_from_slice(STEP_NAMES);
     names

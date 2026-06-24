@@ -115,9 +115,9 @@ impl PromptId {
             ),
             PromptId::DockerMissing => {
                 if cfg!(windows) {
-                    "docker compose isn't on PATH. The stack (FalkorDB / Redis / observability) \
-                    needs it. Install the Docker Compose standalone binary via winget, \
-                    or install it manually from docs.docker.com/compose."
+                    "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
+                    needs it. Install Docker Engine in WSL2 (lightweight, free, no GUI) \
+                    or install Docker Desktop manually from docs.docker.com."
                         .to_string()
                 } else {
                     "docker isn't on PATH. The compose stack (FalkorDB / Redis / observability) \
@@ -159,7 +159,7 @@ impl PromptId {
         }
     }
 
-    pub fn options(self) -> Vec<PromptOption> {
+    pub fn options(self, d: Option<&DetectionResult>) -> Vec<PromptOption> {
         match self {
             PromptId::DiskLow => vec![
                 PromptOption {
@@ -175,19 +175,29 @@ impl PromptId {
             ],
             PromptId::DockerMissing => {
                 if cfg!(windows) {
-                    vec![
-                        PromptOption {
-                            key: "install",
-                            label: "Install Docker Compose via winget",
-                            description: "Runs `winget install --id Docker.DockerCompose --silent`. \
-                                Requires Docker Engine (Docker Desktop or WSL2) to be running.",
-                        },
-                        PromptOption {
-                            key: "abort",
-                            label: "Abort — I'll install Docker Compose manually",
-                            description: "Default. Re-run the installer once docker is on PATH.",
-                        },
-                    ]
+                    let mut opts = Vec::new();
+                    // Only offer the WSL2 path when the WSL2 feature is already
+                    // enabled — installing it would require a Windows restart.
+                    if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                        opts.push(PromptOption {
+                            key: "install_wsl2_docker",
+                            label: "Install Docker Engine in WSL2 (lightweight, no GUI)",
+                            description: "Creates an ag-ubuntu WSL2 distro and installs Docker CE. \
+                                Free, headless, ~200 MB RAM. Downloads an Ubuntu rootfs (~500 MB).",
+                        });
+                    }
+                    opts.push(PromptOption {
+                        key: "install_docker_desktop",
+                        label: "Install Docker Compose via winget (requires Docker Desktop)",
+                        description: "Runs `winget install --id Docker.DockerCompose --silent`. \
+                            Requires Docker Desktop or another Docker Engine already running.",
+                    });
+                    opts.push(PromptOption {
+                        key: "abort",
+                        label: "Abort — I'll set up Docker manually",
+                        description: "Default. Re-run the installer once docker is on PATH.",
+                    });
+                    opts
                 } else {
                     vec![
                         PromptOption {
@@ -349,5 +359,15 @@ impl PromptAnswers {
     }
     pub fn choice(&self, id: PromptId) -> Option<&str> {
         self.choices.get(id.title()).map(String::as_str)
+    }
+
+    /// True when docker ops should route through the WSL2 `ag-ubuntu`
+    /// distro rather than a native Docker Engine on the host. Windows-only
+    /// in practice; the key never appears on Linux.
+    pub fn use_wsl2_docker(&self) -> bool {
+        matches!(
+            self.choice(PromptId::DockerMissing),
+            Some("install_wsl2_docker")
+        )
     }
 }

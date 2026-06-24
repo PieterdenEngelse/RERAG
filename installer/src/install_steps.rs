@@ -69,7 +69,9 @@ pub enum ProgressEvent {
 }
 
 #[cfg(windows)]
-pub const INSTALL_DOCKER_STEP_NAME: &str = "Install Docker Compose";
+pub const INSTALL_DOCKER_STEP_NAME: &str = "Install Docker Desktop";
+#[cfg(windows)]
+pub const INSTALL_WSL2_DOCKER_STEP_NAME: &str = "Install WSL2 Docker Engine";
 
 pub const STEP_NAMES: &[&str] = &[
     "Ensure XDG tree",
@@ -175,11 +177,20 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
     }
 
     #[cfg(windows)]
-    if matches!(answers.choice(PromptId::DockerMissing), Some("install")) {
-        step!(
-            INSTALL_DOCKER_STEP_NAME,
-            crate::platform::install_docker(&tx, &tee)
-        );
+    match answers.choice(PromptId::DockerMissing) {
+        Some("install_docker_desktop") => {
+            step!(
+                INSTALL_DOCKER_STEP_NAME,
+                crate::platform::install_docker(&tx, &tee)
+            );
+        }
+        Some("install_wsl2_docker") => {
+            step!(
+                INSTALL_WSL2_DOCKER_STEP_NAME,
+                crate::platform::install_docker_wsl2(&paths, &tx, &tee)
+            );
+        }
+        _ => {}
     }
 
     step!(
@@ -196,7 +207,7 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
     );
     step!(
         "FalkorDB native service",
-        crate::platform::install_stack(&paths, &tx, &tee)
+        crate::platform::install_stack(&paths, &tx, &tee, &answers)
     );
     step!(
         "Systemd user units",

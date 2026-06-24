@@ -98,7 +98,8 @@ pub enum DetectionStatus {
 /// themselves are the same set on both platforms — `native_obs` is
 /// always empty on Windows so no row would surface there anyway.
 pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
-    vec![
+    #[allow(unused_mut)]
+    let mut rows = vec![
         DetectionRow {
             label: "Distro",
             value: d.distro.clone().unwrap_or_else(|| "unknown".to_string()),
@@ -249,7 +250,27 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
                 DetectionStatus::Ok
             },
         },
-    ]
+    ];
+
+    // WSL2 Docker Engine — Windows-only row. The fields exist on both
+    // platforms (always None/false on Linux), but the row itself only makes
+    // sense on Windows. Gated on the statement, not a `#[cfg]` vec element
+    // (attributes on expressions are unstable on stable Rust).
+    #[cfg(windows)]
+    rows.push(DetectionRow {
+        label: "WSL2 Docker Engine",
+        value: if let Some(v) = &d.wsl2_docker_version {
+            format!("installed in WSL2 ({v})")
+        } else if d.wsl2_available {
+            "WSL2 available — Docker Engine not yet installed".to_string()
+        } else {
+            "WSL2 not detected — enable via Windows Features for lightweight Docker".to_string()
+        },
+        // Informational; the Docker row is the real blocker.
+        status: DetectionStatus::Ok,
+    });
+
+    rows
 }
 
 // =============================================================================

@@ -54,6 +54,17 @@ pub struct DetectionResult {
     /// Linux: `/etc/os-release` PRETTY_NAME. Windows: registry
     /// `ProductName` + `DisplayVersion`. `None` if unobtainable.
     pub distro: Option<String>,
+    /// Windows only. `wsl --status` exited 0 → WSL2 feature is enabled.
+    /// Gates whether the WSL2 Docker option appears in the DockerMissing
+    /// prompt. Always `false` on Linux (field exists on both platforms so
+    /// the struct shape stays shared).
+    pub wsl2_available: bool,
+    /// Windows only. `wsl -d ag-ubuntu -- docker --version` succeeded →
+    /// Docker Engine is already installed inside the ag-managed distro.
+    pub wsl2_docker_version: Option<String>,
+    /// Windows only. The ag-managed WSL2 distro (`ag-ubuntu`) already
+    /// exists → `Some("ag-ubuntu")`. Reinstalls reuse it.
+    pub wsl2_distro_name: Option<String>,
 }
 
 /// Runs every probe; orchestrator body lives in
@@ -94,6 +105,9 @@ mod tests {
         println!("disk_free_gb       {}", result.disk_free_gb);
         println!("ram_gb             {}", result.ram_gb);
         println!("distro             {:?}", result.distro);
+        println!("wsl2_available     {}", result.wsl2_available);
+        println!("wsl2_docker_version {:?}", result.wsl2_docker_version);
+        println!("wsl2_distro_name   {:?}", result.wsl2_distro_name);
 
         let rows = crate::app::detection_rows(&result);
         println!("\n--- Detection screen rows ---");

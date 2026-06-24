@@ -121,7 +121,7 @@ fn PromptCard(props: PromptCardProps) -> Element {
     }
 
     let options: Vec<RadioOption> = id
-        .options()
+        .options(Some(&props.detection))
         .into_iter()
         .map(
             |PromptOption {

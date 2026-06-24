@@ -571,7 +571,15 @@ pub async fn copy_artifacts(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
 // Step 4: install_stack — FalkorDB native binaries + unit (PR1.4)
 // =============================================================================
 
-pub async fn install_stack(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+pub async fn install_stack(
+    paths: &Paths,
+    tx: &ProgressSender,
+    tee: &LogTee,
+    // Windows uses this to route between native and WSL2 Docker; Linux
+    // always installs the native FalkorDB binaries, so it's ignored here.
+    // The param exists for signature parity across the shared re-export.
+    _answers: &PromptAnswers,
+) -> Result<()> {
     let stage = bundled::falkordb_stage_dir();
     let dst = paths.ag_home.join("falkordb");
     fs::create_dir_all(&dst)?;
