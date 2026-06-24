@@ -82,7 +82,7 @@ pub fn SummaryScreen() -> Element {
                     button {
                         class: "btn btn-primary",
                         onclick: move |_| open_dashboard(),
-                        "Open ag dashboard"
+                        "Open ag"
                     }
                 }
             }
@@ -126,16 +126,18 @@ fn SummaryBucket(props: SummaryBucketProps) -> Element {
 /// connection-refused — that's fine; user closes the tab. Phase E will
 /// read the actual port from ag.env instead of hard-coding 3010.
 fn open_dashboard() {
-    let _ = std::process::Command::new("xdg-open")
-        .arg("http://127.0.0.1:3010")
-        .spawn();
+    crate::ui::shell_open::open("http://127.0.0.1:3010");
 }
 
-/// Open the logs directory in the user's file manager. Phase D will land
-/// the specific log file path; until then this opens the parent dir.
+/// Open the logs directory in the user's file manager.
 fn open_logs_dir() {
+    #[cfg(windows)]
+    let logs = std::env::var("LOCALAPPDATA")
+        .map(|p| format!("{p}\\ag\\logs"))
+        .unwrap_or_else(|_| r"C:\Temp".to_string());
+    #[cfg(not(windows))]
     let logs = std::env::var("HOME")
         .map(|h| format!("{h}/.local/share/ag/logs"))
         .unwrap_or_else(|_| "/tmp".to_string());
-    let _ = std::process::Command::new("xdg-open").arg(&logs).spawn();
+    crate::ui::shell_open::open(&logs);
 }

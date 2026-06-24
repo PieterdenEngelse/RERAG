@@ -30,7 +30,7 @@ pub fn AboutModal(props: AboutModalProps) -> Element {
 
     let open_url = |url: &'static str| {
         move |_| {
-            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+            crate::ui::shell_open::open(url);
         }
     };
 

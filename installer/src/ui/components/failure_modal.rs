@@ -39,10 +39,7 @@ pub fn FailureModal(props: FailureModalProps) -> Element {
 
     let on_open_log = move |_| {
         if let Some(path) = &log_path {
-            // xdg-open is the standard portable opener on Linux desktops.
-            // We don't await or error-check: best-effort is fine for a
-            // failure-modal escape hatch.
-            let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+            crate::ui::shell_open::open(path);
         }
     };
 

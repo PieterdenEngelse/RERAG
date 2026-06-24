@@ -38,14 +38,7 @@ pub fn Welcome() -> Element {
                             button {
                                 class: "btn btn-link update-banner-action",
                                 onclick: move |_| {
-                                    #[cfg(windows)]
-                                    let _ = std::process::Command::new("cmd")
-                                        .args(["/c", "start", "", url.as_str()])
-                                        .spawn();
-                                    #[cfg(not(windows))]
-                                    let _ = std::process::Command::new("xdg-open")
-                                        .arg(url.clone())
-                                        .spawn();
+                                    crate::ui::shell_open::open(&url);
                                 },
                                 "Download →"
                             }
