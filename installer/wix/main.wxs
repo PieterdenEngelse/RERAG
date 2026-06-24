@@ -131,7 +131,7 @@
                                         Id='AgXmlTmpl'
                                         Name='ag.xml.tmpl'
                                         DiskId='1'
-                                        Source='..\scheduled-tasks\ag.xml.tmpl'
+                                        Source='..\..\installer\scheduled-tasks\ag.xml.tmpl'
                                         KeyPath='yes' />
                                 </Component>
                                 <Component Id='AgStackXmlTmpl' Guid='*' Win64='yes'>
@@ -139,7 +139,7 @@
                                         Id='AgStackXmlTmpl'
                                         Name='ag-stack.xml.tmpl'
                                         DiskId='1'
-                                        Source='..\scheduled-tasks\ag-stack.xml.tmpl'
+                                        Source='..\..\installer\scheduled-tasks\ag-stack.xml.tmpl'
                                         KeyPath='yes' />
                                 </Component>
                             </Directory>

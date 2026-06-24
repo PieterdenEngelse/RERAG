@@ -349,11 +349,21 @@ jobs:
         # dashboard dist. main.wxs's <Feature Id='Main'> references
         # WebFilesGroup via <ComponentGroupRef>. -gg auto-generates
         # GUIDs, -srd suppresses root-dir component, -sfrag emits one
-        # fragment. No `-var` indirection — heat emits the literal
-        # source path into `<File Source="...">` and candle reads it
-        # directly. v1.2.3 tried `-var var.WebDir` + `-dWebDir=...` on
-        # the cargo-wix tail, but cargo-wix parses anything after `--`
-        # as a positional .wxs input rather than forwarding to candle.
+        # fragment.
+        #
+        # `-var var.WebDir` makes heat emit `<File
+        # Source="$(var.WebDir)\dioxus.svg">` instead of a literal
+        # `SourceDir\dioxus.svg`. The WebDir variable is supplied to
+        # candle below via cargo-wix's `-C -dWebDir=…`. Without this,
+        # light tried to resolve `SourceDir\…` against its CWD (the
+        # `target\wix\` staging dir) and failed v1.2.5 with LGHT0103.
+        #
+        # v1.2.3 tried this same `-var` indirection but passed
+        # `-dWebDir=…` after `--` on the cargo-wix tail, which
+        # cargo-wix parses as positional .wxs inputs rather than
+        # forwarding to candle. cargo-wix's documented
+        # `-C/--compiler-arg` flag is the supported path and is used
+        # below.
         shell: pwsh
         run: |
           $webDir = "target\dx\fro\release\web\public"
@@ -364,6 +374,7 @@ jobs:
           heat dir $webDir `
             -dr ShareAgDir `
             -cg WebFilesGroup `
+            -var var.WebDir `
             -gg -srd -sfrag `
             -out installer\wix\web.wxs
 
@@ -377,11 +388,18 @@ jobs:
           # `main.wxs`. v1.2.4 added `--include installer\wix\web.wxs`
           # too, which fed candle the same file twice and triggered
           # CNDL0351 (duplicate `.wixobj` outputs).
+          #
+          # `-C -dWebDir=…` defines the preprocessor variable
+          # referenced by the heat-generated `<File Source="$(var.WebDir)\…">`
+          # entries. Pass an absolute path so light's link-time file
+          # resolution doesn't depend on the cargo-wix staging CWD.
+          $absWebDir = (Resolve-Path "target\dx\fro\release\web\public").Path
           cargo wix `
             -p ag-installer `
             --no-build `
             --target x86_64-pc-windows-msvc `
             --nocapture `
+            -C "-dWebDir=$absWebDir" `
             --output "ag-installer-v${env:VERSION}-x86_64.msi"
 
       - name: Verify MSI installs + uninstalls cleanly
