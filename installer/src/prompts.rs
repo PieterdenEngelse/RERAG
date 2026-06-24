@@ -114,9 +114,16 @@ impl PromptId {
                 d.disk_free_gb, DISK_WARN_GB, DISK_HARD_GB
             ),
             PromptId::DockerMissing => {
-                "docker isn't on PATH. The compose stack (FalkorDB / Redis / observability) \
-                needs it. The official get.docker.com script is the standard route."
-                    .to_string()
+                if cfg!(windows) {
+                    "docker compose isn't on PATH. The stack (FalkorDB / Redis / observability) \
+                    needs it. Install the Docker Compose standalone binary via winget, \
+                    or install it manually from docs.docker.com/compose."
+                        .to_string()
+                } else {
+                    "docker isn't on PATH. The compose stack (FalkorDB / Redis / observability) \
+                    needs it. The official get.docker.com script is the standard route."
+                        .to_string()
+                }
             }
             PromptId::PortBusy => "Something is already listening on port 3010. \
                 If you continue with the default port, ag.service will fail to bind."
@@ -166,18 +173,36 @@ impl PromptId {
                     description: "Free up space first, then re-run the installer.",
                 },
             ],
-            PromptId::DockerMissing => vec![
-                PromptOption {
-                    key: "install",
-                    label: "Install via get.docker.com (requires sudo)",
-                    description: "Equivalent to the bash installer's --install-docker.",
-                },
-                PromptOption {
-                    key: "abort",
-                    label: "Abort — I'll install Docker manually",
-                    description: "Default. Re-run the installer once docker is on PATH.",
-                },
-            ],
+            PromptId::DockerMissing => {
+                if cfg!(windows) {
+                    vec![
+                        PromptOption {
+                            key: "install",
+                            label: "Install Docker Compose via winget",
+                            description: "Runs `winget install --id Docker.DockerCompose --silent`. \
+                                Requires Docker Engine (Docker Desktop or WSL2) to be running.",
+                        },
+                        PromptOption {
+                            key: "abort",
+                            label: "Abort — I'll install Docker Compose manually",
+                            description: "Default. Re-run the installer once docker is on PATH.",
+                        },
+                    ]
+                } else {
+                    vec![
+                        PromptOption {
+                            key: "install",
+                            label: "Install via get.docker.com (requires sudo)",
+                            description: "Equivalent to the bash installer's --install-docker.",
+                        },
+                        PromptOption {
+                            key: "abort",
+                            label: "Abort — I'll install Docker manually",
+                            description: "Default. Re-run the installer once docker is on PATH.",
+                        },
+                    ]
+                }
+            }
             PromptId::PortBusy => vec![
                 PromptOption {
                     key: "pick",

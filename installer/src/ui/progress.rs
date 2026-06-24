@@ -17,15 +17,16 @@ use dioxus::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::{InstallStep, StepStatus};
-use crate::install_steps::{self, ProgressEvent, STEP_NAMES};
-use crate::prompts::PromptAnswers;
+use crate::install_steps::{self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, STEP_NAMES};
+use crate::prompts::{PromptAnswers, PromptId};
 use crate::ui::components::{FailureInfo, FailureModal, LogView, NavFooter, StepListView};
 
 #[component]
 pub fn ProgressScreen() -> Element {
     let answers_signal = use_context::<Signal<PromptAnswers>>();
 
-    let mut steps = use_signal(initial_steps);
+    let answers_for_steps = answers_signal.read().clone();
+    let mut steps = use_signal(move || initial_steps(&answers_for_steps));
     let mut log_lines = use_signal(Vec::<String>::new);
     let mut error_signal = use_signal::<Option<FailureInfo>>(|| None);
     let mut complete = use_signal(|| false);
@@ -73,13 +74,14 @@ pub fn ProgressScreen() -> Element {
     });
 
     let is_complete = *complete.read();
+    let step_count = steps.read().len();
 
     rsx! {
         div { class: "screen",
             div { class: "screen-header",
                 h1 { class: "screen-title", "Installing" }
                 p { class: "screen-subtitle",
-                    "Six steps. Output streams below — your install log is "
+                    "{step_count} steps. Output streams below — your install log is "
                     "preserved under "
                     code { "~/.local/share/ag/logs/" }
                     "."
@@ -103,8 +105,14 @@ pub fn ProgressScreen() -> Element {
     }
 }
 
-fn initial_steps() -> Vec<InstallStep> {
-    STEP_NAMES
+fn initial_steps(answers: &PromptAnswers) -> Vec<InstallStep> {
+    let mut names: Vec<&'static str> = Vec::new();
+    #[cfg(windows)]
+    if matches!(answers.choice(PromptId::DockerMissing), Some("install")) {
+        names.push(INSTALL_DOCKER_STEP_NAME);
+    }
+    names.extend_from_slice(STEP_NAMES);
+    names
         .iter()
         .map(|&name| InstallStep {
             name,

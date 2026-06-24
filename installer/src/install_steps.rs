@@ -68,6 +68,9 @@ pub enum ProgressEvent {
     InstallComplete,
 }
 
+#[cfg(windows)]
+pub const INSTALL_DOCKER_STEP_NAME: &str = "Install Docker Compose";
+
 pub const STEP_NAMES: &[&str] = &[
     "Ensure XDG tree",
     "Seed config",
@@ -169,6 +172,14 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
                 }
             }
         }};
+    }
+
+    #[cfg(windows)]
+    if matches!(answers.choice(PromptId::DockerMissing), Some("install")) {
+        step!(
+            INSTALL_DOCKER_STEP_NAME,
+            crate::platform::install_docker(&tx, &tee)
+        );
     }
 
     step!(

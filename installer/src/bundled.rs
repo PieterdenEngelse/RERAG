@@ -48,7 +48,19 @@ pub fn ag_binary_path() -> PathBuf {
     if let Some(root) = bundle_install_root() {
         return root.join("bin").join(AG_BIN_NAME);
     }
-    repo_root().join("target/release").join(AG_BIN_NAME)
+    let root = repo_root();
+    // In dev mode the installer may be built with --target <triple>, placing
+    // the ag binary under target/<triple>/release/ rather than target/release/.
+    // Scan one level deep so sandbox runs work without a separate host build.
+    if let Ok(entries) = std::fs::read_dir(root.join("target")) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("release").join(AG_BIN_NAME);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    root.join("target/release").join(AG_BIN_NAME)
 }
 
 pub fn libtika_path() -> Option<PathBuf> {

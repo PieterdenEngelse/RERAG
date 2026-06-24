@@ -38,6 +38,11 @@ pub fn Welcome() -> Element {
                             button {
                                 class: "btn btn-link update-banner-action",
                                 onclick: move |_| {
+                                    #[cfg(windows)]
+                                    let _ = std::process::Command::new("cmd")
+                                        .args(["/c", "start", "", url.as_str()])
+                                        .spawn();
+                                    #[cfg(not(windows))]
                                     let _ = std::process::Command::new("xdg-open")
                                         .arg(url.clone())
                                         .spawn();
@@ -57,13 +62,25 @@ pub fn Welcome() -> Element {
             div { class: "screen-body screen-body-centered",
                 div { class: "welcome-card",
                     p {
-                        "This installer copies the ag binary and its runtime "
-                        "files into XDG-standard locations under your home "
-                        "directory, sets up three "
-                        em { "systemd --user" }
-                        " services, and configures graph and observability "
-                        "back-ends. No system files are modified; no root is "
-                        "required for the default install."
+                        if cfg!(windows) {
+                            "This installer copies the ag binary and its runtime "
+                            "files into "
+                            code { "%LOCALAPPDATA%\\ag\\" }
+                            " and "
+                            code { "%APPDATA%\\ag\\" }
+                            ", registers two Scheduled Tasks (ag and ag-stack), "
+                            "and configures graph and observability back-ends. "
+                            "No system files are modified; no administrator "
+                            "rights are required for the default install."
+                        } else {
+                            "This installer copies the ag binary and its runtime "
+                            "files into XDG-standard locations under your home "
+                            "directory, sets up three "
+                            em { "systemd --user" }
+                            " services, and configures graph and observability "
+                            "back-ends. No system files are modified; no root is "
+                            "required for the default install."
+                        }
                     }
                     div { class: "welcome-actions",
                         button {
@@ -78,12 +95,22 @@ pub fn Welcome() -> Element {
                     }
                     if *show_details.read() {
                         ul { class: "welcome-paths",
-                            li { code { "~/.local/bin/ag" } "  — the ag binary" }
-                            li { code { "~/.local/lib/libtika_native.so" } "  — document-parser native lib" }
-                            li { code { "~/.local/share/ag/" } "  — runtime state (data, index, db, logs, FalkorDB, web/)" }
-                            li { code { "~/.config/ag/ag.env" } "  — env file (seeded from .env.example; never overwritten)" }
-                            li { code { "~/.config/ag/docker-compose.yml" } "  — observability stack definition" }
-                            li { code { "~/.config/systemd/user/{{ag,ag-stack,falkordb}}.service" } " — three composable units" }
+                            if cfg!(windows) {
+                                li { code { "%LOCALAPPDATA%\\ag\\bin\\ag.exe" } "  — the ag binary" }
+                                li { code { "%LOCALAPPDATA%\\ag\\bin\\ag-start.cmd" } "  — startup wrapper" }
+                                li { code { "%LOCALAPPDATA%\\ag\\lib\\tika_native.dll" } "  — document-parser native lib" }
+                                li { code { "%LOCALAPPDATA%\\ag\\" } "  — runtime state (data, index, db, logs, web/)" }
+                                li { code { "%APPDATA%\\ag\\ag.env" } "  — env file (seeded from .env.example; never overwritten)" }
+                                li { code { "%APPDATA%\\ag\\docker-compose.yml" } "  — observability stack definition" }
+                                li { code { "Scheduled Tasks: ag, ag-stack" } "  — two composable tasks" }
+                            } else {
+                                li { code { "~/.local/bin/ag" } "  — the ag binary" }
+                                li { code { "~/.local/lib/libtika_native.so" } "  — document-parser native lib" }
+                                li { code { "~/.local/share/ag/" } "  — runtime state (data, index, db, logs, FalkorDB, web/)" }
+                                li { code { "~/.config/ag/ag.env" } "  — env file (seeded from .env.example; never overwritten)" }
+                                li { code { "~/.config/ag/docker-compose.yml" } "  — observability stack definition" }
+                                li { code { "~/.config/systemd/user/{{ag,ag-stack,falkordb}}.service" } " — three composable units" }
+                            }
                         }
                     }
                     div { class: "welcome-meta",

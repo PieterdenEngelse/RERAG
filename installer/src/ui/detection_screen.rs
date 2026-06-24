@@ -42,7 +42,11 @@ pub fn DetectionScreen() -> Element {
                         div { class: "detection-pending",
                             div { class: "detection-spinner" }
                             p { class: "detection-pending-label",
-                                "Probing docker, systemd units, ports, disk and RAM…"
+                                if cfg!(windows) {
+                                    "Probing docker, scheduled tasks, ports, disk and RAM…"
+                                } else {
+                                    "Probing docker, systemd units, ports, disk and RAM…"
+                                }
                             }
                         }
                     },

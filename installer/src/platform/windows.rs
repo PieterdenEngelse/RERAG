@@ -1050,6 +1050,65 @@ fn edit_env_in_place(path: &std::path::Path, kvs: &[(&str, &str)]) -> Result<()>
     Ok(())
 }
 
+// =============================================================================
+// Install Docker Compose via winget
+// =============================================================================
+
+pub async fn install_docker(tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+    let step = "Install Docker Compose";
+    if skip_systemctl() {
+        step_log(
+            tx,
+            tee,
+            step,
+            "SKIP_SCHTASKS=1 — would run: winget install --id Docker.DockerCompose --silent",
+        );
+        return Ok(());
+    }
+    let out = Command::new("winget")
+        .args([
+            "install",
+            "--id",
+            "Docker.DockerCompose",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ])
+        .output()
+        .await
+        .with_context(|| "spawn winget install Docker.DockerCompose")?;
+    if !out.status.success() {
+        bail!(
+            "winget install Docker.DockerCompose exited {}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    step_log(tx, tee, step, "Docker Compose installed via winget");
+
+    // Verify with `docker compose version`, not `docker --version`.
+    // `winget install Docker.DockerCompose` installs the compose binary only —
+    // Docker Engine is separate, so `docker --version` would still fail even
+    // on a successful compose install, giving a false WARN.
+    let compose_ok = Command::new("docker")
+        .args(["compose", "version"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok());
+    match compose_ok {
+        Some(v) => step_log(tx, tee, step, format!("verified: {}", v.trim())),
+        None => step_log(
+            tx,
+            tee,
+            step,
+            "WARN: docker compose still not responding — you may need to reopen your terminal",
+        ),
+    }
+    Ok(())
+}
+
 /// Send `AUTH <password>\r\nPING\r\n` to `addr`, read until we either
 /// see `+PONG\r\n` (good — password accepted, ping responded) or the
 /// connection closes / times out.
