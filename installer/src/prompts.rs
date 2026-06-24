@@ -115,10 +115,21 @@ impl PromptId {
             ),
             PromptId::DockerMissing => {
                 if cfg!(windows) {
-                    "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
-                    needs it. Install Docker Engine in WSL2 (lightweight, free, no GUI) \
-                    or install Docker Desktop manually from docs.docker.com."
-                        .to_string()
+                    if d.wsl2_available {
+                        "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
+                        needs it. WSL2 is enabled on this machine, so the installer can add \
+                        Docker Engine inside a dedicated Linux distro — lightweight, free, no \
+                        GUI, and no admin needed. Or install Docker Desktop manually from \
+                        docs.docker.com."
+                            .to_string()
+                    } else {
+                        "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
+                        needs it. The lightweight WSL2 Docker option is hidden because WSL2 \
+                        isn't enabled yet — enabling it needs admin rights and a reboot: run \
+                        `wsl --install` in an elevated PowerShell, restart Windows, then re-run \
+                        this installer. Otherwise install Docker Desktop from docs.docker.com."
+                            .to_string()
+                    }
                 } else {
                     "docker isn't on PATH. The compose stack (FalkorDB / Redis / observability) \
                     needs it. The official get.docker.com script is the standard route."

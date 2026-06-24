@@ -262,9 +262,11 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
         value: if let Some(v) = &d.wsl2_docker_version {
             format!("installed in WSL2 ({v})")
         } else if d.wsl2_available {
-            "WSL2 available — Docker Engine not yet installed".to_string()
+            "WSL2 enabled — installer can add Docker Engine here (no admin needed)".to_string()
         } else {
-            "WSL2 not detected — enable via Windows Features for lightweight Docker".to_string()
+            "WSL2 not enabled — run `wsl --install` in an admin PowerShell, reboot, \
+            then re-run this installer to unlock the lightweight Docker option"
+                .to_string()
         },
         // Informational; the Docker row is the real blocker.
         status: DetectionStatus::Ok,
