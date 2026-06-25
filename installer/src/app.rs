@@ -123,11 +123,14 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
                 "unknown".to_string()
             } else if cfg!(windows) {
                 format!(
-                    "{} GB free on install volume (≥ 20 GB recommended)",
+                    "{} GB free on install volume (10 GB min, 20 GB recommended)",
                     d.disk_free_gb
                 )
             } else {
-                format!("{} GB free on $HOME (≥ 20 GB recommended)", d.disk_free_gb)
+                format!(
+                    "{} GB free on $HOME (10 GB min, 20 GB recommended)",
+                    d.disk_free_gb
+                )
             },
             status: if d.disk_free_gb >= 20 || d.disk_free_gb == 0 {
                 DetectionStatus::Ok

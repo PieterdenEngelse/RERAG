@@ -728,8 +728,8 @@ fail; both artifacts upload to the release.
    ```markdown
    ## Install on Windows
 
-   **Requirements**: Windows 10 (1809+) or 11, Docker Compose, ~4 GB
-   free disk space.
+   **Requirements**: Windows 10 (1809+) or 11, Docker Compose, 10 GB free
+   disk minimum (20 GB recommended).
 
    1. Download `ag-installer-vX.Y.Z-x86_64.msi` from the
       [latest release](https://github.com/PieterdenEngelse/RERAG/releases/latest).

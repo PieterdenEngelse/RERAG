@@ -145,8 +145,9 @@ impl PromptId {
     pub fn context(self, d: &DetectionResult) -> String {
         match self {
             PromptId::DiskLow => format!(
-                "{} GB free on $HOME (recommended ≥ {} GB). Below {} GB the install would refuse to run. \
-                Continuing is fine but the install may be tight if target/ rebuilds.",
+                "{} GB free on the install volume — recommended {} GB, minimum {} GB (below that \
+                the installer won't start). Continuing is fine, but the compose images may leave \
+                little headroom.",
                 d.disk_free_gb, DISK_WARN_GB, DISK_HARD_GB
             ),
             PromptId::DockerMissing => {
@@ -212,11 +213,9 @@ impl PromptId {
                 ag can reuse them (skip our compose stack) or run its own alongside.",
                 d.native_obs.join(", ")
             ),
-            PromptId::SystemRedis => {
-                "Something is responding to redis-cli on 127.0.0.1:6379. \
+            PromptId::SystemRedis => "Something is responding to redis-cli on 127.0.0.1:6379. \
                 ag can use it (and skip the compose Redis), or install ag-redis alongside."
-                    .to_string()
-            }
+                .to_string(),
             PromptId::AgInstallDrift => "Something changed how ag starts when you sign in, so \
                 it no longer matches the installer's setup. Choose what to do with your version."
                 .to_string(),

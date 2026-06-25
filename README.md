@@ -175,7 +175,8 @@ exactly which paths will be removed.
   matrix.
 - Docker (for the optional observability stack; the installer prompts to
   install via `get.docker.com` if missing)
-- ~10 GB free disk on `$HOME`
+- 10 GB free disk on `$HOME` minimum (20 GB recommended; below 10 GB the
+  installer won't start)
 - 7 GB RAM minimum; the installer detects low RAM and offers a smaller
   compose profile
 
@@ -186,7 +187,8 @@ exactly which paths will be removed.
   container under the `falkor-container` compose profile; any Docker
   provider with `docker compose` works: Docker Desktop, Rancher Desktop,
   or WSL2 + Docker Engine)
-- ~10 GB free disk on the install volume (`%LOCALAPPDATA%`)
+- 10 GB free disk on the install volume (`%LOCALAPPDATA%`) minimum (20 GB
+  recommended; below 10 GB the installer won't start)
 - 7 GB RAM minimum; same low-RAM prompt as on Linux
 
 ## What ag does

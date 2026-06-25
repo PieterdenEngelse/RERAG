@@ -54,16 +54,18 @@ The MSI is per-machine; everything below lives under `%PROGRAMFILES%\ag\`.
 Launch *RERAG installer* from the Start Menu and walk every screen.
 
 - [ ] **Welcome**: click Continue
-- [ ] **Detection** rows show real values:
-      - [ ] Docker: version string
-      - [ ] Compose: *Down* (first install)
-      - [ ] Ollama: *responding* or *not responding* (host-dependent)
-      - [ ] FalkorDB: *not running*
-      - [ ] ag.env: *missing*
-      - [ ] Port 3010: *free*
-      - [ ] System Redis: usually *not present*
+- [ ] **Detection** rows show real values, with honest icons (✓ = active,
+      ○ = will-provision/not a problem, ⚠ = needs attention):
+      - [ ] Docker: ✓ *engine running (vX)* with the daemon up — **not** a
+            bare CLI version string (the row reads the daemon, not just PATH)
+      - [ ] Compose: ○ *not running — will start*
+      - [ ] Ollama: ✓ *responding* or ○ *no response* (host-dependent)
+      - [ ] FalkorDB: ○ *not running — will start via compose*
+      - [ ] ag.env: ○ *not present — will create* (first install)
+      - [ ] Port 3010: ✓ *free*
       - [ ] Native obs row: hidden on Windows
-      - [ ] ag task drift: *false*
+      - [ ] ag auto-start row: **absent** (no customization) — see §11a
+      - [ ] WSL2 Docker Engine row present (state depends on host)
       - [ ] Disk free / RAM: real GB values
       - [ ] Distro: e.g. *Windows 11 23H2*
 - [ ] **Prompts**: accept defaults, Continue
@@ -137,6 +139,55 @@ docker ps                 # expect ag-falkordb, ag-redis containers up
 
 ---
 
+## 11. Decision-screen paths (each needs a specific VM state)
+
+§0–§10 cover the baseline happy path (Docker present and running, ample
+disk). The checks below exercise the detection/gate logic added on top.
+Each needs the VM staged into a particular state — run whichever you can
+set up; each is independently pass/fail.
+
+### 11a. Honest detection icons (any install)
+- [ ] Services that aren't running yet show a neutral ○ — **never** a green
+      ✓ (FalkorDB, Compose, Ollama-when-down, ag.env-when-absent)
+- [ ] Green ✓ appears only for genuinely-active things (Docker engine up,
+      port free, disk OK)
+- [ ] The "ag auto-start" row is absent on a clean machine (only shows when
+      the logon task was customized)
+
+### 11b. Docker engine not running
+Quit Docker Desktop (leave the `docker` CLI on PATH), relaunch the installer.
+- [ ] Detection: Docker row = ⚠ *CLI on PATH but engine not reachable*
+- [ ] Prompts: a **"Docker engine not running"** card appears, default *Abort*
+- [ ] With Abort selected, **"Begin install" is disabled** + a callout explains why
+- [ ] Switching the card to *Continue anyway* re-enables "Begin install"
+
+### 11c. Firmware virtualization off (VT-x / AMD-V disabled)
+On a VM with nested virtualization off and Docker absent:
+- [ ] Detection: WSL2 row = ⚠ *blocked — enable Intel VT-x / AMD-V (SVM)…*
+- [ ] Prompts: "Docker is missing" preselects **Abort**; the enable-WSL2
+      option is **not** offered (no wasted reboot)
+- [ ] "Begin install" disabled while Abort is selected (the only other
+      option, Docker Desktop via winget, can't run without VT-x either)
+
+### 11d. WSL2 enable + reboot-resume
+On a VM with WSL2 off but virtualization on, Docker absent:
+- [ ] Prompts: **"Enable WSL2 + install Docker Engine"** is the preselected default
+- [ ] Proceeding raises exactly **one** UAC prompt
+- [ ] Progress shows an *Enable WSL2* step, then the **reboot banner**
+      (Restart now / I'll restart later)
+- [ ] *Restart now* reboots; after logon the installer **reopens
+      automatically** (HKCU RunOnce), and the resumed run finishes the
+      install (Docker Engine in `ag-ubuntu`, stack up)
+
+### 11e. Disk floor (< 10 GB free)
+On a volume with under 10 GB free:
+- [ ] Prompts: **"Begin install" disabled** + callout *"Only N GB free — ag
+      needs at least 10 GB…"*
+- [ ] (Mid-install) if free space drops below 10 GB before the stack pull,
+      the stack step **fails with that same message**, not a cryptic ENOSPC
+
+---
+
 ## Signed-build extras (PR4 only)
 
 Skip this section until PR4 lands. Once the MSI is signed:
@@ -165,3 +216,9 @@ Every box in §0–§10 ticks without manual intervention beyond accepting
 SmartScreen on first run (unsigned build) or none at all (signed build).
 Any unticked box blocks the release tag from being promoted from
 *prerelease* to *latest*.
+
+§11 paths are conditional — they require staging a specific VM state, so
+they aren't all mandatory for one VM. But each path you *can* stage must
+pass, and at minimum 11a (honest icons) should be eyeballed on the baseline
+run. The disk floor (11e) and engine-down (11b) are cheap to stage and
+worth covering before a release.
