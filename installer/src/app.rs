@@ -264,8 +264,8 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
         } else if d.wsl2_available {
             "WSL2 enabled — installer can add Docker Engine here (no admin needed)".to_string()
         } else {
-            "WSL2 not enabled — run `wsl --install` in an admin PowerShell, reboot, \
-            then re-run this installer to unlock the lightweight Docker option"
+            "WSL2 not enabled — the installer can enable it (one-time admin + restart) and \
+            add a lightweight Docker Engine; it reopens automatically after the restart"
                 .to_string()
         },
         // Informational; the Docker row is the real blocker.

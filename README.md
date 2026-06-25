@@ -44,8 +44,8 @@ No root password needed; nothing is written outside your home directory.
 
 ### Quick install on Windows (MSI)
 
-For end users on Windows 10 (1809+) or Windows 11. Docker Desktop must
-already be installed.
+For end users on Windows 10 (1809+) or Windows 11. Docker Compose must
+be available (Docker Desktop, Rancher Desktop, or WSL2 + Docker Engine).
 
 1. **Download** the latest MSI from the
    [latest release](https://github.com/PieterdenEngelse/RERAG/releases/latest)
@@ -65,8 +65,8 @@ already be installed.
    system service to manage. After a reboot, log back in and ag runs
    automatically.
 
-The compose stack (FalkorDB + Redis + observability) comes up under
-Docker Desktop. FalkorDB runs as a container on Windows since no native
+The compose stack (FalkorDB + Redis + observability) is managed via
+`docker compose`. FalkorDB runs as a container on Windows since no native
 Windows build exists; on Linux it stays a `systemd --user` service.
 
 ### Developer install (terminal)
@@ -182,8 +182,10 @@ exactly which paths will be removed.
 #### Windows
 
 - Windows 10 (1809+) or Windows 11, x86-64
-- Docker Desktop (FalkorDB has no native Windows build — it runs as a
-  container under the `falkor-container` compose profile)
+- Docker Compose (FalkorDB has no native Windows build — it runs as a
+  container under the `falkor-container` compose profile; any Docker
+  provider with `docker compose` works: Docker Desktop, Rancher Desktop,
+  or WSL2 + Docker Engine)
 - ~10 GB free disk on the install volume (`%LOCALAPPDATA%`)
 - 7 GB RAM minimum; same low-RAM prompt as on Linux
 

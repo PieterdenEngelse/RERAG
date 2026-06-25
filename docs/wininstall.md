@@ -28,7 +28,7 @@ implementations selected at compile time. The shipped artifact is an MSI
 built by `cargo-wix` on a `windows-latest` runner, uploaded to the same
 GitHub Release as the AppImage.
 
-The Windows install requires Docker Desktop. ag itself runs as a per-user
+The Windows install requires Docker Compose (`docker compose` available on PATH). ag itself runs as a per-user
 Scheduled Task triggered at logon — no admin, no UAC, no system-wide
 Service. To stay reviewable, the work is staged into three PRs (see
 Staging at the end).
@@ -501,7 +501,7 @@ the tag that introduces Windows support.
 
 ## Verification
 
-End-to-end on a Windows 10/11 box with Docker Desktop installed:
+End-to-end on a Windows 10/11 box with Docker Compose available:
 
 1. **Dev-mode smoke test** (after PR 2 lands, before PR 3):
    ```pwsh
@@ -521,7 +521,7 @@ End-to-end on a Windows 10/11 box with Docker Desktop installed:
    - `bundled::ag_binary_path()` returns
      `target\…\release\ag.exe` in dev mode
    - `Paths::resolve()` honors `AG_HOME` and falls back to `%LOCALAPPDATA%\ag`
-   - The `print_real_result` ignored test (`detection.rs:331`) runs
+   - The `print_real_result` ignored test (`detection.rs:95`) runs
      under PowerShell
 
 3. **MSI build** (PR 3):

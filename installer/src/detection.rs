@@ -86,8 +86,10 @@ mod tests {
     /// `#[ignore]` so it never runs in normal CI / pre-commit — the values
     /// are host-specific and meaningless on a clean GitHub runner. Invoke
     /// explicitly with:
-    ///     cargo test -p ag-installer --lib -- --ignored --nocapture \
+    ///     cargo test -p ag-installer -- --ignored --nocapture \
     ///         detection::tests::print_real_result
+    /// (no `--lib`: ag-installer is a binary-only crate, so `--lib` errors
+    /// with "no library targets found").
     #[tokio::test]
     #[ignore]
     async fn print_real_result() {
@@ -125,7 +127,11 @@ mod tests {
             println!("  (none)");
         } else {
             for id in prompts {
-                println!("  - {:?} → default {:?}", id, id.default_choice());
+                println!(
+                    "  - {:?} → default {:?}",
+                    id,
+                    id.default_choice(Some(&result))
+                );
             }
         }
     }

@@ -897,7 +897,7 @@ change is *qualitative*:
 - The learning-platform goal — *make the invisible visible, no setup
   friction* — is genuinely better served by in-process observability than by
   asking users to learn Grafana to see what ag is doing.
-- New-user onboarding goes from "you need Docker Desktop and 6 GB of RAM
+- New-user onboarding goes from "you need Docker Compose and 6 GB of RAM
   for the stack" to "download a binary and run it."
 
 This is a different product than ag-today, not just a smaller deployment of

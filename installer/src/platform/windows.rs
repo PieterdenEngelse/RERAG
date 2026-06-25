@@ -31,6 +31,7 @@ use crate::bundled;
 use crate::detection::{DetectionResult, BACKEND_PORT};
 use crate::install_steps::{
     render_template, step_log, LogTee, ProgressEvent, ProgressSender, FALKORDB_PORT,
+    INSTALL_WSL2_ENABLE_STEP_NAME, STEP_ENSURE_TREE, STEP_SERVICE, STEP_STACK,
 };
 use crate::prompts::{PromptAnswers, PromptId};
 use crate::uninstall::{rm_dir_quiet, rm_quiet};
@@ -457,7 +458,7 @@ pub async fn ensure_install_tree(
         step_log(
             tx,
             tee,
-            "Ensure XDG tree",
+            STEP_ENSURE_TREE,
             format!("created {}", d.display()),
         );
     }
@@ -474,7 +475,7 @@ pub async fn ensure_install_tree(
     step_log(
         tx,
         tee,
-        "Ensure XDG tree",
+        STEP_ENSURE_TREE,
         format!("install log: {}", log_path.display()),
     );
     *log_path_out = Some(log_path);
@@ -645,7 +646,7 @@ async fn install_stack_native(paths: &Paths, tx: &ProgressSender, tee: &LogTee) 
         step_log(
             tx,
             tee,
-            "FalkorDB native service",
+            STEP_STACK,
             format!(
                 "SKIP_SCHTASKS=1 — would run: docker compose -f {compose_str} \
                 --profile \"\" --profile falkor-container up -d"
@@ -686,7 +687,7 @@ async fn install_stack_native(paths: &Paths, tx: &ProgressSender, tee: &LogTee) 
     step_log(
         tx,
         tee,
-        "FalkorDB native service",
+        STEP_STACK,
         format!("brought up ag-falkordb container via {compose_str}"),
     );
     Ok(())
@@ -709,7 +710,7 @@ async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
         step_log(
             tx,
             tee,
-            "FalkorDB native service",
+            STEP_STACK,
             format!(
                 "SKIP_SCHTASKS=1 — would run: wsl -d ag-ubuntu -u root -- docker compose \
                 -f {compose_wsl} --profile \"\" --profile falkor-container up -d"
@@ -750,7 +751,7 @@ async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
     step_log(
         tx,
         tee,
-        "FalkorDB native service",
+        STEP_STACK,
         format!("brought up ag-falkordb container via WSL2 (ag-ubuntu) using {compose_wsl}"),
     );
     Ok(())
@@ -777,7 +778,7 @@ pub async fn install_service(
             step_log(
                 tx,
                 tee,
-                "Systemd user units",
+                STEP_SERVICE,
                 format!("keeping existing {} per prompt choice", ag_task.display()),
             );
             false
@@ -790,7 +791,7 @@ pub async fn install_service(
             step_log(
                 tx,
                 tee,
-                "Systemd user units",
+                STEP_SERVICE,
                 format!("backed up {} → {}", ag_task.display(), bak.display()),
             );
             true
@@ -815,7 +816,7 @@ pub async fn install_service(
         step_log(
             tx,
             tee,
-            "Systemd user units",
+            STEP_SERVICE,
             format!(
                 "rendered {} (backend_port={})",
                 ag_task.display(),
@@ -831,7 +832,7 @@ pub async fn install_service(
         step_log(
             tx,
             tee,
-            "Systemd user units",
+            STEP_SERVICE,
             "ag-stack task skipped (user chose no stack)",
         );
     } else {
@@ -888,7 +889,7 @@ pub async fn install_service(
         step_log(
             tx,
             tee,
-            "Systemd user units",
+            STEP_SERVICE,
             format!(
                 "rendered {} (profile={}, docker={})",
                 stack_task.display(),
@@ -902,7 +903,7 @@ pub async fn install_service(
     // Start the ag task immediately so the user sees the dashboard come
     // up without waiting for next logon. ag-stack will be triggered by
     // the same logon flow on next sign-in.
-    schtasks(tx, tee, "Systemd user units", &["/Run", "/TN", "ag"]).await?;
+    schtasks(tx, tee, STEP_SERVICE, &["/Run", "/TN", "ag"]).await?;
     Ok(())
 }
 
@@ -920,7 +921,7 @@ async fn register_task(
     schtasks(
         tx,
         tee,
-        "Systemd user units",
+        STEP_SERVICE,
         &["/Create", "/XML", &xml.display().to_string(), "/TN", name],
     )
     .await
@@ -1276,6 +1277,183 @@ pub async fn install_docker(tx: &ProgressSender, tee: &LogTee) -> Result<()> {
 }
 
 // =============================================================================
+// Enable the WSL2 Windows feature (elevated) + logon-resume registration
+// =============================================================================
+
+/// Outcome of enabling the WSL2 Windows feature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WslEnableOutcome {
+    /// WSL2 is usable immediately — the install can proceed straight into
+    /// installing Docker Engine in the distro without a reboot.
+    ReadyNow,
+    /// The feature was enabled but Windows needs a restart before WSL2
+    /// works. The caller registers a resume hook and stops here.
+    RebootRequired,
+}
+
+/// Enable the WSL2 Windows feature, then report whether a reboot is needed.
+///
+/// Enabling Virtual Machine Platform + WSL is a machine-level operation, so
+/// this is the one install path that needs administrator rights. It elevates
+/// via PowerShell's `Start-Process -Verb RunAs` — a single UAC prompt. The
+/// app itself still installs entirely under the user account; this is a
+/// one-time OS prerequisite, not the app asking for admin.
+///
+/// `--no-distribution` keeps `wsl --install` from creating a stray default
+/// Ubuntu — we manage our own `ag-ubuntu` distro in `install_docker_wsl2`.
+/// `wsl --update` ensures a current kernel, closing the stale-kernel gap on
+/// machines where WSL was only half-enabled.
+pub async fn enable_wsl2(tx: &ProgressSender, tee: &LogTee) -> Result<WslEnableOutcome> {
+    let step = INSTALL_WSL2_ENABLE_STEP_NAME;
+    if skip_systemctl() {
+        step_log(
+            tx,
+            tee,
+            step,
+            "SKIP_SCHTASKS=1 — would run (elevated): wsl --install --no-distribution; wsl --update",
+        );
+        // Exercise the resume path in dev by reporting a reboot is needed.
+        return Ok(WslEnableOutcome::RebootRequired);
+    }
+
+    step_log(
+        tx,
+        tee,
+        step,
+        "requesting elevation (UAC) for: wsl --install --no-distribution",
+    );
+    run_wsl_elevated(&["--install", "--no-distribution"])
+        .await
+        .with_context(|| "elevated wsl --install --no-distribution")?;
+
+    // Best-effort kernel update — a post-reboot `wsl --update` also works, so
+    // a failure here isn't fatal.
+    step_log(
+        tx,
+        tee,
+        step,
+        "requesting elevation (UAC) for: wsl --update",
+    );
+    if let Err(e) = run_wsl_elevated(&["--update"]).await {
+        step_log(
+            tx,
+            tee,
+            step,
+            format!("WARN: wsl --update failed ({e:#}) — continuing"),
+        );
+    }
+
+    // Decide reboot-vs-ready from the live feature state, not `wsl --install`'s
+    // exit code (which is unreliable across Windows builds).
+    if probe_wsl2_available().await {
+        step_log(tx, tee, step, "WSL2 is active — no restart needed");
+        Ok(WslEnableOutcome::ReadyNow)
+    } else {
+        step_log(
+            tx,
+            tee,
+            step,
+            "WSL2 feature enabled — a Windows restart is required to finish",
+        );
+        Ok(WslEnableOutcome::RebootRequired)
+    }
+}
+
+/// Run `wsl <args>` elevated via a single UAC prompt, waiting for it to
+/// finish. `Start-Process -Verb RunAs` raises the prompt; if the user denies
+/// it, PowerShell throws and exits non-zero, which surfaces here as an error.
+/// The actual success of the WSL operation is judged by the caller's
+/// `wsl --status` re-probe, not this exit code.
+async fn run_wsl_elevated(wsl_args: &[&str]) -> Result<()> {
+    let arg_list = wsl_args
+        .iter()
+        .map(|a| format!("'{a}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let ps = format!(
+        "Start-Process -FilePath wsl.exe -ArgumentList {arg_list} -Verb RunAs -Wait \
+        -WindowStyle Hidden"
+    );
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .output()
+        .await
+        .with_context(|| "spawn powershell Start-Process -Verb RunAs")?;
+    if !out.status.success() {
+        bail!(
+            "elevated `wsl {}` failed (exit {}) — UAC may have been declined\nstderr: {}",
+            wsl_args.join(" "),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Register an `HKCU` `RunOnce` entry so the installer relaunches itself at
+/// the next logon after the reboot.
+///
+/// `HKCU` (not `HKLM`) keeps this admin-free; Windows deletes `RunOnce`
+/// entries before executing them, so it fires exactly once and can't loop.
+/// The install is detection-driven and idempotent, so "resume" is just
+/// "relaunch" — no saved state.
+///
+/// We point `RunOnce` at the *current* exe path, not a copy. `bundled`
+/// resolves the MSI payload relative to `current_exe()`
+/// (`%PROGRAMFILES%\ag\bin\ag-installer.exe` → `..\..\share\ag`), so the
+/// resumed run must launch from that same install location for
+/// `copy_artifacts` to find `share\ag`. Staging a copy elsewhere would break
+/// that relative resolution. The MSI install path is stable across the
+/// reboot, so no copy is needed.
+pub async fn register_wsl2_resume(tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+    let step = INSTALL_WSL2_ENABLE_STEP_NAME;
+    let self_exe = std::env::current_exe().with_context(|| "locate current installer exe")?;
+    let self_exe_str = self_exe.display().to_string();
+
+    if skip_systemctl() {
+        step_log(
+            tx,
+            tee,
+            step,
+            format!(
+                "SKIP_SCHTASKS=1 — would: reg add HKCU\\…\\RunOnce /v ag-installer-resume /d {self_exe_str}"
+            ),
+        );
+        return Ok(());
+    }
+
+    let out = Command::new("reg")
+        .args([
+            "add",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce",
+            "/v",
+            "ag-installer-resume",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &format!("\"{self_exe_str}\""),
+            "/f",
+        ])
+        .output()
+        .await
+        .with_context(|| "spawn reg add RunOnce")?;
+    if !out.status.success() {
+        bail!(
+            "reg add RunOnce exited {}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    step_log(
+        tx,
+        tee,
+        step,
+        format!("registered logon resume (HKCU RunOnce → {self_exe_str})"),
+    );
+    Ok(())
+}
+
+// =============================================================================
 // Install Docker Engine inside a WSL2 distro (ag-ubuntu)
 // =============================================================================
 
@@ -1291,11 +1469,7 @@ const WSL2_DISTRO: &str = "ag-ubuntu";
 /// Only invoked when the user picked the WSL2 Docker option, which only
 /// appears when `wsl2_available` was true in detection — so the WSL2
 /// feature is already enabled and no Windows restart is needed here.
-pub async fn install_docker_wsl2(
-    paths: &Paths,
-    tx: &ProgressSender,
-    tee: &LogTee,
-) -> Result<()> {
+pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
     let step = "Install WSL2 Docker Engine";
 
     if skip_systemctl() {
@@ -1335,7 +1509,12 @@ pub async fn install_docker_wsl2(
             .timeout(Duration::from_secs(600))
             .build()
             .with_context(|| "build http client for rootfs download")?;
-        step_log(tx, tee, step, format!("downloading rootfs: {WSL2_ROOTFS_URL}"));
+        step_log(
+            tx,
+            tee,
+            step,
+            format!("downloading rootfs: {WSL2_ROOTFS_URL}"),
+        );
         let resp = client
             .get(WSL2_ROOTFS_URL)
             .send()

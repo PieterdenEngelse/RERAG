@@ -66,20 +66,54 @@ pub enum ProgressEvent {
     /// Emitted exactly once after the final step completes successfully.
     /// Drives the "Continue" button on the Progress screen.
     InstallComplete,
+    /// Windows-only: WSL2 was just enabled but the machine must restart
+    /// before the install can finish. A logon-resume hook has already been
+    /// registered, so the installer reopens itself after the reboot. The
+    /// Progress screen shows `message` and offers Restart-now / later.
+    RebootRequired {
+        message: String,
+    },
 }
 
 #[cfg(windows)]
 pub const INSTALL_DOCKER_STEP_NAME: &str = "Install Docker Desktop";
 #[cfg(windows)]
 pub const INSTALL_WSL2_DOCKER_STEP_NAME: &str = "Install WSL2 Docker Engine";
+#[cfg(windows)]
+pub const INSTALL_WSL2_ENABLE_STEP_NAME: &str = "Enable WSL2";
+
+// Step display names. The three that name an OS-specific mechanism are
+// cfg-branched so the progress screen never shows Linux terms (XDG, systemd,
+// "native service") on Windows. These constants are the single source of
+// truth: STEP_NAMES, the `step!` calls in `run()`, and the platform
+// `step_log` calls all reference them so the UI step list, the per-step
+// status transitions, and the install-log prefixes stay in sync.
+pub const STEP_SEED_CONFIG: &str = "Seed config";
+pub const STEP_INSTALL_ARTIFACTS: &str = "Install artifacts";
+pub const STEP_HEALTH_CHECK: &str = "Health check";
+
+#[cfg(windows)]
+pub const STEP_ENSURE_TREE: &str = "Create install folders";
+#[cfg(not(windows))]
+pub const STEP_ENSURE_TREE: &str = "Ensure XDG tree";
+
+#[cfg(windows)]
+pub const STEP_STACK: &str = "Docker compose stack";
+#[cfg(not(windows))]
+pub const STEP_STACK: &str = "FalkorDB native service";
+
+#[cfg(windows)]
+pub const STEP_SERVICE: &str = "Scheduled Tasks";
+#[cfg(not(windows))]
+pub const STEP_SERVICE: &str = "Systemd user units";
 
 pub const STEP_NAMES: &[&str] = &[
-    "Ensure XDG tree",
-    "Seed config",
-    "Install artifacts",
-    "FalkorDB native service",
-    "Systemd user units",
-    "Health check",
+    STEP_ENSURE_TREE,
+    STEP_SEED_CONFIG,
+    STEP_INSTALL_ARTIFACTS,
+    STEP_STACK,
+    STEP_SERVICE,
+    STEP_HEALTH_CHECK,
 ];
 
 #[allow(dead_code)]
@@ -190,30 +224,95 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
                 crate::platform::install_docker_wsl2(&paths, &tx, &tee)
             );
         }
+        Some("enable_wsl2_docker") => {
+            // Enable the WSL2 feature first (elevated). The step! macro can't
+            // express the branch on the enable outcome, so plumb the events
+            // here. On ReadyNow we continue into the Docker-in-WSL2 install;
+            // on RebootRequired we register the logon-resume hook and stop —
+            // the install finishes after the user restarts and the installer
+            // relaunches itself (detection-driven, so a plain relaunch
+            // resumes where this left off).
+            use crate::platform::WslEnableOutcome;
+            let name = INSTALL_WSL2_ENABLE_STEP_NAME;
+            if tx.send(ProgressEvent::StepStart { name }).is_err() {
+                return InstallResult {
+                    success: false,
+                    log_path,
+                };
+            }
+            let started = std::time::Instant::now();
+            match crate::platform::enable_wsl2(&tx, &tee).await {
+                Ok(WslEnableOutcome::ReadyNow) => {
+                    let _ = tx.send(ProgressEvent::StepDone {
+                        name,
+                        duration: started.elapsed(),
+                    });
+                    step!(
+                        INSTALL_WSL2_DOCKER_STEP_NAME,
+                        crate::platform::install_docker_wsl2(&paths, &tx, &tee)
+                    );
+                }
+                Ok(WslEnableOutcome::RebootRequired) => {
+                    if let Err(e) = crate::platform::register_wsl2_resume(&tx, &tee).await {
+                        let error = format!("{e:#}");
+                        tee.write_line(&format!("FAILED: {error}\n"));
+                        let _ = tx.send(ProgressEvent::StepFailed { name, error });
+                        return InstallResult {
+                            success: false,
+                            log_path,
+                        };
+                    }
+                    let _ = tx.send(ProgressEvent::StepDone {
+                        name,
+                        duration: started.elapsed(),
+                    });
+                    let _ = tx.send(ProgressEvent::RebootRequired {
+                        message: "WSL2 has been enabled, but Windows needs to restart to \
+                            finish. After you restart and sign back in, this installer reopens \
+                            automatically to install Docker and complete setup — the WSL2 \
+                            Docker option will be preselected, so just click through."
+                            .to_string(),
+                    });
+                    return InstallResult {
+                        success: true,
+                        log_path,
+                    };
+                }
+                Err(e) => {
+                    let error = format!("{e:#}");
+                    tee.write_line(&format!("FAILED: {error}\n"));
+                    let _ = tx.send(ProgressEvent::StepFailed { name, error });
+                    return InstallResult {
+                        success: false,
+                        log_path,
+                    };
+                }
+            }
+        }
         _ => {}
     }
 
     step!(
-        "Ensure XDG tree",
+        STEP_ENSURE_TREE,
         crate::platform::ensure_install_tree(&paths, &tx, &tee, &mut log_path)
     );
     step!(
-        "Seed config",
+        STEP_SEED_CONFIG,
         seed_config(&paths, &tx, &tee, &answers, backend_port)
     );
     step!(
-        "Install artifacts",
+        STEP_INSTALL_ARTIFACTS,
         crate::platform::copy_artifacts(&paths, &tx, &tee)
     );
     step!(
-        "FalkorDB native service",
+        STEP_STACK,
         crate::platform::install_stack(&paths, &tx, &tee, &answers)
     );
     step!(
-        "Systemd user units",
+        STEP_SERVICE,
         crate::platform::install_service(&paths, &tx, &tee, &answers, backend_port)
     );
-    step!("Health check", health_check(&tx, &tee, backend_port));
+    step!(STEP_HEALTH_CHECK, health_check(&tx, &tee, backend_port));
 
     let _ = tx.send(ProgressEvent::InstallComplete);
     InstallResult {

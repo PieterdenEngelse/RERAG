@@ -124,10 +124,13 @@ impl PromptId {
                             .to_string()
                     } else {
                         "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
-                        needs it. The lightweight WSL2 Docker option is hidden because WSL2 \
-                        isn't enabled yet — enabling it needs admin rights and a reboot: run \
-                        `wsl --install` in an elevated PowerShell, restart Windows, then re-run \
-                        this installer. Otherwise install Docker Desktop from docs.docker.com."
+                        needs it. WSL2 isn't enabled yet — the installer can enable it for you \
+                        (one UAC prompt and a one-time Windows restart), then install a \
+                        lightweight, headless Docker Engine in a dedicated Linux distro. After \
+                        the restart the installer reopens automatically to finish. The app \
+                        itself still installs entirely under your user account — the admin step \
+                        is a one-time Windows prerequisite. Prefer not to? Install Docker \
+                        Desktop instead."
                             .to_string()
                     }
                 } else {
@@ -186,15 +189,30 @@ impl PromptId {
             ],
             PromptId::DockerMissing => {
                 if cfg!(windows) {
+                    let wsl2 = d.map(|d| d.wsl2_available).unwrap_or(false);
                     let mut opts = Vec::new();
                     // Only offer the WSL2 path when the WSL2 feature is already
                     // enabled — installing it would require a Windows restart.
-                    if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                    // When available it's the preselected default (see
+                    // `default_choice`), so its description carries "Default."
+                    // The WSL2 path is the default either way; which key it uses
+                    // depends on whether the feature is already enabled.
+                    if wsl2 {
                         opts.push(PromptOption {
                             key: "install_wsl2_docker",
                             label: "Install Docker Engine in WSL2 (lightweight, no GUI)",
-                            description: "Creates an ag-ubuntu WSL2 distro and installs Docker CE. \
-                                Free, headless, ~200 MB RAM. Downloads an Ubuntu rootfs (~500 MB).",
+                            description: "Default. Creates an ag-ubuntu WSL2 distro and installs \
+                                Docker CE. Free, headless, ~200 MB RAM. Downloads an Ubuntu \
+                                rootfs (~500 MB). No admin, no restart.",
+                        });
+                    } else {
+                        opts.push(PromptOption {
+                            key: "enable_wsl2_docker",
+                            label: "Enable WSL2 + install Docker Engine (one-time admin + restart)",
+                            description: "Default. Enables the WSL2 Windows feature (one UAC \
+                                prompt + a restart), then installs a lightweight, headless \
+                                Docker Engine in an ag-ubuntu distro. The installer reopens \
+                                automatically after the restart to finish.",
                         });
                     }
                     opts.push(PromptOption {
@@ -206,7 +224,9 @@ impl PromptId {
                     opts.push(PromptOption {
                         key: "abort",
                         label: "Abort — I'll set up Docker manually",
-                        description: "Default. Re-run the installer once docker is on PATH.",
+                        // Never the default on Windows: a WSL2 path is always
+                        // preselected (enable-or-install).
+                        description: "Re-run the installer once docker is on PATH.",
                     });
                     opts
                 } else {
@@ -339,10 +359,24 @@ impl PromptId {
         }
     }
 
-    pub fn default_choice(self) -> &'static str {
+    pub fn default_choice(self, d: Option<&DetectionResult>) -> &'static str {
         match self {
             PromptId::DiskLow => "continue",
-            PromptId::DockerMissing => "abort",
+            // On Windows the WSL2 path is always the preselected default: the
+            // lightweight "install Docker in WSL2" when the feature is already
+            // enabled, otherwise "enable WSL2 + install" (admin + restart).
+            // On Linux there's no WSL2, so fall back to the safe "abort".
+            PromptId::DockerMissing => {
+                if cfg!(windows) {
+                    if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                        "install_wsl2_docker"
+                    } else {
+                        "enable_wsl2_docker"
+                    }
+                } else {
+                    "abort"
+                }
+            }
             PromptId::PortBusy => "pick",
             PromptId::LowRam => "core",
             PromptId::NativeObs => "natives",
@@ -378,7 +412,7 @@ impl PromptAnswers {
     pub fn use_wsl2_docker(&self) -> bool {
         matches!(
             self.choice(PromptId::DockerMissing),
-            Some("install_wsl2_docker")
+            Some("install_wsl2_docker") | Some("enable_wsl2_docker")
         )
     }
 }

@@ -18,7 +18,8 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::{InstallStep, StepStatus};
 use crate::install_steps::{
-    self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME, STEP_NAMES,
+    self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME,
+    INSTALL_WSL2_ENABLE_STEP_NAME, STEP_NAMES,
 };
 use crate::prompts::{PromptAnswers, PromptId};
 use crate::ui::components::{FailureInfo, FailureModal, LogView, NavFooter, StepListView};
@@ -32,6 +33,8 @@ pub fn ProgressScreen() -> Element {
     let mut log_lines = use_signal(Vec::<String>::new);
     let mut error_signal = use_signal::<Option<FailureInfo>>(|| None);
     let mut complete = use_signal(|| false);
+    // Set when the install paused for a Windows restart (WSL2 enablement).
+    let mut reboot = use_signal::<Option<String>>(|| None);
 
     // Spawn the install task once on mount. Resource runs once even though
     // its body closes over the signals we mutate from event handling.
@@ -70,12 +73,18 @@ pub fn ProgressScreen() -> Element {
                     ProgressEvent::InstallComplete => {
                         complete.set(true);
                     }
+                    ProgressEvent::RebootRequired { message } => {
+                        log_lines.with_mut(|l| l.push(format!("[⟳] {message}")));
+                        reboot.set(Some(message));
+                        complete.set(true);
+                    }
                 }
             }
         }
     });
 
     let is_complete = *complete.read();
+    let reboot_msg = reboot.read().clone();
     let step_count = steps.read().len();
 
     rsx! {
@@ -85,7 +94,9 @@ pub fn ProgressScreen() -> Element {
                 p { class: "screen-subtitle",
                     "{step_count} steps. Output streams below — your install log is "
                     "preserved under "
-                    code { "~/.local/share/ag/logs/" }
+                    code {
+                        if cfg!(windows) { "%LOCALAPPDATA%\\ag\\logs\\" } else { "~/.local/share/ag/logs/" }
+                    }
                     "."
                 }
             }
@@ -98,13 +109,50 @@ pub fn ProgressScreen() -> Element {
                 }
             }
             FailureModal { error: error_signal }
-            NavFooter {
-                next_label: if is_complete { "Continue".to_string() } else { "Installing…".to_string() },
-                next_enabled: is_complete,
-                hide_back: true,
+            if let Some(msg) = reboot_msg {
+                div {
+                    style: "margin: 0.75rem 1.5rem; padding: 0.75rem 1rem; border: 1px solid \
+                        #7C2A02; border-radius: 6px; background: rgba(124,42,2,0.15); \
+                        color: #d1d5db;",
+                    p { style: "margin: 0;", "{msg}" }
+                }
+                div { class: "screen-footer",
+                    div { class: "screen-footer-left" }
+                    div { class: "screen-footer-right",
+                        button {
+                            class: "btn btn-secondary",
+                            onclick: move |_| quit_installer(),
+                            "I'll restart later"
+                        }
+                        button {
+                            class: "btn btn-primary",
+                            onclick: move |_| {
+                                // Best-effort immediate restart; the OS tears
+                                // this process down. The HKCU RunOnce hook
+                                // relaunches the installer after logon.
+                                let _ = std::process::Command::new("shutdown")
+                                    .args(["/r", "/t", "0"])
+                                    .spawn();
+                            },
+                            "Restart now"
+                        }
+                    }
+                }
+            } else {
+                NavFooter {
+                    next_label: if is_complete { "Continue".to_string() } else { "Installing…".to_string() },
+                    next_enabled: is_complete,
+                    hide_back: true,
+                }
             }
         }
     }
+}
+
+/// Quit the installer. Wrapped in a `()`-returning fn so the click handler
+/// doesn't trip never-type fallback — `std::process::exit` returns `!`.
+fn quit_installer() {
+    std::process::exit(0);
 }
 
 fn initial_steps(answers: &PromptAnswers) -> Vec<InstallStep> {
@@ -113,6 +161,10 @@ fn initial_steps(answers: &PromptAnswers) -> Vec<InstallStep> {
     match answers.choice(PromptId::DockerMissing) {
         Some("install_docker_desktop") => names.push(INSTALL_DOCKER_STEP_NAME),
         Some("install_wsl2_docker") => names.push(INSTALL_WSL2_DOCKER_STEP_NAME),
+        Some("enable_wsl2_docker") => {
+            names.push(INSTALL_WSL2_ENABLE_STEP_NAME);
+            names.push(INSTALL_WSL2_DOCKER_STEP_NAME);
+        }
         _ => {}
     }
     names.extend_from_slice(STEP_NAMES);

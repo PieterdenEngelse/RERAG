@@ -33,7 +33,7 @@ pub fn PromptsScreen() -> Element {
         let mut changed = false;
         for id in &prompts_to_show {
             if updated.choice(*id).is_none() {
-                updated.set_choice(*id, id.default_choice().to_string());
+                updated.set_choice(*id, id.default_choice(detection_state.as_ref()).to_string());
                 changed = true;
             }
         }
@@ -104,7 +104,7 @@ fn PromptCard(props: PromptCardProps) -> Element {
         .read()
         .choice(id)
         .map(str::to_string)
-        .unwrap_or_else(|| id.default_choice().to_string());
+        .unwrap_or_else(|| id.default_choice(Some(&props.detection)).to_string());
     let selected = use_signal(|| current_choice.clone());
 
     // Mirror local radio state → shared PromptAnswers signal whenever it

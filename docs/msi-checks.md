@@ -11,7 +11,7 @@ is the copy-pasteable runbook to walk while sitting in front of a VM.
 ## 0. Pre-flight
 
 - [ ] Fresh Windows 10 or 11 VM, no prior ag install
-- [ ] Docker Desktop installed and running
+- [ ] Docker Compose available and Docker daemon running (`docker compose version` succeeds)
 - [ ] Default SmartScreen settings (do not relax them)
 - [ ] Logged in as a local Administrator (per-machine MSI needs this)
 - [ ] Latest MSI downloaded from the release page:

@@ -225,7 +225,7 @@ cleanly (it may re-flow braces — accept those changes).
 ## PR 2 — Windows code + backend hook + compose profile
 
 Goal: real Windows installer executable that walks all six screens
-end-to-end on a Windows 10/11 box with Docker Desktop. No MSI yet —
+end-to-end on a Windows 10/11 box with Docker Compose. No MSI yet —
 that's PR 3.
 
 ### PR2.1 — Add cfg(windows) deps in `installer/Cargo.toml` ✅
@@ -728,7 +728,7 @@ fail; both artifacts upload to the release.
    ```markdown
    ## Install on Windows
 
-   **Requirements**: Windows 10 (1809+) or 11, Docker Desktop, ~4 GB
+   **Requirements**: Windows 10 (1809+) or 11, Docker Compose, ~4 GB
    free disk space.
 
    1. Download `ag-installer-vX.Y.Z-x86_64.msi` from the
@@ -759,7 +759,7 @@ Verification: README renders correctly on GitHub. Links work.
 
 ### PR3.4 — End-to-end Windows verification on clean VM ⬜
 
-On a fresh Windows 10 or 11 VM with Docker Desktop installed (but no
+On a fresh Windows 10 or 11 VM with Docker Compose available (but no
 prior ag install):
 
 1. Download the MSI from the release page (or copy from a build dir).
