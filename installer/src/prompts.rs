@@ -442,3 +442,107 @@ impl PromptAnswers {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal detection result carrying only the fields the DockerMissing
+    /// prompt logic reads; everything else stays at its default.
+    fn det(
+        docker: Option<&str>,
+        wsl2_available: bool,
+        virtualization_blocked: bool,
+    ) -> DetectionResult {
+        DetectionResult {
+            docker_present: docker.map(str::to_string),
+            wsl2_available,
+            virtualization_blocked,
+            ..Default::default()
+        }
+    }
+
+    /// The DockerMissing prompt only fires when docker is absent — true on
+    /// every platform, so this guard is un-gated.
+    #[test]
+    fn docker_missing_fires_only_when_docker_absent() {
+        assert!(required_prompts(&det(None, false, false)).contains(&PromptId::DockerMissing));
+        assert!(
+            !required_prompts(&det(Some("Docker version 29"), false, false))
+                .contains(&PromptId::DockerMissing)
+        );
+    }
+
+    // The cases below exercise the Windows-only WSL2 enable/gate logic. On
+    // Linux `cfg!(windows)` is false and DockerMissing always resolves to
+    // "abort" with the get.docker.com option set, so these assertions only
+    // hold — and only compile in — on Windows.
+    #[cfg(windows)]
+    fn option_keys(d: &DetectionResult) -> Vec<&'static str> {
+        PromptId::DockerMissing
+            .options(Some(d))
+            .into_iter()
+            .map(|o| o.key)
+            .collect()
+    }
+
+    /// WSL2 already enabled → the lightweight in-WSL2 install is preselected,
+    /// and the (restart-incurring) enable option isn't offered.
+    #[cfg(windows)]
+    #[test]
+    fn wsl2_enabled_preselects_lightweight_install() {
+        let d = det(None, true, false);
+        assert_eq!(
+            PromptId::DockerMissing.default_choice(Some(&d)),
+            "install_wsl2_docker"
+        );
+        let keys = option_keys(&d);
+        assert!(keys.contains(&"install_wsl2_docker"));
+        assert!(!keys.contains(&"enable_wsl2_docker"));
+    }
+
+    /// WSL2 off but the machine can run it → preselect "enable WSL2 + install".
+    #[cfg(windows)]
+    #[test]
+    fn wsl2_disabled_but_capable_preselects_enable() {
+        let d = det(None, false, false);
+        assert_eq!(
+            PromptId::DockerMissing.default_choice(Some(&d)),
+            "enable_wsl2_docker"
+        );
+        assert!(option_keys(&d).contains(&"enable_wsl2_docker"));
+    }
+
+    /// Firmware virtualization off → neither WSL2 path is offered (enabling
+    /// would reboot for nothing) and "abort" is the preselected default.
+    #[cfg(windows)]
+    #[test]
+    fn virtualization_blocked_omits_enable_and_defaults_to_abort() {
+        let d = det(None, false, true);
+        let keys = option_keys(&d);
+        assert!(!keys.contains(&"enable_wsl2_docker"));
+        assert!(!keys.contains(&"install_wsl2_docker"));
+        // Docker Desktop + abort remain; abort wins the default.
+        assert!(keys.contains(&"install_docker_desktop"));
+        assert!(keys.contains(&"abort"));
+        assert_eq!(PromptId::DockerMissing.default_choice(Some(&d)), "abort");
+    }
+
+    /// Blocked machines get the BIOS fix surfaced in both the context
+    /// paragraph and the abort option's description.
+    #[cfg(windows)]
+    #[test]
+    fn virtualization_blocked_surfaces_bios_guidance() {
+        let d = det(None, false, true);
+        let ctx = PromptId::DockerMissing.context(&d);
+        assert!(ctx.contains("VT-x"), "context should name VT-x: {ctx}");
+        assert!(ctx.to_lowercase().contains("virtualization"));
+        let abort = PromptId::DockerMissing
+            .options(Some(&d))
+            .into_iter()
+            .find(|o| o.key == "abort")
+            .expect("abort option present");
+        assert!(abort.description.contains("VT-x"));
+        assert!(abort.description.contains("BIOS"));
+    }
+}
