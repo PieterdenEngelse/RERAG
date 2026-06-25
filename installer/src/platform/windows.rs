@@ -155,6 +155,7 @@ pub async fn run_detection() -> DetectionResult {
         wsl2_available,
         wsl2_docker_version,
         wsl2_distro_name,
+        virtualization_blocked,
     ) = tokio::join!(
         probe_docker(),
         probe_ollama_active(),
@@ -170,6 +171,7 @@ pub async fn run_detection() -> DetectionResult {
         probe_wsl2_available(),
         probe_wsl2_docker(),
         probe_wsl2_distro_name(),
+        probe_virtualization_blocked(),
     );
     DetectionResult {
         docker_present,
@@ -189,6 +191,7 @@ pub async fn run_detection() -> DetectionResult {
         wsl2_available,
         wsl2_docker_version,
         wsl2_distro_name,
+        virtualization_blocked,
     }
 }
 
@@ -204,6 +207,38 @@ async fn probe_wsl2_available() -> bool {
         .await
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// `true` only when we can positively confirm hardware virtualization is
+/// off at the firmware level and no hypervisor is running — the one state
+/// where enabling WSL2 can't succeed without a BIOS/UEFI change (and Docker
+/// Desktop can't run either). `wsl --install` reports success regardless, so
+/// detection has to read the machine, not the install exit code.
+///
+/// Ordering is load-bearing: when a hypervisor is already present, WMI
+/// reports `VirtualizationFirmwareEnabled` as false/null even though VT-x is
+/// on, so we short-circuit to "not blocked" before ever trusting that
+/// property. We only return `true` on an *explicit* `false` reading with no
+/// hypervisor present; null / unreadable / probe-failed all fall through to
+/// `false` (best-effort — never false-block a machine that might be fine).
+/// `Select-Object -First 1` collapses the per-socket `Win32_Processor`
+/// collection so the comparison stays scalar on multi-socket hosts.
+async fn probe_virtualization_blocked() -> bool {
+    let ps = "$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue; \
+        $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | \
+        Select-Object -First 1; \
+        if ($cs.HypervisorPresent) { 'ok' } \
+        elseif ($cpu.VirtualizationFirmwareEnabled -eq $true) { 'ok' } \
+        elseif ($cpu.VirtualizationFirmwareEnabled -eq $false) { 'blocked' } \
+        else { 'unknown' }";
+    match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim() == "blocked",
+        _ => false,
+    }
 }
 
 /// True when the ag-managed `ag-ubuntu` distro is registered. `wsl --list

@@ -115,7 +115,14 @@ impl PromptId {
             ),
             PromptId::DockerMissing => {
                 if cfg!(windows) {
-                    if d.wsl2_available {
+                    if d.virtualization_blocked {
+                        "docker isn't on PATH — and hardware virtualization is turned off in \
+                        this machine's firmware (BIOS/UEFI), so neither WSL2 nor Docker Desktop \
+                        can run yet. Enable Intel VT-x (or AMD-V / SVM) in your BIOS/UEFI setup, \
+                        reboot, then re-run this installer. Enabling WSL2 before that would force \
+                        a restart and still fail to start, so the installer doesn't offer it here."
+                            .to_string()
+                    } else if d.wsl2_available {
                         "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
                         needs it. WSL2 is enabled on this machine, so the installer can add \
                         Docker Engine inside a dedicated Linux distro — lightweight, free, no \
@@ -190,6 +197,7 @@ impl PromptId {
             PromptId::DockerMissing => {
                 if cfg!(windows) {
                     let wsl2 = d.map(|d| d.wsl2_available).unwrap_or(false);
+                    let blocked = d.map(|d| d.virtualization_blocked).unwrap_or(false);
                     let mut opts = Vec::new();
                     // Only offer the WSL2 path when the WSL2 feature is already
                     // enabled — installing it would require a Windows restart.
@@ -197,6 +205,11 @@ impl PromptId {
                     // `default_choice`), so its description carries "Default."
                     // The WSL2 path is the default either way; which key it uses
                     // depends on whether the feature is already enabled.
+                    //
+                    // Firmware-virtualization-off is the exception: the
+                    // enable-WSL2 option is omitted entirely (it can't succeed
+                    // without a BIOS change, so offering it would just burn a
+                    // reboot), and `abort` becomes the BIOS-guidance default.
                     if wsl2 {
                         opts.push(PromptOption {
                             key: "install_wsl2_docker",
@@ -205,7 +218,7 @@ impl PromptId {
                                 Docker CE. Free, headless, ~200 MB RAM. Downloads an Ubuntu \
                                 rootfs (~500 MB). No admin, no restart.",
                         });
-                    } else {
+                    } else if !blocked {
                         opts.push(PromptOption {
                             key: "enable_wsl2_docker",
                             label: "Enable WSL2 + install Docker Engine (one-time admin + restart)",
@@ -224,9 +237,16 @@ impl PromptId {
                     opts.push(PromptOption {
                         key: "abort",
                         label: "Abort — I'll set up Docker manually",
-                        // Never the default on Windows: a WSL2 path is always
-                        // preselected (enable-or-install).
-                        description: "Re-run the installer once docker is on PATH.",
+                        description: if blocked {
+                            // Default when firmware virtualization is off: no
+                            // Docker path can run until the BIOS toggle is flipped.
+                            "Default. Enable Intel VT-x (or AMD-V / SVM) in your BIOS/UEFI, \
+                                reboot, then re-run the installer — no Docker option can run \
+                                until hardware virtualization is on."
+                        } else {
+                            // Otherwise a WSL2 path is the preselected default.
+                            "Re-run the installer once docker is on PATH."
+                        },
                     });
                     opts
                 } else {
@@ -362,13 +382,19 @@ impl PromptId {
     pub fn default_choice(self, d: Option<&DetectionResult>) -> &'static str {
         match self {
             PromptId::DiskLow => "continue",
-            // On Windows the WSL2 path is always the preselected default: the
+            // On Windows the WSL2 path is normally the preselected default: the
             // lightweight "install Docker in WSL2" when the feature is already
             // enabled, otherwise "enable WSL2 + install" (admin + restart).
-            // On Linux there's no WSL2, so fall back to the safe "abort".
+            // Exception: when firmware virtualization is off, neither WSL2 nor
+            // Docker Desktop can run until VT-x/AMD-V is enabled in BIOS — so
+            // we preselect "abort" and the enable option isn't even offered
+            // (it would reboot for nothing). On Linux there's no WSL2, so fall
+            // back to the safe "abort".
             PromptId::DockerMissing => {
                 if cfg!(windows) {
-                    if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                    if d.map(|d| d.virtualization_blocked).unwrap_or(false) {
+                        "abort"
+                    } else if d.map(|d| d.wsl2_available).unwrap_or(false) {
                         "install_wsl2_docker"
                     } else {
                         "enable_wsl2_docker"

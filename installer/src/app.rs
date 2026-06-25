@@ -263,13 +263,23 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             format!("installed in WSL2 ({v})")
         } else if d.wsl2_available {
             "WSL2 enabled — installer can add Docker Engine here (no admin needed)".to_string()
+        } else if d.virtualization_blocked {
+            "blocked — hardware virtualization is off in firmware; enable Intel VT-x / \
+            AMD-V (SVM) in BIOS/UEFI and reboot before WSL2 or Docker Desktop can run"
+                .to_string()
         } else {
             "WSL2 not enabled — the installer can enable it (one-time admin + restart) and \
             add a lightweight Docker Engine; it reopens automatically after the restart"
                 .to_string()
         },
-        // Informational; the Docker row is the real blocker.
-        status: DetectionStatus::Ok,
+        // Usually informational (the Docker row is the real blocker), but a
+        // firmware-virtualization-off machine can't run any Docker path, so
+        // flag it.
+        status: if d.virtualization_blocked {
+            DetectionStatus::Warn
+        } else {
+            DetectionStatus::Ok
+        },
     });
 
     rows

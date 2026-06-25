@@ -174,6 +174,9 @@ pub async fn run_detection() -> DetectionResult {
         disk_free_gb,
         ram_gb,
         distro,
+        // Windows-only fields (wsl2_*, virtualization_blocked) stay at their
+        // defaults on Linux — the struct shape is shared across platforms.
+        ..Default::default()
     }
 }
 

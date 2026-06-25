@@ -65,6 +65,19 @@ pub struct DetectionResult {
     /// Windows only. The ag-managed WSL2 distro (`ag-ubuntu`) already
     /// exists → `Some("ag-ubuntu")`. Reinstalls reuse it.
     pub wsl2_distro_name: Option<String>,
+    /// Windows only. `true` only when virtualization is **off at the
+    /// firmware level** and no hypervisor is running — i.e.
+    /// `Win32_ComputerSystem.HypervisorPresent` is false AND
+    /// `Win32_Processor.VirtualizationFirmwareEnabled` is explicitly false.
+    /// In that state `wsl --install` reports success but WSL2 still can't
+    /// start after a reboot (error `0x80370102`), so the "enable WSL2" path
+    /// would burn a restart for nothing — and Docker Desktop can't run
+    /// either. Gates enablement off and drives the "enable VT-x/AMD-V in
+    /// BIOS first" guidance. Conservative: any uncertainty (property
+    /// unreadable, probe failed, hypervisor already present) leaves this
+    /// `false` so we never false-block a machine that's actually fine.
+    /// Always `false` on Linux.
+    pub virtualization_blocked: bool,
 }
 
 /// Runs every probe; orchestrator body lives in
@@ -110,6 +123,7 @@ mod tests {
         println!("wsl2_available     {}", result.wsl2_available);
         println!("wsl2_docker_version {:?}", result.wsl2_docker_version);
         println!("wsl2_distro_name   {:?}", result.wsl2_distro_name);
+        println!("virtualization_blocked {}", result.virtualization_blocked);
 
         let rows = crate::app::detection_rows(&result);
         println!("\n--- Detection screen rows ---");
