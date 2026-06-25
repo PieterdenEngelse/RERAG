@@ -142,6 +142,7 @@ pub async fn run_detection() -> DetectionResult {
     let paths = Paths::resolve();
     let (
         docker_present,
+        docker_engine_version,
         ollama_active,
         compose_up,
         ag_env_exists,
@@ -158,6 +159,7 @@ pub async fn run_detection() -> DetectionResult {
         virtualization_blocked,
     ) = tokio::join!(
         probe_docker(),
+        probe_docker_engine(),
         probe_ollama_active(),
         probe_compose_up(),
         probe_ag_env_exists(&paths),
@@ -175,6 +177,7 @@ pub async fn run_detection() -> DetectionResult {
     );
     DetectionResult {
         docker_present,
+        docker_engine_version,
         ollama_active,
         compose_up,
         falkordb_healthy,
@@ -277,6 +280,29 @@ async fn probe_wsl2_docker() -> Option<String> {
 async fn probe_docker() -> Option<String> {
     let out = Command::new("docker")
         .arg("--version")
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version)
+    }
+}
+
+/// Engine/daemon version via `docker version --format {{.Server.Version}}`.
+/// Unlike `--version` (which only reads the CLI binary), this round-trips to
+/// `dockerd`, so it exits non-zero when the daemon is unreachable — exactly
+/// the "Docker Desktop installed but not started" case the compose stack
+/// would otherwise hit at `docker compose up`. The `{{...}}` is a Go
+/// template, passed literally as one arg.
+async fn probe_docker_engine() -> Option<String> {
+    let out = Command::new("docker")
+        .args(["version", "--format", "{{.Server.Version}}"])
         .output()
         .await
         .ok()?;
@@ -426,6 +452,13 @@ async fn probe_disk_free_gb(paths: &Paths) -> u64 {
     tokio::task::spawn_blocking(move || fs2::available_space(&target).unwrap_or(0) >> 30)
         .await
         .unwrap_or(0)
+}
+
+/// Public re-probe of free space on the install volume, for the mid-install
+/// disk guard in `install_steps::run`. Same measurement as detection's
+/// `probe_disk_free_gb`, exposed with a uniform cross-platform signature.
+pub async fn disk_free_gb(paths: &Paths) -> u64 {
+    probe_disk_free_gb(paths).await
 }
 
 async fn probe_ram_gb() -> u64 {

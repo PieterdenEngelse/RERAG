@@ -136,6 +136,7 @@ pub fn skip_systemctl() -> bool {
 pub async fn run_detection() -> DetectionResult {
     let (
         docker_present,
+        docker_engine_version,
         ollama_active,
         compose_up,
         ag_env_exists,
@@ -148,6 +149,7 @@ pub async fn run_detection() -> DetectionResult {
         distro,
     ) = tokio::join!(
         probe_docker(),
+        probe_docker_engine(),
         probe_ollama_active(),
         probe_compose_up(),
         probe_ag_env_exists(),
@@ -163,6 +165,7 @@ pub async fn run_detection() -> DetectionResult {
 
     DetectionResult {
         docker_present,
+        docker_engine_version,
         ollama_active,
         compose_up,
         falkordb_healthy,
@@ -183,6 +186,27 @@ pub async fn run_detection() -> DetectionResult {
 async fn probe_docker() -> Option<String> {
     let out = Command::new("docker")
         .arg("--version")
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version)
+    }
+}
+
+/// Engine/daemon version via `docker version --format {{.Server.Version}}`.
+/// Unlike `--version` (CLI-only), this round-trips to `dockerd`, so it exits
+/// non-zero when the daemon isn't reachable — the compose stack needs the
+/// engine, not just the CLI. The `{{...}}` is a Go template, one literal arg.
+async fn probe_docker_engine() -> Option<String> {
+    let out = Command::new("docker")
+        .args(["version", "--format", "{{.Server.Version}}"])
         .output()
         .await
         .ok()?;
@@ -294,6 +318,14 @@ async fn probe_disk_free_gb() -> u64 {
         .map(|s| s.trim().trim_end_matches('G'))
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0)
+}
+
+/// Public re-probe of free space, for the mid-install disk guard in
+/// `install_steps::run`. Same measurement as detection's `probe_disk_free_gb`
+/// (`df $HOME`); takes `&Paths` for a uniform cross-platform signature even
+/// though Linux derives the path from `$HOME`.
+pub async fn disk_free_gb(_paths: &Paths) -> u64 {
+    probe_disk_free_gb().await
 }
 
 async fn probe_backend_port_busy(port: u16) -> bool {

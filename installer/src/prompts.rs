@@ -12,6 +12,14 @@ use crate::detection::DetectionResult;
 pub enum PromptId {
     DiskLow,
     DockerMissing,
+    /// docker CLI is on PATH but the engine/daemon isn't reachable
+    /// (`docker_engine_version` is `None` while `docker_present` is `Some`).
+    /// Cross-platform: a stopped Docker Desktop on Windows or a stopped
+    /// `docker` service on Linux both land here. Mutually exclusive with
+    /// `DockerMissing` (that one needs the CLI absent). Surfaces the issue
+    /// on the decision screen instead of letting the stack step fail with a
+    /// cryptic "cannot connect to the Docker daemon" later.
+    DockerEngineDown,
     PortBusy,
     LowRam,
     /// Native loki / tempo / otelcol units (Linux only — no analog on
@@ -23,12 +31,12 @@ pub enum PromptId {
     #[cfg_attr(windows, allow(dead_code))]
     NativeObs,
     SystemRedis,
-    /// "Existing ag service / scheduled task was edited" — Linux variant
-    /// is the rendered `~/.config/systemd/user/ag.service`, Windows
-    /// variant is the Scheduled-Task XML. Labels branch on `cfg!(windows)`
-    /// in `title()` / `context()` / `options()`. The same field
-    /// (`DetectionResult::ag_service_drift`) drives both — the bool's
-    /// meaning generalizes cleanly across OSes.
+    /// The user customized how ag auto-starts at sign-in (the Linux systemd
+    /// user unit or the Windows logon task) away from the installer's setup.
+    /// Driven by `DetectionResult::ag_service_drift`. User-facing copy is
+    /// platform-neutral ("ag auto-start") — the underlying mechanism differs
+    /// per OS, but the end user only cares that *their* version won't be
+    /// clobbered without asking.
     AgInstallDrift,
 }
 
@@ -51,6 +59,10 @@ pub fn required_prompts(d: &DetectionResult) -> Vec<PromptId> {
     }
     if d.docker_present.is_none() {
         prompts.push(PromptId::DockerMissing);
+    } else if d.docker_engine_version.is_none() {
+        // CLI present but the engine/daemon isn't reachable — the compose
+        // stack can't come up until it's running.
+        prompts.push(PromptId::DockerEngineDown);
     }
     if d.backend_port_busy {
         prompts.push(PromptId::PortBusy);
@@ -76,6 +88,35 @@ pub fn required_prompts(d: &DetectionResult) -> Vec<PromptId> {
     prompts
 }
 
+/// Hard blockers that stop the install regardless of any prompt choice,
+/// returned as human-readable reasons for the Prompts-screen gate to show
+/// (it disables "Begin install" while any exist). Distinct from prompts: the
+/// user can't resolve these by picking an option — they must fix the
+/// underlying condition and re-run.
+///
+/// Today the only blocker is free space below `DISK_HARD_GB`, the floor the
+/// `DiskLow` copy promises ("below {HARD} GB the install would refuse to
+/// run"). `disk_free_gb == 0` means "unknown" per the detection convention,
+/// so it is never treated as a blocker.
+pub fn install_blockers(d: &DetectionResult) -> Vec<String> {
+    disk_blocker(d.disk_free_gb).into_iter().collect()
+}
+
+/// The free-space hard-stop, factored out so both the pre-install gate
+/// (`install_blockers`, from detection) and the mid-install re-probe (in
+/// `install_steps::run`, just before the disk-heavy stack step) share one
+/// floor and one message. `0` means "unknown" → never a blocker.
+pub fn disk_blocker(disk_free_gb: u64) -> Option<String> {
+    if disk_free_gb > 0 && disk_free_gb < DISK_HARD_GB {
+        Some(format!(
+            "Only {disk_free_gb} GB free — ag needs at least {DISK_HARD_GB} GB. \
+            Free up space, then re-run the installer."
+        ))
+    } else {
+        None
+    }
+}
+
 /// One option in a prompt's radio group: stable key, label shown next to the
 /// radio, and a one-line description underneath.
 #[derive(Clone, PartialEq, Eq)]
@@ -90,17 +131,12 @@ impl PromptId {
         match self {
             PromptId::DiskLow => "Disk is tight",
             PromptId::DockerMissing => "Docker is missing",
+            PromptId::DockerEngineDown => "Docker engine not running",
             PromptId::PortBusy => "Backend port is in use",
             PromptId::LowRam => "Compose stack profile",
             PromptId::NativeObs => "Native observability detected",
             PromptId::SystemRedis => "System Redis detected",
-            PromptId::AgInstallDrift => {
-                if cfg!(windows) {
-                    "Existing ag scheduled task was edited"
-                } else {
-                    "Existing ag.service was edited"
-                }
-            }
+            PromptId::AgInstallDrift => "Your ag auto-start was customized",
         }
     }
 
@@ -146,6 +182,23 @@ impl PromptId {
                         .to_string()
                 }
             }
+            PromptId::DockerEngineDown => {
+                if cfg!(windows) {
+                    "The docker CLI is on PATH, but its engine (the dockerd daemon) isn't \
+                    responding — `docker version` can't reach the server. The stack (FalkorDB / \
+                    Redis / observability) needs a running engine, so it would fail to come up. \
+                    Start Docker Desktop and wait until it reports \"running\", then continue — \
+                    or abort, start it, and re-run."
+                        .to_string()
+                } else {
+                    "The docker CLI is on PATH, but its engine (the dockerd daemon) isn't \
+                    responding — `docker version` can't reach the server. The compose stack \
+                    (FalkorDB / Redis / observability) needs a running engine, so it would fail \
+                    to come up. Start the docker service (e.g. `systemctl start docker`), then \
+                    continue — or abort, start it, and re-run."
+                        .to_string()
+                }
+            }
             PromptId::PortBusy => "Something is already listening on port 3010. \
                 If you continue with the default port, ag.service will fail to bind."
                 .to_string(),
@@ -164,19 +217,9 @@ impl PromptId {
                 ag can use it (and skip the compose Redis), or install ag-redis alongside."
                     .to_string()
             }
-            PromptId::AgInstallDrift => {
-                if cfg!(windows) {
-                    "The `ag` scheduled task is registered, but its <Command> doesn't point \
-                    at the installer-managed ag-start.cmd. Pick how to handle the rendered \
-                    task from this install."
-                        .to_string()
-                } else {
-                    "~/.config/systemd/user/ag.service exists but is missing one or more lines \
-                    from our template — almost certainly hand-edited. Pick how to handle the \
-                    rendered unit from this install."
-                        .to_string()
-                }
-            }
+            PromptId::AgInstallDrift => "Something changed how ag starts when you sign in, so \
+                it no longer matches the installer's setup. Choose what to do with your version."
+                .to_string(),
         }
     }
 
@@ -186,7 +229,7 @@ impl PromptId {
                 PromptOption {
                     key: "continue",
                     label: "Continue anyway",
-                    description: "Default. Phase D will still abort if disk drops below the hard threshold mid-install.",
+                    description: "Default. Fine to proceed in the 10–20 GB band; the installer only hard-stops below 10 GB free.",
                 },
                 PromptOption {
                     key: "abort",
@@ -264,6 +307,18 @@ impl PromptId {
                     ]
                 }
             }
+            PromptId::DockerEngineDown => vec![
+                PromptOption {
+                    key: "abort",
+                    label: "Abort — I'll start Docker first",
+                    description: "Default. Start the Docker engine, wait until it's running, then re-run the installer.",
+                },
+                PromptOption {
+                    key: "continue",
+                    label: "Continue anyway",
+                    description: "Proceed now. The stack step will fail unless the engine is running by the time it starts.",
+                },
+            ],
             PromptId::PortBusy => vec![
                 PromptOption {
                     key: "pick",
@@ -337,45 +392,23 @@ impl PromptId {
                     description: "Decide later.",
                 },
             ],
-            PromptId::AgInstallDrift => {
-                if cfg!(windows) {
-                    vec![
-                        PromptOption {
-                            key: "keep",
-                            label: "Keep existing ag task (skip rendering)",
-                            description: "Default. Your registered scheduled task stays in place; this install does not overwrite it.",
-                        },
-                        PromptOption {
-                            key: "backup",
-                            label: "Back up → ag.xml.bak-<ts> and replace",
-                            description: "Safe replace. Original XML is preserved with a timestamp suffix.",
-                        },
-                        PromptOption {
-                            key: "replace",
-                            label: "Replace without backup",
-                            description: "Destructive. Only pick if you're certain you don't need the existing task.",
-                        },
-                    ]
-                } else {
-                    vec![
-                        PromptOption {
-                            key: "keep",
-                            label: "Keep existing ag.service (skip rendering)",
-                            description: "Default. Your hand-edited unit stays in place; this install does not overwrite it.",
-                        },
-                        PromptOption {
-                            key: "backup",
-                            label: "Back up → ag.service.bak-<ts> and replace",
-                            description: "Safe replace. Original is preserved with a timestamp suffix.",
-                        },
-                        PromptOption {
-                            key: "replace",
-                            label: "Replace without backup",
-                            description: "Destructive. Only pick if you're certain you don't need the existing unit.",
-                        },
-                    ]
-                }
-            }
+            PromptId::AgInstallDrift => vec![
+                PromptOption {
+                    key: "keep",
+                    label: "Keep my version",
+                    description: "Default. Your customized auto-start stays in place; the installer won't change it.",
+                },
+                PromptOption {
+                    key: "backup",
+                    label: "Back mine up, use the standard one",
+                    description: "Saves your version with a timestamp, then installs the standard auto-start.",
+                },
+                PromptOption {
+                    key: "replace",
+                    label: "Replace with the standard one",
+                    description: "Discards your version. Only pick this if you don't need it.",
+                },
+            ],
         }
     }
 
@@ -403,6 +436,7 @@ impl PromptId {
                     "abort"
                 }
             }
+            PromptId::DockerEngineDown => "abort",
             PromptId::PortBusy => "pick",
             PromptId::LowRam => "core",
             PromptId::NativeObs => "natives",
@@ -430,6 +464,13 @@ impl PromptAnswers {
     }
     pub fn choice(&self, id: PromptId) -> Option<&str> {
         self.choices.get(id.title()).map(String::as_str)
+    }
+
+    /// True when any recorded choice selected an "abort" option. The Prompts
+    /// screen disables "Begin install" while this holds, so `install_steps::run`
+    /// should never be reached with an abort selected.
+    pub fn has_abort(&self) -> bool {
+        self.choices.values().any(|v| v == "abort")
     }
 
     /// True when docker ops should route through the WSL2 `ag-ubuntu`
@@ -471,6 +512,62 @@ mod tests {
             !required_prompts(&det(Some("Docker version 29"), false, false))
                 .contains(&PromptId::DockerMissing)
         );
+    }
+
+    /// CLI present but the engine unreachable → DockerEngineDown fires (and
+    /// DockerMissing does not, since they're mutually exclusive). Default is
+    /// the safe "abort". Cross-platform — the prompt's logic isn't cfg-branched.
+    #[test]
+    fn docker_engine_down_fires_when_cli_present_but_engine_absent() {
+        let d = DetectionResult {
+            docker_present: Some("Docker version 29.5.3".to_string()),
+            docker_engine_version: None,
+            ..Default::default()
+        };
+        let prompts = required_prompts(&d);
+        assert!(prompts.contains(&PromptId::DockerEngineDown));
+        assert!(!prompts.contains(&PromptId::DockerMissing));
+        assert_eq!(PromptId::DockerEngineDown.default_choice(Some(&d)), "abort");
+    }
+
+    /// Free space below the 10 GB floor is a hard blocker; 0 ("unknown") and
+    /// ≥ 10 GB are not.
+    #[test]
+    fn install_blockers_flags_only_below_disk_floor() {
+        let disk = |gb| DetectionResult {
+            disk_free_gb: gb,
+            ..Default::default()
+        };
+        assert!(install_blockers(&disk(8))
+            .iter()
+            .any(|r| r.contains("Only 8 GB")));
+        assert!(install_blockers(&disk(DISK_HARD_GB)).is_empty()); // exactly 10 → OK
+        assert!(install_blockers(&disk(25)).is_empty());
+        assert!(install_blockers(&disk(0)).is_empty()); // unknown, never block
+    }
+
+    /// `has_abort` drives the Prompts-screen install gate.
+    #[test]
+    fn has_abort_tracks_abort_choices() {
+        let mut a = PromptAnswers::default();
+        assert!(!a.has_abort());
+        a.set_choice(PromptId::DockerEngineDown, "continue".to_string());
+        assert!(!a.has_abort());
+        a.set_choice(PromptId::DockerEngineDown, "abort".to_string());
+        assert!(a.has_abort());
+    }
+
+    /// A reachable engine fires neither Docker prompt.
+    #[test]
+    fn reachable_engine_fires_no_docker_prompt() {
+        let d = DetectionResult {
+            docker_present: Some("Docker version 29.5.3".to_string()),
+            docker_engine_version: Some("29.5.3".to_string()),
+            ..Default::default()
+        };
+        let prompts = required_prompts(&d);
+        assert!(!prompts.contains(&PromptId::DockerEngineDown));
+        assert!(!prompts.contains(&PromptId::DockerMissing));
     }
 
     // The cases below exercise the Windows-only WSL2 enable/gate logic. On

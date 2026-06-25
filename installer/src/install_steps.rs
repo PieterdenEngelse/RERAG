@@ -162,6 +162,13 @@ pub(crate) fn step_log(
 }
 
 pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
+    // Invariant: the Prompts screen disables "Begin install" whenever any
+    // choice is "abort", so the install can't be launched in that state. This
+    // documents (and in debug builds enforces) that contract at the boundary.
+    debug_assert!(
+        !answers.has_abort(),
+        "install_steps::run reached with an abort choice — the Prompts screen should block it"
+    );
     let paths = Paths::resolve();
     let backend_port = answers.backend_port.unwrap_or(DEFAULT_BACKEND_PORT);
     let tee = LogTee::new();
@@ -304,10 +311,20 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
         STEP_INSTALL_ARTIFACTS,
         crate::platform::copy_artifacts(&paths, &tx, &tee)
     );
-    step!(
-        STEP_STACK,
-        crate::platform::install_stack(&paths, &tx, &tee, &answers)
-    );
+    step!(STEP_STACK, async {
+        // Mid-install disk guard: re-probe right before the heaviest step
+        // (compose image pulls can be several GB). The Prompts-screen gate
+        // already enforced the floor from detection, but space can drop
+        // between then and now (earlier steps, the WSL2 rootfs download, or
+        // other processes) — fail with a clear message rather than a cryptic
+        // ENOSPC from docker mid-pull. Same floor/message as the pre-install
+        // gate (`prompts::disk_blocker`).
+        let free = crate::platform::disk_free_gb(&paths).await;
+        if let Some(msg) = crate::prompts::disk_blocker(free) {
+            anyhow::bail!("{msg}");
+        }
+        crate::platform::install_stack(&paths, &tx, &tee, &answers).await
+    });
     step!(
         STEP_SERVICE,
         crate::platform::install_service(&paths, &tx, &tee, &answers, backend_port)

@@ -4,7 +4,9 @@
 //! the result as two side-by-side groups: OK on the left, "Need attention"
 //! (Warn) on the right. Warn-on-the-right keeps the urgent items where the
 //! eye lands first when the user is looking for what they need to act on.
-//! While probes are pending the screen shows a spinner.
+//! While probes are pending the screen shows a spinner over a pulsing
+//! checklist of the checks being run, so the wait reads as "scanning the
+//! host" rather than a frozen screen.
 
 use dioxus::prelude::*;
 
@@ -38,28 +40,50 @@ pub fn DetectionScreen() -> Element {
             }
             div { class: "screen-body",
                 match value.as_ref() {
-                    None => rsx! {
-                        div { class: "detection-pending",
-                            div { class: "detection-spinner" }
-                            p { class: "detection-pending-label",
-                                if cfg!(windows) {
-                                    "Probing docker, scheduled tasks, ports, disk and RAM…"
-                                } else {
-                                    "Probing docker, systemd units, ports, disk and RAM…"
+                    None => {
+                        // Reuse detection_rows so the pending checklist always
+                        // matches the real row set: labels are cfg-branched but
+                        // value-independent, so a default result yields exactly
+                        // the labels (and order) that will appear once probes
+                        // resolve — no second list to keep in sync.
+                        let probing: Vec<&'static str> = detection_rows(&DetectionResult::default())
+                            .into_iter()
+                            .map(|r| r.label)
+                            .collect();
+                        rsx! {
+                            div { class: "detection-pending",
+                                div { class: "detection-spinner" }
+                                p { class: "detection-pending-label",
+                                    if cfg!(windows) {
+                                        "Probing docker, scheduled tasks, ports, disk, RAM and WSL2…"
+                                    } else {
+                                        "Probing docker, systemd units, ports, disk and RAM…"
+                                    }
+                                }
+                                ul { class: "detection-probe-grid",
+                                    for label in probing {
+                                        li { key: "{label}", class: "detection-probe-item",
+                                            span { class: "detection-probe-dot" }
+                                            span { class: "detection-probe-name", "{label}" }
+                                        }
+                                    }
                                 }
                             }
                         }
-                    },
+                    }
                     Some(result) => {
                         let rows = detection_rows(result);
-                        let (ok_rows, warn_rows): (Vec<DetectionRow>, Vec<DetectionRow>) = rows
+                        // Only Warn rows go in the right "needs attention" column;
+                        // Ok (✓) and Info (○) both mean "no action needed" and
+                        // share the left column.
+                        let (cleared_rows, warn_rows): (Vec<DetectionRow>, Vec<DetectionRow>) = rows
                             .into_iter()
-                            .partition(|r| matches!(r.status, DetectionStatus::Ok));
+                            .partition(|r| !matches!(r.status, DetectionStatus::Warn));
                         rsx! {
                             div { class: "detection-groups",
                                 DetectionGroup {
                                     kind: GroupKind::Ok,
-                                    rows: ok_rows,
+                                    rows: cleared_rows,
                                 }
                                 DetectionGroup {
                                     kind: GroupKind::Warn,
@@ -91,7 +115,10 @@ struct DetectionGroupProps {
 fn DetectionGroup(props: DetectionGroupProps) -> Element {
     let count = props.rows.len();
     let (class, header) = match props.kind {
-        GroupKind::Ok => ("detection-group detection-group-ok", format!("{count} OK")),
+        GroupKind::Ok => (
+            "detection-group detection-group-ok",
+            format!("{count} no action needed"),
+        ),
         GroupKind::Warn => (
             "detection-group detection-group-warn",
             if count == 0 {
@@ -131,6 +158,8 @@ fn DetectionGroup(props: DetectionGroupProps) -> Element {
 fn icon_for(s: DetectionStatus) -> IconKind {
     match s {
         DetectionStatus::Ok => IconKind::Ok,
+        // Neutral ○ (gray) — "noted, not active", never a green pass.
+        DetectionStatus::Info => IconKind::Pending,
         DetectionStatus::Warn => IconKind::Warn,
     }
 }
@@ -138,6 +167,7 @@ fn icon_for(s: DetectionStatus) -> IconKind {
 fn row_class(s: DetectionStatus) -> &'static str {
     match s {
         DetectionStatus::Ok => "detection-row detection-row-ok",
+        DetectionStatus::Info => "detection-row detection-row-info",
         DetectionStatus::Warn => "detection-row detection-row-warn",
     }
 }

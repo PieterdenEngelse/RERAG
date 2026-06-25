@@ -18,8 +18,17 @@ pub const BACKEND_PORT: u16 = 3010;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DetectionResult {
-    /// `docker --version` string when present, `None` otherwise.
+    /// `docker --version` (the CLI *client*) when the binary is on PATH,
+    /// `None` otherwise. Presence of the CLI does **not** imply a running
+    /// engine — see `docker_engine_version`.
     pub docker_present: Option<String>,
+    /// `docker version --format {{.Server.Version}}` — the engine/daemon
+    /// (`dockerd`) version, set only when the daemon is actually reachable.
+    /// `Some` ⇒ a working engine the compose stack can use; `None` with a
+    /// `Some(docker_present)` ⇒ the CLI is installed but the daemon isn't
+    /// running (e.g. Docker Desktop not started). The compose stack needs
+    /// the engine, not just the CLI, so detection probes both.
+    pub docker_engine_version: Option<String>,
     /// Linux: `systemctl --user is-active ollama` exits 0.
     /// Windows: `http://127.0.0.1:11434/api/tags` responds 2xx.
     pub ollama_active: bool,
@@ -109,6 +118,7 @@ mod tests {
         let result = run().await;
         println!("\n--- DetectionResult ---");
         println!("docker_present     {:?}", result.docker_present);
+        println!("docker_engine_version {:?}", result.docker_engine_version);
         println!("ollama_active      {}", result.ollama_active);
         println!("compose_up         {}", result.compose_up);
         println!("falkordb_healthy   {}", result.falkordb_healthy);
@@ -130,6 +140,7 @@ mod tests {
         for row in &rows {
             let mark = match row.status {
                 crate::app::DetectionStatus::Ok => '✓',
+                crate::app::DetectionStatus::Info => '○',
                 crate::app::DetectionStatus::Warn => '⚠',
             };
             println!("  {mark}  {:<22} {}", row.label, row.value);

@@ -83,7 +83,15 @@ pub struct DetectionRow {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DetectionStatus {
+    /// Present and active — a genuine green ✓ (Docker engine running, disk
+    /// has space, port free).
     Ok,
+    /// Not currently active, but not a problem either — the installer will
+    /// provision it, or it's purely informational. Neutral ○, never a green
+    /// ✓ (FalkorDB/compose not yet running, ag.env will be created, WSL2 will
+    /// be enabled). Lives in the "no action needed" column, like `Ok`.
+    Info,
+    /// Needs a decision or could block the install — amber ⚠.
     Warn,
 }
 
@@ -129,11 +137,18 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
         },
         DetectionRow {
             label: "Docker",
-            value: d
-                .docker_present
-                .clone()
-                .unwrap_or_else(|| "not on PATH".to_string()),
-            status: if d.docker_present.is_some() {
+            // Three states: a reachable engine is the only true "ready" — the
+            // compose stack needs the daemon, not just the CLI. CLI-on-PATH
+            // with no engine (Docker Desktop installed but not started) is a
+            // Warn, not an OK, since `docker compose up` would fail.
+            value: match (&d.docker_present, &d.docker_engine_version) {
+                (_, Some(engine)) => format!("engine running ({engine})"),
+                (Some(_), None) => {
+                    "CLI on PATH but engine not reachable — start Docker, then re-run".to_string()
+                }
+                (None, None) => "not on PATH".to_string(),
+            },
+            status: if d.docker_engine_version.is_some() {
                 DetectionStatus::Ok
             } else {
                 DetectionStatus::Warn
@@ -156,9 +171,14 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             } else {
                 "user systemd service not active — LLM modes will return 503".to_string()
             },
-            // Soft signal — bash logs this as a warning but doesn't prompt or
-            // abort. Surface as Ok so it doesn't look like a blocker.
-            status: DetectionStatus::Ok,
+            // Not a blocker (the install doesn't prompt or abort on it), but a
+            // green ✓ would wrongly imply Ollama is up — so Info (neutral ○)
+            // when it isn't responding, Ok only when it actually is.
+            status: if d.ollama_active {
+                DetectionStatus::Ok
+            } else {
+                DetectionStatus::Info
+            },
         },
         DetectionRow {
             label: if cfg!(windows) {
@@ -177,7 +197,13 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             } else {
                 "not active — will install".to_string()
             },
-            status: DetectionStatus::Ok,
+            // ✓ only when it's actually healthy/reusable; otherwise Info — the
+            // installer brings it up, it isn't running *yet*.
+            status: if d.falkordb_healthy {
+                DetectionStatus::Ok
+            } else {
+                DetectionStatus::Info
+            },
         },
         DetectionRow {
             label: "Compose stack",
@@ -186,7 +212,11 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             } else {
                 "not running — will start".to_string()
             },
-            status: DetectionStatus::Ok,
+            status: if d.compose_up {
+                DetectionStatus::Ok
+            } else {
+                DetectionStatus::Info
+            },
         },
         DetectionRow {
             label: "ag.env",
@@ -195,11 +225,15 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             } else {
                 "not present — install will create it".to_string()
             },
-            // Always Ok: bash treats this as silent-reuse (the install does the
-            // right thing either way, no prompt fires). Surfacing it here is a
-            // "make the invisible visible" win — the user knows their config
-            // won't be overwritten.
-            status: DetectionStatus::Ok,
+            // Fine either way (no prompt fires) — but a ✓ on "not present"
+            // misleads, so Ok when it exists (will preserve), Info when the
+            // install will create it. Either way a "make the invisible
+            // visible" win: the user knows their config won't be overwritten.
+            status: if d.ag_env_exists {
+                DetectionStatus::Ok
+            } else {
+                DetectionStatus::Info
+            },
         },
         DetectionRow {
             label: "Backend port 3010",
@@ -227,30 +261,20 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
                 DetectionStatus::Ok
             },
         },
-        DetectionRow {
-            label: if cfg!(windows) {
-                "Existing ag task"
-            } else {
-                "Existing ag.service"
-            },
-            value: if d.ag_service_drift {
-                if cfg!(windows) {
-                    "registered but Command points elsewhere".to_string()
-                } else {
-                    "present but hand-edited (drift detected)".to_string()
-                }
-            } else if cfg!(windows) {
-                "not registered (or points at ag-start.cmd)".to_string()
-            } else {
-                "not present (or matches template)".to_string()
-            },
-            status: if d.ag_service_drift {
-                DetectionStatus::Warn
-            } else {
-                DetectionStatus::Ok
-            },
-        },
     ];
+
+    // ag auto-start — only surfaced when the user customized their sign-in
+    // auto-start away from the installer's setup. With no customization
+    // there's nothing to decide, so the row would just be noise (and a green
+    // ✓ on "matches / will create" misleads). Shown only on drift, as a Warn
+    // that pairs with the AgInstallDrift prompt.
+    if d.ag_service_drift {
+        rows.push(DetectionRow {
+            label: "ag auto-start",
+            value: "customized — you'll choose what to keep".to_string(),
+            status: DetectionStatus::Warn,
+        });
+    }
 
     // WSL2 Docker Engine — Windows-only row. The fields exist on both
     // platforms (always None/false on Linux), but the row itself only makes
@@ -272,13 +296,16 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             add a lightweight Docker Engine; it reopens automatically after the restart"
                 .to_string()
         },
-        // Usually informational (the Docker row is the real blocker), but a
-        // firmware-virtualization-off machine can't run any Docker path, so
-        // flag it.
+        // ✓ only when Docker Engine is actually installed in the distro. A
+        // firmware-virtualization-off machine can't run any Docker path → Warn.
+        // Otherwise (WSL2 enabled-but-empty, or not-yet-enabled) it's Info —
+        // the installer will provision it, nothing is wrong yet.
         status: if d.virtualization_blocked {
             DetectionStatus::Warn
-        } else {
+        } else if d.wsl2_docker_version.is_some() {
             DetectionStatus::Ok
+        } else {
+            DetectionStatus::Info
         },
     });
 

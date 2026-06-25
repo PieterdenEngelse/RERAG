@@ -42,6 +42,30 @@ pub fn PromptsScreen() -> Element {
         }
     }
 
+    // Any shown prompt currently answered "abort" blocks the install. Reading
+    // the answers signal here subscribes this screen, so flipping a radio
+    // re-renders and the gate updates live.
+    let aborted_titles: Vec<&'static str> = {
+        let answers = answers_signal.read();
+        prompts_to_show
+            .iter()
+            .copied()
+            .filter(|id| answers.choice(*id) == Some("abort"))
+            .map(PromptId::title)
+            .collect()
+    };
+    let any_abort = !aborted_titles.is_empty();
+    let aborted_list = aborted_titles.join(", ");
+
+    // Hard blockers from detection (e.g. free space below the 10 GB floor)
+    // also disable the install — unlike aborts, the user can't fix these by
+    // changing a choice; they must resolve the condition and re-run.
+    let blockers: Vec<String> = detection_state
+        .as_ref()
+        .map(prompts::install_blockers)
+        .unwrap_or_default();
+    let any_block = any_abort || !blockers.is_empty();
+
     rsx! {
         div { class: "screen",
             div { class: "screen-header",
@@ -84,7 +108,30 @@ pub fn PromptsScreen() -> Element {
                     }
                 }
             }
-            NavFooter { next_label: "Begin install".to_string() }
+            for reason in blockers.iter() {
+                div {
+                    style: "margin: 0 1.5rem 0.75rem; padding: 0.75rem 1rem; border: 1px solid \
+                        #3a2a10; border-radius: 6px; background: rgba(251,191,36,0.08); \
+                        color: #d1d5db;",
+                    p { style: "margin: 0;",
+                        "Can't install: "
+                        strong { "{reason}" }
+                    }
+                }
+            }
+            if any_abort {
+                div {
+                    style: "margin: 0 1.5rem 0.75rem; padding: 0.75rem 1rem; border: 1px solid \
+                        #3a2a10; border-radius: 6px; background: rgba(251,191,36,0.08); \
+                        color: #d1d5db;",
+                    p { style: "margin: 0;",
+                        "Set to abort the install: "
+                        strong { "{aborted_list}" }
+                        ". Pick a different option above to continue, or click Cancel to exit."
+                    }
+                }
+            }
+            NavFooter { next_label: "Begin install".to_string(), next_enabled: !any_block }
         }
     }
 }
@@ -227,6 +274,7 @@ fn id_key(id: PromptId) -> &'static str {
     match id {
         PromptId::DiskLow => "disk_low",
         PromptId::DockerMissing => "docker_missing",
+        PromptId::DockerEngineDown => "docker_engine_down",
         PromptId::PortBusy => "port_busy",
         PromptId::LowRam => "low_ram",
         PromptId::NativeObs => "native_obs",

@@ -687,6 +687,40 @@ a:focus-visible,
 @keyframes detection-spin {
     to { transform: rotate(360deg); }
 }
+.detection-probe-grid {
+    list-style: none;
+    margin: 0.25rem 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1.5rem;
+    width: 100%;
+    max-width: 34rem;
+}
+.detection-probe-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+.detection-probe-dot {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    background: #7C2A02;
+    animation: detection-probe-pulse 1.2s ease-in-out infinite;
+}
+.detection-probe-name {
+    color: #d1d5db;
+}
+/* Staggered wave so the list reads as "scanning" rather than blinking in unison. */
+.detection-probe-item:nth-child(3n + 2) .detection-probe-dot { animation-delay: 0.2s; }
+.detection-probe-item:nth-child(3n) .detection-probe-dot { animation-delay: 0.4s; }
+@keyframes detection-probe-pulse {
+    0%, 100% { opacity: 0.25; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.1); }
+}
 
 /* =============================================================================
    Prompt cards — sub-form for PortBusy "pick" choice (Phase C)
