@@ -294,8 +294,12 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
         label: "WSL2 Docker Engine",
         value: if let Some(v) = &d.wsl2_docker_version {
             format!("installed in WSL2 ({v})")
-        } else if d.wsl2_available {
+        } else if d.wsl2_ready_now() {
             "WSL2 enabled — installer can add Docker Engine here (no admin needed)".to_string()
+        } else if d.wsl2_available && d.wsl2_reboot_pending {
+            "WSL2 enabled — restart Windows to finish, then the installer can add Docker \
+            Engine here (it reopens automatically after the restart)"
+                .to_string()
         } else if d.virtualization_blocked {
             "blocked — hardware virtualization is off in firmware; enable Intel VT-x / \
             AMD-V (SVM) in BIOS/UEFI and reboot before WSL2 or Docker Desktop can run"

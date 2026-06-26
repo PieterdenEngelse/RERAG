@@ -159,7 +159,7 @@ impl PromptId {
                         reboot, then re-run this installer. Enabling WSL2 before that would force \
                         a restart and still fail to start, so the installer doesn't offer it here."
                             .to_string()
-                    } else if d.wsl2_available {
+                    } else if d.wsl2_ready_now() {
                         "docker isn't on PATH. The stack (FalkorDB / Redis / observability) \
                         needs it. WSL2 is enabled on this machine, so the installer can add \
                         Docker Engine inside a dedicated Linux distro — lightweight, free, no \
@@ -238,7 +238,7 @@ impl PromptId {
             ],
             PromptId::DockerMissing => {
                 if cfg!(windows) {
-                    let wsl2 = d.map(|d| d.wsl2_available).unwrap_or(false);
+                    let wsl2 = d.map(|d| d.wsl2_ready_now()).unwrap_or(false);
                     let blocked = d.map(|d| d.virtualization_blocked).unwrap_or(false);
                     let mut opts = Vec::new();
                     // Only offer the WSL2 path when the WSL2 feature is already
@@ -307,7 +307,7 @@ impl PromptId {
                 }
             }
             PromptId::DockerEngineDown => {
-                let wsl2 = d.map(|d| d.wsl2_available).unwrap_or(false);
+                let wsl2 = d.map(|d| d.wsl2_ready_now()).unwrap_or(false);
                 let blocked = d.map(|d| d.virtualization_blocked).unwrap_or(false);
                 let mut opts = Vec::new();
                 // On Windows, offer routing around the stopped Docker Desktop
@@ -455,7 +455,7 @@ impl PromptId {
                 if cfg!(windows) {
                     if d.map(|d| d.virtualization_blocked).unwrap_or(false) {
                         "abort"
-                    } else if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                    } else if d.map(|d| d.wsl2_ready_now()).unwrap_or(false) {
                         "install_wsl2_docker"
                     } else {
                         "enable_wsl2_docker"
@@ -470,7 +470,7 @@ impl PromptId {
             // On Linux there's no WSL2, so abort (start the daemon, re-run).
             PromptId::DockerEngineDown => {
                 if cfg!(windows) && !d.map(|d| d.virtualization_blocked).unwrap_or(false) {
-                    if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                    if d.map(|d| d.wsl2_ready_now()).unwrap_or(false) {
                         "install_wsl2_docker"
                     } else {
                         "enable_wsl2_docker"
@@ -710,5 +710,43 @@ mod tests {
             .expect("abort option present");
         assert!(abort.description.contains("VT-x"));
         assert!(abort.description.contains("BIOS"));
+    }
+
+    /// `wsl2_ready_now` requires the feature enabled AND no pending reboot —
+    /// the distinction that keeps a just-enabled, not-yet-rebooted WSL2 from
+    /// reading as usable. Cross-platform: it's pure struct logic.
+    #[test]
+    fn wsl2_ready_now_requires_no_pending_reboot() {
+        let mut d = DetectionResult {
+            wsl2_available: true,
+            ..Default::default()
+        };
+        assert!(d.wsl2_ready_now(), "enabled + no pending reboot → ready");
+        d.wsl2_reboot_pending = true;
+        assert!(!d.wsl2_ready_now(), "pending reboot → not ready");
+        d.wsl2_available = false;
+        assert!(!d.wsl2_ready_now(), "not enabled → not ready");
+    }
+
+    /// WSL2 enabled but a servicing reboot is pending → not ready now, so the
+    /// installer preselects the enable/restart route (which drives the reboot
+    /// via enable_wsl2's RebootRequired) instead of the no-restart lightweight
+    /// install, which would fail against a not-yet-rebooted WSL2.
+    #[cfg(windows)]
+    #[test]
+    fn wsl2_enabled_but_reboot_pending_preselects_enable() {
+        let d = DetectionResult {
+            wsl2_available: true,
+            wsl2_reboot_pending: true,
+            ..Default::default()
+        };
+        assert!(!d.wsl2_ready_now());
+        assert_eq!(
+            PromptId::DockerMissing.default_choice(Some(&d)),
+            "enable_wsl2_docker"
+        );
+        let keys = option_keys(&d);
+        assert!(keys.contains(&"enable_wsl2_docker"));
+        assert!(!keys.contains(&"install_wsl2_docker"));
     }
 }

@@ -141,7 +141,7 @@ pub fn skip_systemctl() -> bool {
 
 /// Number of probes `run_detection` runs — the denominator for the detection
 /// screen's progress bar. Keep in sync with the `tokio::join!` arms below.
-pub const DETECTION_PROBE_COUNT: usize = 16;
+pub const DETECTION_PROBE_COUNT: usize = 17;
 
 pub async fn run_detection(progress: Option<UnboundedSender<()>>) -> DetectionResult {
     let paths = Paths::resolve();
@@ -173,6 +173,7 @@ pub async fn run_detection(progress: Option<UnboundedSender<()>>) -> DetectionRe
         ram_gb,
         distro,
         wsl2_available,
+        wsl2_reboot_pending,
         wsl2_docker_version,
         wsl2_distro_name,
         virtualization_blocked,
@@ -190,6 +191,7 @@ pub async fn run_detection(progress: Option<UnboundedSender<()>>) -> DetectionRe
         ticked!(probe_ram_gb()),
         ticked!(probe_distro()),
         ticked!(probe_wsl2_available()),
+        ticked!(probe_wsl2_reboot_pending()),
         ticked!(probe_wsl2_docker()),
         ticked!(probe_wsl2_distro_name()),
         ticked!(probe_virtualization_blocked()),
@@ -211,6 +213,7 @@ pub async fn run_detection(progress: Option<UnboundedSender<()>>) -> DetectionRe
         ram_gb,
         distro,
         wsl2_available,
+        wsl2_reboot_pending,
         wsl2_docker_version,
         wsl2_distro_name,
         virtualization_blocked,
@@ -229,6 +232,28 @@ async fn probe_wsl2_available() -> bool {
         .await
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// `true` when a Windows servicing reboot is pending (the Component Based
+/// Servicing `RebootPending` key exists). Enabling Virtual Machine Platform —
+/// which `wsl --install` does under the hood — stages such a reboot, so this
+/// is how we tell "WSL2 feature enabled" (`wsl --status` exits 0) apart from
+/// "WSL2 enabled but a restart is still needed". Without it the installer
+/// would treat a just-enabled, not-yet-rebooted WSL2 as ready and install
+/// Docker into a distro that can't start. The CBS key is readable without
+/// elevation; any failure falls through to `false` (best-effort — never
+/// invent a reboot prompt we can't justify). `Test-Path` doesn't throw on a
+/// missing key, so a clean machine simply reports `ok`.
+async fn probe_wsl2_reboot_pending() -> bool {
+    let ps = "if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') { 'pending' } else { 'ok' }";
+    match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim() == "pending",
+        _ => false,
+    }
 }
 
 /// `true` only when we can positively confirm hardware virtualization is
@@ -1436,8 +1461,13 @@ pub async fn enable_wsl2(tx: &ProgressSender, tee: &LogTee) -> Result<WslEnableO
     }
 
     // Decide reboot-vs-ready from the live feature state, not `wsl --install`'s
-    // exit code (which is unreliable across Windows builds).
-    if probe_wsl2_available().await {
+    // exit code (which is unreliable across Windows builds). `wsl --status`
+    // exits 0 the moment the feature is staged — even while a reboot is still
+    // pending — so a 0 exit alone is a false "ready". Gate on the absence of a
+    // pending servicing reboot too: enabling Virtual Machine Platform stages
+    // one, and Docker installed into a not-yet-rebooted WSL2 fails to start.
+    let ready_now = probe_wsl2_available().await && !probe_wsl2_reboot_pending().await;
+    if ready_now {
         step_log(tx, tee, step, "WSL2 is active — no restart needed");
         Ok(WslEnableOutcome::ReadyNow)
     } else {

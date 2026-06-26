@@ -66,8 +66,18 @@ pub struct DetectionResult {
     /// Windows only. `wsl --status` exited 0 → WSL2 feature is enabled.
     /// Gates whether the WSL2 Docker option appears in the DockerMissing
     /// prompt. Always `false` on Linux (field exists on both platforms so
-    /// the struct shape stays shared).
+    /// the struct shape stays shared). NOTE: `wsl --status` exits 0 the
+    /// instant the feature is staged — even while a reboot is still
+    /// pending — so this alone is **not** "usable now"; combine it with
+    /// `wsl2_reboot_pending` via [`DetectionResult::wsl2_ready_now`].
     pub wsl2_available: bool,
+    /// Windows only. `true` when a Windows servicing reboot is pending — the
+    /// state where the WSL2 feature reads as enabled (`wsl --status` exits 0)
+    /// but Virtual Machine Platform isn't live until the machine restarts.
+    /// `wsl --install` stages exactly such an operation, so right after
+    /// enabling WSL2 this is `true` until the reboot. Read from the Component
+    /// Based Servicing reboot marker (non-elevated). Always `false` on Linux.
+    pub wsl2_reboot_pending: bool,
     /// Windows only. `wsl -d ag-ubuntu -- docker --version` succeeded →
     /// Docker Engine is already installed inside the ag-managed distro.
     pub wsl2_docker_version: Option<String>,
@@ -87,6 +97,18 @@ pub struct DetectionResult {
     /// `false` so we never false-block a machine that's actually fine.
     /// Always `false` on Linux.
     pub virtualization_blocked: bool,
+}
+
+impl DetectionResult {
+    /// `true` when WSL2 is enabled **and usable right now** — the feature is
+    /// on (`wsl2_available`) and no servicing reboot is pending. The installer
+    /// offers the no-restart "lightweight" Docker path only in this state;
+    /// `wsl2_available && wsl2_reboot_pending` routes to the enable/restart
+    /// path instead, because WSL2 can't actually run until the machine reboots
+    /// even though `wsl --status` already exits 0. Always `false` on Linux.
+    pub fn wsl2_ready_now(&self) -> bool {
+        self.wsl2_available && !self.wsl2_reboot_pending
+    }
 }
 
 /// Runs every probe (orchestrator body lives in
@@ -136,6 +158,7 @@ mod tests {
         println!("ram_gb             {}", result.ram_gb);
         println!("distro             {:?}", result.distro);
         println!("wsl2_available     {}", result.wsl2_available);
+        println!("wsl2_reboot_pending {}", result.wsl2_reboot_pending);
         println!("wsl2_docker_version {:?}", result.wsl2_docker_version);
         println!("wsl2_distro_name   {:?}", result.wsl2_distro_name);
         println!("virtualization_blocked {}", result.virtualization_blocked);
