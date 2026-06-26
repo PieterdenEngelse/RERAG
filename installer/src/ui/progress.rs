@@ -21,7 +21,7 @@ use crate::install_steps::{
     self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME,
     INSTALL_WSL2_ENABLE_STEP_NAME, STEP_NAMES,
 };
-use crate::prompts::{PromptAnswers, PromptId};
+use crate::prompts::PromptAnswers;
 use crate::ui::components::{FailureInfo, FailureModal, LogView, NavFooter, StepListView};
 
 #[component]
@@ -85,6 +85,9 @@ pub fn ProgressScreen() -> Element {
 
     let is_complete = *complete.read();
     let reboot_msg = reboot.read().clone();
+    // Sandbox (SKIP_SCHTASKS): the WSL2-enable + resume hooks ran as no-ops, so
+    // the reboot footer must not offer a real restart that would only dead-end.
+    let sandbox = crate::platform::skip_systemctl();
     let step_count = steps.read().len();
 
     rsx! {
@@ -119,22 +122,33 @@ pub fn ProgressScreen() -> Element {
                 div { class: "screen-footer",
                     div { class: "screen-footer-left" }
                     div { class: "screen-footer-right",
-                        button {
-                            class: "btn btn-secondary",
-                            onclick: move |_| quit_installer(),
-                            "I'll restart later"
-                        }
-                        button {
-                            class: "btn btn-primary",
-                            onclick: move |_| {
-                                // Best-effort immediate restart; the OS tears
-                                // this process down. The HKCU RunOnce hook
-                                // relaunches the installer after logon.
-                                let _ = std::process::Command::new("shutdown")
-                                    .args(["/r", "/t", "0"])
-                                    .spawn();
-                            },
-                            "Restart now"
+                        if sandbox {
+                            // Dry run: nothing was enabled or registered, so a
+                            // real restart would dead-end (no RunOnce hook to
+                            // relaunch). Offer a plain close, not "Restart now".
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| quit_installer(),
+                                "Close (dry run)"
+                            }
+                        } else {
+                            button {
+                                class: "btn btn-secondary",
+                                onclick: move |_| quit_installer(),
+                                "I'll restart later"
+                            }
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| {
+                                    // Best-effort immediate restart; the OS tears
+                                    // this process down. The HKCU RunOnce hook
+                                    // relaunches the installer after logon.
+                                    let _ = std::process::Command::new("shutdown")
+                                        .args(["/r", "/t", "0"])
+                                        .spawn();
+                                },
+                                "Restart now"
+                            }
                         }
                     }
                 }
@@ -158,7 +172,7 @@ fn quit_installer() {
 fn initial_steps(answers: &PromptAnswers) -> Vec<InstallStep> {
     let mut names: Vec<&'static str> = Vec::new();
     #[cfg(windows)]
-    match answers.choice(PromptId::DockerMissing) {
+    match answers.docker_setup_choice() {
         Some("install_docker_desktop") => names.push(INSTALL_DOCKER_STEP_NAME),
         Some("install_wsl2_docker") => names.push(INSTALL_WSL2_DOCKER_STEP_NAME),
         Some("enable_wsl2_docker") => {

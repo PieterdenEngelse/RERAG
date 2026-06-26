@@ -89,12 +89,16 @@ pub struct DetectionResult {
     pub virtualization_blocked: bool,
 }
 
-/// Runs every probe; orchestrator body lives in
-/// `platform::{linux,windows}::run_detection`. This wrapper keeps the
-/// existing `detection::run().await` call shape (used by
-/// `ui/detection_screen.rs`) intact across the PR 1 refactor.
-pub async fn run() -> DetectionResult {
-    crate::platform::run_detection().await
+/// Runs every probe (orchestrator body lives in
+/// `platform::{linux,windows}::run_detection`), sending a `()` on `progress`
+/// as each probe completes so the detection screen can advance a progress
+/// bar. The number of ticks to expect is
+/// [`crate::platform::DETECTION_PROBE_COUNT`]. Pass a throwaway sender when
+/// progress isn't needed.
+pub async fn run_with_progress(
+    progress: tokio::sync::mpsc::UnboundedSender<()>,
+) -> DetectionResult {
+    crate::platform::run_detection(Some(progress)).await
 }
 
 #[cfg(test)]
@@ -115,7 +119,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn print_real_result() {
-        let result = run().await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = run_with_progress(tx).await;
         println!("\n--- DetectionResult ---");
         println!("docker_present     {:?}", result.docker_present);
         println!("docker_engine_version {:?}", result.docker_engine_version);

@@ -25,6 +25,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use tokio::process::Command;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 
 use crate::bundled;
@@ -138,8 +139,26 @@ pub fn skip_systemctl() -> bool {
 // tool, non-zero exit, parse failure — rather than propagating errors.
 // Detection is best-effort.
 
-pub async fn run_detection() -> DetectionResult {
+/// Number of probes `run_detection` runs — the denominator for the detection
+/// screen's progress bar. Keep in sync with the `tokio::join!` arms below.
+pub const DETECTION_PROBE_COUNT: usize = 16;
+
+pub async fn run_detection(progress: Option<UnboundedSender<()>>) -> DetectionResult {
     let paths = Paths::resolve();
+    // Wrap each probe so it sends a tick the instant it resolves — the
+    // detection screen advances its progress bar one notch per completed
+    // probe. Keep DETECTION_PROBE_COUNT in sync with these arms.
+    macro_rules! ticked {
+        ($p:expr) => {
+            async {
+                let r = $p.await;
+                if let Some(tx) = progress.as_ref() {
+                    let _ = tx.send(());
+                }
+                r
+            }
+        };
+    }
     let (
         docker_present,
         docker_engine_version,
@@ -158,22 +177,22 @@ pub async fn run_detection() -> DetectionResult {
         wsl2_distro_name,
         virtualization_blocked,
     ) = tokio::join!(
-        probe_docker(),
-        probe_docker_engine(),
-        probe_ollama_active(),
-        probe_compose_up(),
-        probe_ag_env_exists(&paths),
-        probe_falkordb_healthy(),
-        probe_backend_port_busy(BACKEND_PORT),
-        probe_system_redis(),
-        probe_ag_task_drift(&paths),
-        probe_disk_free_gb(&paths),
-        probe_ram_gb(),
-        probe_distro(),
-        probe_wsl2_available(),
-        probe_wsl2_docker(),
-        probe_wsl2_distro_name(),
-        probe_virtualization_blocked(),
+        ticked!(probe_docker()),
+        ticked!(probe_docker_engine()),
+        ticked!(probe_ollama_active()),
+        ticked!(probe_compose_up()),
+        ticked!(probe_ag_env_exists(&paths)),
+        ticked!(probe_falkordb_healthy()),
+        ticked!(probe_backend_port_busy(BACKEND_PORT)),
+        ticked!(probe_system_redis()),
+        ticked!(probe_ag_task_drift(&paths)),
+        ticked!(probe_disk_free_gb(&paths)),
+        ticked!(probe_ram_gb()),
+        ticked!(probe_distro()),
+        ticked!(probe_wsl2_available()),
+        ticked!(probe_wsl2_docker()),
+        ticked!(probe_wsl2_distro_name()),
+        ticked!(probe_virtualization_blocked()),
     );
     DetectionResult {
         docker_present,
@@ -780,8 +799,9 @@ async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
             tee,
             STEP_STACK,
             format!(
-                "SKIP_SCHTASKS=1 — would run: wsl -d ag-ubuntu -u root -- docker compose \
-                -f {compose_wsl} --profile \"\" --profile falkor-container up -d"
+                "SKIP_SCHTASKS=1 — would run: wsl -d ag-ubuntu -u root -- \
+                /usr/local/bin/ag-stack-up -f {compose_wsl} --profile \"\" \
+                --profile falkor-container up -d"
             ),
         );
         return Ok(());
@@ -794,8 +814,9 @@ async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
             "-u",
             "root",
             "--",
-            "docker",
-            "compose",
+            // Wait-for-dockerd wrapper (installed by install_docker_wsl2), not
+            // `docker compose` directly — the [boot] dockerd autostart is async.
+            "/usr/local/bin/ag-stack-up",
             "-f",
             &compose_wsl,
             "--profile",
@@ -921,15 +942,18 @@ pub async fn install_service(
         //
         // The scheduled-task <Command> differs by Docker mode:
         //  - native:  docker compose -f "<win_path>" <profiles> up -d
-        //  - WSL2:    wsl -d ag-ubuntu -u root -- docker compose
+        //  - WSL2:    wsl -d ag-ubuntu -u root -- /usr/local/bin/ag-stack-up
         //             -f <wsl_path> <profiles> up -d
+        // The WSL2 path goes through the ag-stack-up wrapper (not `docker
+        // compose` directly) so the per-logon bring-up waits for the async
+        // [boot] dockerd autostart instead of racing it.
         let use_wsl2 = answers.use_wsl2_docker();
         let (stack_command, stack_args) = if use_wsl2 {
             let compose_wsl = windows_path_to_wsl(&paths.docker_compose().display().to_string());
             (
                 "wsl".to_string(),
                 format!(
-                    "-d ag-ubuntu -u root -- docker compose -f {compose_wsl} {profile_args} up -d"
+                    "-d ag-ubuntu -u root -- /usr/local/bin/ag-stack-up -f {compose_wsl} {profile_args} up -d"
                 ),
             )
         } else {
@@ -1525,13 +1549,57 @@ pub async fn register_wsl2_resume(tx: &ProgressSender, tee: &LogTee) -> Result<(
 // Install Docker Engine inside a WSL2 distro (ag-ubuntu)
 // =============================================================================
 
-/// Ubuntu WSL rootfs. NOTE: cloud-images filenames have shifted across
-/// releases; this is verified at runtime (a non-200 → `bail!` with the URL)
-/// rather than trusted blindly.
-const WSL2_ROOTFS_URL: &str =
-    "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz";
+/// Ubuntu base rootfs release directory (Noble / 24.04 LTS). The tarball
+/// name embeds the point release (`ubuntu-base-24.04.<N>-base-amd64.tar.gz`)
+/// and changes with every point release, so we never hardcode the filename —
+/// `resolve_rootfs_url` reads the `SHA256SUMS` in this directory and picks the
+/// newest amd64 base tarball. (The old `cloud-images.ubuntu.com/wsl/...`
+/// rootfs path now ships only manifests, no downloadable rootfs — which is
+/// what the previously-hardcoded URL 404'd on.)
+const WSL2_ROOTFS_RELEASE_DIR: &str =
+    "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/";
 
 const WSL2_DISTRO: &str = "ag-ubuntu";
+
+/// Resolve the current Ubuntu base rootfs URL by reading the `SHA256SUMS` in
+/// [`WSL2_ROOTFS_RELEASE_DIR`] and selecting the newest
+/// `ubuntu-base-24.04.<N>-base-amd64.tar.gz`. This runtime resolution replaces
+/// the formerly-hardcoded filename, which broke whenever Canonical published a
+/// new point release.
+async fn resolve_rootfs_url(client: &reqwest::Client) -> Result<String> {
+    let sums_url = format!("{WSL2_ROOTFS_RELEASE_DIR}SHA256SUMS");
+    let body = client
+        .get(&sums_url)
+        .send()
+        .await
+        .with_context(|| format!("GET {sums_url}"))?
+        .error_for_status()
+        .with_context(|| format!("fetch {sums_url}"))?
+        .text()
+        .await
+        .with_context(|| "read SHA256SUMS body")?;
+    // Lines look like "<sha256> *ubuntu-base-24.04.<N>-base-amd64.tar.gz".
+    // Pick the highest <N> so we always grab the latest point release.
+    let mut best: Option<(u32, String)> = None;
+    for line in body.lines() {
+        let file = match line.split_whitespace().nth(1) {
+            Some(f) => f.trim_start_matches('*'),
+            None => continue,
+        };
+        if let Some(rest) = file.strip_prefix("ubuntu-base-24.04.") {
+            if let Some(point) = rest.strip_suffix("-base-amd64.tar.gz") {
+                if let Ok(n) = point.parse::<u32>() {
+                    if best.as_ref().is_none_or(|(b, _)| n > *b) {
+                        best = Some((n, file.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    let (_, file) =
+        best.with_context(|| format!("no ubuntu-base 24.04 amd64 rootfs listed in {sums_url}"))?;
+    Ok(format!("{WSL2_ROOTFS_RELEASE_DIR}{file}"))
+}
 
 /// Create the `ag-ubuntu` WSL2 distro and install Docker CE inside it.
 /// Only invoked when the user picked the WSL2 Docker option, which only
@@ -1547,7 +1615,7 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
             step,
             format!(
                 "SKIP_SCHTASKS=1 — would: wsl --set-default-version 2; \
-                download {WSL2_ROOTFS_URL}; \
+                download latest ubuntu-base rootfs from {WSL2_ROOTFS_RELEASE_DIR}; \
                 wsl --import {WSL2_DISTRO} {}\\wsl\\{WSL2_DISTRO} <rootfs> --version 2; \
                 install docker-ce inside the distro; write /etc/wsl.conf dockerd autostart; \
                 terminate + poll `docker info`",
@@ -1563,35 +1631,52 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
         .output()
         .await;
 
-    // b. Reuse an existing ag-ubuntu distro if present.
-    if probe_wsl2_distro_name().await.is_some() {
+    // b. Reuse an existing ag-ubuntu distro only if it already has a working
+    //    Docker. A distro that exists but lacks Docker (e.g. a prior run that
+    //    imported the rootfs but failed during docker-ce install) must not be
+    //    silently reused — the stack step would then fail with no Docker. Tear
+    //    it down and re-import clean (wsl --import refuses an existing distro
+    //    name, so the unregister has to come first).
+    let distro_exists = probe_wsl2_distro_name().await.is_some();
+    let docker_ready = distro_exists && probe_wsl2_docker().await.is_some();
+    if docker_ready {
         step_log(
             tx,
             tee,
             step,
-            format!("existing {WSL2_DISTRO} distro found — reusing it"),
+            format!("existing {WSL2_DISTRO} distro with Docker found — reusing it"),
         );
     } else {
-        // c. Download the Ubuntu rootfs to %TEMP%, verifying the URL first.
+        if distro_exists {
+            step_log(
+                tx,
+                tee,
+                step,
+                format!("{WSL2_DISTRO} exists but Docker isn't installed — re-importing clean"),
+            );
+            let _ = Command::new("wsl")
+                .args(["--unregister", WSL2_DISTRO])
+                .output()
+                .await;
+        }
+        // c. Download the Ubuntu base rootfs to %TEMP%. Resolve the exact
+        //    filename at runtime (it embeds the point release), then verify
+        //    the URL returns 200 before importing.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(600))
             .build()
             .with_context(|| "build http client for rootfs download")?;
-        step_log(
-            tx,
-            tee,
-            step,
-            format!("downloading rootfs: {WSL2_ROOTFS_URL}"),
-        );
+        let rootfs_url = resolve_rootfs_url(&client).await?;
+        step_log(tx, tee, step, format!("downloading rootfs: {rootfs_url}"));
         let resp = client
-            .get(WSL2_ROOTFS_URL)
+            .get(&rootfs_url)
             .send()
             .await
-            .with_context(|| format!("GET {WSL2_ROOTFS_URL}"))?;
+            .with_context(|| format!("GET {rootfs_url}"))?;
         if !resp.status().is_success() {
             bail!(
-                "rootfs download returned {} for {WSL2_ROOTFS_URL}\n\
-                The Ubuntu WSL rootfs filename may have changed. Download a current \
+                "rootfs download returned {} for {rootfs_url}\n\
+                The Ubuntu base rootfs may have moved. Download a current \
                 rootfs manually, import it as `{WSL2_DISTRO}`, and re-run the installer.",
                 resp.status()
             );
@@ -1644,7 +1729,12 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
             format!("imported {WSL2_DISTRO} → {}", install_dir.display()),
         );
 
-        // e. Install Docker Engine from the official APT repo.
+        // e. Install Docker Engine from the official APT repo. The repo
+        //    codename is hardcoded to `noble`: we pin the rootfs to Ubuntu
+        //    24.04, and on the minimal ubuntu-base image both `lsb_release -cs`
+        //    (flaky right after install) and `/etc/os-release`'s
+        //    VERSION_CODENAME (empty) are unreliable — a blank codename writes
+        //    a bad docker.list and breaks `apt-get update`.
         let install_script = r#"set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -1652,57 +1742,79 @@ apt-get install -y -qq ca-certificates curl gnupg lsb-release
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
 apt-get update -qq
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
 "#;
         wsl_root_bash(step, tx, tee, install_script, "install docker-ce").await?;
 
-        // f. dockerd autostart via /etc/wsl.conf (no systemd dependency).
-        let wsl_conf = "[boot]\ncommand = \"/usr/bin/dockerd --host unix:///var/run/docker.sock --log-level error &>/tmp/dockerd.log &\"\n";
-        let write_conf = format!("printf '%s' '{wsl_conf}' > /etc/wsl.conf");
-        wsl_root_bash(step, tx, tee, &write_conf, "write /etc/wsl.conf").await?;
-
-        // g. Restart the distro so /etc/wsl.conf takes effect.
-        let _ = Command::new("wsl")
-            .args(["--terminate", WSL2_DISTRO])
-            .output()
-            .await;
-        sleep(Duration::from_secs(2)).await;
-        step_log(tx, tee, step, "terminated distro to apply /etc/wsl.conf");
+        // f. Docker daemon startup is owned by the ag-stack-up wrapper below,
+        //    NOT /etc/wsl.conf [boot]: launching dockerd from [boot] runs it
+        //    too early in distro init, where it hangs without ever creating
+        //    /var/run/docker.sock (manual start after boot works fine). So we
+        //    deliberately write no [boot] command and let the wrapper start
+        //    dockerd on demand.
     }
 
-    // h. Readiness poll: WSL re-runs the [boot] command on each cold start
-    //    and dockerd needs a moment. Poll `docker info` rather than a single
-    //    check. WARN (not fatal) if it never comes up — mirrors health_check.
-    let mut ready = false;
-    for attempt in 1..=10u32 {
-        let out = Command::new("wsl")
-            .args(["-d", WSL2_DISTRO, "-u", "root", "--", "docker", "info"])
-            .output()
-            .await;
-        if let Ok(o) = out {
-            if o.status.success() {
-                step_log(
-                    tx,
-                    tee,
-                    step,
-                    format!("dockerd ready in {WSL2_DISTRO} (attempt {attempt})"),
-                );
-                ready = true;
-                break;
-            }
+    // f2. Install the `ag-stack-up` wrapper that BOTH the install-time stack
+    //     bring-up and the ag-stack scheduled task call. This WSL distro has
+    //     no systemd, so the wrapper owns the daemon: it starts dockerd if it
+    //     isn't already serving, waits for the socket, then execs docker
+    //     compose. Without this, `docker compose up` on a freshly-booted
+    //     distro fails with "no such file: /var/run/docker.sock". Written
+    //     unconditionally (outside the fresh-import branch) so reused/repaired
+    //     distros get it too.
+    let helper = "#!/usr/bin/env bash\n\
+        # No systemd here: ensure dockerd is up, then exec docker compose with\n\
+        # the passed-through args. dockerd is started on demand (after boot is\n\
+        # complete) rather than via /etc/wsl.conf [boot], which hangs.\n\
+        if ! docker info >/dev/null 2>&1; then\n\
+        pkill -x dockerd 2>/dev/null\n\
+        nohup dockerd --host unix:///var/run/docker.sock --log-level error >/var/log/ag-dockerd.log 2>&1 &\n\
+        fi\n\
+        for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done\n\
+        exec docker compose \"$@\"\n";
+    let write_helper = format!(
+        "install -d /usr/local/bin && printf '%s' '{helper}' > /usr/local/bin/ag-stack-up \
+         && chmod +x /usr/local/bin/ag-stack-up"
+    );
+    wsl_root_bash(step, tx, tee, &write_helper, "install ag-stack-up wrapper").await?;
+
+    // h. Bring the daemon up now via the wrapper — the exact path the stack
+    //    step and scheduled task use. `ag-stack-up version` starts dockerd,
+    //    waits for the socket, then runs `docker compose version`. This both
+    //    confirms the engine works at install time and leaves dockerd running
+    //    for the stack step. WARN (not fatal) on failure — the stack step
+    //    would surface a real error anyway.
+    let out = Command::new("wsl")
+        .args([
+            "-d",
+            WSL2_DISTRO,
+            "-u",
+            "root",
+            "--",
+            "/usr/local/bin/ag-stack-up",
+            "version",
+        ])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => {
+            step_log(
+                tx,
+                tee,
+                step,
+                format!("Docker Engine ready in {WSL2_DISTRO}"),
+            );
         }
-        sleep(Duration::from_secs(2)).await;
-    }
-    if !ready {
-        step_log(
-            tx,
-            tee,
-            step,
-            "WARN: dockerd did not report ready within ~20s — it may still be starting. \
-            The stack step will retry the connection.",
-        );
+        _ => {
+            step_log(
+                tx,
+                tee,
+                step,
+                "WARN: Docker Engine didn't confirm ready — the stack step will start it",
+            );
+        }
     }
     Ok(())
 }

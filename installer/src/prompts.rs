@@ -185,11 +185,11 @@ impl PromptId {
             }
             PromptId::DockerEngineDown => {
                 if cfg!(windows) {
-                    "The docker CLI is on PATH, but its engine (the dockerd daemon) isn't \
-                    responding — `docker version` can't reach the server. The stack (FalkorDB / \
-                    Redis / observability) needs a running engine, so it would fail to come up. \
-                    Start Docker Desktop and wait until it reports \"running\", then continue — \
-                    or abort, start it, and re-run."
+                    "The docker CLI is on PATH, but its engine (Docker Desktop's daemon) isn't \
+                    responding. The stack (FalkorDB / Redis / observability) needs a running \
+                    engine. Easiest: let the installer run the stack on the WSL2 Docker Engine \
+                    instead — no Docker Desktop needed. Or start Docker Desktop and continue on \
+                    it, or abort and re-run once it's up."
                         .to_string()
                 } else {
                     "The docker CLI is on PATH, but its engine (the dockerd daemon) isn't \
@@ -306,18 +306,47 @@ impl PromptId {
                     ]
                 }
             }
-            PromptId::DockerEngineDown => vec![
-                PromptOption {
+            PromptId::DockerEngineDown => {
+                let wsl2 = d.map(|d| d.wsl2_available).unwrap_or(false);
+                let blocked = d.map(|d| d.virtualization_blocked).unwrap_or(false);
+                let mut opts = Vec::new();
+                // On Windows, offer routing around the stopped Docker Desktop
+                // by running the stack on the WSL2 engine instead — the
+                // preselected default (see `default_choice`). Omitted on Linux
+                // (no WSL2) and when firmware virtualization is off (can't
+                // enable WSL2). Same keys as DockerMissing so the install flow
+                // handles them identically (see `docker_setup_choice`).
+                if cfg!(windows) && !blocked {
+                    if wsl2 {
+                        opts.push(PromptOption {
+                            key: "install_wsl2_docker",
+                            label: "Use the WSL2 Docker Engine instead (no Docker Desktop needed)",
+                            description: "Default. Creates an ag-ubuntu WSL2 distro and installs \
+                                Docker CE there, so the stack doesn't need Docker Desktop running. \
+                                No admin, no restart.",
+                        });
+                    } else {
+                        opts.push(PromptOption {
+                            key: "enable_wsl2_docker",
+                            label: "Use the WSL2 Docker Engine instead (one-time admin + restart)",
+                            description: "Default. Enables WSL2 (one UAC prompt + a restart) and \
+                                installs a headless Docker Engine in an ag-ubuntu distro — no \
+                                Docker Desktop needed. The installer reopens after the restart.",
+                        });
+                    }
+                }
+                opts.push(PromptOption {
+                    key: "continue",
+                    label: "Continue with Docker Desktop",
+                    description: "Proceed now. Start Docker Desktop before the stack step or it will fail.",
+                });
+                opts.push(PromptOption {
                     key: "abort",
                     label: "Abort — I'll start Docker first",
-                    description: "Default. Start the Docker engine, wait until it's running, then re-run the installer.",
-                },
-                PromptOption {
-                    key: "continue",
-                    label: "Continue anyway",
-                    description: "Proceed now. The stack step will fail unless the engine is running by the time it starts.",
-                },
-            ],
+                    description: "Stop here; start the Docker engine, then re-run the installer.",
+                });
+                opts
+            }
             PromptId::PortBusy => vec![
                 PromptOption {
                     key: "pick",
@@ -435,7 +464,21 @@ impl PromptId {
                     "abort"
                 }
             }
-            PromptId::DockerEngineDown => "abort",
+            // On Windows, preselect routing the stack onto the WSL2 engine
+            // rather than dead-ending on "start Docker Desktop" — unless
+            // virtualization is off (can't enable WSL2), where abort stands.
+            // On Linux there's no WSL2, so abort (start the daemon, re-run).
+            PromptId::DockerEngineDown => {
+                if cfg!(windows) && !d.map(|d| d.virtualization_blocked).unwrap_or(false) {
+                    if d.map(|d| d.wsl2_available).unwrap_or(false) {
+                        "install_wsl2_docker"
+                    } else {
+                        "enable_wsl2_docker"
+                    }
+                } else {
+                    "abort"
+                }
+            }
             PromptId::PortBusy => "pick",
             PromptId::LowRam => "core",
             PromptId::NativeObs => "natives",
@@ -472,12 +515,22 @@ impl PromptAnswers {
         self.choices.values().any(|v| v == "abort")
     }
 
+    /// The docker-setup action the user chose, from whichever docker prompt
+    /// fired: `DockerMissing` (CLI absent) or `DockerEngineDown` (CLI present
+    /// but the daemon is down — the user can route onto WSL2 instead of
+    /// starting Docker Desktop). The two are mutually exclusive, so at most
+    /// one is set. `install_steps::run` and the step list both key off this.
+    pub fn docker_setup_choice(&self) -> Option<&str> {
+        self.choice(PromptId::DockerMissing)
+            .or_else(|| self.choice(PromptId::DockerEngineDown))
+    }
+
     /// True when docker ops should route through the WSL2 `ag-ubuntu`
     /// distro rather than a native Docker Engine on the host. Windows-only
     /// in practice; the key never appears on Linux.
     pub fn use_wsl2_docker(&self) -> bool {
         matches!(
-            self.choice(PromptId::DockerMissing),
+            self.docker_setup_choice(),
             Some("install_wsl2_docker") | Some("enable_wsl2_docker")
         )
     }
@@ -514,8 +567,9 @@ mod tests {
     }
 
     /// CLI present but the engine unreachable → DockerEngineDown fires (and
-    /// DockerMissing does not, since they're mutually exclusive). Default is
-    /// the safe "abort". Cross-platform — the prompt's logic isn't cfg-branched.
+    /// DockerMissing does not, since they're mutually exclusive). On Windows
+    /// the default routes onto the WSL2 engine (no dead-end at "start Docker
+    /// Desktop"); on Linux there's no WSL2, so the default is "abort".
     #[test]
     fn docker_engine_down_fires_when_cli_present_but_engine_absent() {
         let d = DetectionResult {
@@ -526,7 +580,23 @@ mod tests {
         let prompts = required_prompts(&d);
         assert!(prompts.contains(&PromptId::DockerEngineDown));
         assert!(!prompts.contains(&PromptId::DockerMissing));
-        assert_eq!(PromptId::DockerEngineDown.default_choice(Some(&d)), "abort");
+
+        let default = PromptId::DockerEngineDown.default_choice(Some(&d));
+        #[cfg(windows)]
+        {
+            // wsl2 off + not blocked → enable-WSL2 is the preselected route.
+            assert_eq!(default, "enable_wsl2_docker");
+            let keys: Vec<_> = PromptId::DockerEngineDown
+                .options(Some(&d))
+                .into_iter()
+                .map(|o| o.key)
+                .collect();
+            assert!(keys.contains(&"enable_wsl2_docker"));
+            assert!(keys.contains(&"continue"));
+            assert!(keys.contains(&"abort"));
+        }
+        #[cfg(not(windows))]
+        assert_eq!(default, "abort");
     }
 
     /// Free space below the 10 GB floor is a hard blocker; 0 ("unknown") and

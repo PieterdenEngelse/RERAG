@@ -31,6 +31,13 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 thiserror = "1"
 
+# Embed the observability config trees (ops/observability + the Grafana
+# dashboards under backend/src/monitoring/dashboards) directly into the
+# installer binary. docker-compose.yml bind-mounts these relative to the
+# config dir; embedding them means seed_config can write them out without
+# any extra MSI / AppImage payload or CI harvesting. See seed_config.
+include_dir = "0.7"
+
 # Serde for ag.env munging + update-check JSON parsing.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

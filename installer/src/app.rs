@@ -147,14 +147,20 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
             value: match (&d.docker_present, &d.docker_engine_version) {
                 (_, Some(engine)) => format!("engine running ({engine})"),
                 (Some(_), None) => {
-                    "CLI on PATH but engine not reachable — start Docker, then re-run".to_string()
+                    "CLI on PATH but engine not reachable — start Docker, then re-run \
+                     (only if the stack won't run on WSL2)"
+                        .to_string()
                 }
                 (None, None) => "not on PATH".to_string(),
             },
-            status: if d.docker_engine_version.is_some() {
-                DetectionStatus::Ok
-            } else {
-                DetectionStatus::Warn
+            status: match (&d.docker_present, &d.docker_engine_version) {
+                // Engine reachable → genuinely ready.
+                (_, Some(_)) => DetectionStatus::Ok,
+                // CLI present but daemon down → only matters off-WSL2, so it's
+                // a neutral ○, not a blocker.
+                (Some(_), None) => DetectionStatus::Info,
+                // Not on PATH → the DockerMissing prompt fires; needs a decision.
+                (None, None) => DetectionStatus::Warn,
             },
         },
         DetectionRow {

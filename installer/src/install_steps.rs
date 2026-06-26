@@ -32,12 +32,26 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
+use include_dir::{include_dir, Dir, DirEntry};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::{sleep, Duration};
 
 use crate::bundled;
 use crate::paths::{self, Paths};
 use crate::prompts::{PromptAnswers, PromptId};
+
+// Observability config trees embedded at compile time. docker-compose.yml
+// bind-mounts these relative to the directory that holds the compose file
+// (the per-user config dir), so they must be staged next to it or every
+// config-mounting container (prometheus, grafana, loki, tempo, otel) fails
+// to start with "not a directory: mounting a directory onto a file" — Docker
+// auto-creates the missing bind source as an empty dir. Embedding (rather
+// than adding them to the MSI / AppImage payload) keeps one source of truth
+// and needs no packaging or CI changes. Paths are relative to this crate's
+// Cargo.toml (installer/), so `../` reaches the repo root. See seed_config.
+static OBSERVABILITY_CONFIG: Dir = include_dir!("$CARGO_MANIFEST_DIR/../ops/observability");
+static DASHBOARD_CONFIG: Dir =
+    include_dir!("$CARGO_MANIFEST_DIR/../backend/src/monitoring/dashboards");
 
 pub type ProgressSender = UnboundedSender<ProgressEvent>;
 
@@ -217,8 +231,10 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
         }};
     }
 
+    // The docker-setup action may come from DockerMissing (CLI absent) or
+    // DockerEngineDown (CLI present but daemon down → user routed onto WSL2).
     #[cfg(windows)]
-    match answers.choice(PromptId::DockerMissing) {
+    match answers.docker_setup_choice() {
         Some("install_docker_desktop") => {
             step!(
                 INSTALL_DOCKER_STEP_NAME,
@@ -273,13 +289,28 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
                         name,
                         duration: started.elapsed(),
                     });
-                    let _ = tx.send(ProgressEvent::RebootRequired {
-                        message: "WSL2 has been enabled, but Windows needs to restart to \
-                            finish. After you restart and sign back in, this installer reopens \
-                            automatically to install Docker and complete setup — the WSL2 \
-                            Docker option will be preselected, so just click through."
-                            .to_string(),
-                    });
+                    // In SKIP_SCHTASKS sandbox mode neither enable_wsl2 nor
+                    // register_wsl2_resume touched the system — they only logged
+                    // what they would do. Say so plainly; otherwise the user
+                    // reboots expecting the auto-resume the real path promises,
+                    // but nothing was enabled or registered (the trap that
+                    // motivated this branch).
+                    let message = if crate::platform::skip_systemctl() {
+                        "SKIP_SCHTASKS sandbox — dry run only. WSL2 was NOT actually \
+                            enabled and no logon-resume was registered, so restarting \
+                            will not reopen the installer. Unset SKIP_SCHTASKS and \
+                            re-run (ideally the installed ag-installer.exe) to enable \
+                            WSL2 for real."
+                            .to_string()
+                    } else {
+                        "WSL2 has been enabled, but Windows needs to restart to \
+                            finish. After you restart and sign back in, this installer \
+                            reopens automatically to install Docker and complete setup — \
+                            the WSL2 Docker option will be preselected, so just click \
+                            through."
+                            .to_string()
+                    };
+                    let _ = tx.send(ProgressEvent::RebootRequired { message });
                     return InstallResult {
                         success: true,
                         log_path,
@@ -440,7 +471,120 @@ async fn seed_config(
             format!("{} exists — preserved", compose_target.display()),
         );
     }
+
+    // Observability config trees: prometheus / grafana / loki / tempo / otel
+    // bind-mount these from paths relative to the compose file. If they're
+    // absent, `docker compose up` fails to start every config-mounting
+    // container ("not a directory: mounting a directory onto a file" — Docker
+    // auto-creates the missing bind source as an empty dir). Stage the
+    // embedded trees next to docker-compose.yml. The config dir is the
+    // compose file's parent (portable across Linux ~/.config/ag and Windows
+    // %APPDATA%\ag without reaching for a platform-specific field).
+    let config_dir = compose_target
+        .parent()
+        .ok_or_else(|| anyhow!("docker-compose.yml path has no parent dir"))?;
+    stage_embedded_tree(
+        &OBSERVABILITY_CONFIG,
+        &config_dir.join("ops").join("observability"),
+        "prometheus.yml",
+        tx,
+        tee,
+    )?;
+    stage_embedded_tree(
+        &DASHBOARD_CONFIG,
+        &config_dir
+            .join("backend")
+            .join("src")
+            .join("monitoring")
+            .join("dashboards"),
+        "datasources.yaml",
+        tx,
+        tee,
+    )?;
     Ok(())
+}
+
+/// Write an embedded config tree to `dest`. Skips the write when
+/// `dest/<marker>` already exists as a regular file — the user may have
+/// edited the staged copy, and we treat config like docker-compose.yml
+/// (copy-if-missing, never clobber). Re-extracts when the marker is absent
+/// *or* present as something other than a regular file, which repairs the
+/// empty directories a prior failed `docker compose up` left behind in place
+/// of the real config files.
+fn stage_embedded_tree(
+    dir: &Dir,
+    dest: &Path,
+    marker: &str,
+    tx: &ProgressSender,
+    tee: &LogTee,
+) -> Result<()> {
+    if dest.join(marker).is_file() {
+        step_log(
+            tx,
+            tee,
+            "Seed config",
+            format!("{} exists — preserved", dest.display()),
+        );
+        return Ok(());
+    }
+    extract_embedded(dir, dest)
+        .with_context(|| format!("stage embedded config tree → {}", dest.display()))?;
+    step_log(
+        tx,
+        tee,
+        "Seed config",
+        format!(
+            "staged {} config file(s) → {}",
+            count_embedded_files(dir),
+            dest.display()
+        ),
+    );
+    Ok(())
+}
+
+/// Recursively write every file in an embedded `Dir` under `base`,
+/// reproducing the tree's directory structure. Built from the final path
+/// component at each level (rather than `File::path()`, whose root-relative
+/// vs. dir-relative semantics vary by include_dir version) so nesting is
+/// always rebuilt from the traversal itself.
+fn extract_embedded(dir: &Dir, base: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(base)?;
+    for entry in dir.entries() {
+        match entry {
+            DirEntry::Dir(sub) => {
+                let name = sub.path().file_name().unwrap_or_default();
+                let target = base.join(name);
+                // A prior failed run may have left a regular file where this
+                // tree needs a directory; clear it so create_dir_all wins.
+                if target.is_file() {
+                    fs::remove_file(&target)?;
+                }
+                extract_embedded(sub, &target)?;
+            }
+            DirEntry::File(file) => {
+                let name = file.path().file_name().unwrap_or_default();
+                let target = base.join(name);
+                // Docker auto-creates an empty *directory* at a missing bind
+                // source; remove it so we can write the real config file
+                // (fs::write would otherwise fail with "Is a directory").
+                if target.is_dir() {
+                    fs::remove_dir_all(&target)?;
+                }
+                fs::write(&target, file.contents())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn count_embedded_files(dir: &Dir) -> usize {
+    dir.entries()
+        .iter()
+        .map(|e| match e {
+            DirEntry::Dir(sub) => count_embedded_files(sub),
+            DirEntry::File(_) => 1,
+        })
+        .sum()
 }
 
 // =============================================================================
@@ -578,4 +722,104 @@ pub(crate) fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(not(unix))]
 pub(crate) fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unique scratch dir under the OS temp dir — avoids clobbering a real
+    /// install and lets the test run without env setup.
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("ag-installer-test-{tag}-{nanos}"))
+    }
+
+    /// `extract_embedded` must reproduce the exact relative paths
+    /// docker-compose.yml bind-mounts — including the nested `loki/` and
+    /// `tempo/` subdirs — or the observability containers fail to start.
+    #[test]
+    fn extract_observability_tree_matches_compose_mounts() {
+        let dest = scratch("obs");
+        extract_embedded(&OBSERVABILITY_CONFIG, &dest).expect("extract observability");
+        for rel in [
+            "prometheus.yml",
+            "grafana.ini",
+            "loki/config.yml",
+            "tempo/config.yml",
+            "otel-collector.yml",
+        ] {
+            assert!(
+                dest.join(rel).is_file(),
+                "expected staged file {rel} under {}",
+                dest.display()
+            );
+        }
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    /// The Grafana provisioning files plus the `ag/` and `extras/` dashboard
+    /// directories (mounted as whole dirs) must all land.
+    #[test]
+    fn extract_dashboard_tree_matches_compose_mounts() {
+        let dest = scratch("dash");
+        extract_embedded(&DASHBOARD_CONFIG, &dest).expect("extract dashboards");
+        for rel in ["datasources.yaml", "ag.yaml", "extras.yaml"] {
+            assert!(
+                dest.join(rel).is_file(),
+                "expected staged file {rel} under {}",
+                dest.display()
+            );
+        }
+        for dir in ["ag", "extras"] {
+            let d = dest.join(dir);
+            assert!(d.is_dir(), "expected dashboard dir {dir}");
+            let json_count = fs::read_dir(&d)
+                .expect("read dashboard dir")
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .count();
+            assert!(json_count > 0, "expected ≥1 .json in {dir}");
+        }
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    /// The copy-if-missing guard preserves a user-edited marker file and
+    /// repairs the empty-directory artifact a failed `docker compose up`
+    /// leaves in place of the marker.
+    #[test]
+    fn stage_guard_preserves_file_but_repairs_junk_dir() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let tee = LogTee::new();
+
+        // Marker already a real file → preserved (no real config written).
+        let dest = scratch("guard-keep");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("prometheus.yml"), b"user edit").unwrap();
+        stage_embedded_tree(&OBSERVABILITY_CONFIG, &dest, "prometheus.yml", &tx, &tee).unwrap();
+        assert_eq!(
+            fs::read(dest.join("prometheus.yml")).unwrap(),
+            b"user edit",
+            "user-edited marker must be preserved"
+        );
+        assert!(
+            !dest.join("loki/config.yml").exists(),
+            "preserve path must not re-extract the tree"
+        );
+        let _ = fs::remove_dir_all(&dest);
+
+        // Marker is a junk *directory* (Docker's auto-created bind source)
+        // → not a regular file, so the tree is (re)extracted over it.
+        let dest = scratch("guard-repair");
+        fs::create_dir_all(dest.join("prometheus.yml")).unwrap();
+        stage_embedded_tree(&OBSERVABILITY_CONFIG, &dest, "prometheus.yml", &tx, &tee).unwrap();
+        assert!(
+            dest.join("loki/config.yml").is_file(),
+            "junk-dir marker must trigger re-extraction"
+        );
+        let _ = fs::remove_dir_all(&dest);
+    }
 }

@@ -9,6 +9,7 @@
 //! host" rather than a frozen screen.
 
 use dioxus::prelude::*;
+use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::{detection_rows, DetectionRow, DetectionStatus};
 use crate::detection::{self, DetectionResult};
@@ -17,17 +18,29 @@ use crate::ui::components::{IconKind, NavFooter, StatusIcon};
 #[component]
 pub fn DetectionScreen() -> Element {
     let mut detection_signal = use_context::<Signal<Option<DetectionResult>>>();
+    // Completed-probe count, driven by per-probe ticks from run_with_progress;
+    // feeds the progress bar while probes are pending.
+    let mut done = use_signal(|| 0usize);
+    let mut value = use_signal::<Option<DetectionResult>>(|| None);
 
-    // Resource runs once on mount and stores the result in the shared signal
-    // so the Prompts screen (and anything else downstream) can read it.
-    let resource = use_resource(move || async move {
-        let result = detection::run().await;
-        detection_signal.set(Some(result.clone()));
-        result
+    // Runs once on mount: detection runs on its own task so the tick-receive
+    // loop below isn't blocked; each tick advances `done`. When it finishes we
+    // store the result (shared signal for the Prompts screen + local `value`).
+    let _resource = use_resource(move || async move {
+        let (tx, mut rx) = unbounded_channel::<()>();
+        let task = tokio::spawn(detection::run_with_progress(tx));
+        while rx.recv().await.is_some() {
+            done.with_mut(|d| *d += 1);
+        }
+        if let Ok(result) = task.await {
+            detection_signal.set(Some(result.clone()));
+            value.set(Some(result));
+        }
     });
 
-    let value_state = resource.value();
-    let value = value_state.read();
+    let value_state = value.read();
+    let value = value_state;
+    let done_count = *done.read();
 
     rsx! {
         div { class: "screen",
@@ -50,6 +63,12 @@ pub fn DetectionScreen() -> Element {
                             .into_iter()
                             .map(|r| r.label)
                             .collect();
+                        // Real progress: fraction of probes that have ticked
+                        // in. Clamped so an off-by-one in the probe count can't
+                        // overshoot; the swap to the results table happens the
+                        // moment the full result lands anyway.
+                        let total = crate::platform::DETECTION_PROBE_COUNT.max(1);
+                        let pct = (done_count.min(total) * 100 / total) as u32;
                         rsx! {
                             div { class: "detection-pending",
                                 div { class: "detection-spinner" }
@@ -58,6 +77,12 @@ pub fn DetectionScreen() -> Element {
                                         "Probing docker, scheduled tasks, ports, disk, RAM and WSL2…"
                                     } else {
                                         "Probing docker, systemd units, ports, disk and RAM…"
+                                    }
+                                }
+                                div { class: "detection-progress",
+                                    div {
+                                        class: "detection-progress-fill",
+                                        style: "width: {pct}%;",
                                     }
                                 }
                                 ul { class: "detection-probe-grid",

@@ -684,6 +684,23 @@ a:focus-visible,
     font-size: 0.9rem;
     color: #9ca3af;
 }
+.detection-progress {
+    width: 100%;
+    max-width: 34rem;
+    height: 10px;
+    border-radius: 5px;
+    /* Clearly lighter than the near-black page bg (#0c0e12) + a defined
+       border so the empty track reads as a track, not background. */
+    background: #374151;
+    border: 1px solid #4b5563;
+    overflow: hidden;
+}
+.detection-progress-fill {
+    height: 100%;
+    background: #7C2A02;
+    border-radius: 5px;
+    transition: width 0.25s ease-out;
+}
 @keyframes detection-spin {
     to { transform: rotate(360deg); }
 }

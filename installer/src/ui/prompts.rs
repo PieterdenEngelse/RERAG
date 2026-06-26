@@ -125,9 +125,9 @@ pub fn PromptsScreen() -> Element {
                         #3a2a10; border-radius: 6px; background: rgba(251,191,36,0.08); \
                         color: #d1d5db;",
                     p { style: "margin: 0;",
-                        "Set to abort the install: "
+                        "These choices will abort the install: "
                         strong { "{aborted_list}" }
-                        ". Pick a different option above to continue, or click Cancel to exit."
+                        ". Switch them to another option to continue, or click Cancel to start over."
                     }
                 }
             }

@@ -16,6 +16,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use tokio::process::Command;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 
 use crate::bundled;
@@ -133,7 +134,26 @@ pub fn skip_systemctl() -> bool {
 /// Runs every probe; independent probes go in parallel via `tokio::join!`.
 /// `system_redis` runs after `compose_up` so it can skip when our own
 /// ag-redis container owns 6379.
-pub async fn run_detection() -> DetectionResult {
+/// Number of probes `run_detection` runs — the denominator for the detection
+/// screen's progress bar. Keep in sync with the `tokio::join!` arms below
+/// plus the sequential `probe_system_redis`.
+pub const DETECTION_PROBE_COUNT: usize = 13;
+
+pub async fn run_detection(progress: Option<UnboundedSender<()>>) -> DetectionResult {
+    // Wrap each probe so it sends a tick the instant it resolves — the
+    // detection screen advances its progress bar one notch per completed
+    // probe. Keep DETECTION_PROBE_COUNT in sync with these.
+    macro_rules! ticked {
+        ($p:expr) => {
+            async {
+                let r = $p.await;
+                if let Some(tx) = progress.as_ref() {
+                    let _ = tx.send(());
+                }
+                r
+            }
+        };
+    }
     let (
         docker_present,
         docker_engine_version,
@@ -148,20 +168,23 @@ pub async fn run_detection() -> DetectionResult {
         falkordb_healthy,
         distro,
     ) = tokio::join!(
-        probe_docker(),
-        probe_docker_engine(),
-        probe_ollama_active(),
-        probe_compose_up(),
-        probe_ag_env_exists(),
-        probe_ram_gb(),
-        probe_disk_free_gb(),
-        probe_backend_port_busy(BACKEND_PORT),
-        probe_native_obs(),
-        probe_ag_service_drift(),
-        probe_falkordb_healthy(),
-        probe_distro(),
+        ticked!(probe_docker()),
+        ticked!(probe_docker_engine()),
+        ticked!(probe_ollama_active()),
+        ticked!(probe_compose_up()),
+        ticked!(probe_ag_env_exists()),
+        ticked!(probe_ram_gb()),
+        ticked!(probe_disk_free_gb()),
+        ticked!(probe_backend_port_busy(BACKEND_PORT)),
+        ticked!(probe_native_obs()),
+        ticked!(probe_ag_service_drift()),
+        ticked!(probe_falkordb_healthy()),
+        ticked!(probe_distro()),
     );
     let system_redis = probe_system_redis(compose_up).await;
+    if let Some(tx) = progress.as_ref() {
+        let _ = tx.send(());
+    }
 
     DetectionResult {
         docker_present,

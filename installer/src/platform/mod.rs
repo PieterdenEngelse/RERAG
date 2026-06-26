@@ -21,7 +21,7 @@ mod windows;
 pub use linux::{
     apply_falkordb_password, copy_artifacts, disk_free_gb, ensure_install_tree, install_service,
     install_stack, run_detection, skip_systemctl, start_ag, uninstall_managed, uninstall_targets,
-    Paths,
+    Paths, DETECTION_PROBE_COUNT,
 };
 
 #[cfg(windows)]
@@ -29,5 +29,5 @@ pub use windows::{
     apply_falkordb_password, copy_artifacts, disk_free_gb, enable_wsl2, ensure_install_tree,
     install_docker, install_docker_wsl2, install_service, install_stack, register_wsl2_resume,
     run_detection, skip_systemctl, start_ag, uninstall_managed, uninstall_targets, Paths,
-    WslEnableOutcome,
+    WslEnableOutcome, DETECTION_PROBE_COUNT,
 };
