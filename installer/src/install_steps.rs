@@ -782,11 +782,9 @@ async fn health_check(tx: &ProgressSender, tee: &LogTee, backend_port: u16) -> R
 // Helpers — template render, env edit, file mode
 // =============================================================================
 
-/// `{{KEY}}` literal substitution, mirroring bash `render_template`.
-///
-/// `pub(crate)` so platform impls can render systemd unit / Scheduled Task
-/// XML files from their step bodies.
-pub(crate) fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()> {
+/// Read `src` and apply `{{KEY}}` literal substitution for each var,
+/// returning the filled text. Shared by the platform renderers below.
+fn fill_template(src: &Path, vars: &[(&str, String)]) -> Result<String> {
     if !src.exists() {
         return Err(anyhow!("template missing: {}", src.display()));
     }
@@ -796,8 +794,35 @@ pub(crate) fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -
         let placeholder = format!("{{{{{key}}}}}");
         content = content.replace(&placeholder, value);
     }
+    Ok(content)
+}
+
+/// `{{KEY}}` substitution → UTF-8 file. Used for Linux systemd unit files,
+/// which are UTF-8 text. (On Windows the Scheduled Task XMLs need UTF-16 —
+/// see `render_task_xml`.)
+#[cfg(unix)]
+pub(crate) fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()> {
+    let content = fill_template(src, vars)?;
     fs::write(dst, content).with_context(|| format!("write rendered {}", dst.display()))?;
     set_mode(dst, 0o644)?;
+    Ok(())
+}
+
+/// `{{KEY}}` substitution → UTF-16LE-with-BOM file, for Windows Scheduled
+/// Task XML. `schtasks /Create /XML` rejects a UTF-8 file (even valid, no
+/// BOM) with "ERROR: The task XML is malformed … unable to switch the
+/// encoding"; it requires UTF-16. The templates declare encoding="UTF-16"
+/// to match. We emit the bytes explicitly (BOM + LE code units) so the
+/// output never depends on the platform's default text encoding.
+#[cfg(windows)]
+pub(crate) fn render_task_xml(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()> {
+    let content = fill_template(src, vars)?;
+    let mut bytes = Vec::with_capacity(2 + content.len() * 2);
+    bytes.extend_from_slice(&[0xFF, 0xFE]); // UTF-16LE BOM
+    for unit in content.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    fs::write(dst, &bytes).with_context(|| format!("write rendered {}", dst.display()))?;
     Ok(())
 }
 
@@ -978,6 +1003,38 @@ mod tests {
             embedding_model_present(&dir),
             "full model + tokenizer → present"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Scheduled Task XML must be UTF-16LE with a BOM — `schtasks /Create
+    /// /XML` rejects UTF-8 with "unable to switch the encoding". Guards the
+    /// byte format and that substitution still works.
+    #[cfg(windows)]
+    #[test]
+    fn render_task_xml_emits_utf16le_bom() {
+        let dir = scratch("taskxml");
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("t.tmpl");
+        fs::write(
+            &src,
+            "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task>{{CMD}}</Task>\n",
+        )
+        .unwrap();
+        let dst = dir.join("t.xml");
+        render_task_xml(&src, &dst, &[("CMD", "wsl".to_string())]).unwrap();
+
+        let bytes = fs::read(&dst).unwrap();
+        assert_eq!(&bytes[0..2], &[0xFF, 0xFE], "must start with UTF-16LE BOM");
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let text = String::from_utf16(&units).unwrap();
+        assert!(
+            text.contains(r#"encoding="UTF-16""#),
+            "declaration preserved"
+        );
+        assert!(text.contains("<Task>wsl</Task>"), "placeholder substituted");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -31,7 +31,7 @@ use tokio::time::sleep;
 use crate::bundled;
 use crate::detection::{DetectionResult, BACKEND_PORT};
 use crate::install_steps::{
-    render_template, step_log, LogTee, ProgressEvent, ProgressSender, FALKORDB_PORT,
+    render_task_xml, step_log, LogTee, ProgressEvent, ProgressSender, FALKORDB_PORT,
     INSTALL_WSL2_ENABLE_STEP_NAME, STEP_ENSURE_TREE, STEP_SERVICE, STEP_STACK,
 };
 use crate::prompts::{PromptAnswers, PromptId};
@@ -917,7 +917,7 @@ pub async fn install_service(
 
     if install_ag_task {
         let tmpl = bundled::scheduled_tasks_template_dir().join("ag.xml.tmpl");
-        render_template(
+        render_task_xml(
             &tmpl,
             &ag_task,
             &[
@@ -992,7 +992,7 @@ pub async fn install_service(
         };
         let stack_task = paths.ag_stack_task_xml();
         let tmpl = bundled::scheduled_tasks_template_dir().join("ag-stack.xml.tmpl");
-        render_template(
+        render_task_xml(
             &tmpl,
             &stack_task,
             &[
