@@ -104,6 +104,7 @@ pub const INSTALL_WSL2_ENABLE_STEP_NAME: &str = "Enable WSL2";
 // status transitions, and the install-log prefixes stay in sync.
 pub const STEP_SEED_CONFIG: &str = "Seed config";
 pub const STEP_INSTALL_ARTIFACTS: &str = "Install artifacts";
+pub const STEP_FETCH_MODEL: &str = "Download embedding model";
 pub const STEP_HEALTH_CHECK: &str = "Health check";
 
 #[cfg(windows)]
@@ -125,6 +126,7 @@ pub const STEP_NAMES: &[&str] = &[
     STEP_ENSURE_TREE,
     STEP_SEED_CONFIG,
     STEP_INSTALL_ARTIFACTS,
+    STEP_FETCH_MODEL,
     STEP_STACK,
     STEP_SERVICE,
     STEP_HEALTH_CHECK,
@@ -342,6 +344,7 @@ pub async fn run(answers: PromptAnswers, tx: ProgressSender) -> InstallResult {
         STEP_INSTALL_ARTIFACTS,
         crate::platform::copy_artifacts(&paths, &tx, &tee)
     );
+    step!(STEP_FETCH_MODEL, fetch_embedding_model(&paths, &tx, &tee));
     step!(STEP_STACK, async {
         // Mid-install disk guard: re-probe right before the heaviest step
         // (compose image pulls can be several GB). The Prompts-screen gate
@@ -588,6 +591,123 @@ fn count_embedded_files(dir: &Dir) -> usize {
 }
 
 // =============================================================================
+// Step: fetch_embedding_model — download the ONNX embedder the backend needs
+// =============================================================================
+//
+// The backend's default embedder is in-process ONNX (bge-small-en-v1.5) and it
+// *requires* `models/embedding_model.onnx` + `tokenizer.json` under AG_HOME —
+// it panics on boot without them. The model is ~127 MB, so it's fetched here at
+// install time (the install already pulls a WSL2 rootfs + GBs of container
+// images) rather than bloating the MSI/AppImage payload. Idempotent: a present
+// model is left alone, so reinstalls and post-reboot resumes don't re-download.
+
+/// HuggingFace source for the default embedder. `onnx/model.onnx` is the fp32
+/// model; `tokenizer.json` is its matching tokenizer. Pinned to the model the
+/// backend's `EmbeddingModel` default expects (bge-small-en-v1.5, 384-dim).
+const EMBED_MODEL_BASE: &str = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main";
+
+/// Minimum size (bytes) for the staged `.onnx` to count as "really there".
+/// Guards against a truncated download — or an HTML error page saved under the
+/// model's name — satisfying a bare `exists()` check and panicking the backend.
+const EMBED_MODEL_MIN_BYTES: u64 = 50 * 1024 * 1024;
+
+/// True when a usable embedder is already staged in `models_dir` — a
+/// non-trivial `.onnx` plus its tokenizer. Used to make the download step
+/// idempotent across reinstalls and resume-after-reboot runs.
+fn embedding_model_present(models_dir: &Path) -> bool {
+    let model_ok = fs::metadata(models_dir.join("embedding_model.onnx"))
+        .map(|m| m.len() >= EMBED_MODEL_MIN_BYTES)
+        .unwrap_or(false);
+    model_ok && models_dir.join("tokenizer.json").is_file()
+}
+
+async fn fetch_embedding_model(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+    // The backend resolves ONNX_MODEL_PATH ("models/embedding_model.onnx")
+    // relative to its working directory, which the service launches as AG_HOME.
+    let models_dir = paths.ag_home.join("models");
+
+    if embedding_model_present(&models_dir) {
+        step_log(
+            tx,
+            tee,
+            STEP_FETCH_MODEL,
+            format!(
+                "embedder already present in {} — skipping",
+                models_dir.display()
+            ),
+        );
+        return Ok(());
+    }
+
+    fs::create_dir_all(&models_dir).with_context(|| format!("create {}", models_dir.display()))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(900))
+        .build()
+        .with_context(|| "build http client for model download")?;
+
+    step_log(
+        tx,
+        tee,
+        STEP_FETCH_MODEL,
+        "fetching ONNX embedder bge-small-en-v1.5 (~127 MB, one-time) from HuggingFace",
+    );
+    download_file(
+        &client,
+        &format!("{EMBED_MODEL_BASE}/onnx/model.onnx"),
+        &models_dir.join("embedding_model.onnx"),
+        tx,
+        tee,
+    )
+    .await?;
+    download_file(
+        &client,
+        &format!("{EMBED_MODEL_BASE}/tokenizer.json"),
+        &models_dir.join("tokenizer.json"),
+        tx,
+        tee,
+    )
+    .await?;
+    Ok(())
+}
+
+/// GET `url` into `dest`, failing on a non-2xx status. Buffers the whole body
+/// before writing (the largest artifact is ~127 MB — fine in memory, and it
+/// avoids leaving a partially-written file at `dest` on a mid-stream error).
+async fn download_file(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    tx: &ProgressSender,
+    tee: &LogTee,
+) -> Result<()> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        bail!("download returned {} for {url}", resp.status());
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .with_context(|| format!("read response body for {url}"))?;
+    fs::write(dest, &bytes).with_context(|| format!("write {}", dest.display()))?;
+    step_log(
+        tx,
+        tee,
+        STEP_FETCH_MODEL,
+        format!(
+            "downloaded {:.1} MB → {}",
+            bytes.len() as f64 / (1024.0 * 1024.0),
+            dest.display()
+        ),
+    );
+    Ok(())
+}
+
+// =============================================================================
 // Step 6: health_check — poll /health
 // =============================================================================
 //
@@ -821,5 +941,43 @@ mod tests {
             "junk-dir marker must trigger re-extraction"
         );
         let _ = fs::remove_dir_all(&dest);
+    }
+
+    /// The download step's idempotency guard must require BOTH a tokenizer and
+    /// an `.onnx` over the size floor — a missing tokenizer or a truncated
+    /// model (an HTML error page saved under the model's name) must not count
+    /// as "present", or the backend would panic on a bad file.
+    #[test]
+    fn embedding_model_present_requires_full_model_and_tokenizer() {
+        let dir = scratch("embed");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(!embedding_model_present(&dir), "empty dir → not present");
+
+        // Truncated model + tokenizer → still not present (below size floor).
+        fs::write(dir.join("embedding_model.onnx"), b"<html>404</html>").unwrap();
+        fs::write(dir.join("tokenizer.json"), b"{}").unwrap();
+        assert!(
+            !embedding_model_present(&dir),
+            "sub-floor .onnx must be rejected"
+        );
+
+        // Full-size model but missing tokenizer → not present. Use a sparse
+        // file (set_len) so the test doesn't write 50 MB to disk.
+        let f = fs::File::create(dir.join("embedding_model.onnx")).unwrap();
+        f.set_len(EMBED_MODEL_MIN_BYTES + 1).unwrap();
+        drop(f);
+        fs::remove_file(dir.join("tokenizer.json")).unwrap();
+        assert!(
+            !embedding_model_present(&dir),
+            "missing tokenizer must be rejected"
+        );
+
+        // Full-size model + tokenizer → present.
+        fs::write(dir.join("tokenizer.json"), b"{}").unwrap();
+        assert!(
+            embedding_model_present(&dir),
+            "full model + tokenizer → present"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
