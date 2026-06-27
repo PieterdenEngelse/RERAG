@@ -68,7 +68,11 @@ services:
     volumes:
       - falkordb-data:/data
     environment:
-      - FALKORDB_PASSWORD=${FALKOR_PASSWORD:-agpassword123}
+      # The falkordb image enforces a password through REDIS_ARGS (forwarded to
+      # redis-server), NOT a FALKORDB_PASSWORD env var — that name is silently
+      # ignored, which left the server open (no requirepass) while the backend
+      # dutifully sent AUTH and got "authentication failed", degrading GraphRAG.
+      - REDIS_ARGS=--requirepass ${FALKOR_PASSWORD:-agpassword123}
     healthcheck:
       test:
         - "CMD"
