@@ -339,6 +339,12 @@ async fn main() -> std::io::Result<()> {
     // ─────────────────────────────────────────────────────────────
     // PHASE 3.6: Start the configured local runtime (idempotent)
     // ─────────────────────────────────────────────────────────────
+    // Linux-only: this drives the runtime via `systemctl --user`. On Windows
+    // (Scheduled Tasks) and in containers the runtime — Ollama in particular —
+    // is managed externally (the compose stack or the user), so there's no
+    // user service to start. Gated to avoid a spurious "systemctl: program not
+    // found" warning on every Windows boot.
+    #[cfg(target_os = "linux")]
     {
         use ag::db::param_hardware::{self, BackendType};
         let service = match param_hardware::global_config().backend_type {

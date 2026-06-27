@@ -270,8 +270,13 @@ impl ResourceTracker {
         // Read current process stats
         let current_stats = match ProcessStats::read() {
             Ok(stats) => stats,
-            Err(e) => {
-                warn!(error = ?e, "Failed to read process stats");
+            Err(_e) => {
+                // These stats come from /proc/self/* — Linux-only. Off Linux the
+                // read always fails and there's nothing to attribute, so stay
+                // quiet instead of warning every cycle. On Linux a failure is
+                // genuinely unexpected, so surface it there.
+                #[cfg(target_os = "linux")]
+                warn!(error = ?_e, "Failed to read process stats");
                 return;
             }
         };
@@ -279,8 +284,9 @@ impl ResourceTracker {
         // Read memory stats
         let mem_stats = match MemoryStats::read() {
             Ok(stats) => stats,
-            Err(e) => {
-                warn!(error = ?e, "Failed to read memory stats");
+            Err(_e) => {
+                #[cfg(target_os = "linux")]
+                warn!(error = ?_e, "Failed to read memory stats");
                 return;
             }
         };
