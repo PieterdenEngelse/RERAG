@@ -18,9 +18,14 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::{InstallStep, StepStatus};
 use crate::detection::DetectionResult;
+use crate::install_steps::{self, ProgressEvent, STEP_NAMES};
+// Windows-only step-name constants, consumed by initial_steps' #[cfg(windows)]
+// docker-setup branch. The import must be gated too — on Linux these
+// cfg(windows) consts don't exist, and an unconditional import fails to
+// resolve (which broke the AppImage build).
+#[cfg(windows)]
 use crate::install_steps::{
-    self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME,
-    INSTALL_WSL2_ENABLE_STEP_NAME, STEP_NAMES,
+    INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME, INSTALL_WSL2_ENABLE_STEP_NAME,
 };
 use crate::prompts::PromptAnswers;
 use crate::ui::components::{FailureInfo, FailureModal, LogView, NavFooter, StepListView};
