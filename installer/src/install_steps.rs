@@ -816,7 +816,13 @@ pub(crate) fn render_template(src: &Path, dst: &Path, vars: &[(&str, String)]) -
 /// output never depends on the platform's default text encoding.
 #[cfg(windows)]
 pub(crate) fn render_task_xml(src: &Path, dst: &Path, vars: &[(&str, String)]) -> Result<()> {
-    let content = fill_template(src, vars)?;
+    // We emit UTF-16LE, so force the XML declaration to match. A template that
+    // still says encoding="UTF-8" (e.g. an older bundled copy that predates the
+    // UTF-16 switch) would otherwise trip schtasks' "unable to switch the
+    // encoding" — render_task_xml owns the on-disk encoding, so it owns the
+    // declaration too. A no-op when the template already says UTF-16.
+    let content =
+        fill_template(src, vars)?.replacen(r#"encoding="UTF-8""#, r#"encoding="UTF-16""#, 1);
     let mut bytes = Vec::with_capacity(2 + content.len() * 2);
     bytes.extend_from_slice(&[0xFF, 0xFE]); // UTF-16LE BOM
     for unit in content.encode_utf16() {

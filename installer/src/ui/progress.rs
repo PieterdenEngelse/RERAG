@@ -17,6 +17,7 @@ use dioxus::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::{InstallStep, StepStatus};
+use crate::detection::DetectionResult;
 use crate::install_steps::{
     self, ProgressEvent, INSTALL_DOCKER_STEP_NAME, INSTALL_WSL2_DOCKER_STEP_NAME,
     INSTALL_WSL2_ENABLE_STEP_NAME, STEP_NAMES,
@@ -27,9 +28,33 @@ use crate::ui::components::{FailureInfo, FailureModal, LogView, NavFooter, StepL
 #[component]
 pub fn ProgressScreen() -> Element {
     let answers_signal = use_context::<Signal<PromptAnswers>>();
+    let detection_signal = use_context::<Signal<Option<DetectionResult>>>();
 
-    let answers_for_steps = answers_signal.read().clone();
-    let mut steps = use_signal(move || initial_steps(&answers_for_steps));
+    // Fill any required prompt that lacks an explicit answer with its default,
+    // computed synchronously here — the one point guaranteed to run right
+    // before the install reads the answers. The Prompts screen seeds these
+    // too, but a Dioxus signal-timing edge can leave a defaulted (or even
+    // clicked) choice unwritten in the shared signal — observed as
+    // docker_setup_choice arriving as None, which wrongly sent the install
+    // down the native-Docker path. Reading the value here (not re-seeding the
+    // signal) sidesteps the race; an explicit non-default answer is preserved
+    // since we only fill `is_none()` choices.
+    let answers = {
+        let mut a = answers_signal.read().clone();
+        if let Some(d) = detection_signal.read().as_ref() {
+            for id in crate::prompts::required_prompts(d) {
+                if a.choice(id).is_none() {
+                    a.set_choice(id, id.default_choice(Some(d)).to_string());
+                }
+            }
+        }
+        a
+    };
+
+    let mut steps = use_signal({
+        let answers = answers.clone();
+        move || initial_steps(&answers)
+    });
     let mut log_lines = use_signal(Vec::<String>::new);
     let mut error_signal = use_signal::<Option<FailureInfo>>(|| None);
     let mut complete = use_signal(|| false);
@@ -39,7 +64,7 @@ pub fn ProgressScreen() -> Element {
     // Spawn the install task once on mount. Resource runs once even though
     // its body closes over the signals we mutate from event handling.
     let _install_resource = use_resource(move || {
-        let answers = answers_signal.read().clone();
+        let answers = answers.clone();
         async move {
             let (tx, mut rx) = unbounded_channel::<ProgressEvent>();
             // Run the install on a separate task so the receive loop below

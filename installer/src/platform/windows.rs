@@ -321,6 +321,26 @@ async fn probe_wsl2_docker() -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
+/// Resilient "does ag-ubuntu have working Docker?" check. `probe_wsl2_docker`
+/// returns `None` on *any* failure, including a transient unresponsive distro —
+/// and a false `None` drives a destructive re-import of a working distro. Wake
+/// the distro, then retry a few times before concluding Docker is truly absent.
+async fn wsl2_docker_present() -> bool {
+    let _ = Command::new("wsl")
+        .args(["-d", WSL2_DISTRO, "--", "true"])
+        .output()
+        .await;
+    for attempt in 0..3 {
+        if probe_wsl2_docker().await.is_some() {
+            return true;
+        }
+        if attempt < 2 {
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+    false
+}
+
 async fn probe_docker() -> Option<String> {
     let out = Command::new("docker")
         .arg("--version")
@@ -886,7 +906,17 @@ pub async fn install_service(
     // title/context/options cfg-branch to say "scheduled task" instead
     // of "service" on Windows.
     let ag_task = paths.ag_task_xml();
-    let drift_choice = answers.choice(PromptId::AgInstallDrift).unwrap_or("keep");
+    // Default to (re)installing the task, NOT "keep". The AgInstallDrift prompt
+    // only fires when an existing *registered* ag task has drifted; when it
+    // didn't fire (the usual case) the choice is absent. Defaulting to "keep"
+    // there meant a stale ag.xml *file* left by a prior failed run (which never
+    // actually registered the task) caused `"keep" if ag_task.exists()` to skip
+    // registration — and then the unconditional `schtasks /Run /TN ag` below
+    // failed with "cannot find the file" because no task was ever created.
+    // "replace" falls through to the register arm, overwriting any stale file.
+    let drift_choice = answers
+        .choice(PromptId::AgInstallDrift)
+        .unwrap_or("replace");
     let install_ag_task = match drift_choice {
         "keep" if ag_task.exists() => {
             step_log(
@@ -1025,16 +1055,30 @@ pub async fn install_service(
 }
 
 /// Delete-then-create: `schtasks /Create /F` is unreliable on some
-/// Windows builds (leaves half-updated state). Best-effort `/Delete`
-/// first (ignored if the task doesn't exist), then `/Create`.
+/// Windows builds (leaves half-updated state), so we `/Delete` first then
+/// `/Create` *without* `/F`. The delete is best-effort (a missing task is
+/// fine), but `/Create` refuses an existing name — so before creating we
+/// verify the name is actually gone and bail with an actionable message if a
+/// failed delete left it behind, rather than emitting an opaque create error.
 async fn register_task(
     tx: &ProgressSender,
     tee: &LogTee,
     name: &str,
     xml: &std::path::Path,
 ) -> Result<()> {
-    // Best-effort delete — log but don't fail on "task not found".
+    // Best-effort delete — a "task not found" is the common, fine case.
     let _ = schtasks_quiet(&["/Delete", "/TN", name, "/F"]).await;
+    // Guard: never /Create over a still-registered name. In dry-run
+    // (SKIP_SCHTASKS) the /Create below is a no-op, so a leftover task can't
+    // collide — skip the guard there.
+    if !skip_systemctl() && task_exists(name).await {
+        bail!(
+            "Scheduled Task `{name}` already exists and couldn't be removed for a \
+             clean re-create — it may be running or require elevation. Remove it \
+             manually with `schtasks /End /TN {name}` then \
+             `schtasks /Delete /TN {name} /F`, and re-run the installer."
+        );
+    }
     schtasks(
         tx,
         tee,
@@ -1088,6 +1132,15 @@ async fn schtasks_quiet(args: &[&str]) -> Option<std::process::ExitStatus> {
         .status()
         .await
         .ok()
+}
+
+/// Whether a Scheduled Task named `name` is currently registered.
+/// `schtasks /Query /TN <name>` exits 0 when it exists, non-zero otherwise.
+async fn task_exists(name: &str) -> bool {
+    matches!(
+        schtasks_quiet(&["/Query", "/TN", name]).await,
+        Some(s) if s.success()
+    )
 }
 
 /// `<UserId>` for the rendered Scheduled-Task XML. The Task Scheduler
@@ -1661,15 +1714,21 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
         .output()
         .await;
 
-    // b. Reuse an existing ag-ubuntu distro only if it already has a working
-    //    Docker. A distro that exists but lacks Docker (e.g. a prior run that
-    //    imported the rootfs but failed during docker-ce install) must not be
-    //    silently reused — the stack step would then fail with no Docker. Tear
-    //    it down and re-import clean (wsl --import refuses an existing distro
-    //    name, so the unregister has to come first).
-    let distro_exists = probe_wsl2_distro_name().await.is_some();
-    let docker_ready = distro_exists && probe_wsl2_docker().await.is_some();
-    if docker_ready {
+    // b. Decide reuse-vs-fresh-import. The distro's ext4.vhdx on disk is the
+    //    most reliable existence signal: `wsl --list` parsing false-negatives
+    //    under the concurrent WSL load the installer generates, and a false
+    //    "absent" sends us down a fresh `wsl --import` that then fails
+    //    0xffffffff against the distro that's actually still there. A
+    //    filesystem stat can't be fooled by WSL being momentarily
+    //    unresponsive; the list probe is a fallback for a distro that somehow
+    //    lives outside our managed install dir. An existing distro is never
+    //    re-imported (that has wiped working multi-GB distros) — if its Docker
+    //    probe comes back empty we (re)install Docker in place below instead.
+    let install_dir = paths.ag_home.join("wsl").join(WSL2_DISTRO);
+    let distro_exists =
+        install_dir.join("ext4.vhdx").exists() || probe_wsl2_distro_name().await.is_some();
+    let docker_present = distro_exists && wsl2_docker_present().await;
+    if docker_present {
         step_log(
             tx,
             tee,
@@ -1678,86 +1737,106 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
         );
     } else {
         if distro_exists {
+            // Existing distro, but the Docker probe came back empty — frequently
+            // a FALSE negative (the distro is slow to answer while detection
+            // hammers WSL with concurrent probes). Unregister + re-import has
+            // repeatedly wiped working multi-GB distros and fails outright
+            // (0xffffffff) when the still-locked ext4.vhdx can't be replaced. So
+            // never re-import an existing distro: reuse it and (re)install Docker
+            // in place below — the apt install is idempotent, a no-op when Docker
+            // is already present.
             step_log(
                 tx,
                 tee,
                 step,
-                format!("{WSL2_DISTRO} exists but Docker isn't installed — re-importing clean"),
+                format!(
+                    "{WSL2_DISTRO} exists but the Docker probe was empty — \
+                     installing Docker in place (not re-importing)"
+                ),
             );
-            let _ = Command::new("wsl")
-                .args(["--unregister", WSL2_DISTRO])
-                .output()
-                .await;
-        }
-        // c. Download the Ubuntu base rootfs to %TEMP%. Resolve the exact
-        //    filename at runtime (it embeds the point release), then verify
-        //    the URL returns 200 before importing.
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(600))
-            .build()
-            .with_context(|| "build http client for rootfs download")?;
-        let rootfs_url = resolve_rootfs_url(&client).await?;
-        step_log(tx, tee, step, format!("downloading rootfs: {rootfs_url}"));
-        let resp = client
-            .get(&rootfs_url)
-            .send()
-            .await
-            .with_context(|| format!("GET {rootfs_url}"))?;
-        if !resp.status().is_success() {
-            bail!(
-                "rootfs download returned {} for {rootfs_url}\n\
+        } else {
+            // c. Download the Ubuntu base rootfs to %TEMP%. Resolve the exact
+            //    filename at runtime (it embeds the point release), then verify
+            //    the URL returns 200 before importing.
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(600))
+                .build()
+                .with_context(|| "build http client for rootfs download")?;
+            let rootfs_url = resolve_rootfs_url(&client).await?;
+            step_log(tx, tee, step, format!("downloading rootfs: {rootfs_url}"));
+            let resp = client
+                .get(&rootfs_url)
+                .send()
+                .await
+                .with_context(|| format!("GET {rootfs_url}"))?;
+            if !resp.status().is_success() {
+                bail!(
+                    "rootfs download returned {} for {rootfs_url}\n\
                 The Ubuntu base rootfs may have moved. Download a current \
                 rootfs manually, import it as `{WSL2_DISTRO}`, and re-run the installer.",
-                resp.status()
+                    resp.status()
+                );
+            }
+            let bytes = resp
+                .bytes()
+                .await
+                .with_context(|| "read rootfs response body")?;
+            let rootfs_path = std::env::temp_dir().join("ag-ubuntu-rootfs.tar.gz");
+            fs::write(&rootfs_path, &bytes)
+                .with_context(|| format!("write rootfs to {}", rootfs_path.display()))?;
+            step_log(
+                tx,
+                tee,
+                step,
+                format!(
+                    "downloaded {:.0} MB → {}",
+                    bytes.len() as f64 / (1024.0 * 1024.0),
+                    rootfs_path.display()
+                ),
             );
-        }
-        let bytes = resp
-            .bytes()
-            .await
-            .with_context(|| "read rootfs response body")?;
-        let rootfs_path = std::env::temp_dir().join("ag-ubuntu-rootfs.tar.gz");
-        fs::write(&rootfs_path, &bytes)
-            .with_context(|| format!("write rootfs to {}", rootfs_path.display()))?;
-        step_log(
-            tx,
-            tee,
-            step,
-            format!(
-                "downloaded {:.0} MB → {}",
-                bytes.len() as f64 / (1024.0 * 1024.0),
-                rootfs_path.display()
-            ),
-        );
 
-        // d. Import the distro. wsl --import needs the install dir to exist.
-        let install_dir = paths.ag_home.join("wsl").join(WSL2_DISTRO);
-        fs::create_dir_all(&install_dir)
-            .with_context(|| format!("create {}", install_dir.display()))?;
-        let out = Command::new("wsl")
-            .args([
-                "--import",
-                WSL2_DISTRO,
-                &install_dir.display().to_string(),
-                &rootfs_path.display().to_string(),
-                "--version",
-                "2",
-            ])
-            .output()
-            .await
-            .with_context(|| "spawn wsl --import")?;
-        if !out.status.success() {
-            bail!(
-                "wsl --import exited {}\nstderr: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
+            // d. Import the distro. wsl --import needs the install dir to exist.
+            //    (`install_dir` is defined at the reuse gate above.)
+            fs::create_dir_all(&install_dir)
+                .with_context(|| format!("create {}", install_dir.display()))?;
+            // Never import over a still-registered distro: wsl --import refuses an
+            // existing name and fails with an opaque 0xffffffff. If the unregister
+            // above didn't free the name (distro re-spawned / held open by the running
+            // stack), stop here with an actionable message instead.
+            if probe_wsl2_distro_name().await.is_some() {
+                bail!(
+                    "{WSL2_DISTRO} is still registered, so a clean import can't proceed — \
+                 it's likely in use by the running ag stack. Free it with \
+                 `wsl --terminate {WSL2_DISTRO} && wsl --unregister {WSL2_DISTRO}`, then \
+                 re-run the installer."
+                );
+            }
+            let out = Command::new("wsl")
+                .args([
+                    "--import",
+                    WSL2_DISTRO,
+                    &install_dir.display().to_string(),
+                    &rootfs_path.display().to_string(),
+                    "--version",
+                    "2",
+                ])
+                .output()
+                .await
+                .with_context(|| "spawn wsl --import")?;
+            if !out.status.success() {
+                bail!(
+                    "wsl --import exited {}\nstderr: {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            step_log(
+                tx,
+                tee,
+                step,
+                format!("imported {WSL2_DISTRO} → {}", install_dir.display()),
             );
         }
-        step_log(
-            tx,
-            tee,
-            step,
-            format!("imported {WSL2_DISTRO} → {}", install_dir.display()),
-        );
 
         // e. Install Docker Engine from the official APT repo. The repo
         //    codename is hardcoded to `noble`: we pin the rootfs to Ubuntu
@@ -1804,11 +1883,29 @@ apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plug
         fi\n\
         for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done\n\
         exec docker compose \"$@\"\n";
-    let write_helper = format!(
-        "install -d /usr/local/bin && printf '%s' '{helper}' > /usr/local/bin/ag-stack-up \
+    // Stage the wrapper through a temp file + `cp`, NOT a shell heredoc/printf.
+    // The helper is multi-line and contains `$(seq …)` and `"$@"`; embedding it
+    // in a single-quoted `printf` that crosses Command::args → wsl.exe →
+    // `bash -c` corrupts it — the embedded newlines split the single-quoted
+    // string apart, so `$(seq 1 60)` expands (seq's output bakes into the file)
+    // and `"$@"` collapses to `""`. A temp file carries the exact bytes; `cp`
+    // never parses the content. fs::write emits the string's LF bytes verbatim,
+    // so no CRLF cleanup is needed.
+    let wrapper_tmp = std::env::temp_dir().join("ag-stack-up");
+    fs::write(&wrapper_tmp, helper).with_context(|| format!("write {}", wrapper_tmp.display()))?;
+    let wrapper_wsl = windows_path_to_wsl(&wrapper_tmp.display().to_string());
+    let install_wrapper = format!(
+        "install -d /usr/local/bin && cp '{wrapper_wsl}' /usr/local/bin/ag-stack-up \
          && chmod +x /usr/local/bin/ag-stack-up"
     );
-    wsl_root_bash(step, tx, tee, &write_helper, "install ag-stack-up wrapper").await?;
+    wsl_root_bash(
+        step,
+        tx,
+        tee,
+        &install_wrapper,
+        "install ag-stack-up wrapper",
+    )
+    .await?;
 
     // h. Bring the daemon up now via the wrapper — the exact path the stack
     //    step and scheduled task use. `ag-stack-up version` starts dockerd,
