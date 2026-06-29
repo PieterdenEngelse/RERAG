@@ -341,6 +341,31 @@ async fn wsl2_docker_present() -> bool {
     false
 }
 
+/// Resilient "can `ag-ubuntu` actually boot?" probe. Runs a trivial command in
+/// the distro; success means its disk attaches and the VM starts. A single
+/// `wsl -- true` can false-negative under the concurrent WSL load detection
+/// generates, and a false "can't boot" would let `clear_zombie_wsl2_distro`
+/// unregister a working distro — so retry a few times before concluding it's
+/// dead. A genuine zombie (registered, no disk) fails every attempt with
+/// "Failed to attach disk … cannot find the file".
+async fn wsl2_distro_bootable() -> bool {
+    for attempt in 0..3 {
+        let ok = Command::new("wsl")
+            .args(["-d", WSL2_DISTRO, "--", "true"])
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            return true;
+        }
+        if attempt < 2 {
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+    false
+}
+
 async fn probe_docker() -> Option<String> {
     let out = Command::new("docker")
         .arg("--version")
@@ -1684,6 +1709,127 @@ async fn resolve_rootfs_url(client: &reqwest::Client) -> Result<String> {
     Ok(format!("{WSL2_ROOTFS_RELEASE_DIR}{file}"))
 }
 
+/// Unregister a zombie `ag-ubuntu`: a registration with no `ext4.vhdx` in our
+/// managed dir that also can't boot. Such a distro comes from a `wsl --import`
+/// that registered the name but failed to create the disk — seen on a freshly
+/// enabled WSL2 right after the resume reboot, when the lightweight utility VM
+/// isn't up yet. It can never start, so leaving it makes `install_docker_wsl2`
+/// take the reuse path and fail later in the distro, while blocking a fresh
+/// import (the name is taken → 0xffffffff).
+///
+/// The guards are deliberately strict — the project has been burned before by
+/// re-import logic wiping working multi-GB distros — so we never unregister a
+/// distro whose managed disk exists, nor one that answers a boot probe.
+async fn clear_zombie_wsl2_distro(
+    install_dir: &std::path::Path,
+    step: &'static str,
+    tx: &ProgressSender,
+    tee: &LogTee,
+) {
+    if install_dir.join("ext4.vhdx").exists() {
+        return; // our managed disk is real — never touch it
+    }
+    if probe_wsl2_distro_name().await.is_none() {
+        return; // not registered — nothing to clear
+    }
+    if wsl2_distro_bootable().await {
+        return; // registered with a disk elsewhere and it boots — leave it alone
+    }
+    step_log(
+        tx,
+        tee,
+        step,
+        format!(
+            "{WSL2_DISTRO} is registered but has no disk and won't start \
+             (zombie from a failed import) — unregistering it before re-import"
+        ),
+    );
+    let _ = Command::new("wsl")
+        .args(["--terminate", WSL2_DISTRO])
+        .output()
+        .await;
+    let _ = Command::new("wsl")
+        .args(["--unregister", WSL2_DISTRO])
+        .output()
+        .await;
+}
+
+/// `wsl --import` with cleanup-and-retry for a not-yet-ready WSL2 VM.
+///
+/// Right after the WSL2-enable reboot the lightweight utility VM / kernel can
+/// still be coming up. `wsl --import` then registers the distro name but fails
+/// to lay down `ext4.vhdx`, leaving a zombie that can never start. The real
+/// success signal is the disk on disk, not the exit code (which has been seen
+/// to lie on a cold VM), so we treat "exit non-zero" and "exit zero but no
+/// ext4.vhdx" alike as a failed attempt: unregister the half-baked distro, back
+/// off, and retry. A growing backoff gives the VM time to finish starting.
+async fn wsl_import_with_retry(
+    install_dir: &std::path::Path,
+    rootfs_path: &std::path::Path,
+    step: &'static str,
+    tx: &ProgressSender,
+    tee: &LogTee,
+) -> Result<()> {
+    const ATTEMPTS: u64 = 3;
+    let vhdx = install_dir.join("ext4.vhdx");
+    let mut last_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        // wsl --import needs the install dir to exist; recreate it each attempt
+        // since the cleanup below may have cleared it.
+        fs::create_dir_all(install_dir)
+            .with_context(|| format!("create {}", install_dir.display()))?;
+        let out = Command::new("wsl")
+            .args([
+                "--import",
+                WSL2_DISTRO,
+                &install_dir.display().to_string(),
+                &rootfs_path.display().to_string(),
+                "--version",
+                "2",
+            ])
+            .output()
+            .await
+            .with_context(|| "spawn wsl --import")?;
+        if out.status.success() && vhdx.exists() {
+            return Ok(());
+        }
+        last_err = if !out.status.success() {
+            format!(
+                "exit {} — {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )
+        } else {
+            "exit 0 but ext4.vhdx was not created (WSL2 VM not ready)".to_string()
+        };
+        // Clear the half-baked registration so the next --import isn't refused
+        // with 0xffffffff for a name that's already taken.
+        let _ = Command::new("wsl")
+            .args(["--terminate", WSL2_DISTRO])
+            .output()
+            .await;
+        let _ = Command::new("wsl")
+            .args(["--unregister", WSL2_DISTRO])
+            .output()
+            .await;
+        if attempt < ATTEMPTS {
+            let backoff = Duration::from_secs(5 * attempt);
+            step_log(
+                tx,
+                tee,
+                step,
+                format!(
+                    "wsl --import attempt {attempt}/{ATTEMPTS} failed ({last_err}) — \
+                     retrying in {}s (the WSL2 VM may still be starting up)",
+                    backoff.as_secs()
+                ),
+            );
+            sleep(backoff).await;
+        }
+    }
+    bail!("wsl --import failed after {ATTEMPTS} attempts: {last_err}");
+}
+
 /// Create the `ag-ubuntu` WSL2 distro and install Docker CE inside it.
 /// Only invoked when the user picked the WSL2 Docker option, which only
 /// appears when `wsl2_available` was true in detection — so the WSL2
@@ -1725,6 +1871,15 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
     //    re-imported (that has wiped working multi-GB distros) — if its Docker
     //    probe comes back empty we (re)install Docker in place below instead.
     let install_dir = paths.ag_home.join("wsl").join(WSL2_DISTRO);
+
+    // b0. Clear a zombie registration left by an earlier import that registered
+    //     the name but failed to lay down the disk (a not-yet-ready WSL2 VM
+    //     right after the enable reboot). Left in place it makes `distro_exists`
+    //     true below, sending us down the reuse path that then fails at the
+    //     in-distro Docker step — and a fresh `wsl --import` would be refused
+    //     (0xffffffff) while the dead name is still taken.
+    clear_zombie_wsl2_distro(&install_dir, step, tx, tee).await;
+
     let distro_exists =
         install_dir.join("ext4.vhdx").exists() || probe_wsl2_distro_name().await.is_some();
     let docker_present = distro_exists && wsl2_docker_present().await;
@@ -1795,41 +1950,13 @@ pub async fn install_docker_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTe
                 ),
             );
 
-            // d. Import the distro. wsl --import needs the install dir to exist.
-            //    (`install_dir` is defined at the reuse gate above.)
-            fs::create_dir_all(&install_dir)
-                .with_context(|| format!("create {}", install_dir.display()))?;
-            // Never import over a still-registered distro: wsl --import refuses an
-            // existing name and fails with an opaque 0xffffffff. If the unregister
-            // above didn't free the name (distro re-spawned / held open by the running
-            // stack), stop here with an actionable message instead.
-            if probe_wsl2_distro_name().await.is_some() {
-                bail!(
-                    "{WSL2_DISTRO} is still registered, so a clean import can't proceed — \
-                 it's likely in use by the running ag stack. Free it with \
-                 `wsl --terminate {WSL2_DISTRO} && wsl --unregister {WSL2_DISTRO}`, then \
-                 re-run the installer."
-                );
-            }
-            let out = Command::new("wsl")
-                .args([
-                    "--import",
-                    WSL2_DISTRO,
-                    &install_dir.display().to_string(),
-                    &rootfs_path.display().to_string(),
-                    "--version",
-                    "2",
-                ])
-                .output()
-                .await
-                .with_context(|| "spawn wsl --import")?;
-            if !out.status.success() {
-                bail!(
-                    "wsl --import exited {}\nstderr: {}",
-                    out.status,
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-            }
+            // d. Import the distro. The zombie clear at step b0 plus the
+            //    retry-with-cleanup inside `wsl_import_with_retry` handle the
+            //    not-yet-ready WSL2 VM that registers the name but fails to lay
+            //    down ext4.vhdx; a still-registered name held by a *running*
+            //    stack would have a working disk (so b0 leaves it) and surfaces
+            //    here as a 0xffffffff that the retry reports.
+            wsl_import_with_retry(&install_dir, &rootfs_path, step, tx, tee).await?;
             step_log(
                 tx,
                 tee,
