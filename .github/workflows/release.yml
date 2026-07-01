@@ -372,7 +372,7 @@ jobs:
             exit 1
           }
           heat dir $webDir `
-            -dr ShareAgDir `
+            -dr WebDir `
             -cg WebFilesGroup `
             -var var.WebDir `
             -gg -srd -sfrag `

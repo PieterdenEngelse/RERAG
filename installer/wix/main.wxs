@@ -145,19 +145,26 @@
                             </Directory>
 
                             <!--
-                              share\ag\web\ — harvested by heat.exe in CI.
+                              share\ag\web\ — the dashboard. heat.exe (CI)
+                              harvests target\dx\fro\release\web\public into
+                              this WebDir via `-dr WebDir`, so the files land at
+                              share\ag\web\ — exactly where the installer's
+                              bundled::frontend_dist_dir() (= share_dir()/"web")
+                              reads them from to populate the runtime web\ dir.
 
-                              PR 3.2 generates installer/wix/web.wxs from
-                              frontend\fro\dist via:
-                                heat dir ..\..\frontend\fro\dist \
-                                  -dr ShareAgDir -cg WebFilesGroup \
-                                  -gg -srd -sfrag -var var.WebDir \
-                                  -out installer\wix\web.wxs
-                              and the candle invocation references it
-                              + sets -dWebDir=...\frontend\fro\dist.
-                              The <FeatureRef Id='WebFiles' /> below pulls
-                              the harvested components into the install.
+                              This element only supplies the target directory;
+                              the harvested components come from web.wxs and are
+                              pulled in by <ComponentGroupRef Id='WebFilesGroup'/>
+                              in the Feature below.
+
+                              Regression note: heat previously used
+                              `-dr ShareAgDir`, dropping the dashboard at
+                              share\ag\ instead of share\ag\web\. The installer
+                              looked in share\ag\web\, found nothing, skipped the
+                              copy, and the runtime served a stale/blank
+                              dashboard. -dr WebDir + this directory fix that.
                             -->
+                            <Directory Id='WebDir' Name='web' />
 
                         </Directory>
                     </Directory>
