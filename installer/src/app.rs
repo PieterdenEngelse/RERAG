@@ -138,30 +138,40 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
                 DetectionStatus::Warn
             },
         },
-        DetectionRow {
-            label: "Docker",
-            // Three states: a reachable engine is the only true "ready" — the
-            // compose stack needs the daemon, not just the CLI. CLI-on-PATH
-            // with no engine (Docker Desktop installed but not started) is a
-            // Warn, not an OK, since `docker compose up` would fail.
-            value: match (&d.docker_present, &d.docker_engine_version) {
-                (_, Some(engine)) => format!("engine running ({engine})"),
-                (Some(_), None) => {
+        {
+            // Docker: a reachable engine is the only true "ready" — the compose
+            // stack needs the daemon, not just the CLI. Compute value+status
+            // together so the "not on PATH" case can branch on WSL2: with the
+            // WSL2 feature enabled, Docker is *meant* to live inside the
+            // ag-ubuntu distro (never on the Windows PATH), so its absence is
+            // expected setup, a neutral ○ — not a warning that reads like a
+            // broken prerequisite.
+            let (value, status) = match (&d.docker_present, &d.docker_engine_version) {
+                // Engine reachable → genuinely ready.
+                (_, Some(engine)) => {
+                    (format!("engine running ({engine})"), DetectionStatus::Ok)
+                }
+                // CLI present but daemon down → only matters off-WSL2, neutral ○.
+                (Some(_), None) => (
                     "CLI on PATH but engine not reachable — start Docker, then re-run \
                      (only if the stack won't run on WSL2)"
-                        .to_string()
-                }
-                (None, None) => "not on PATH".to_string(),
-            },
-            status: match (&d.docker_present, &d.docker_engine_version) {
-                // Engine reachable → genuinely ready.
-                (_, Some(_)) => DetectionStatus::Ok,
-                // CLI present but daemon down → only matters off-WSL2, so it's
-                // a neutral ○, not a blocker.
-                (Some(_), None) => DetectionStatus::Info,
-                // Not on PATH → the DockerMissing prompt fires; needs a decision.
-                (None, None) => DetectionStatus::Warn,
-            },
+                        .to_string(),
+                    DetectionStatus::Info,
+                ),
+                // Not installed, but WSL2 is available → the install sets up the
+                // WSL2 Docker Engine. Expected, not a problem.
+                (None, None) if cfg!(windows) && d.wsl2_available => (
+                    "not installed — the install sets it up in WSL2 (no Docker Desktop needed)"
+                        .to_string(),
+                    DetectionStatus::Info,
+                ),
+                // No Docker and no WSL2 fallback → a real decision is needed.
+                (None, None) => (
+                    "not on PATH — you'll pick WSL2 or Docker Desktop on the next screen".to_string(),
+                    DetectionStatus::Warn,
+                ),
+            };
+            DetectionRow { label: "Docker", value, status }
         },
         DetectionRow {
             label: if cfg!(windows) {
@@ -244,18 +254,27 @@ pub fn detection_rows(d: &DetectionResult) -> Vec<DetectionRow> {
                 DetectionStatus::Info
             },
         },
-        DetectionRow {
-            label: "Backend port 3010",
-            value: if d.backend_port_busy {
-                "in use by another process".to_string()
+        {
+            // Backend port: "busy" on a machine that already has RERAG installed
+            // (ag.env present) is almost always our own backend still running —
+            // the install stops it before starting the new one, so that's a
+            // neutral ○, not a warning. Busy with no prior install means a
+            // foreign process holds the port and the user has to free it.
+            let (value, status) = if !d.backend_port_busy {
+                ("free".to_string(), DetectionStatus::Ok)
+            } else if d.ag_env_exists {
+                (
+                    "in use — RERAG is already running here; the install restarts it".to_string(),
+                    DetectionStatus::Info,
+                )
             } else {
-                "free".to_string()
-            },
-            status: if d.backend_port_busy {
-                DetectionStatus::Warn
-            } else {
-                DetectionStatus::Ok
-            },
+                (
+                    "in use by another app — free port 3010 or set BACKEND_PORT, then re-run"
+                        .to_string(),
+                    DetectionStatus::Warn,
+                )
+            };
+            DetectionRow { label: "Backend port 3010", value, status }
         },
         DetectionRow {
             label: "RAM",
