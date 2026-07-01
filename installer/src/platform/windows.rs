@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
@@ -103,6 +104,23 @@ impl Paths {
 
     pub fn ag_start_cmd(&self) -> PathBuf {
         self.bin_dir.join("ag-start.cmd")
+    }
+
+    /// One-click launcher: starts the on-demand stack + backend tasks, then
+    /// opens the dashboard. Target of the Start-menu shortcut.
+    pub fn ag_launch_cmd(&self) -> PathBuf {
+        self.bin_dir.join("ag-launch.cmd")
+    }
+
+    /// Per-user Start-menu shortcut → `ag-launch.cmd`. Under `%APPDATA%\…\Start
+    /// Menu\Programs` so it needs no admin rights, matching the default install.
+    pub fn start_menu_shortcut(&self) -> PathBuf {
+        let roaming = std::env::var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(r"C:\Users\Default\AppData\Roaming"));
+        roaming
+            .join(r"Microsoft\Windows\Start Menu\Programs")
+            .join("RERAG.lnk")
     }
 
     pub fn ag_task_xml(&self) -> PathBuf {
@@ -736,6 +754,90 @@ pub async fn copy_artifacts(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
         format!("wrote wrapper {}", wrapper.display()),
     );
 
+    // ag-launch.cmd — one-click "Start RERAG": kick off the on-demand stack +
+    // backend tasks, poll /health (reading BACKEND_PORT from ag.env, default
+    // 3010), then open the dashboard. The loop falls through to open after its
+    // cap so it never hangs. curl.exe is built into Windows 10 1803+/11.
+    let launch = paths.ag_launch_cmd();
+    let launch_body = concat!(
+        "@echo off\r\n",
+        "REM Start RERAG on demand: bring up the container stack + backend (both\r\n",
+        "REM are on-demand scheduled tasks), then open the dashboard once it answers.\r\n",
+        "set \"AG_PORT=3010\"\r\n",
+        "for /f \"usebackq tokens=1,* delims==\" %%a in (\"%APPDATA%\\ag\\ag.env\") do if /I \"%%a\"==\"BACKEND_PORT\" set \"AG_PORT=%%b\"\r\n",
+        "schtasks /Run /TN ag-stack >nul 2>&1\r\n",
+        "schtasks /Run /TN ag >nul 2>&1\r\n",
+        "echo Starting RERAG - waiting for the dashboard on http://127.0.0.1:%AG_PORT%/ ...\r\n",
+        "for /L %%i in (1,1,90) do (\r\n",
+        "  curl -s -o nul \"http://127.0.0.1:%AG_PORT%/health\" && goto :ready\r\n",
+        "  timeout /t 2 /nobreak >nul\r\n",
+        ")\r\n",
+        ":ready\r\n",
+        "start \"\" \"http://127.0.0.1:%AG_PORT%/\"\r\n",
+    );
+    fs::write(&launch, launch_body.as_bytes())
+        .with_context(|| format!("write {}", launch.display()))?;
+    step_log(
+        tx,
+        tee,
+        "Install artifacts",
+        format!("wrote launcher {}", launch.display()),
+    );
+
+    // Start-menu shortcut → ag-launch.cmd, so "RERAG" is one click from Start.
+    // Best-effort: a failed shortcut never fails the install (the tasks + the
+    // launcher cmd still work). Skipped under SKIP_SCHTASKS so a sandbox test
+    // never writes into the real (non-redirected) Start Menu.
+    let lnk = paths.start_menu_shortcut();
+    if skip_systemctl() {
+        step_log(
+            tx,
+            tee,
+            "Install artifacts",
+            format!("SKIP_SCHTASKS=1 — would create Start-menu shortcut {}", lnk.display()),
+        );
+    } else {
+        if let Some(parent) = lnk.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let esc = |p: String| p.replace('\'', "''");
+        let ps = format!(
+            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); \
+             $s.TargetPath='{}'; $s.WorkingDirectory='{}'; $s.WindowStyle=7; \
+             $s.Description='Start RERAG (RAG stack + backend)'; $s.Save()",
+            esc(lnk.display().to_string()),
+            esc(launch.display().to_string()),
+            esc(paths.bin_dir.display().to_string()),
+        );
+        match Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => step_log(
+                tx,
+                tee,
+                "Install artifacts",
+                format!("created Start-menu shortcut {}", lnk.display()),
+            ),
+            Ok(o) => step_log(
+                tx,
+                tee,
+                "Install artifacts",
+                format!(
+                    "WARN: Start-menu shortcut not created — {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+            ),
+            Err(e) => step_log(
+                tx,
+                tee,
+                "Install artifacts",
+                format!("WARN: Start-menu shortcut not created — {e}"),
+            ),
+        }
+    }
+
     // Smoke-test ag.exe. PATH includes lib_dir so tika_native.dll resolves
     // (Windows DLL loader checks the binary's directory and PATH; no LD_LIBRARY_PATH).
     let path_env = format!(
@@ -877,6 +979,19 @@ async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
         return Ok(());
     }
 
+    // Pull the images first with a measured progress bar — the multi-GB
+    // download is the slow, otherwise-silent part. Non-fatal: if the streamed
+    // pull hiccups we fall through to `up -d`, which re-pulls and surfaces a
+    // real error if the registry is genuinely unreachable.
+    if let Err(e) = pull_stack_wsl2(&compose_wsl, tx, tee).await {
+        step_log(
+            tx,
+            tee,
+            STEP_STACK,
+            format!("WARN: measured image pull did not finish cleanly ({e:#}) — continuing to up -d"),
+        );
+    }
+
     let out = Command::new("wsl")
         .args([
             "-d",
@@ -914,6 +1029,125 @@ async fn install_stack_wsl2(paths: &Paths, tx: &ProgressSender, tee: &LogTee) ->
         format!("brought up ag-falkordb container via WSL2 (ag-ubuntu) using {compose_wsl}"),
     );
     Ok(())
+}
+
+/// Stream `docker compose pull` with `--progress json`, aggregating each
+/// layer's `current`/`total` (compressed download bytes) into one figure, and
+/// emit a throttled [`ProgressEvent::StepProgress`] so the install screen can
+/// show a real percentage, live MB/s, and ETA. Routed through `ag-stack-up` so
+/// dockerd is up first; `2>&1` folds compose's progress (written to stderr)
+/// into stdout for line-by-line parsing.
+async fn pull_stack_wsl2(compose_wsl: &str, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+    let script = format!(
+        "/usr/local/bin/ag-stack-up --progress json -f '{compose_wsl}' \
+         --profile '' --profile falkor-container pull 2>&1"
+    );
+    let mut child = Command::new("wsl")
+        .args(["-d", WSL2_DISTRO, "-u", "root", "--", "bash", "-lc", &script])
+        .env("COMPOSE_PROJECT_NAME", "ag")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| "spawn wsl docker compose pull")?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("no stdout from docker compose pull"))?;
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    // Per-layer (downloaded, total) in compressed download bytes, keyed by the
+    // layer id. `total` only becomes known once a layer starts downloading, so
+    // the aggregate denominator grows as more layers begin — normal for pulls.
+    let mut layers: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    let mut rate = 0.0_f64; // smoothed bytes/sec (EMA)
+    let mut last_done = 0u64;
+    let mut last_t = std::time::Instant::now();
+    let mut last_emit = std::time::Instant::now();
+    step_log(tx, tee, STEP_STACK, "pulling container images…".to_string());
+
+    while let Ok(Some(line)) = reader.next_line().await {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("");
+        let id = v.get("id").and_then(|t| t.as_str()).unwrap_or("");
+        match text {
+            "Downloading" => {
+                let cur = v.get("current").and_then(|c| c.as_u64()).unwrap_or(0);
+                let tot = v.get("total").and_then(|c| c.as_u64()).unwrap_or(0);
+                if !id.is_empty() && tot > 0 {
+                    layers.insert(id.to_string(), (cur, tot));
+                }
+            }
+            "Download complete" => {
+                // Download finished for this layer: pin current to total.
+                if let Some(entry) = layers.get_mut(id) {
+                    entry.0 = entry.1;
+                }
+            }
+            _ => {}
+        }
+        // Aggregate + throttle emission to ~2.5/s.
+        let now = std::time::Instant::now();
+        if now.duration_since(last_emit) >= Duration::from_millis(400) {
+            let done: u64 = layers.values().map(|(c, _)| *c).sum();
+            let total: u64 = layers.values().map(|(_, t)| *t).sum();
+            let dt = now.duration_since(last_t).as_secs_f64();
+            if dt > 0.0 {
+                let inst = done.saturating_sub(last_done) as f64 / dt;
+                rate = if rate == 0.0 { inst } else { 0.4 * inst + 0.6 * rate };
+            }
+            last_done = done;
+            last_t = now;
+            last_emit = now;
+            let _ = tx.send(ProgressEvent::StepProgress {
+                name: STEP_STACK,
+                done_bytes: done,
+                total_bytes: total,
+                bytes_per_sec: rate.max(0.0),
+            });
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .with_context(|| "await docker compose pull")?;
+    if !status.success() {
+        bail!("docker compose pull exited {status}");
+    }
+    // Land the bar at 100% before `up -d` takes over.
+    let total: u64 = layers.values().map(|(_, t)| *t).sum();
+    if total > 0 {
+        let _ = tx.send(ProgressEvent::StepProgress {
+            name: STEP_STACK,
+            done_bytes: total,
+            total_bytes: total,
+            bytes_per_sec: 0.0,
+        });
+        step_log(
+            tx,
+            tee,
+            STEP_STACK,
+            format!("pulled {} of images", human_mb(total)),
+        );
+    }
+    Ok(())
+}
+
+/// Compact byte size for log lines: MB under 1 GB, else GB.
+fn human_mb(bytes: u64) -> String {
+    let mb = bytes as f64 / 1_048_576.0;
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.0} MB")
+    }
 }
 
 // =============================================================================
@@ -1072,9 +1306,12 @@ pub async fn install_service(
         register_task(tx, tee, "ag-stack", &stack_task).await?;
     }
 
-    // Start the ag task immediately so the user sees the dashboard come
-    // up without waiting for next logon. ag-stack will be triggered by
-    // the same logon flow on next sign-in.
+    // Start the ag backend now so the user sees the dashboard come up right
+    // after install (the stack itself was already brought up by the Docker
+    // compose stack step). Both tasks are on-demand only — nothing auto-starts
+    // at logon — so this install-time /Run is what makes RERAG live this
+    // session; on later boots the user starts it themselves (schtasks /Run
+    // /TN ag-stack, then /TN ag).
     schtasks(tx, tee, STEP_SERVICE, &["/Run", "/TN", "ag"]).await?;
     Ok(())
 }
@@ -1186,6 +1423,8 @@ pub fn uninstall_targets(paths: &Paths) -> Vec<PathBuf> {
     vec![
         paths.ag_exe(),
         paths.ag_start_cmd(),
+        paths.ag_launch_cmd(),
+        paths.start_menu_shortcut(),
         paths.lib_dir.join("tika_native.dll"),
         paths.ag_task_xml(),
         paths.ag_stack_task_xml(),
@@ -1255,6 +1494,8 @@ pub async fn uninstall_managed(paths: &Paths) {
     rm_dir_quiet(&paths.scheduled_tasks_dir);
     rm_quiet(&paths.ag_exe());
     rm_quiet(&paths.ag_start_cmd());
+    rm_quiet(&paths.ag_launch_cmd());
+    rm_quiet(&paths.start_menu_shortcut());
     rm_quiet(&paths.lib_dir.join("tika_native.dll"));
 }
 

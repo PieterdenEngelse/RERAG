@@ -344,6 +344,18 @@ pub enum StepStatus {
     Failed,
 }
 
+/// Live state of the docker-compose image pull, shown under its step on the
+/// install screen. `elapsed_s` always ticks once the step starts; the byte
+/// fields populate only once the pull streams `--progress json` data (until
+/// then the UI shows a time estimate). `bytes_per_sec` is a smoothed rate.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub struct StackPull {
+    pub elapsed_s: u32,
+    pub done_bytes: u64,
+    pub total_bytes: u64,
+    pub bytes_per_sec: f64,
+}
+
 // =============================================================================
 // Summary buckets (the four-list view on the Done screen)
 // =============================================================================

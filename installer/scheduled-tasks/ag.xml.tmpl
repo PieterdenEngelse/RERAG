@@ -1,15 +1,10 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>RERAG (ag) backend — launched at user logon via ag-start.cmd.</Description>
+    <Description>RERAG (ag) backend — started on demand via ag-start.cmd (no auto-start at logon).</Description>
     <URI>\ag</URI>
   </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{{USER}}</UserId>
-    </LogonTrigger>
-  </Triggers>
+  <Triggers></Triggers>
   <Principals>
     <Principal id="Author">
       <UserId>{{USER}}</UserId>

@@ -387,6 +387,33 @@ html, body {
 .step-done .step-name { color: #9ca3af; }
 .step-running .step-name { color: #e5e7eb; font-weight: 500; }
 
+/* Time-based pull estimate under the running docker-compose stack step.
+   Spans the full grid width on its own row beneath icon/name/duration. */
+.stack-progress {
+    grid-column: 1 / -1;
+    margin-top: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+.stack-bar-track {
+    height: 6px;
+    border-radius: 999px;
+    background: #1b2430;
+    overflow: hidden;
+}
+.stack-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: #1D6B9A;
+    transition: width 0.6s linear;
+}
+.stack-bar-label {
+    color: #9ca3af;
+    font-size: 0.72rem;
+    font-family: ui-monospace, monospace;
+}
+
 .log-view {
     background: #0a0c10;
     color: #d1d5db;
@@ -683,6 +710,11 @@ a:focus-visible,
 .detection-pending-label {
     font-size: 0.9rem;
     color: #9ca3af;
+}
+.detection-pending-hint {
+    font-size: 0.8rem;
+    color: #9ca3af;
+    margin-top: 0.25rem;
 }
 .detection-progress {
     width: 100%;

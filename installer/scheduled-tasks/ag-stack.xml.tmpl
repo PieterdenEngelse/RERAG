@@ -1,15 +1,10 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>RERAG compose stack — FalkorDB + Redis + observability containers, brought up at user logon.</Description>
+    <Description>RERAG compose stack — FalkorDB + Redis + observability containers, brought up on demand (no auto-start at logon).</Description>
     <URI>\ag-stack</URI>
   </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{{USER}}</UserId>
-    </LogonTrigger>
-  </Triggers>
+  <Triggers></Triggers>
   <Principals>
     <Principal id="Author">
       <UserId>{{USER}}</UserId>

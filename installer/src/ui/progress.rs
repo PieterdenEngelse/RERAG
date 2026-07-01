@@ -16,9 +16,9 @@
 use dioxus::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::app::{InstallStep, StepStatus};
+use crate::app::{InstallStep, StackPull, StepStatus};
 use crate::detection::DetectionResult;
-use crate::install_steps::{self, ProgressEvent, STEP_NAMES};
+use crate::install_steps::{self, ProgressEvent, STEP_NAMES, STEP_STACK};
 // Windows-only step-name constants, consumed by initial_steps' #[cfg(windows)]
 // docker-setup branch. The import must be gated too — on Linux these
 // cfg(windows) consts don't exist, and an unconditional import fails to
@@ -66,6 +66,27 @@ pub fn ProgressScreen() -> Element {
     // Set when the install paused for a Windows restart (WSL2 enablement).
     let mut reboot = use_signal::<Option<String>>(|| None);
 
+    // Live state for the docker-compose stack step. Its dominant wait is a
+    // multi-GB image pull; `pull_stack_wsl2` streams byte counts into the
+    // `stack` signal (StepProgress events below) for a real bar + MB/s + ETA.
+    // The 1s ticker keeps an elapsed clock too, which drives the time-estimate
+    // fallback shown before any bytes arrive (and on the non-WSL2 path).
+    let mut stack_started = use_signal::<Option<std::time::Instant>>(|| None);
+    let mut stack = use_signal(StackPull::default);
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            // `.peek()` reads without subscribing, so this 1s loop is never torn
+            // down and recreated by the signals it inspects.
+            if let Some(start) = *stack_started.peek() {
+                let secs = start.elapsed().as_secs() as u32;
+                if stack.peek().elapsed_s != secs {
+                    stack.with_mut(|s| s.elapsed_s = secs);
+                }
+            }
+        }
+    });
+
     // Spawn the install task once on mount. Resource runs once even though
     // its body closes over the signals we mutate from event handling.
     let _install_resource = use_resource(move || {
@@ -82,18 +103,42 @@ pub fn ProgressScreen() -> Element {
                     ProgressEvent::StepStart { name } => {
                         steps.with_mut(|s| set_step(s, name, StepStatus::Running, 0));
                         log_lines.with_mut(|l| l.push(format!("[▶] {name}")));
+                        if name == STEP_STACK {
+                            stack.set(StackPull::default());
+                            stack_started.set(Some(std::time::Instant::now()));
+                        }
                     }
                     ProgressEvent::StepLog { name: _, line } => {
                         log_lines.with_mut(|l| l.push(line));
+                    }
+                    ProgressEvent::StepProgress {
+                        name,
+                        done_bytes,
+                        total_bytes,
+                        bytes_per_sec,
+                    } => {
+                        if name == STEP_STACK {
+                            stack.with_mut(|s| {
+                                s.done_bytes = done_bytes;
+                                s.total_bytes = total_bytes;
+                                s.bytes_per_sec = bytes_per_sec;
+                            });
+                        }
                     }
                     ProgressEvent::StepDone { name, duration } => {
                         let secs = duration.as_secs() as u32;
                         steps.with_mut(|s| set_step(s, name, StepStatus::Done, secs));
                         log_lines.with_mut(|l| l.push(format!("[✓] {name}  ({secs}s)")));
+                        if name == STEP_STACK {
+                            stack_started.set(None);
+                        }
                     }
                     ProgressEvent::StepFailed { name, error } => {
                         steps.with_mut(|s| set_step(s, name, StepStatus::Failed, 0));
                         log_lines.with_mut(|l| l.push(format!("[✗] {name}: {error}")));
+                        if name == STEP_STACK {
+                            stack_started.set(None);
+                        }
                         error_signal.set(Some(FailureInfo {
                             step: name.to_string(),
                             message: error,
@@ -135,7 +180,7 @@ pub fn ProgressScreen() -> Element {
             }
             div { class: "screen-body progress-body",
                 div { class: "progress-pane progress-left",
-                    StepListView { steps: steps.read().clone() }
+                    StepListView { steps: steps.read().clone(), stack: *stack.read() }
                 }
                 div { class: "progress-pane progress-right",
                     LogView { lines: log_lines.read().clone() }

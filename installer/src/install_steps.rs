@@ -77,6 +77,16 @@ pub enum ProgressEvent {
         name: &'static str,
         error: String,
     },
+    /// Streamed download progress for a long-running step (currently the
+    /// Windows docker-compose image pull). Byte counts are summed across all
+    /// layers; `bytes_per_sec` is a smoothed rate. Drives a real progress bar +
+    /// live MB/s + ETA on the install screen.
+    StepProgress {
+        name: &'static str,
+        done_bytes: u64,
+        total_bytes: u64,
+        bytes_per_sec: f64,
+    },
     /// Emitted exactly once after the final step completes successfully.
     /// Drives the "Continue" button on the Progress screen.
     InstallComplete,
