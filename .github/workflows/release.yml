@@ -394,12 +394,20 @@ jobs:
           # entries. Pass an absolute path so light's link-time file
           # resolution doesn't depend on the cargo-wix staging CWD.
           $absWebDir = (Resolve-Path "target\dx\fro\release\web\public").Path
+          # `-C -ext -C <name>` / `-L -ext -L <name>` link the WiX extensions
+          # main.wxs now needs: WixUIExtension for the WixUI_InstallDir wizard,
+          # WixUtilExtension for the WixShellExec launch-on-finish action. Both
+          # are passed to candle (compile) and light (link).
           cargo wix `
             -p ag-installer `
             --no-build `
             --target x86_64-pc-windows-msvc `
             --nocapture `
             -C "-dWebDir=$absWebDir" `
+            -C -ext -C WixUIExtension `
+            -C -ext -C WixUtilExtension `
+            -L -ext -L WixUIExtension `
+            -L -ext -L WixUtilExtension `
             --output "ag-installer-v${env:VERSION}-x86_64.msi"
 
       - name: Verify MSI installs + uninstalls cleanly

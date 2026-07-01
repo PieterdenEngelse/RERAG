@@ -234,6 +234,47 @@
         <Property Id='ARPHELPLINK' Value='https://github.com/PieterdenEngelse/RERAG' />
         <Property Id='ARPURLINFOABOUT' Value='https://github.com/PieterdenEngelse/RERAG' />
 
+        <!--
+          Installer UI. Without this, double-clicking the MSI shows only
+          Windows Installer's bare progress bar and closes with no
+          confirmation — which reads as "it flashed and did nothing".
+          WixUI_InstallDir gives a real wizard: Welcome → choose install
+          folder → Verify → progress → Finish.
+
+          The license/EULA page is skipped (RERAG is MIT-OR-Apache-2.0; we
+          don't gate install on a clickthrough — matches
+          [package.metadata.wix] eula=false) by routing Welcome's Next
+          straight to the install-dir page. WIXUI_INSTALLDIR names the
+          directory the "Change…" button edits.
+
+          The Finish page offers a checkbox to launch the RERAG (Dioxus)
+          installer immediately. WixShellExec runs it via ShellExecute with
+          Impersonate='yes', i.e. un-elevated as the invoking user — correct,
+          since the Dioxus installer does per-user setup, not machine changes.
+
+          Requires linking WixUIExtension (dialogs) + WixUtilExtension
+          (WixShellExec / WixCA) — see the cargo-wix -ext flags in
+          .github/workflows/release.yml's "Build MSI via cargo-wix" step.
+        -->
+        <Property Id='WIXUI_INSTALLDIR' Value='INSTALLFOLDER' />
+        <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT' Value='Launch the RERAG installer now' />
+        <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOX' Value='1' />
+        <Property Id='WixShellExecTarget' Value='[#AgInstallerExe]' />
+        <CustomAction
+            Id='LaunchApplication'
+            BinaryKey='WixCA'
+            DllEntry='WixShellExec'
+            Impersonate='yes'
+            Return='asyncNoWait' />
+        <UI>
+            <UIRef Id='WixUI_InstallDir' />
+            <!-- Skip the license page: Welcome → InstallDir directly. -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='InstallDirDlg' Order='2'>1</Publish>
+            <Publish Dialog='InstallDirDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='2'>1</Publish>
+            <!-- Launch the RERAG installer from the Finish page when checked. -->
+            <Publish Dialog='ExitDialog' Control='Finish' Event='DoAction' Value='LaunchApplication'>WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
+        </UI>
+
     </Product>
 
 </Wix>
