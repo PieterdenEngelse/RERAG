@@ -662,6 +662,32 @@ pub async fn ensure_install_tree(
 // =============================================================================
 
 pub async fn copy_artifacts(paths: &Paths, tx: &ProgressSender, tee: &LogTee) -> Result<()> {
+    // A re-install has to free the running backend's lock on ag.exe first, or
+    // the copies below fail with a sharing violation ("Access is denied"). The
+    // ag task launches ag.exe via `start /B`, which detaches it — so the task
+    // instance has already ended and `schtasks /End` can't reach it; kill the
+    // process by image name. Best-effort, and a harmless no-op on a fresh
+    // install where nothing is running. Skipped under SKIP_SCHTASKS.
+    if !skip_systemctl() {
+        let _ = schtasks_quiet(&["/End", "/TN", "ag"]).await;
+        let killed = Command::new("taskkill")
+            .args(["/IM", "ag.exe", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if matches!(killed, Ok(s) if s.success()) {
+            step_log(
+                tx,
+                tee,
+                "Install artifacts",
+                "stopped running ag.exe before overwriting it".to_string(),
+            );
+            // Give Windows a moment to release the file handle before copying.
+            sleep(Duration::from_millis(500)).await;
+        }
+    }
+
     // ag.exe
     let ag_src = bundled::ag_binary_path();
     if !ag_src.exists() {
