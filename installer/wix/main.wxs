@@ -264,8 +264,7 @@
             Id='LaunchApplication'
             BinaryKey='WixCA'
             DllEntry='WixShellExec'
-            Impersonate='yes'
-            Return='asyncNoWait' />
+            Impersonate='yes' />
         <UI>
             <UIRef Id='WixUI_InstallDir' />
             <!-- Skip the license page: Welcome → InstallDir directly. -->
