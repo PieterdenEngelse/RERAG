@@ -1142,8 +1142,11 @@ pub fn Home() -> Element {
 
         // Full height container that fills below the global header
         div {
-            class: "relative flex h-[calc(100vh-2.5rem)] bg-base-200 overflow-hidden",
+            class: "relative flex h-[calc(100vh-2.5rem)] overflow-hidden",
             "data-theme": "dark",
+            // Chat area: lifted a step above base-200 with a faint cyan tint so
+            // it reads lighter without leaving the dark theme.
+            style: "background-color: #1b2a30;",
 
             // Left sidebar - Document Upload Panel (collapsible)
             if show_upload_panel() {

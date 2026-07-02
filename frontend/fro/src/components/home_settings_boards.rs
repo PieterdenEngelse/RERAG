@@ -87,8 +87,8 @@ pub fn HomeSettingsBoards(
 
                         // Runtime board
                         div {
-                            class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                            style: "min-width: 12rem;",
+                            class: "rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
+                            style: "min-width: 12rem; background-color: rgba(34,211,238,0.10); border: 1px solid rgba(34,211,238,0.20);",
                             div {
                                 class: "flex items-center gap-2",
                                 label {
@@ -127,8 +127,8 @@ pub fn HomeSettingsBoards(
 
                         // Mode board
                         div {
-                            class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                            style: "padding-right: calc(1.25rem + 1.5cm);",
+                            class: "rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
+                            style: "padding-right: calc(1.25rem + 1.5cm); background-color: rgba(34,211,238,0.10); border: 1px solid rgba(34,211,238,0.20);",
                             div {
                                 class: "flex items-center gap-3 w-full",
                                 label {
@@ -549,8 +549,8 @@ pub fn HomeSettingsBoards(
                         // Corpus board — only shown when a RAG mode is active
                         if chat_mode() != "llm" {
                         div {
-                            class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                            style: "min-width: 12rem;",
+                            class: "rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
+                            style: "min-width: 12rem; background-color: rgba(34,211,238,0.10); border: 1px solid rgba(34,211,238,0.20);",
                             div {
                                 class: "flex items-center gap-2",
                                 label {
@@ -752,8 +752,8 @@ pub fn HomeSettingsBoards(
 
                         // RAG Add's board
                         div {
-                            class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
-                            style: "min-width: calc(12rem + 2cm); padding-left: calc(1.25rem + 1cm); padding-right: calc(1.25rem + 1cm);",
+                            class: "rounded-2xl px-5 py-4 flex flex-col items-center gap-3 pointer-events-auto",
+                            style: "min-width: calc(12rem + 2cm); padding-left: calc(1.25rem + 1cm); padding-right: calc(1.25rem + 1cm); background-color: rgba(34,211,238,0.10); border: 1px solid rgba(34,211,238,0.20);",
                             label {
                                 class: "font-medium text-center",
                                 style: "color: white; font-size: 1.1rem;",
@@ -879,7 +879,8 @@ pub fn HomeSettingsBoards(
 
                         // KV Cache board (moved from Row 3)
                         div {
-                            class: "bg-white/5 border border-white/10 rounded-2xl px-5 py-4 flex flex-col items-center gap-2",
+                            class: "rounded-2xl px-5 py-4 flex flex-col items-center gap-2",
+                            style: "background-color: rgba(34,211,238,0.10); border: 1px solid rgba(34,211,238,0.20);",
                             label {
                                 class: "font-medium text-center",
                                 style: "color: white; font-size: 1.1rem;",
