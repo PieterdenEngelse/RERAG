@@ -118,8 +118,14 @@ pub fn Header() -> Element {
                                     page_errors.with_mut(|e| e.clear_error("docker"));
                                 }
                             } else {
-                                page_errors
-                                    .with_mut(|e| e.set_error("docker", "Docker not available"));
+                                // Docker is entirely optional — it only powers
+                                // auxiliary services (FalkorDB, Redis, Ollama,
+                                // observability). Its absence is a valid config
+                                // (e.g. a Windows install with no Docker), so it
+                                // must not turn the master status light red.
+                                // Container degradation above is still surfaced;
+                                // "no Docker at all" is not an error.
+                                page_errors.with_mut(|e| e.clear_error("docker"));
                             }
                         }
                         Err(_) => {
