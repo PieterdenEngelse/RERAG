@@ -79,6 +79,7 @@ pub fn DetectionScreen() -> Element {
                                         "Probing docker, systemd units, ports, disk and RAM…"
                                     }
                                 }
+                                p { class: "detection-pending-hint", "This can take a minute." }
                                 div { class: "detection-progress",
                                     div {
                                         class: "detection-progress-fill",
